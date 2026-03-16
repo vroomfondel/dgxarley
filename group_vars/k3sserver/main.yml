@@ -1,0 +1,54 @@
+---
+deinstall_apparmor: true
+
+# K3s Master
+k3smasterip: "192.168.124.100"
+k3s_master_node_hostname: "k3smaster"
+# API server URL for local kubeconfig (K3s API binds to VLAN 191)
+kubeconfig_api_server: "https://192.168.124.100:6443"
+
+# NFS — falls gewuenscht, NFS-Server und -Pfad setzen
+wantsnfsmount: false
+# nfsmasterip: "192.168.123.xxx"
+# nfs_share_path: "/k3shared"
+
+# Cluster CIDRs
+cluster_cidr: "10.68.0.0/16"
+service_cidr: "10.69.0.0/16"
+
+# K3s Version
+k3s_version: "v1.35.2+k3s1"
+
+# DNS
+dns_external_domain_suffix: "dgx.example.com"
+coredns_replicas: 1
+
+# Pod/Service CIDRs fuer iptables ipsets
+localnets_k3sserver:
+  - { cidr: "10.68.0.0/16", comment: "k3s-pods" }
+  - { cidr: "10.69.0.0/16", comment: "k3s-services" }
+
+# Cert-manager TSIG secret
+tsig_secret_key: "CHANGEME_BASE64_TSIG_KEY_HERE"
+
+# ESO (External Secrets Operator)
+eso_service_account: external-secrets
+eso_namespace: external-secrets
+eso_secrets_namespace: admin-secrets
+eso_default_store_name: "k8s-internal-store"
+eso_default_store_ref:
+  name: "{{ eso_default_store_name }}"
+  kind: ClusterSecretStore
+
+# Keine spezielle Edge-Infrastruktur
+providespxeboot: false
+providesmqttexternal: false
+providescoturn: false
+iswireguardhost: false
+
+# RustFS rc alias for backup uploads
+rustfs_rc_alias: "backupstore"
+rustfs_rc_endpoint: "https://minio.example.com"
+rustfs_rc_access_key: "dgxbackup"
+rustfs_rc_secret_key: "CHANGEME"
+rustfs_rc_backup_bucket: "dgx-backups"

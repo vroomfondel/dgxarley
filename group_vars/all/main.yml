@@ -1,0 +1,99 @@
+---
+ansible_ssh_user: root
+
+fail2ban_recipient: "fail2ban@example.com"
+fail2ban_ignoreips:
+  - "192.168.123.0/16"
+
+certmanager_letsencrypt_email: "admin@example.com"
+smartd_mail_recipients: "root,admin@example.com"
+
+# Postfix relay
+postfix_relayhost: "[mail.example.com]"
+
+# Geoblock/Allow
+geoallow:
+  - de
+geoblock:
+  - cn
+
+localnets:
+  - { cidr: "10.0.0.0/8", comment: "private-rfc1918" }
+  - { cidr: "172.16.0.0/12", comment: "private-rfc1918" }
+  - { cidr: "192.168.0.0/16", comment: "private-rfc1918" }
+  - { cidr: "169.254.0.0/16", comment: "link-local" }
+
+localnets_ipv6:
+  - { cidr: "fe80::/10", comment: "link-local" }
+
+# OpenWebUI
+openwebui_secret_key: "CHANGEME_SECRET_KEY"
+openwebui_admin_email: "admin@example.com"
+openwebui_admin_password: "changeme"
+
+# HuggingFace
+hf_token: "hf_CHANGEME"
+
+# nsupdate / DNS
+nsupdate_server: "198.51.100.1"
+nsupdate_tsig_key_secret: "CHANGEME_BASE64_TSIG_KEY"
+nsupdate_ingress_ip: "192.168.124.100"
+
+# QSFP IPs for NCCL bootstrap
+qsfp_ip_spark1: "10.10.10.0"
+qsfp_ip_spark2: "10.10.10.0"
+
+# PostgreSQL
+postgresql_postgres_password: "changeme"
+postgresql_openwebui_password: "changeme"
+
+# Grafana
+grafana_admin_password: "changeme"
+grafana_root_url: "https://grafana.example.com"
+
+# Keel
+keel_webhook_endpoint: "https://webhooks.example.com/keel?code=changeme"
+keel_basic_auth_password: "changeme"
+
+# Alertmanager
+alertmanager_smtp_smarthost: "mail.example.com:25"
+alertmanager_smtp_mailfrom: "alertmanager@example.com"
+alertmanager_alert_email: "admin@example.com"
+alertmanager_gotify_token: "CHANGEME_GOTIFY_TOKEN"
+alertmanager_gotify_url: "https://gotify.example.com"
+
+# iptables
+iptables_xosrc_ips: []
+iptables_lifeline_ips: []
+iptables_k3s_external_ips: []
+iptables_static_dns_ips: []
+
+# Clevis / Tang NBDE
+clevis_tang_servers:
+  - "http://tang.example.com"
+
+# WiFi access points
+wifi_access_points: []
+
+# NUT UPS
+nut_admin_password: "changeme"
+nut_monitor_password: "changeme"
+nut_shutdown_ssh_hosts:
+  - "192.168.124.101"
+  - "192.168.124.102"
+
+# DynDNS hostname for ipset updates
+dyndns_hostname: "dyn.example.com"
+
+# HAProxy stats + Traefik dashboard
+haproxy_stats_password: "changeme"
+traefik_dashboard_password: "changeme"
+
+# Traefik IP-Allowlist for internal services (k8s_infra + k8s_dgx)
+traefik_internal_allowlist:
+  - "192.168.123.0/24"
+  - "192.168.124.0/24"
+
+# NUT exporter (k8s_infra)
+nut_exporter_server: "192.168.124.100"
+nut_exporter_password: "changeme"

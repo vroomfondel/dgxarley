@@ -1,0 +1,44 @@
+---
+# WiFi Interface deaktivieren (kein DHCP, kein Link-Local)
+disable_wifi_iface: "wlP9s9"
+
+# OVS Bridge auf den Sparks (VLAN 191 als einziges/untagged VLAN)
+wantsopenvswitch: true
+ovs_bridge_name: "br0"
+
+# Network (overridden by vault.yml)
+dgxsparks_dns_server: "192.168.123.1"
+dgxsparks_gateway: "192.168.124.1"
+
+ovs_vlans:
+  - id: 124
+    primary: true
+    untagged: true
+    dhcp4: false
+    dhcp6: false
+    link_local: "[ ]"
+    addresses:
+      - "192.168.124.{{ host_octet }}/24"
+    nameservers:
+      addresses:
+        - "{{ dgxsparks_dns_server }}"
+    routes:
+      - to: default
+        via: "{{ dgxsparks_gateway }}"
+        metric: 100
+
+# QSFP Point-to-Point Netzwerk zwischen den Sparks
+qsfp_network: "10.10.10.0/24"
+qsfp_mtu: 9000
+
+# QSFP Interfaces (ConnectX-7 Dual-PCIe Multi-Host)
+# 4 logische Interfaces pro Spark — alle mit MTU 9000 konfiguriert
+qsfp_interfaces:
+  - "enp1s0f0np0"
+  - "enp1s0f1np1"
+  - "enP2p1s0f0np0"
+  - "enP2p1s0f1np1"
+
+# ulimits
+memlock_limit: "unlimited"
+stack_limit: 67108864

@@ -1,0 +1,46 @@
+---
+# DNS server and gateway for VLAN 123 + 124 (overridden by vault.yml)
+fullvlans_dns_server: "192.168.123.1"
+fullvlans_gateway: "192.168.123.1"
+
+ovs_vlans:
+  - id: 123
+    link_local: "[ ipv6 ]"
+    primary: true
+    untagged: true
+    dhcp4: false
+    addresses:
+      - "192.168.123.{{ ((ovs_vlan_extra | default({}))[123] | default({})).host_octet | default(host_octet) }}/24"
+    nameservers:
+      addresses:
+        - "{{ fullvlans_dns_server }}"
+    routes:
+      - to: default
+        via: "{{ fullvlans_gateway }}"
+        metric: 100
+    dhcp6: true
+    ipv6_privacy: false
+    dhcp4_overrides:
+      use_dns: false
+      use_domains: false
+    dhcp6_overrides:
+      use_dns: false
+      use_domains: false
+  - id: 124
+    dhcp4: false
+    dhcp6: false
+    link_local: "[ ]"
+    addresses:
+      - "192.168.124.{{ ((ovs_vlan_extra | default({}))[124] | default({})).host_octet | default(host_octet) }}/24"
+    dhcp4_overrides:
+      use_routes: false
+      use_dns: false
+      use_domains: false
+      route_metric: 1004
+    dhcp6_overrides:
+      use_routes: false
+      use_dns: false
+      use_domains: false
+      route_metric: 1004
+
+providespxeboot: false
