@@ -1,0 +1,24 @@
+---
+- name: Ensure VLAN interface {{ item.name }} exists
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/interface/vlan/find name={{ item.name }}]] = 0)
+        do={ /interface/vlan/add interface={{ mikrotik_bridge_name }}
+        name={{ item.name }} vlan-id={{ item.vlan_id }} }
+  loop: "{{ mikrotik_mgmt_interfaces }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: false
+
+- name: Ensure IP address on {{ item.name }}
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/ip/address/find interface={{ item.name }}]] = 0)
+        do={ /ip/address/add address={{ item.address }} interface={{ item.name }} }
+        else={ /ip/address/set [find interface={{ item.name }}] address={{ item.address }} }
+  loop: "{{ mikrotik_mgmt_interfaces }}"
+  loop_control:
+    label: "{{ item.name }} {{ item.address }}"
+  changed_when: false

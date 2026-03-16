@@ -1,0 +1,14 @@
+---
+- name: Configure bridge port {{ item.interface }} (pvid={{ item.pvid }})
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/interface/bridge/port/find interface={{ item.interface }}]] = 0)
+        do={ /interface/bridge/port/add bridge={{ mikrotik_bridge_name }}
+        interface={{ item.interface }} pvid={{ item.pvid }} hw=yes }
+        else={ /interface/bridge/port/set [find interface={{ item.interface }}]
+        bridge={{ mikrotik_bridge_name }} pvid={{ item.pvid }} hw=yes }
+  loop: "{{ mikrotik_bridge_ports }}"
+  loop_control:
+    label: "{{ item.interface }}"
+  changed_when: false

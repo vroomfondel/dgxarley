@@ -1,0 +1,61 @@
+---
+mikrotik_bridge_name: bridge
+
+mikrotik_bridge_ports:
+  - interface: ether1
+    pvid: 188
+    comment: "Uplink (Netgear)"
+  - interface: ether3
+    pvid: 101
+    comment: "k3smaster OVS trunk"
+  - interface: ether5
+    pvid: 191
+    comment: "spark1 access"
+  - interface: ether7
+    pvid: 191
+    comment: "spark2 access"
+
+mikrotik_bridge_vlans:
+  - vlan_ids: 101
+    tagged: "bridge,ether1"
+    untagged: "ether3"
+  - vlan_ids: 191
+    tagged: "bridge,ether1,ether3"
+    untagged: "ether5,ether7"
+  - vlan_ids: 188
+    tagged: "ether3"
+    untagged: "ether1"
+  - vlan_ids: 102
+    tagged: "ether1,ether3"
+  - vlan_ids: 150
+    tagged: "ether1,ether3"
+  - vlan_ids: 153
+    tagged: "ether1,ether3"
+  - vlan_ids: 178
+    tagged: "ether1,ether3"
+
+mikrotik_mgmt_interfaces:
+  - name: vlan101-mgmt
+    vlan_id: 101
+    address: "192.168.101.x/24"
+  - name: vlan191-mgmt
+    vlan_id: 191
+    address: "192.168.191.x/24"
+
+mikrotik_default_gateway: "192.168.101.x"
+
+mikrotik_srcnat_rules:
+  - comment: "masquerade vlan191 to vlan101"
+    chain: srcnat
+    action: masquerade
+    src_address: "192.168.191.0/24"
+    out_interface: vlan101-mgmt
+
+mikrotik_dhcp_servers:
+  - name: dhcp-vlan191
+    interface: vlan191-mgmt
+    pool_name: dhcp-pool-vlan191
+    pool_ranges: "192.168.191.100-192.168.191.199"
+    network: "192.168.191.0/24"
+    gateway: "192.168.191.x"
+    dns_server: "192.168.101.x"

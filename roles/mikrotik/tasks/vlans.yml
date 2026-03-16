@@ -1,0 +1,18 @@
+---
+- name: Configure bridge VLAN {{ item.vlan_ids }}
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/interface/bridge/vlan/find bridge={{ mikrotik_bridge_name }}
+        vlan-ids={{ item.vlan_ids }}]] = 0)
+        do={ /interface/bridge/vlan/add bridge={{ mikrotik_bridge_name }}
+        vlan-ids={{ item.vlan_ids }} tagged={{ item.tagged }}
+        {{ 'untagged=' + item.untagged if item.untagged is defined else '' }} }
+        else={ /interface/bridge/vlan/set
+        [find bridge={{ mikrotik_bridge_name }} vlan-ids={{ item.vlan_ids }}]
+        tagged={{ item.tagged }}
+        {{ 'untagged=' + item.untagged if item.untagged is defined else '' }} }
+  loop: "{{ mikrotik_bridge_vlans }}"
+  loop_control:
+    label: "VLAN {{ item.vlan_ids }}"
+  changed_when: false

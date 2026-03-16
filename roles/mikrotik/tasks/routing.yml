@@ -1,0 +1,9 @@
+---
+- name: Ensure default route via {{ mikrotik_default_gateway }}
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/ip/route/find dst-address=0.0.0.0/0]] = 0)
+        do={ /ip/route/add dst-address=0.0.0.0/0 gateway={{ mikrotik_default_gateway }} }
+        else={ /ip/route/set [find dst-address=0.0.0.0/0] gateway={{ mikrotik_default_gateway }} }
+  changed_when: false

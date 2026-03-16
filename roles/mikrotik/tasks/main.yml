@@ -1,0 +1,15 @@
+---
+- import_tasks: bridge.yml
+  tags: [mikrotik_bridge, mikrotik]
+- import_tasks: ports.yml
+  tags: [mikrotik_ports, mikrotik]
+- import_tasks: vlans.yml
+  tags: [mikrotik_vlans, mikrotik]
+- import_tasks: management.yml
+  tags: [mikrotik_mgmt, mikrotik]
+- import_tasks: routing.yml
+  tags: [mikrotik_routing, mikrotik]
+- import_tasks: dhcp.yml
+  tags: [mikrotik_dhcp, mikrotik]
+- import_tasks: nat.yml
+  tags: [mikrotik_nat, mikrotik]

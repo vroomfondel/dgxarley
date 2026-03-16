@@ -1,0 +1,40 @@
+---
+- name: Ensure IP pool {{ item.pool_name }}
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/ip/pool/find name={{ item.pool_name }}]] = 0)
+        do={ /ip/pool/add name={{ item.pool_name }} ranges={{ item.pool_ranges }} }
+        else={ /ip/pool/set [find name={{ item.pool_name }}] ranges={{ item.pool_ranges }} }
+  loop: "{{ mikrotik_dhcp_servers }}"
+  loop_control:
+    label: "{{ item.pool_name }}"
+  changed_when: false
+
+- name: Ensure DHCP network for {{ item.network }}
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/ip/dhcp-server/network/find address={{ item.network }}]] = 0)
+        do={ /ip/dhcp-server/network/add address={{ item.network }}
+        gateway={{ item.gateway }} dns-server={{ item.dns_server }} }
+        else={ /ip/dhcp-server/network/set [find address={{ item.network }}]
+        gateway={{ item.gateway }} dns-server={{ item.dns_server }} }
+  loop: "{{ mikrotik_dhcp_servers }}"
+  loop_control:
+    label: "{{ item.network }}"
+  changed_when: false
+
+- name: Ensure DHCP server {{ item.name }}
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/ip/dhcp-server/find name={{ item.name }}]] = 0)
+        do={ /ip/dhcp-server/add name={{ item.name }}
+        interface={{ item.interface }} address-pool={{ item.pool_name }} }
+        else={ /ip/dhcp-server/set [find name={{ item.name }}]
+        interface={{ item.interface }} address-pool={{ item.pool_name }} }
+  loop: "{{ mikrotik_dhcp_servers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: false

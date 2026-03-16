@@ -1,0 +1,16 @@
+---
+- name: Ensure srcnat rule — {{ item.comment }}
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/ip/firewall/nat/find comment="{{ item.comment }}"]] = 0)
+        do={ /ip/firewall/nat/add chain={{ item.chain }} action={{ item.action }}
+        src-address={{ item.src_address }} out-interface={{ item.out_interface }}
+        comment="{{ item.comment }}" }
+        else={ /ip/firewall/nat/set [find comment="{{ item.comment }}"]
+        chain={{ item.chain }} action={{ item.action }}
+        src-address={{ item.src_address }} out-interface={{ item.out_interface }} }
+  loop: "{{ mikrotik_srcnat_rules }}"
+  loop_control:
+    label: "{{ item.comment }}"
+  changed_when: false
