@@ -1,0 +1,10 @@
+---
+# Dummy values — overridden by vault.yml
+
+ansible_host: "192.168.124.101"
+host_octet: 101
+mailname: "spark1.example.com"
+default_route_iface: "br0.124"
+clevis_luks_passphrase: "changeme"
+qsfp_ip: "10.10.10.1"
+k3s_node_ip: "192.168.124.101"

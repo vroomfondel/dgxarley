@@ -1,0 +1,6 @@
+---
+# Dummy values — overridden by vault.yml
+
+ansible_host: "192.168.123.1"
+ansible_password: "changeme"
+serial_number: "CHANGEME"
