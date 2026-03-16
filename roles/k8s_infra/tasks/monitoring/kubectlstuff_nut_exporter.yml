@@ -1,0 +1,75 @@
+---
+# =============================================================================
+# NUT EXPORTER — Prometheus metrics for UPS monitoring via NUT
+# =============================================================================
+
+- name: Create nut-exporter-secrets
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: nut-exporter-secrets
+        namespace: monitoring
+      type: Opaque
+      stringData:
+        NUT_EXPORTER_SERVER: "{{ nut_exporter_server }}"
+        NUT_EXPORTER_USERNAME: "{{ nut_exporter_username }}"
+        NUT_EXPORTER_PASSWORD: "{{ nut_exporter_password }}"
+        # Default vars + battery.runtime (runtimecal), ups.beeper.status, ups.realpower.nominal
+        NUT_EXPORTER_VARIABLES: "battery.charge,battery.runtime,battery.voltage,battery.voltage.nominal,input.voltage,input.voltage.nominal,ups.beeper.status,ups.load,ups.realpower.nominal,ups.status"
+
+- name: Create nut-exporter Deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: nut-exporter
+        namespace: monitoring
+        labels:
+          app.kubernetes.io/name: nut-exporter
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: nut-exporter
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: nut-exporter
+            annotations:
+              prometheus.io/scrape: "true"
+              prometheus.io/port: "9199"
+              prometheus.io/path: "/ups_metrics"
+          spec:
+            nodeSelector:
+              kubernetes.io/arch: amd64
+            dnsConfig:
+              options:
+                - name: ndots
+                  value: "2"
+            containers:
+            - name: nut-exporter
+              image: druggeri/nut_exporter:3.2.5
+              envFrom:
+              - secretRef:
+                  name: nut-exporter-secrets
+              ports:
+              - name: metrics
+                containerPort: 9199
+              livenessProbe:
+                httpGet:
+                  path: /metrics
+                  port: metrics
+                initialDelaySeconds: 10
+                periodSeconds: 30
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  cpu: 100m
+                  memory: 64Mi

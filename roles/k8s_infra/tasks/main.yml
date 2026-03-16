@@ -1,0 +1,169 @@
+---
+- name: debug k8s_infra role start
+  debug:
+    msg: "DONE k8s_infra ON: {{ inventory_hostname }}"
+
+
+# === CORE ===
+- name: config coredns
+  import_tasks: core/kubectlstuff_coredns.yml
+  tags:
+    - coredns
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: import kubectlstuff_certmanager.yml if isk3smaster is defined and true
+  import_tasks: core/kubectlstuff_certmanager.yml
+  tags: certmanager
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: import kubectlstuff_traefikdashboard.yml if isk3smaster is defined and true
+  import_tasks: core/kubectlstuff_traefikdashboard.yml
+  tags: traefikdashboard
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: config keel
+  import_tasks: core/kubectlstuff_keel.yml
+  tags:
+    - keel
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: import kubectlstuff_eso_keyverno.yml if isk3smaster is defined and true
+  import_tasks: core/kubectlstuff_eso_keyverno.yml
+  tags:
+    - eso
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: import kubectlstuff_eso_secrets.yml if isk3smaster is defined and true
+  import_tasks: core/kubectlstuff_eso_secrets.yml
+  tags:
+    - eso
+    - eso_secrets
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+
+- name: import kubectlstuff_smarter_devices.yml if isk3smaster is defined and true
+  import_tasks: core/kubectlstuff_smarter_devices.yml
+  tags:
+    - smarter_devices
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: import kubectlstuff_nfd.yml if isk3smaster is defined and true
+  import_tasks: core/kubectlstuff_nfd.yml
+  tags:
+    - nfd
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: import kubectlstuff_sealed_secrets.yml if isk3smaster is defined and true
+  import_tasks: core/kubectlstuff_sealed_secrets.yml
+  tags: sealed_secrets
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+# === DATABASES ===
+
+- name: import kubectlstuff_postgresql.yml if isk3smaster is defined and true
+  import_tasks: databases/kubectlstuff_postgresql.yml
+  tags:
+    - postgresql
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: import kubectlstuff_postgresql_backup.yml if isk3smaster is defined and true
+  import_tasks: databases/kubectlstuff_postgresql_backup.yml
+  tags:
+    - postgresql_backup
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: import kubectlstuff_redis.yml if isk3smaster is defined and true
+  import_tasks: databases/kubectlstuff_redis.yml
+  tags:
+    - redis
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+# === MONITORING ===
+
+- name: Create monitoring namespace and shared middlewares
+  import_tasks: monitoring/kubectlstuff_monitoring_core.yml
+  tags: [monitoring_core, promstack]
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: Deploy kube-state-metrics
+  import_tasks: monitoring/kubectlstuff_ksm.yml
+  tags: [ksm, promstack]
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: Deploy node-exporter
+  import_tasks: monitoring/kubectlstuff_nodeexporter.yml
+  tags: [nodeexporter, promstack]
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: Deploy Prometheus
+  import_tasks: monitoring/kubectlstuff_prometheus.yml
+  tags: [prometheus, promstack]
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: Deploy Alertmanager
+  import_tasks: monitoring/kubectlstuff_alertmanager.yml
+  tags: [alertmanager, promstack]
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: Deploy Grafana
+  import_tasks: monitoring/kubectlstuff_grafana.yml
+  tags: [grafana, promstack]
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: import kubectlstuff_loki.yml if isk3smaster is defined and true
+  import_tasks: monitoring/kubectlstuff_loki.yml
+  tags: loki
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: import kubectlstuff_uptimekuma.yml if isk3smaster is defined and true
+  import_tasks: monitoring/kubectlstuff_uptimekuma.yml
+  tags:
+    - uptimekuma
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: Deploy NUT exporter for UPS monitoring
+  import_tasks: monitoring/kubectlstuff_nut_exporter.yml
+  tags: [nut_exporter, promstack]
+  when:
+    - isk3smaster is defined
+    - isk3smaster

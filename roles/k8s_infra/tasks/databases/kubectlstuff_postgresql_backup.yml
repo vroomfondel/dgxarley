@@ -1,0 +1,164 @@
+---
+# kubectlstuff_postgresql_backup.yml
+# CronJob to back up all PostgreSQL databases nightly via pg_dump
+
+- name: Create postgresql-backup-script ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: postgresql-backup-script
+        namespace: postgresql
+      data:
+        backup.sh: |
+          #!/bin/bash
+          set -eo pipefail
+
+          BACKUP_ROOT="/mnt/BACKUP"
+          DATE=$(date +%Y%m%d_%H%M%S)
+          BACKUP_DIR="${BACKUP_ROOT}/${DATE}"
+          KEEP_DAYS=123
+
+          DB_HOST="postgresql.postgresql.svc.cluster.local."
+          DB_PORT="5432"
+          DB_SUPERUSER="postgres"
+
+          echo "=== PostgreSQL Backup: ${DATE} ==="
+
+          mkdir -p "${BACKUP_DIR}"
+
+          # 1. Dump global objects (roles, tablespaces)
+          echo "Dumping global objects (roles, tablespaces)..."
+          PGPASSWORD="${POSTGRES_PASSWORD}" pg_dumpall \
+            -h "${DB_HOST}" -p "${DB_PORT}" \
+            -U "${DB_SUPERUSER}" \
+            --globals-only \
+            | gzip > "${BACKUP_DIR}/globals.sql.gz"
+          GLOBALS_SIZE=$(du -sh "${BACKUP_DIR}/globals.sql.gz" | cut -f1)
+          echo "  globals.sql.gz: ${GLOBALS_SIZE}"
+
+          # 2. Dump each database individually
+          DATABASES=$(PGPASSWORD="${POSTGRES_PASSWORD}" psql \
+            -h "${DB_HOST}" -p "${DB_PORT}" \
+            -U "${DB_SUPERUSER}" -d postgres \
+            -At -c "SELECT datname FROM pg_database WHERE datistemplate = false AND datname != 'postgres' ORDER BY datname")
+          echo "Databases to back up: ${DATABASES}"
+
+          FAILED=""
+          for DB in ${DATABASES}; do
+            echo "Dumping database: ${DB}..."
+            if PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump \
+              -h "${DB_HOST}" -p "${DB_PORT}" \
+              -U "${DB_SUPERUSER}" \
+              -d "${DB}" \
+              --no-owner --no-privileges \
+              | gzip > "${BACKUP_DIR}/${DB}.sql.gz"; then
+              DB_SIZE=$(du -sh "${BACKUP_DIR}/${DB}.sql.gz" | cut -f1)
+              echo "  ${DB}.sql.gz: ${DB_SIZE}"
+            else
+              echo "  ERROR: Failed to dump ${DB}"
+              FAILED="${FAILED} ${DB}"
+            fi
+          done
+
+          # 3. Copy backup to RustFS
+          echo "Uploading backup to {{ rustfs_rc_alias }}/{{ rustfs_rc_backup_bucket }}/pgbackup/${DATE}/..."
+          for F in "${BACKUP_DIR}"/*.sql.gz; do
+            rc cp -q --continue-on-error "${F}" {{ rustfs_rc_alias }}/{{ rustfs_rc_backup_bucket }}/pgbackup/${DATE}/
+          done
+          echo "  Upload complete."
+
+          # 4. Prune old backups
+          echo "Pruning backups older than ${KEEP_DAYS} days..."
+          find "${BACKUP_ROOT}" -maxdepth 1 -mindepth 1 -type d -mtime +${KEEP_DAYS} | while read -r OLD_DIR; do
+            echo "  Removing: ${OLD_DIR}"
+            rm -rf "${OLD_DIR}"
+            OLD_NAME=$(basename "${OLD_DIR}")
+            echo "  Removing from {{ rustfs_rc_alias }}: {{ rustfs_rc_backup_bucket }}/pgbackup/${OLD_NAME}/"
+            rc rm -q --continue-on-error --force {{ rustfs_rc_alias }}/{{ rustfs_rc_backup_bucket }}/pgbackup/${OLD_NAME}/
+          done
+
+          TOTAL_SIZE=$(du -sh "${BACKUP_ROOT}" | cut -f1)
+          echo "=== Backup Complete: ${BACKUP_DIR} (total backup storage: ${TOTAL_SIZE}) ==="
+
+          if [ -n "${FAILED}" ]; then
+            echo "WARNING: Failed databases:${FAILED}"
+            exit 1
+          fi
+
+- name: Create postgresql-backup CronJob
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: batch/v1
+      kind: CronJob
+      metadata:
+        name: postgresql-backup
+        namespace: postgresql
+      spec:
+        schedule: "0 2 * * *"
+        successfulJobsHistoryLimit: 3
+        failedJobsHistoryLimit: 3
+        timeZone: "Europe/Berlin"
+        concurrencyPolicy: Replace
+        jobTemplate:
+          spec:
+            backoffLimit: 0
+            template:
+              spec:
+                nodeSelector:
+                  kubernetes.io/arch: "amd64"
+                dnsConfig:
+                  options:
+                    - name: ndots
+                      value: "1"
+                restartPolicy: Never
+                containers:
+                  - name: postgresql-backup
+                    image: xomoxcc/postgreslocaled:latest
+                    command: ["/bin/bash", "/scripts/backup.sh"]
+                    env:
+                      - name: POSTGRES_PASSWORD
+                        valueFrom:
+                          secretKeyRef:
+                            name: postgresql-secrets
+                            key: POSTGRES_PASSWORD
+                      - name: TZ
+                        value: "Europe/Berlin"
+                    resources:
+                      requests:
+                        cpu: 100m
+                        memory: 256Mi
+                      limits:
+                        cpu: 1000m
+                        memory: 512Mi
+                    volumeMounts:
+                      - name: backup-script
+                        mountPath: /scripts
+                      - name: backup-data
+                        mountPath: /mnt/BACKUP
+                      - name: rc-binary
+                        mountPath: /usr/local/bin/rc
+                        readOnly: true
+                      - name: rc-config
+                        mountPath: /root/.config/rc
+                        readOnly: true
+                volumes:
+                  - name: backup-script
+                    configMap:
+                      name: postgresql-backup-script
+                      defaultMode: 0755
+                  - name: backup-data
+                    hostPath:
+                      path: "{{ k8s_infra_data_base }}/pgbackup"
+                      type: DirectoryOrCreate
+                  - name: rc-binary
+                    hostPath:
+                      path: /usr/local/bin/rc
+                      type: File
+                  - name: rc-config
+                    hostPath:
+                      path: /root/.config/rc
+                      type: Directory

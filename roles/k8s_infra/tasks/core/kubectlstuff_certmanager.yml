@@ -1,0 +1,191 @@
+---
+# - kubectlstuff_certmanager.yml
+
+# install cert-manager
+# wget https://github.com/cert-manager/cert-manager/releases/download/v1.19.2/cert-manager.yaml -O cert-manager_cert-manager.yml
+
+- name: Attempt to create cert-manager namespace
+  kubernetes.core.k8s:
+    name: cert-manager
+    api_version: v1
+    kind: Namespace
+    state: present
+  register: certmanager
+
+- name: create certmanager crd
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('file', 'cert-manager_cert-manager.yml') | from_yaml_all }}"
+
+
+
+- name: Patch cert-manager controller resources
+  kubernetes.core.k8s:
+    state: patched
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: cert-manager
+        namespace: cert-manager
+      spec:
+        template:
+          spec:
+            nodeSelector:
+              kubernetes.io/os: "linux"
+              kubernetes.io/arch: amd64
+            containers:
+              - name: cert-manager-controller
+                resources:
+                  requests:
+                    cpu: 10m
+                    memory: 32Mi
+                  limits:
+                    cpu: 200m
+                    memory: 128Mi
+
+- name: Patch cert-manager cainjector resources
+  kubernetes.core.k8s:
+    state: patched
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: cert-manager-cainjector
+        namespace: cert-manager
+      spec:
+        template:
+          spec:
+            nodeSelector:
+              kubernetes.io/os: "linux"
+              kubernetes.io/arch: amd64
+            containers:
+              - name: cert-manager-cainjector
+                resources:
+                  requests:
+                    cpu: 10m
+                    memory: 32Mi
+                  limits:
+                    cpu: 200m
+                    memory: 256Mi
+
+- name: Patch cert-manager webhook resources
+  kubernetes.core.k8s:
+    state: patched
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: cert-manager-webhook
+        namespace: cert-manager
+      spec:
+        template:
+          spec:
+            nodeSelector:
+              kubernetes.io/os: "linux"
+              kubernetes.io/arch: amd64
+            containers:
+              - name: cert-manager-webhook
+                resources:
+                  requests:
+                    cpu: 10m
+                    memory: 16Mi
+                  limits:
+                    cpu: 100m
+                    memory: 76Mi
+
+- name: Check if cmctl is installed
+  shell: which cmctl
+  register: cmctl_check
+  changed_when: false
+  failed_when: false
+
+- name: install cmctl on EXEC-HOST
+  shell: >
+      OS=$(go env GOOS); ARCH=$(go env GOARCH) ;
+      if [ "$(id -u)" = "0" ]; then
+        INSTALL_DIR=/usr/local/bin;
+      else
+        INSTALL_DIR=$HOME/.local/bin;
+        mkdir -p $INSTALL_DIR;
+      fi;
+      echo GO_OS: $OS;
+      echo GO_ARCH: $ARCH;
+      echo INSTALL_DIR: $INSTALL_DIR;
+      URL=https://github.com/cert-manager/cmctl/releases/latest/download/cmctl_${OS}_${ARCH};
+      echo -e "\nURL: $URL\n";
+      curl -fsSL -o cmctl $URL &&
+      chmod a+x cmctl &&
+      mv -v cmctl $INSTALL_DIR/
+  args:
+    chdir: /tmp
+  register: cmtclout
+  when: cmctl_check.rc != 0
+
+- name: debug cmctl
+  debug:
+    var: cmtclout
+  when:
+    - cmtclout is defined
+
+- name: check if api accessible
+  shell: "cmctl check api"
+  register: cmctl
+
+- name: debug
+  debug:
+    var: cmctl
+
+
+- name: Wait for cert-manager webhook to be ready
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: cert-manager-webhook
+    namespace: cert-manager
+  register: _cm_webhook
+  until: >
+    _cm_webhook.resources | length > 0 and
+    (_cm_webhook.resources[0].status.readyReplicas | default(0)) >= 1
+  retries: 30
+  delay: 10
+
+- name: Create rndc-secret in cert-manager namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: tsig-secret
+        namespace: cert-manager
+      type: generic
+      stringData:
+        tsig-secret-key: "{{ tsig_secret_key }}"
+
+- name: Create letsencrypt-production ClusterIssuer
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: cert-manager.io/v1
+      kind: ClusterIssuer
+      metadata:
+        name: letsencrypt-production
+      spec:
+        acme:
+          email: "{{ certmanager_letsencrypt_email }}"
+          server: https://acme-v02.api.letsencrypt.org/directory
+          privateKeySecretRef:
+            name: elasticc-issuer-key-production
+          solvers:
+            - dns01:
+                rfc2136:
+                  nameserver: "{{ nsupdate_server }}:53"
+                  tsigKeyName: "{{ dns_external_domain_suffix }}"
+                  tsigAlgorithm: HMACSHA256
+                  tsigSecretSecretRef:
+                    name: tsig-secret
+                    key: tsig-secret-key
+              selector:
+                dnsZones:
+                  - "{{ dns_external_domain_suffix }}"

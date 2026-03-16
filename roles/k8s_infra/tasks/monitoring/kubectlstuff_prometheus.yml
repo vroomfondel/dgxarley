@@ -1,0 +1,499 @@
+---
+# =============================================================================
+# PROMETHEUS (RBAC, ConfigMap, Deployment, Service, Ingress)
+# =============================================================================
+
+- name: Create prometheus ServiceAccount
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: prometheus
+        namespace: monitoring
+
+- name: Create prometheus ClusterRole
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: prometheus
+      rules:
+      - apiGroups: [""]
+        resources: ["nodes", "nodes/proxy", "services", "pods", "endpointslices"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["discovery.k8s.io"]
+        resources: ["endpointslices"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["extensions"]
+        resources: ["ingresses"]
+        verbs: ["get", "list", "watch"]
+      - nonResourceURLs: ["/metrics"]
+        verbs: ["get"]
+
+- name: Create prometheus ClusterRoleBinding
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: prometheus
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: prometheus
+      subjects:
+      - kind: ServiceAccount
+        name: prometheus
+        namespace: monitoring
+
+- name: Create prometheus-config ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: prometheus-config
+        namespace: monitoring
+      data:
+        prometheus.yml: |
+          global:
+            scrape_interval: 30s
+            evaluation_interval: 30s
+
+          # TELL PROMETHEUS WHERE ALERTMANAGER IS
+          alerting:
+            alertmanagers:
+            - static_configs:
+              - targets:
+                - alertmanager.monitoring.svc.cluster.local:9093
+
+          # LOAD THE RULES FILE
+          rule_files:
+            - "/etc/prometheus/alert_rules.yml"
+
+          scrape_configs:
+            - job_name: 'prometheus'
+              static_configs:
+                - targets: ['127.0.0.1:9090']
+
+            - job_name: 'kubernetes-kubelets'
+              scheme: https
+              tls_config:
+                ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+              kubernetes_sd_configs:
+                - role: node
+              relabel_configs:
+                - action: labelmap
+                  regex: __meta_kubernetes_node_label_(.+)
+              # --- RAM-Optimierung: NFD + deprecated Beta-Labels droppen ---
+              metric_relabel_configs:
+                - action: labeldrop
+                  regex: 'feature_node_kubernetes_io_.+'
+                - action: labeldrop
+                  regex: 'beta_kubernetes_io_.+'
+                # Phase 3: Konstante Labels droppen (single-node cluster)
+                - action: labeldrop
+                  regex: 'node_kubernetes_io_instance_type'
+                - action: labeldrop
+                  regex: 'node_role_kubernetes_io_master'
+
+            - job_name: 'traefik'
+              kubernetes_sd_configs:
+                - role: pod
+                  namespaces:
+                    names: ['kube-system']
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+                  action: keep
+                  regex: traefik
+                # Only keep the traefik metrics port (9100), drop all other ports
+                # This prevents scraping mosquitto/other proxy ports exposed through Traefik
+                - source_labels: [__meta_kubernetes_pod_container_port_name]
+                  action: keep
+                  regex: metrics
+
+            - job_name: 'node-exporter'
+              kubernetes_sd_configs:
+                - role: pod
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+                  action: keep
+                  regex: node-exporter
+                - source_labels: [__meta_kubernetes_pod_node_name]
+                  target_label: node
+                # Override instance label with node name (hostname) instead of IP:port
+                # for dashboard readability and cross-metric joins.
+                - source_labels: [__meta_kubernetes_pod_node_name]
+                  target_label: instance
+
+            - job_name: 'coredns'
+              kubernetes_sd_configs:
+                - role: pod
+                  namespaces:
+                    names: ['kube-system']
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_pod_label_k8s_app]
+                  action: keep
+                  regex: kube-dns
+                - source_labels: [__address__]
+                  action: replace
+                  target_label: __address__
+                  regex: ([^:]+)(?::\d+)?
+                  replacement: $1:9153
+
+            - job_name: 'kubernetes-apiservers'
+              kubernetes_sd_configs:
+                - role: endpointslice
+              scheme: https
+              tls_config:
+                ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpointslice_address_type, __meta_kubernetes_endpointslice_port_name]
+                  action: keep
+                  regex: default;kubernetes;IPv4;https
+              # --- RAM-Optimierung: Teure Histogram-Buckets droppen (~63k Serien) ---
+              metric_relabel_configs:
+                # Relabel instance from IP:port to hostname for dashboard readability
+                - source_labels: [instance]
+                  regex: '{{ k3smasterip | regex_escape }}:6443'
+                  target_label: instance
+                  replacement: "{{ k3s_master_node_hostname }}"
+                - source_labels: [__name__]
+                  regex: 'apiserver_request_duration_seconds_bucket|etcd_request_duration_seconds_bucket|apiserver_request_sli_duration_seconds_bucket|apiserver_watch_list_duration_seconds_bucket|apiserver_request_body_size_bytes_bucket|apiserver_watch_cache_read_wait_seconds_bucket|apiserver_response_sizes_bucket|apiserver_watch_events_sizes_bucket|workqueue_queue_duration_seconds_bucket|workqueue_work_duration_seconds_bucket|scheduler_plugin_execution_duration_seconds_bucket|kubernetes_feature_enabled|apiserver_admission_controller_admission_duration_seconds_bucket|apiserver_flowcontrol_request_execution_seconds_bucket|apiserver_flowcontrol_priority_level_request_utilization_bucket'
+                  action: drop
+
+            - job_name: 'kubernetes-nodes'
+              scheme: https
+              tls_config:
+                ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+              kubernetes_sd_configs:
+                - role: node
+              relabel_configs:
+                - action: labelmap
+                  regex: __meta_kubernetes_node_label_(.+)
+                - target_label: __address__
+                  replacement: kubernetes.default.svc.cluster.local:443
+                - source_labels: [__meta_kubernetes_node_name]
+                  regex: (.+)
+                  target_label: __metrics_path__
+                  replacement: /api/v1/nodes/${1}/proxy/metrics
+              # --- RAM-Optimierung: Nur kubelet-Metriken behalten ---
+              # Saves ~75k time-series (~82k → ~7k)
+              metric_relabel_configs:
+                - source_labels: [__name__]
+                  regex: 'kubelet_.+'
+                  action: keep
+                - action: labeldrop
+                  regex: 'feature_node_kubernetes_io_.+'
+                - action: labeldrop
+                  regex: 'beta_kubernetes_io_.+'
+                - action: labeldrop
+                  regex: 'node_kubernetes_io_instance_type'
+                - action: labeldrop
+                  regex: 'node_role_kubernetes_io_master'
+
+            - job_name: 'kubernetes-cadvisor'
+              scheme: https
+              tls_config:
+                ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+              kubernetes_sd_configs:
+                - role: node
+              relabel_configs:
+                - action: labelmap
+                  regex: __meta_kubernetes_node_label_(.+)
+                - target_label: __address__
+                  replacement: kubernetes.default.svc.cluster.local:443
+                - source_labels: [__meta_kubernetes_node_name]
+                  regex: (.+)
+                  target_label: __metrics_path__
+                  replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+                - source_labels: [__meta_kubernetes_node_name]
+                  target_label: node
+              # --- RAM-Optimierung: Nur dashboard-relevante cAdvisor-Metriken behalten ---
+              metric_relabel_configs:
+                - source_labels: [__name__]
+                  regex: 'container_cpu_usage_seconds_total|container_cpu_cfs_throttled_seconds_total|container_memory_working_set_bytes|container_memory_rss|container_spec_cpu_quota|container_spec_memory_limit_bytes|container_network_receive_bytes_total|container_network_receive_errors_total|container_network_receive_packets_total|container_network_receive_packets_dropped_total|container_network_transmit_bytes_total|container_network_transmit_errors_total|container_network_transmit_packets_total|container_network_transmit_packets_dropped_total|container_oom_events_total|container_fs_usage_bytes|container_fs_limit_bytes|machine_cpu_cores|machine_memory_bytes'
+                  action: keep
+                - action: labeldrop
+                  regex: 'feature_node_kubernetes_io_.+'
+                - action: labeldrop
+                  regex: 'beta_kubernetes_io_.+'
+                - action: labeldrop
+                  regex: 'node_kubernetes_io_instance_type'
+                - action: labeldrop
+                  regex: 'node_role_kubernetes_io_master'
+
+            # The Kube-State-Metrics scrape job
+            - job_name: 'kube-state-metrics'
+              static_configs:
+                - targets: ['kube-state-metrics.kube-system.svc.cluster.local:8080']
+              # --- RAM-Optimierung: NFD-Label-Metriken droppen (hoher Index-Overhead) ---
+              metric_relabel_configs:
+                - source_labels: [__name__]
+                  regex: 'kube_node_labels'
+                  action: drop
+
+            - job_name: 'kubernetes-service-endpointslices'
+              kubernetes_sd_configs:
+                - role: endpointslice
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+                  action: keep
+                  regex: true
+                - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scheme]
+                  action: replace
+                  target_label: __scheme__
+                  regex: (https?)
+                - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+                  action: replace
+                  target_label: __metrics_path__
+                  regex: (.+)
+                - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+                  action: replace
+                  target_label: __address__
+                  regex: ([^:]+)(?::\d+)?;(\d+)
+                  replacement: $1:$2
+                - action: labelmap
+                  regex: __meta_kubernetes_service_label_(.+)
+                - source_labels: [__meta_kubernetes_namespace]
+                  action: replace
+                  target_label: kubernetes_namespace
+                - source_labels: [__meta_kubernetes_service_name]
+                  action: replace
+                  target_label: kubernetes_name
+
+            # Pod discovery job
+            - job_name: 'kubernetes-pods'
+              kubernetes_sd_configs:
+                - role: pod
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+                  action: keep
+                  regex: true
+                - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+                  action: replace
+                  target_label: __metrics_path__
+                  regex: (.+)
+                - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+                  action: replace
+                  regex: ([^:]+)(?::\d+)?;(\d+)
+                  replacement: $1:$2
+                  target_label: __address__
+                - action: labelmap
+                  regex: __meta_kubernetes_pod_label_(.+)
+
+        alert_rules.yml: |
+          groups:
+          - name: cronjob-alerts
+            rules:
+            - alert: CronJobFailed
+              expr: increase(kube_job_status_failed{job_name!=""}[5m]) > 0
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                summary: "CronJob {{ '{{' }} $labels.job_name {{ '}}' }} has failed"
+                description: "Job {{ '{{' }} $labels.job_name {{ '}}' }} in namespace {{ '{{' }} $labels.namespace {{ '}}' }} has failed."
+
+          - name: ups-alerts
+            rules:
+            # DRuggeri nut_exporter metric names: network_ups_tools_<var>
+            # ups.status is exported with flag labels (OL, OB, LB, etc.)
+            - alert: UpsOnBattery
+              expr: network_ups_tools_ups_status{flag="OB"} == 1
+              for: 30s
+              labels:
+                severity: warning
+              annotations:
+                summary: "UPS {{ '{{' }} $labels.ups {{ '}}' }} is on battery power"
+                description: "UPS {{ '{{' }} $labels.ups {{ '}}' }} lost mains power and is running on battery."
+
+            - alert: UpsLowBattery
+              expr: network_ups_tools_battery_charge < 50
+              for: 30s
+              labels:
+                severity: critical
+              annotations:
+                summary: "UPS {{ '{{' }} $labels.ups {{ '}}' }} battery low ({{ '{{' }} $value {{ '}}' }}%)"
+                description: "UPS {{ '{{' }} $labels.ups {{ '}}' }} battery charge is {{ '{{' }} $value {{ '}}' }}%. Cluster shutdown imminent."
+
+            - alert: UpsUnavailable
+              expr: up{job="kubernetes-pods", app_kubernetes_io_name="nut-exporter"} == 0
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: "NUT exporter is unreachable"
+                description: "Cannot scrape UPS metrics — NUT exporter or NUT server may be down."
+
+- name: Create prometheus Deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: prometheus
+        namespace: monitoring
+      spec:
+        replicas: 1
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: prometheus
+        template:
+          metadata:
+            labels:
+              app: prometheus
+            annotations:
+              keel.sh/policy: patch
+              keel.sh/match-tag: "true"
+              keel.sh/pollSchedule: "@every 24h"
+              keel.sh/trigger: poll
+          spec:
+            nodeSelector:
+              kubernetes.io/arch: amd64
+            dnsConfig:
+              options:
+                - name: ndots
+                  value: "2"
+            serviceAccountName: prometheus
+            initContainers:
+            - name: fix-permissions
+              image: busybox
+              command: ["sh", "-c", "chown -R 65534:65534 /prometheus"]
+              volumeMounts:
+              - name: prometheus-storage-volume
+                mountPath: /prometheus/
+            containers:
+            - name: prometheus
+              image: prom/prometheus:v3.10.0
+              args:
+                - "--config.file=/etc/prometheus/prometheus.yml"
+                - "--storage.tsdb.path=/prometheus/"
+                - "--storage.tsdb.retention.time=7d"
+                - "--web.enable-lifecycle"
+              ports:
+              - name: prometheusport
+                containerPort: 9090
+              volumeMounts:
+              - name: prometheus-config-volume
+                mountPath: /etc/prometheus/
+              - name: prometheus-storage-volume
+                mountPath: /prometheus/
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 640Mi
+                limits:
+                  cpu: 1250m
+                  memory: 1Gi
+            volumes:
+            - name: prometheus-config-volume
+              configMap:
+                name: prometheus-config
+            - name: prometheus-storage-volume
+              hostPath:
+                path: /var/lib/k8s-data/prometheus
+                type: DirectoryOrCreate
+
+- name: Create prometheus Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: prometheus
+        namespace: monitoring
+      spec:
+        selector:
+          app: prometheus
+        type: ClusterIP
+        ports:
+        - port: 9090
+          targetPort: prometheusport
+
+- name: Create prometheus HTTP IngressRoute
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: prometheusingress
+        namespace: monitoring
+      spec:
+        entryPoints:
+          - web
+        routes:
+        - kind: Rule
+          match: "Host(`prometheus.{{ dns_external_domain_suffix }}`)"
+          priority: 10
+          services:
+          - kind: Service
+            name: prometheus
+            namespace: monitoring
+            passHostHeader: true
+            port: 9090
+          middlewares:
+            - name: ip-source-limiter
+              namespace: monitoring
+            - name: redirect-myhttps
+              namespace: monitoring
+
+- name: Create prometheus TLS Certificate
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: "prometheus.{{ dns_external_domain_suffix }}"
+        namespace: monitoring
+      spec:
+        dnsNames:
+          - "prometheus.{{ dns_external_domain_suffix }}"
+        secretName: "prometheus.{{ dns_external_domain_suffix }}"
+        issuerRef:
+          name: letsencrypt-production
+          kind: ClusterIssuer
+
+- name: Create prometheus HTTPS IngressRoute
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: prometheushttpsingress
+        namespace: monitoring
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - kind: Rule
+            match: "Host(`prometheus.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            services:
+              - kind: Service
+                name: prometheus
+                namespace: monitoring
+                passHostHeader: true
+                port: 9090
+            middlewares:
+              - name: ip-source-limiter
+                namespace: monitoring
+        tls:
+          secretName: "prometheus.{{ dns_external_domain_suffix }}"

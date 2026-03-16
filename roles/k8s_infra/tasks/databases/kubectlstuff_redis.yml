@@ -1,0 +1,168 @@
+---
+# https://rpi4cluster.com/k3s/k3s-redis/
+- name: Create redis namespace
+  kubernetes.core.k8s:
+    name: redis
+    api_version: v1
+    kind: Namespace
+    state: present
+
+- name: Create redis configmap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: redis-config
+        namespace: redis
+      data:
+        redis-config: |
+          daemonize no
+          port 6379
+          tcp-backlog 511
+          bind 0.0.0.0
+          timeout 0
+          tcp-keepalive 30
+          loglevel notice
+          logfile ""
+          databases 16
+          save 900 1
+          save 300 10
+          save 60 10000
+          stop-writes-on-bgsave-error yes
+          rdbcompression yes
+          rdbchecksum yes
+          dbfilename dump.rdb
+          dir /redis-data
+          replica-serve-stale-data no
+          replica-read-only yes
+          repl-diskless-sync yes
+          repl-diskless-sync-delay 2
+          repl-ping-replica-period 10
+          repl-timeout 60
+          repl-disable-tcp-nodelay no
+          repl-backlog-size 5mb
+          repl-backlog-ttl 3600
+          replica-priority 100
+          min-replicas-to-write 0
+          min-replicas-max-lag 10
+          maxmemory 1gb
+          maxmemory-policy noeviction
+          appendonly yes
+          appendfilename "appendonly.aof"
+          appenddirname "appendonlydir"
+          appendfsync everysec
+          no-appendfsync-on-rewrite yes
+          auto-aof-rewrite-percentage 50
+          auto-aof-rewrite-min-size 64mb
+          aof-load-truncated yes
+          lua-time-limit 5000
+          slowlog-log-slower-than 1000
+          slowlog-max-len 128
+          latency-monitor-threshold 0
+          hash-max-listpack-entries 512
+          hash-max-listpack-value 64
+          set-max-intset-entries 512
+          zset-max-listpack-entries 128
+          zset-max-listpack-value 64
+          hll-sparse-max-bytes 3000
+          activerehashing yes
+          client-output-buffer-limit normal 0 0 0
+          client-output-buffer-limit replica 256mb 64mb 60
+          client-output-buffer-limit pubsub 32mb 8mb 60
+          hz 10
+          aof-rewrite-incremental-fsync yes
+          notify-keyspace-events ""
+
+
+- name: Create redis service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      kind: Service
+      apiVersion: v1
+      metadata:
+        name: redis
+        namespace: redis
+        labels:
+          app: redis
+      spec:
+        selector:
+          app: redis
+        ports:
+          - port: 6379
+            name: redisport
+            targetPort: 6379
+
+
+- name: Create redis deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: redis-deployment
+        namespace: redis
+        labels:
+          app: redis-deployment
+        annotations:
+          keel.sh/policy: force
+          keel.sh/match-tag: "true"
+          keel.sh/pollSchedule: "@every 24h"
+          keel.sh/trigger: poll
+      spec:
+        replicas: 1
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: redis
+        template:
+          metadata:
+            labels:
+              app: redis
+          spec:
+            restartPolicy: Always
+            nodeSelector:
+              kubernetes.io/arch: "amd64"
+            dnsConfig:
+              options:
+                - name: ndots
+                  value: "1"
+            containers:
+              - name: redis
+                image: redis:8.6
+                command:
+                  - redis-server
+                  - "/redis/redis.conf"
+                ports:
+                  - containerPort: 6379
+                    name: redisport
+                resources:
+                  requests:
+                    memory: "1Gi"
+                    cpu: "100m"
+                  limits:
+                    memory: "1536Mi"
+                    cpu: "500m"
+                env:
+                  - name: NODE_IP
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: status.hostIP
+                volumeMounts:
+                  - name: redis-data
+                    mountPath: /redis-data
+                  - name: redis-config
+                    subPath: redis-config
+                    mountPath: /redis/redis.conf
+            volumes:
+              - name: redis-data
+                hostPath:
+                  path: "{{ k8s_infra_data_base }}/redis"
+                  type: DirectoryOrCreate
+              - name: redis-config
+                configMap:
+                  name: redis-config

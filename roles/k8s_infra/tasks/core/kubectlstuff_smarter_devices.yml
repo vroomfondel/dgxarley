@@ -1,0 +1,124 @@
+---
+# kubectlstuff_smarter_devices.yml
+#
+# SMARTER Device Manager — Kubernetes-native device scheduling
+# https://github.com/smarter-project/smarter-device-manager
+#
+# Runs as a DaemonSet on all nodes. Scans /dev for devices matching the
+# regex patterns in the ConfigMap and registers them as extended resources.
+# Nodes without matching devices are a harmless no-op.
+#
+# To expose additional device types, add entries to the ConfigMap conf.yaml:
+#   - devicematch: ^apex[0-9]*$    # Google Coral TPU
+#     nummaxdevices: 1
+#   - devicematch: ^nvidia[0-9]*$  # NVIDIA GPU
+#     nummaxdevices: 1
+#   - devicematch: ^dri/renderD[0-9]*$  # Intel/AMD DRM render nodes
+#     nummaxdevices: 5
+# Each match produces a separate extended resource (smarter-devices/<dev>).
+#
+# Pods request the device via resource limits instead of privileged mode:
+#   resources:
+#     limits:
+#       smarter-devices/mali0: 1
+#
+# This replaces `privileged: true` + hostPath mounts for /dev/mali0.
+
+- name: Create smarter-device-manager namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: smarter-device-manager
+
+- name: Create smarter-device-manager ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: smarter-device-manager-config
+        namespace: smarter-device-manager
+      data:
+        conf.yaml: |
+          - devicematch: ^mali[0-9]*$
+            nummaxdevices: 1
+          - devicematch: ^dri/renderD[0-9]*$
+            nummaxdevices: 5
+          - devicematch: ^dri/card[0-9]*$
+            nummaxdevices: 5
+
+- name: Create smarter-device-manager DaemonSet
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: smarter-device-manager
+        namespace: smarter-device-manager
+        labels:
+          app: smarter-device-manager
+        annotations:
+          keel.sh/policy: patch
+          keel.sh/match-tag: "true"
+          keel.sh/pollSchedule: "@every 24h"
+          keel.sh/trigger: poll
+      spec:
+        selector:
+          matchLabels:
+            app: smarter-device-manager
+        template:
+          metadata:
+            labels:
+              app: smarter-device-manager
+          spec:
+            hostNetwork: true
+            dnsPolicy: ClusterFirstWithHostNet
+            priorityClassName: system-node-critical
+            tolerations:
+              - operator: Exists
+                effect: NoSchedule
+            containers:
+              - name: smarter-device-manager
+                # gh api repos/smarter-project/smarter-device-manager/tags --jq '.[].name' | head -10
+                image: ghcr.io/smarter-project/smarter-device-manager:v1.20.12
+                imagePullPolicy: IfNotPresent
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop:
+                      - ALL
+                resources:
+                  requests:
+                    cpu: 10m
+                    memory: 15Mi
+                  limits:
+                    cpu: 100m
+                    memory: 15Mi
+                volumeMounts:
+                  - name: device-plugin
+                    mountPath: /var/lib/kubelet/device-plugins
+                  - name: dev-dir
+                    mountPath: /dev
+                  - name: sys-dir
+                    mountPath: /sys
+                    readOnly: true
+                  - name: config
+                    mountPath: /root/config
+            volumes:
+              - name: device-plugin
+                hostPath:
+                  path: /var/lib/kubelet/device-plugins
+              - name: dev-dir
+                hostPath:
+                  path: /dev
+              - name: sys-dir
+                hostPath:
+                  path: /sys
+              - name: config
+                configMap:
+                  name: smarter-device-manager-config

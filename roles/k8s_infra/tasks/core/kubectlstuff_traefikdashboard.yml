@@ -1,0 +1,241 @@
+---
+### https://doc.traefik.io/traefik/routing/providers/kubernetes-crd/
+### https://blog.b1-systems.de/der-traefik-ingress-controller
+- name: Create traefik service
+  kubernetes.core.k8s:
+    state: absent
+    definition:
+      kind: Service
+      apiVersion: v1
+      metadata:
+        name: traefik-dashboard-service
+        namespace: kube-system
+        labels:
+          app: traefik-dashboard-service
+      spec:
+        selector:
+          app.kubernetes.io/name: traefik
+        ports:
+          - port: 9000
+            name: traefikdashport
+            targetPort: 9000
+
+
+- name: Create traefik-dashboard-auth-middleware secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: traefik-auth
+        namespace: kube-system
+      type: Opaque
+      stringData:
+        # runs: htpasswd -nbB admin <password>
+        users: "{{ lookup('pipe', 'htpasswd -nbB admin ' ~ (traefik_dashboard_password | default('changeme'))) }}"
+          
+
+- name: Create traefik-dashboard-auth-middleware
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: traefik-auth
+        namespace: kube-system
+      spec:
+        basicAuth:
+          secret: traefik-auth
+
+
+- name: Create traefik-connection-termination-middleware
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: traefik-connection-termination
+        namespace: kube-system
+      spec:
+        headers:
+          customResponseHeaders:
+            Connection: "close"
+
+
+
+- name: Create http to https redirect middleware
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: redirect-myhttps
+        namespace: kube-system
+      spec:
+#        redirectRegex:
+#          regex: "^http://(.*)/(.*)"
+#          replacement: "https://${1}/${2}"
+        redirectScheme:
+          scheme: https
+
+
+
+- name: Create http to https redirect route
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: traefik-dashboard-redirect
+        namespace: kube-system
+      spec:
+        entryPoints:
+          - web
+        routes:
+          - match: "Host(`traefik.{{ dns_external_domain_suffix }}`)"
+            kind: Rule
+            services:
+#              - kind: Service
+#                name: traefik-dashboard-service
+#                namespace: kube-system
+#                passHostHeader: true
+#                port: 9000
+              - name: api@internal # Special service created by Traefik pod
+                kind: TraefikService
+                # namespace: kube-system  # Not needed for api@internal - causes "namespace ignored in cross-provider context" warning
+                passHostHeader: true
+            middlewares:
+              - name: redirect-myhttps
+                namespace: kube-system
+
+
+
+- name: Create traefik-dashboard-tls-certificate
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: "traefik.{{ dns_external_domain_suffix }}"
+        namespace: kube-system
+      spec:
+        dnsNames:
+          - "traefik.{{ dns_external_domain_suffix }}"
+        secretName: "traefik.{{ dns_external_domain_suffix }}"
+        issuerRef:
+          name: letsencrypt-production
+          kind: ClusterIssuer
+
+
+# https://doc.traefik.io/traefik/routing/providers/kubernetes-crd/#kind-ingressroutetcp
+
+
+- name: Create traefik-dashboard HTTPS ingressroute
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: traefik-dashboard-ingress-https
+        namespace: kube-system
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - kind: Rule
+            # match: Host(`traefik.example.com`) && (PathPrefix(`/dashboard`) || PathPrefix(`/api`))
+            match: "Host(`traefik.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            services:
+              - name: api@internal # Special service created by Traefik pod
+                kind: TraefikService
+                passHostHeader: true
+                # namespace: kube-system  # Not needed for api@internal - causes "namespace ignored in cross-provider context" warning
+#              - kind: Service
+#                name: traefik-dashboard-service
+#                namespace: kube-system
+#                passHostHeader: true
+#                port: 9000
+            middlewares:
+              - name: traefik-auth
+                namespace: kube-system
+        tls:
+          secretName: "traefik.{{ dns_external_domain_suffix }}"
+
+
+#- name: Create traefik-dashboard HTTPS ingressroute
+#  kubernetes.core.k8s:
+#    state: present
+#    definition:
+#      apiVersion: traefik.io/v1alpha1
+#      kind: IngressRoute
+#      metadata:
+#        name: traefik-dashboard-ingress-https
+#        namespace: kube-system
+##        annotations:
+##          traefik.ingress.kubernetes.io/router.entrypoints: websecure
+##          traefik.ingress.kubernetes.io/router.tls: "true"
+##          cert-manager.io/cluster-issuer: letsencrypt-issuer
+#      spec:
+#        entryPoints:
+#          - websecure
+#        routes:
+#          - match: Host(`traefik.example.com`)
+#          # - match: Host(`traefik.example.com`) && (PathPrefix(`/dashboard`) || PathPrefix(`/api`))
+#            kind: Rule
+#            priority: 10
+#            services:
+##              - kind: Service
+##                name: traefik-dashboard
+##                namespace: kube-system
+##                passHostHeader: true
+##                port: 9000
+#              - name: dashboard@internal # Special service created by Traefik pod
+#                kind: TraefikService
+#                targetPort: 9000
+#            # Enable auth middleware
+##            middlewares:
+##              - name: redirect-myhttps
+##              - name: traefik-auth
+#        tls:
+#          secretName: traefik.example.com
+###          domains:
+##              - main: example.net
+##                sans:
+##                - a.example.net
+##                - b.example.net
+##          tls:
+##            certResolver: myresolver
+#      #      responseForwarding:
+#      #        flushInterval: 1ms
+#      #      scheme: https
+#      #      serversTransport: transport   # [10]
+#      #      sticky:
+#      #        cookie:
+#      #          httpOnly: true
+#      #          name: cookie
+#      #          secure: true
+#      #          sameSite: none
+#      #      strategy: RoundRobin
+#      #      weight: 10
+#      #  tls:                              # [11]
+#      #    secretName: supersecret         # [12]
+#      #    options:                        # [13]
+#      #      name: opt                     # [14]
+#      #      namespace: default            # [15]
+#      #    certResolver: foo               # [16]
+#      #    domains:                        # [17]
+#      #    - main: example.net             # [18]
+#      #      sans:                         # [19]
+#      #      - a.example.net
+#      #      - b.example.net
+
+
+

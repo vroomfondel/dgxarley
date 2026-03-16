@@ -1,0 +1,97 @@
+---
+# =============================================================================
+# NODE EXPORTER
+# =============================================================================
+
+- name: Create node-exporter DaemonSet
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: node-exporter
+        namespace: monitoring
+        labels:
+          app.kubernetes.io/name: node-exporter
+      spec:
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: node-exporter
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: node-exporter
+            annotations:
+              keel.sh/policy: patch
+              keel.sh/match-tag: "true"
+              keel.sh/pollSchedule: "@every 24h"
+              keel.sh/trigger: poll
+          spec:
+            hostPID: true
+            containers:
+            - name: node-exporter
+              image: prom/node-exporter:v1.10.2
+              args:
+                - '--path.procfs=/host/proc'
+                - '--path.sysfs=/host/sys'
+                - '--path.rootfs=/host/root'
+                - '--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/.+)($|/)'
+              ports:
+              - name: metrics
+                containerPort: 9100
+              volumeMounts:
+              - name: proc
+                mountPath: /host/proc
+                readOnly: true
+              - name: sys
+                mountPath: /host/sys
+                readOnly: true
+              - name: root
+                mountPath: /host/root
+                readOnly: true
+                mountPropagation: HostToContainer
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 65534
+              resources:
+                requests:
+                  cpu: 15m
+                  memory: 32Mi
+                limits:
+                  cpu: 50m
+                  memory: 50Mi
+            volumes:
+            - name: proc
+              hostPath:
+                path: /proc
+            - name: sys
+              hostPath:
+                path: /sys
+            - name: root
+              hostPath:
+                path: /
+            tolerations:
+            - effect: NoSchedule
+              operator: Exists
+
+- name: Create node-exporter Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: node-exporter
+        namespace: monitoring
+        labels:
+          app.kubernetes.io/name: node-exporter
+      spec:
+        type: ClusterIP
+        clusterIP: None  # Headless service for DaemonSet
+        ports:
+        - name: metrics
+          port: 9100
+          targetPort: metrics
+        selector:
+          app.kubernetes.io/name: node-exporter

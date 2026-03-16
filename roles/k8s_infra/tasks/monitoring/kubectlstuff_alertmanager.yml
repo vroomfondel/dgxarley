@@ -1,0 +1,285 @@
+---
+# =============================================================================
+# ALERTMANAGER (Secret, ConfigMaps, Gotify Bridge, Deployments, Services)
+# =============================================================================
+
+- name: Create alertmanager-secrets
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: alertmanager-secrets
+        namespace: monitoring
+      type: Opaque
+      stringData:
+        SMTP_SMARTHOST: "{{ alertmanager_smtp_smarthost }}"
+        SMTP_MAILFROM: "{{ alertmanager_smtp_mailfrom }}"
+        ALERT_EMAIL: "{{ alertmanager_alert_email }}"
+        GOTIFY_TOKEN: "{{ alertmanager_gotify_token }}"
+        GOTIFY_URL: "{{ alertmanager_gotify_url }}"
+
+- name: Create alertmanager-config ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: alertmanager-config
+        namespace: monitoring
+      data:
+        alertmanager.yml: |
+          global:
+            resolve_timeout: 5m
+            smtp_smarthost: '${SMTP_SMARTHOST}'
+            smtp_from: '${SMTP_MAILFROM}'
+
+          route:
+            group_by: ['alertname']
+            group_wait: 10s
+            group_interval: 10s
+            repeat_interval: 8760h  # 1 year
+            receiver: 'email-and-gotify' # Default receiver
+
+          receivers:
+          - name: 'email-and-gotify'
+            email_configs:
+            - to: '${ALERT_EMAIL}'
+              send_resolved: true
+              require_tls: false
+              headers:
+                Subject: '[{{ '{{' }} .Status | toUpper {{ '}}' }}] {{ '{{' }} .GroupLabels.alertname {{ '}}' }}'
+              text: |
+                {{ '{{' }} range .Alerts {{ '}}' }}
+                Alert: {{ '{{' }} .Labels.alertname {{ '}}' }}
+                Severity: {{ '{{' }} .Labels.severity {{ '}}' }}
+                Job: {{ '{{' }} .Labels.job_name {{ '}}' }}
+                Namespace: {{ '{{' }} .Labels.namespace {{ '}}' }}
+
+                Summary: {{ '{{' }} .Annotations.summary {{ '}}' }}
+                Description: {{ '{{' }} .Annotations.description {{ '}}' }}
+
+                Status: {{ '{{' }} .Status {{ '}}' }}
+                ---
+                {{ '{{' }} end {{ '}}' }}
+              html: |
+                {{ '{{' }} range .Alerts {{ '}}' }}
+                <h2>Alert: {{ '{{' }} .Labels.alertname {{ '}}' }}</h2>
+                <p><strong>Severity:</strong> {{ '{{' }} .Labels.severity {{ '}}' }}</p>
+                <p><strong>Job:</strong> {{ '{{' }} .Labels.job_name {{ '}}' }}</p>
+                <p><strong>Namespace:</strong> {{ '{{' }} .Labels.namespace {{ '}}' }}</p>
+                <hr>
+                <p><strong>Summary:</strong> {{ '{{' }} .Annotations.summary {{ '}}' }}</p>
+                <p>{{ '{{' }} .Annotations.description {{ '}}' }}</p>
+                <p><strong>Status:</strong> {{ '{{' }} .Status {{ '}}' }}</p>
+                <hr>
+                {{ '{{' }} end {{ '}}' }}
+            webhook_configs:
+            - url: 'http://alertmanager-gotify-bridge.monitoring.svc.cluster.local:8080/webhook'
+              send_resolved: true
+
+- name: Create gotify-bridge-script ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: gotify-bridge-script
+        namespace: monitoring
+      data:
+        bridge.py: "{{ lookup('file', 'gotify_bridge.py') }}"
+
+- name: Create alertmanager-gotify-bridge Deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: alertmanager-gotify-bridge
+        namespace: monitoring
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: alertmanager-gotify-bridge
+        template:
+          metadata:
+            labels:
+              app: alertmanager-gotify-bridge
+            annotations:
+              keel.sh/policy: force
+              keel.sh/match-tag: "true"
+              keel.sh/pollSchedule: "@every 24h"
+              keel.sh/trigger: poll
+          spec:
+            nodeSelector:
+              kubernetes.io/arch: amd64
+            containers:
+              - name: bridge
+                image: python:3.14-slim-trixie
+                command: ["/bin/sh", "-c"]
+                args:
+                  - |
+                    apt update && apt -y install tini procps && \
+                    pip install --no-cache-dir requests && \
+                    touch /tmp/startup-complete && \
+                    exec tini -- python /app/bridge.py
+                ports:
+                  - containerPort: 8080
+                    name: http
+                startupProbe:
+                  exec:
+                    command: ["test", "-f", "/tmp/startup-complete"]
+                  failureThreshold: 30
+                  periodSeconds: 2
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: http
+                  periodSeconds: 10
+                readinessProbe:
+                  httpGet:
+                    path: /readyz
+                    port: http
+                  periodSeconds: 5
+                env:
+                  - name: TINI_SUBREAPER
+                    value: "1"
+                envFrom:
+                  - secretRef:
+                      name: alertmanager-secrets
+                volumeMounts:
+                  - name: script
+                    mountPath: /app
+                resources:
+                  requests:
+                    cpu: 15m
+                    memory: 50Mi
+                  limits:
+                    cpu: 1500m
+                    memory: 450Mi
+            volumes:
+            - name: script
+              configMap:
+                name: gotify-bridge-script
+                defaultMode: 0755
+
+- name: Create alertmanager-gotify-bridge Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: alertmanager-gotify-bridge
+        namespace: monitoring
+      spec:
+        selector:
+          app: alertmanager-gotify-bridge
+        ports:
+        - port: 8080
+          targetPort: http
+
+- name: Create alertmanager Deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: alertmanager
+        namespace: monitoring
+      spec:
+        replicas: 1
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: alertmanager
+        template:
+          metadata:
+            labels:
+              app: alertmanager
+            annotations:
+              kubectl.kubernetes.io/default-container: "alertmanager"
+              keel.sh/policy: patch
+              keel.sh/match-tag: "true"
+              keel.sh/pollSchedule: "@every 24h"
+              keel.sh/trigger: poll
+          spec:
+            nodeSelector:
+              kubernetes.io/arch: amd64
+            initContainers:
+            - name: envsubst-config
+              image: alpine:latest
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  apk add --no-cache gettext && \
+                  export SMTP_SMARTHOST="${HOST_IP}:25" && \
+                  envsubst < /config-template/alertmanager.yml > /etc/alertmanager/alertmanager.yml
+              env:
+              - name: HOST_IP
+                valueFrom:
+                  fieldRef:
+                    fieldPath: status.hostIP
+              envFrom:
+              - secretRef:
+                  name: alertmanager-secrets
+              volumeMounts:
+              - name: config-template
+                mountPath: /config-template
+              - name: config-processed
+                mountPath: /etc/alertmanager
+            containers:
+            - name: alertmanager
+              image: prom/alertmanager:v0.31.1
+              args:
+                - "--config.file=/etc/alertmanager/alertmanager.yml"
+                - "--storage.path=/alertmanager"
+                - "--log.level=debug"
+              ports:
+              - name: alertmgrport
+                containerPort: 9093
+              volumeMounts:
+              - name: config-processed
+                mountPath: /etc/alertmanager
+              - name: storage-volume
+                mountPath: /alertmanager
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 50Mi
+                limits:
+                  cpu: 200m
+                  memory: 100Mi
+            volumes:
+            - name: config-template
+              configMap:
+                name: alertmanager-config
+            - name: config-processed
+              emptyDir: {}
+            - name: storage-volume
+              hostPath:
+                path: /var/lib/k8s-data/alertmanager
+                type: DirectoryOrCreate
+
+- name: Create alertmanager Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: alertmanager
+        namespace: monitoring
+      spec:
+        selector:
+          app: alertmanager
+        ports:
+        - port: 9093
+          targetPort: alertmgrport

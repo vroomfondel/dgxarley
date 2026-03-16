@@ -1,0 +1,162 @@
+---
+- name: Create uptimekuma namespace
+  kubernetes.core.k8s:
+    name: uptimekuma
+    api_version: v1
+    kind: Namespace
+    state: present
+
+
+- name: Create uptimekuma service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      kind: Service
+      apiVersion: v1
+      metadata:
+        name: uptimekuma
+        namespace: uptimekuma
+        labels:
+          app: uptimekuma
+      spec:
+        selector:
+          app: uptimekuma
+        ports:
+          - port: 3001
+            targetPort: uptimekumaport
+            name: uptimekumaport
+
+- name: Create uptimekuma deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: uptimekuma-deployment
+        namespace: uptimekuma
+        labels:
+          app: uptimekuma-deployment
+        annotations:
+          keel.sh/policy: force
+          keel.sh/match-tag: "true"
+          keel.sh/pollSchedule: "@every 24h"
+          keel.sh/trigger: poll
+      spec:
+        replicas: 1
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: uptimekuma
+        template:
+          metadata:
+            labels:
+              app: uptimekuma
+          spec:
+            restartPolicy: Always
+            nodeSelector:
+              kubernetes.io/arch: amd64
+            dnsConfig:
+              options:
+                - name: ndots
+                  value: "1"
+            containers:
+              - name: uptimekuma
+                image: louislam/uptime-kuma:2
+                imagePullPolicy: Always
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 200Mi
+                  limits:
+                    cpu: 500m
+                    memory: 512Mi
+                ports:
+                  - containerPort: 3001
+                    name: uptimekumaport
+                env:
+                  - name: trusted-proxy-headers
+                    value: "X-Forwarded-For,X-Real-IP"
+                  - name: NODE_IP
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: status.hostIP
+                volumeMounts:
+                  - name: uptimekuma-data
+                    mountPath: /app/data
+            volumes:
+              - name: uptimekuma-data
+                hostPath:
+                  path: "{{ k8s_infra_data_base }}/uptimekuma"
+                  type: DirectoryOrCreate
+
+
+- name: Create uptimekuma-tls-certificate
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: "uptimekuma.{{ dns_external_domain_suffix }}"
+        namespace: uptimekuma
+      spec:
+        dnsNames:
+          - "uptimekuma.{{ dns_external_domain_suffix }}"
+        secretName: "uptimekuma.{{ dns_external_domain_suffix }}"
+        issuerRef:
+          name: letsencrypt-production
+          kind: ClusterIssuer
+
+
+
+- name: Create uptimekuma ingressroute HTTPS
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: uptimekumaingresstls
+        namespace: uptimekuma
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - kind: Rule
+            match: "Host(`uptimekuma.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            services:
+              - kind: Service
+                name: uptimekuma
+                namespace: uptimekuma
+                passHostHeader: true
+                port: 3001
+        tls:
+          secretName: "uptimekuma.{{ dns_external_domain_suffix }}"
+
+
+
+- name: Create uptimekuma ingressroute HTTP
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: uptimekumaingress
+        namespace: uptimekuma
+      spec:
+        entryPoints:
+          - web
+        routes:
+          - kind: Rule
+            match: "Host(`uptimekuma.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            services:
+              - kind: Service
+                name: uptimekuma
+                namespace: uptimekuma
+                passHostHeader: true
+                port: 3001

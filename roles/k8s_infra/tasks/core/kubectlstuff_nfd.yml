@@ -1,0 +1,42 @@
+---
+# kubectlstuff_nfd.yml
+# Node Feature Discovery v0.18.3 — auto-labels nodes with hardware capabilities
+# (CPU family, GPU vendor/device, instruction sets, etc.)
+# https://github.com/kubernetes-sigs/node-feature-discovery
+#
+# To upgrade: kubectl kustomize "https://github.com/kubernetes-sigs/node-feature-discovery/deployment/overlays/default?ref=v<VERSION>" > roles/kubectlstuff/files/nfd_node-feature-discovery.yml
+
+- name: Deploy Node Feature Discovery
+  kubernetes.core.k8s:
+    state: present
+    definition: "{{ lookup('file', 'nfd_node-feature-discovery.yml') | from_yaml_all }}"
+
+- name: Patch nfd-gc nodeSelector
+  kubernetes.core.k8s:
+    state: patched
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: nfd-gc
+        namespace: node-feature-discovery
+      spec:
+        template:
+          spec:
+            nodeSelector:
+              kubernetes.io/arch: amd64
+
+- name: Patch nfd-master nodeSelector
+  kubernetes.core.k8s:
+    state: patched
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: nfd-master
+        namespace: node-feature-discovery
+      spec:
+        template:
+          spec:
+            nodeSelector:
+              kubernetes.io/arch: amd64

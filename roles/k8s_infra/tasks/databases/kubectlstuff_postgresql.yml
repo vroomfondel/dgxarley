@@ -1,0 +1,276 @@
+---
+- name: Create postgresql namespace
+  kubernetes.core.k8s:
+    name: postgresql
+    api_version: v1
+    kind: Namespace
+    state: present
+
+
+- name: Create postgresql-secrets which will be used in ENV in the container
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: postgresql-secrets
+        namespace: postgresql
+      type: Opaque
+      stringData:
+        POSTGRES_PASSWORD: "{{ postgresql_postgres_password }}"
+        OPENWEBUI_POSTGRES_PASSWORD: "{{ postgresql_openwebui_password }}"
+
+
+- name: Create postgresql service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      kind: Service
+      apiVersion: v1
+      metadata:
+        name: postgresql
+        namespace: postgresql
+        labels:
+          app: postgresql
+      spec:
+        selector:
+          app: postgresql
+        ports:
+          - port: 5432
+            name: psqlport
+            targetPort: 5432
+
+
+
+- name: Create postgresql configmap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: postgresql-config
+        namespace: postgresql
+      data:
+        # Main postgresql.conf - minimal, just includes conf.d
+        postgresql.conf: |
+          # Minimal postgresql.conf - include custom configs from conf.d
+          listen_addresses = '*'
+          include_dir = 'conf.d'
+
+        # Custom PostgreSQL configuration (included via include_dir)
+        # Optimized for 1Gi RAM container, hostPath storage on k3smaster NVMe
+        custom.conf: |
+          # =============================================================================
+          # CONNECTIONS
+          # =============================================================================
+          max_connections = 100
+
+          # =============================================================================
+          # MEMORY (optimized for 1Gi container)
+          # =============================================================================
+          shared_buffers = 256MB
+          effective_cache_size = 768MB
+          work_mem = 8MB
+          maintenance_work_mem = 128MB
+
+          # =============================================================================
+          # WAL / CHECKPOINTS
+          # =============================================================================
+          wal_buffers = 16MB
+          max_wal_size = 1GB
+          min_wal_size = 256MB
+          checkpoint_completion_target = 0.9
+
+          # =============================================================================
+          # QUERY PLANNER (hostPath on NVMe)
+          # =============================================================================
+          random_page_cost = 1.1
+          effective_io_concurrency = 200
+
+          # =============================================================================
+          # LOGGING
+          # =============================================================================
+          log_timezone = 'Europe/Berlin'
+          log_statement = 'ddl'
+          log_min_duration_statement = 1000
+
+          # =============================================================================
+          # LOCALE / TIMEZONE
+          # =============================================================================
+          timezone = 'Europe/Berlin'
+          datestyle = 'iso, dmy'
+          lc_messages = 'de_DE.utf8'
+          lc_monetary = 'de_DE.utf8'
+          lc_numeric = 'de_DE.utf8'
+          lc_time = 'de_DE.utf8'
+          default_text_search_config = 'pg_catalog.german'
+
+          # =============================================================================
+          # AUTOVACUUM
+          # =============================================================================
+          autovacuum = on
+          autovacuum_max_workers = 3
+          autovacuum_naptime = 1min
+          autovacuum_vacuum_scale_factor = 0.05
+          autovacuum_analyze_scale_factor = 0.025
+
+
+- name: Create postgresql docker-initdb.d files
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: postgresql-docker-initdb-config
+        namespace: postgresql
+      data:
+        1_printenv.sh: |
+          id
+          env
+          pwd
+          echo "****************"
+          ls -haltr /docker-entrypoint-initdb.d
+          echo "****************"
+          echo "****************"
+          ls -haltr /var/lib/postgresql /var/lib/postgresql/18
+          echo "****************"
+
+        2_settimezone.sh: |
+          # id: postgres :-{
+          id
+          export TZ='Europe/Berlin'
+          env
+
+        3_createdb_openwebui.sh: |
+          #!/bin/bash
+          export TZ='Europe/Berlin'
+          export OPENWEBUI_POSTGRES_PASSWORD=${OPENWEBUI_POSTGRES_PASSWORD:-${POSTGRES_PASSWORD}}
+
+          psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+          	CREATE USER openwebui WITH PASSWORD '$OPENWEBUI_POSTGRES_PASSWORD';
+          	CREATE DATABASE openwebui owner openwebui;
+          	GRANT ALL PRIVILEGES ON DATABASE openwebui TO openwebui;
+          	CREATE DATABASE openwebui_vectors owner openwebui;
+          	GRANT ALL PRIVILEGES ON DATABASE openwebui_vectors TO openwebui;
+          EOSQL
+
+          # Enable pgvector extension for Open WebUI RAG vector database
+          psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "openwebui_vectors" <<-EOSQL
+          	CREATE EXTENSION IF NOT EXISTS vector;
+          EOSQL
+
+          echo $0 done
+
+
+- name: Create postgresql deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: postgresql-deployment
+        namespace: postgresql
+        labels:
+          app: postgresql-deployment
+        annotations:
+          keel.sh/policy: force
+          keel.sh/match-tag: "true"
+          keel.sh/pollSchedule: "@every 5m"
+          keel.sh/trigger: poll
+      spec:
+        replicas: 1
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: postgresql
+        template:
+          metadata:
+            labels:
+              app: postgresql
+          spec:
+            restartPolicy: Always
+            nodeSelector:
+              kubernetes.io/arch: "amd64"
+            dnsConfig:
+              options:
+                - name: ndots
+                  value: "1"
+            containers:
+              - name: postgresql
+                imagePullPolicy: Always
+                image: xomoxcc/postgreslocaled:latest
+                ports:
+                  - containerPort: 5432
+                    name: psqlport
+                envFrom:
+                  - secretRef:
+                      name: postgresql-secrets
+                env:
+                  - name: NODE_IP
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: status.hostIP
+                  - name: POD_IP
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: status.podIP
+                readinessProbe:
+                  exec:
+                    command: [ "pg_isready", "-U", "postgres", "-h", "127.0.0.1", "-p", "5432" ]
+                  initialDelaySeconds: 15
+                  timeoutSeconds: 2
+                startupProbe:
+                  exec:
+                    command: [ "pg_isready", "-U", "postgres", "-h", "127.0.0.1", "-p", "5432" ]
+                  failureThreshold: 30
+                  periodSeconds: 10
+                livenessProbe:
+                  exec:
+                    command: [ "pg_isready", "-U", "postgres", "-h", "127.0.0.1", "-p", "5432" ]
+                  periodSeconds: 10
+                  timeoutSeconds: 2
+                resources:
+                  requests:
+                    cpu: "100m"
+                    memory: "750Mi"
+                  limits:
+                    cpu: "3500m"
+                    memory: "1.5Gi"
+                volumeMounts:
+                  - name: postgresql18-data
+                    mountPath: /var/lib/postgresql
+                  - name: postgresql-docker-initdb-config
+                    mountPath: /docker-entrypoint-initdb.d
+                  - name: postgresql-conf
+                    mountPath: /etc/postgresql/postgresql.conf
+                    subPath: postgresql.conf
+                    readOnly: true
+                  - name: postgresql-conf-d
+                    mountPath: /etc/postgresql/conf.d
+                    readOnly: true
+                args:
+                  - -c
+                  - config_file=/etc/postgresql/postgresql.conf
+            volumes:
+              - name: postgresql18-data
+                hostPath:
+                  path: "{{ k8s_infra_data_base }}/postgresql"
+                  type: DirectoryOrCreate
+              - name: postgresql-docker-initdb-config
+                configMap:
+                  name: postgresql-docker-initdb-config
+                  defaultMode: 0777
+              - name: postgresql-conf
+                configMap:
+                  name: postgresql-config
+              - name: postgresql-conf-d
+                configMap:
+                  name: postgresql-config
+                  items:
+                    - key: custom.conf
+                      path: custom.conf

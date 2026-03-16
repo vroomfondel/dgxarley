@@ -1,0 +1,199 @@
+---
+- name: Create keel namespace
+  kubernetes.core.k8s:
+    name: keel
+    api_version: v1
+    kind: Namespace
+    state: present
+
+- name: create keel serviceaccount
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: ServiceAccount
+    namespace: keel
+    state: present
+    definition:
+      metadata:
+        name: keel
+        labels:
+          app: keel
+
+
+- name: create keel clusterrole
+  kubernetes.core.k8s:
+    api_version: rbac.authorization.k8s.io/v1
+    kind: ClusterRole
+    state: present
+    definition:
+      metadata:
+        name: keel
+      rules:
+        - apiGroups:
+            - ""
+          resources:
+            - namespaces
+          verbs:
+            - watch
+            - list
+        - apiGroups:
+            - ""
+          resources:
+            - secrets
+          verbs:
+            - get
+            - watch
+            - list
+        - apiGroups:
+            - ""
+            - extensions
+            - apps
+            - batch
+          resources:
+            - pods
+            - replicasets
+            - replicationcontrollers
+            - statefulsets
+            - deployments
+            - daemonsets
+            - jobs
+            - cronjobs
+          verbs:
+            - get
+            - delete # required to delete pods during force upgrade of the same tag
+            - watch
+            - list
+            - update
+        - apiGroups:
+            - ""
+          resources:
+            - configmaps
+            - pods/portforward
+          verbs:
+            - get
+            - create
+            - update
+
+
+- name: create keel clusterrolebinding
+  kubernetes.core.k8s:
+    api_version: rbac.authorization.k8s.io/v1
+    kind: ClusterRoleBinding
+    state: present
+    definition:
+      metadata:
+        name: keel
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: keel
+      subjects:
+        - kind: ServiceAccount
+          name: keel
+          namespace: keel
+
+
+- name: Create keel service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      kind: Service
+      apiVersion: v1
+      metadata:
+        name: keel
+        namespace: keel
+        labels:
+          app: keel
+      spec:
+        selector:
+          app: keel
+        ports:
+          - port: 9300
+            name: keel
+            targetPort: 9300
+            protocol: TCP
+
+
+- name: Create keel deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: keel
+        namespace: keel
+        labels:
+          app: keel
+      spec:
+        replicas: 1
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: keel
+        template:
+          metadata:
+            labels:
+              app: keel
+          spec:
+            serviceAccountName: keel
+            nodeSelector:
+              kubernetes.io/arch: amd64
+            dnsConfig:
+              options:
+                - name: ndots
+                  value: "1"
+            initContainers:
+              - name: volume-mount-hack
+                image: busybox
+                command: [ "sh", "-c", "chown -R 666:666 /data" ]
+                volumeMounts:
+                  - mountPath: /data
+                    name: keel-data
+            containers:
+              - name: keel
+                image: "keelhq/keel:latest"
+                imagePullPolicy: Always
+                command: ["/bin/keel"]
+                env:
+                  - name: NAMESPACE
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: metadata.namespace
+                  - name: WEBHOOK_ENDPOINT
+                    value: "{{ keel_webhook_endpoint }}"
+                  # Basic auth (to enable UI/API)
+                  - name: BASIC_AUTH_USER
+                    value: admin
+                  - name: BASIC_AUTH_PASSWORD
+                    value: "{{ keel_basic_auth_password }}"
+                  - name: AUTHENTICATED_WEBHOOKS
+                    value: "false"
+                  # Enable insecure registries
+                  - name: INSECURE_REGISTRY
+                    value: "true"
+                  - name: NOTIFICATION_LEVEL
+                    value: "info"
+                ports:
+                  - containerPort: 9300
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: 9300
+                  initialDelaySeconds: 30
+                  timeoutSeconds: 10
+                resources:
+                  limits:
+                    cpu: 100m
+                    memory: 128Mi
+                  requests:
+                    cpu: 50m
+                    memory: 64Mi
+                volumeMounts:
+                  - mountPath: /data
+                    name: keel-data
+            volumes:
+              - name: keel-data
+                hostPath:
+                  path: "{{ k8s_infra_data_base }}/keel"
+                  type: DirectoryOrCreate

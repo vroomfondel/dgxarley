@@ -1,0 +1,25 @@
+---
+# hostPath base directory on k3smaster
+k8s_infra_data_base: "/var/lib/k8s-data"
+# Subdirectories: postgresql, redis, keel, loki, grafana, grafana-dashboards,
+#                 prometheus, alertmanager, uptimekuma, tang, pgbackup
+
+# Secrets (overridden by vault)
+postgresql_postgres_password: "changeme"
+postgresql_openwebui_password: "changeme"
+grafana_admin_password: "changeme"
+grafana_root_url: "https://grafana.example.com"
+keel_webhook_endpoint: "https://webhooks.example.com/keel?code=changeme"
+keel_basic_auth_password: "changeme"
+alertmanager_smtp_smarthost: "mail.example.com:25"
+alertmanager_smtp_mailfrom: "alertmanager@example.com"
+alertmanager_alert_email: "admin@example.com"
+alertmanager_gotify_token: "CHANGEME_GOTIFY_TOKEN"
+alertmanager_gotify_url: "https://gotify.example.com"
+traefik_internal_allowlist:
+  - "192.168.123.0/24"
+  - "192.168.124.0/24"
+nut_exporter_server: "192.168.124.100"
+nut_exporter_username: "monuser"
+nut_exporter_password: "changeme"
+traefik_dashboard_password: "changeme"

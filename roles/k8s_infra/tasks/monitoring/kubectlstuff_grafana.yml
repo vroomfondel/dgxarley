@@ -1,0 +1,348 @@
+---
+# =============================================================================
+# GRAFANA SECRETS (local auth — no Keycloak OIDC)
+# =============================================================================
+
+- name: Create grafana-secrets with local auth configuration
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: grafana-secrets
+        namespace: monitoring
+      type: Opaque
+      stringData:
+        GF_SECURITY_ADMIN_USER: 'admin'
+        GF_SECURITY_ADMIN_PASSWORD: "{{ grafana_admin_password }}"
+        GF_SECURITY_ALLOW_EMBEDDING: 'true'
+        GF_SECURITY_COOKIE_SAMESITE: 'disabled'
+        GF_AUTH_ANONYMOUS_ENABLED: 'false'
+        GF_SERVER_ROOT_URL: "{{ grafana_root_url }}"
+
+# =============================================================================
+# GRAFANA RESOURCES (ConfigMaps, Deployment, Service, Ingress)
+# =============================================================================
+
+- name: Create grafana-provisioning ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: grafana-provisioning
+        namespace: monitoring
+      data:
+        datasources.yaml: |
+          apiVersion: 1
+          deleteDatasources:
+            - name: Prometheus
+              orgId: 1
+          datasources:
+          - name: Prometheus
+            type: prometheus
+            url: http://prometheus.monitoring.svc.cluster.local:9090
+            access: proxy
+            isDefault: true
+            uid: prometheus
+            jsonData:
+              httpMethod: POST
+              manageAlerts: true
+              prometheusType: Prometheus
+              prometheusVersion: "3.9.1"
+        dashboards.yaml: |
+          apiVersion: 1
+          providers:
+          - name: 'Default'
+            orgId: 1
+            folder: ''
+            type: file
+            disableDeletion: false
+            editable: true
+            options:
+              path: /var/lib/grafana/dashboards
+
+- name: Create grafana-download-dashboards-script ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: grafana-download-dashboards-script
+        namespace: monitoring
+      data:
+        download-dashboards.sh: |
+          #!/bin/sh
+          set -e
+
+          apk add --no-cache curl sed jq
+
+          mkdir -p /var/lib/grafana/dashboards
+
+          # Dashboard downloads with datasource variable replacements
+          # https://github.com/dotdc/grafana-dashboards-kubernetes?tab=readme-ov-file#install-manually
+
+          # CronJobs dashboard (14279)
+          curl -s https://grafana.com/api/dashboards/14279/revisions/latest/download \
+            | sed 's/${DS_PROMETHEUS}/Prometheus/g' \
+            > /var/lib/grafana/dashboards/cronjobs-14279.json
+
+          # Kubernetes dashboard (15661)
+          curl -s https://grafana.com/api/dashboards/15661/revisions/latest/download \
+            | sed 's/${DS__VICTORIAMETRICS-PROD-ALL}/Prometheus/g' \
+            > /var/lib/grafana/dashboards/kubernetes-15661.json
+
+          # https://github.com/dotdc/grafana-dashboards-kubernetes?tab=readme-ov-file#install-manually
+          # Additional dashboards from dotdc/grafana-dashboards-kubernetes
+          # Format: "ID:filename"
+          DOTDC_DASHBOARDS="
+            19105:k8s-addons-prometheus
+            16337:k8s-addons-trivy-operator
+            15761:k8s-system-api-server
+            15762:k8s-system-coredns
+            15757:k8s-views-global
+            15758:k8s-views-namespaces
+            15759:k8s-views-nodes
+            15760:k8s-views-pods
+          "
+
+          for entry in $DOTDC_DASHBOARDS; do
+            id="${entry%%:*}"
+            name="${entry#*:}"
+            echo "Downloading dashboard ${name} (${id})..."
+            if [ "$id" = "15759" ]; then
+              # k8s-views-nodes dashboard fixes:
+              # 1. Replace instance="$instance" with node="$node" for node-exporter metrics (CPU, RAM, etc.)
+              #    Our node-exporter has node label with hostname, but dashboard queries use instance
+              # 2. Replace node="$node" with instance="$node" for kubelet_volume_stats metrics (PV panels)
+              #    Our kubelet metrics have instance label with hostname, but dashboard queries use node
+              # JSON contains escaped quotes: =\"$var\"
+              curl -s "https://grafana.com/api/dashboards/${id}/revisions/latest/download" \
+                | sed 's/${DS_PROMETHEUS}/Prometheus/g' \
+                | sed 's/instance=\\"$instance\\"/node=\\"$node\\"/g' \
+                | sed 's/kubelet_volume_stats_\([a-z_]*\){node=\\"$node\\"/kubelet_volume_stats_\1{instance=\\"$node\\"/g' \
+                | sed 's/cluster=\\"$cluster\\", //g' \
+                | sed 's/, cluster=\\"$cluster\\"//g' \
+                > "/var/lib/grafana/dashboards/${name}-${id}.json"
+            else
+              # Strip cluster="$cluster" filter — single-cluster setup has no cluster label.
+              # Handle both mid-selector (with trailing comma) and end-of-selector (with leading comma).
+              curl -s "https://grafana.com/api/dashboards/${id}/revisions/latest/download" \
+                | sed 's/${DS_PROMETHEUS}/Prometheus/g' \
+                | sed 's/cluster=\\"$cluster\\", //g' \
+                | sed 's/, cluster=\\"$cluster\\"//g' \
+                > "/var/lib/grafana/dashboards/${name}-${id}.json"
+            fi
+          done
+
+          # NUT UPS dashboard for DRuggeri nut_exporter (19308)
+          # Patches:
+          # - Remove ups="$ups" filter and ups variable (single UPS, no ups label)
+          # - Manufacturer/Model: use "labelsToFields" transformation so the stat panel
+          #   can display the mfr/model Prometheus label as a field value. Values come
+          #   from NUT overrides (override.device.mfr/model in ups.conf).
+          # - Beeper: remove misleading noValue="0" default
+          # - Power/Runtime/realpower.nominal all work natively via NUT config.
+          curl -s https://grafana.com/api/dashboards/19308/revisions/latest/download \
+            | sed 's/{ups=\\"$ups\\"}//g; s/{ups=\\"${ups}\\"}//g' \
+            | jq '
+              .panels |= map(
+                if .title == "Manufacturer" then
+                  .transformations = [{"id":"labelsToFields","options":{}}]
+                  | .options.reduceOptions = {"calcs":["lastNotNull"],"fields":"/^mfr$/","values":false}
+                  | .options.textMode = "value"
+                elif .title == "Model" then
+                  .transformations = [{"id":"labelsToFields","options":{}}]
+                  | .options.reduceOptions = {"calcs":["lastNotNull"],"fields":"/^model$/","values":false}
+                  | .options.textMode = "value"
+                elif .title == "Beeper Status" then
+                  .fieldConfig.defaults |= del(.noValue)
+                else . end
+              )
+              | .templating.list |= map(select(.name != "ups"))
+            ' > /var/lib/grafana/dashboards/nut-ups-19308.json
+
+          echo "Dashboards downloaded successfully."
+
+- name: Create grafana Deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: grafana
+        namespace: monitoring
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: grafana
+        template:
+          metadata:
+            labels:
+              app: grafana
+            annotations:
+              kubectl.kubernetes.io/default-container: "grafana"
+              keel.sh/policy: force
+              keel.sh/match-tag: "true"
+              keel.sh/pollSchedule: "@every 24h"
+              keel.sh/trigger: poll
+          spec:
+            nodeSelector:
+              kubernetes.io/arch: amd64
+            dnsConfig:
+              options:
+                - name: ndots
+                  value: "2"
+            initContainers:
+            - name: fix-permissions
+              image: busybox
+              command: ["sh", "-c", "chown -R 472:472 /var/lib/grafana"]
+              volumeMounts:
+              - name: grafana-storage
+                mountPath: /var/lib/grafana
+            - name: download-dashboards
+              image: alpine:latest
+              command: ["/bin/sh", "/scripts/download-dashboards.sh"]
+              volumeMounts:
+              - name: download-script
+                mountPath: /scripts
+              - name: grafana-dashboards
+                mountPath: /var/lib/grafana/dashboards
+            containers:
+            - name: grafana
+              image: grafana/grafana:12.4-ubuntu
+              ports:
+              - name: grafanaport
+                containerPort: 3000
+              envFrom:
+              - secretRef:
+                  name: grafana-secrets
+              volumeMounts:
+              - name: grafana-storage
+                mountPath: /var/lib/grafana
+              - name: grafana-provisioning
+                mountPath: /etc/grafana/provisioning/datasources/datasources.yaml
+                subPath: datasources.yaml
+              - name: grafana-provisioning
+                mountPath: /etc/grafana/provisioning/dashboards/dashboards.yaml
+                subPath: dashboards.yaml
+              - name: grafana-dashboards
+                mountPath: /var/lib/grafana/dashboards
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 250Mi
+                limits:
+                  cpu: 2000m
+                  memory: 950Mi
+            volumes:
+            - name: download-script
+              configMap:
+                name: grafana-download-dashboards-script
+                defaultMode: 0755
+            - name: grafana-storage
+              hostPath:
+                path: /var/lib/k8s-data/grafana
+                type: DirectoryOrCreate
+            - name: grafana-provisioning
+              configMap:
+                name: grafana-provisioning
+            - name: grafana-dashboards
+              hostPath:
+                path: /var/lib/k8s-data/grafana-dashboards
+                type: DirectoryOrCreate
+
+- name: Create grafana Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: grafana
+        namespace: monitoring
+      spec:
+        selector:
+          app: grafana
+        type: ClusterIP
+        ports:
+        - port: 3000
+          targetPort: grafanaport
+
+- name: Create grafana HTTP IngressRoute
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: grafanahttpingress
+        namespace: monitoring
+      spec:
+        entryPoints:
+          - web
+        routes:
+        - kind: Rule
+          match: "Host(`promgrafana.{{ dns_external_domain_suffix }}`)"
+          priority: 10
+          services:
+          - kind: Service
+            name: grafana
+            namespace: monitoring
+            passHostHeader: true
+            port: 3000
+          middlewares:
+            - name: ip-source-limiter
+              namespace: monitoring
+            - name: redirect-myhttps
+              namespace: monitoring
+
+- name: Create grafana TLS Certificate
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: "promgrafana.{{ dns_external_domain_suffix }}"
+        namespace: monitoring
+      spec:
+        dnsNames:
+          - "promgrafana.{{ dns_external_domain_suffix }}"
+        secretName: "promgrafana.{{ dns_external_domain_suffix }}"
+        issuerRef:
+          name: letsencrypt-production
+          kind: ClusterIssuer
+
+- name: Create grafana HTTPS IngressRoute
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: pghttpsingress
+        namespace: monitoring
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - kind: Rule
+            match: "Host(`promgrafana.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            services:
+            - kind: Service
+              name: grafana
+              namespace: monitoring
+              passHostHeader: true
+              port: 3000
+            middlewares:
+              - name: ip-source-limiter
+                namespace: monitoring
+        tls:
+          secretName: "promgrafana.{{ dns_external_domain_suffix }}"

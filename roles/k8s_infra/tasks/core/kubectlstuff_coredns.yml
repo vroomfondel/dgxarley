@@ -1,0 +1,75 @@
+---
+- name: update coredns configmap
+  register: corednsconfigmap
+  kubernetes.core.k8s:
+    state: patched
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: coredns
+        namespace: kube-system
+      data:
+        Corefile: |
+          .:53 {
+              log . "{remote} {type} {name} {class} {size} {rcode} {duration}"
+          
+              errors
+              health
+              ready
+              kubernetes cluster.local in-addr.arpa ip6.arpa {
+                pods insecure
+                fallthrough in-addr.arpa ip6.arpa
+              }
+              hosts /etc/coredns/NodeHosts {
+                ttl 60
+                reload 15s
+                fallthrough
+              }
+          
+          # https://jbn1233.medium.com/disable-coredns-aaaa-ipv6-query-response-a99ce9bc6dec
+          
+          #   template ANY AAAA {
+          #     rcode NXDOMAIN
+          #     authority {{ '"{{ .Zone }} 3600 {{ .Class }} SOA ns1.home.net. dnsadmin.home.net (2022122100 14400 3600 604800 30)"' }}
+          #   }
+          
+              prometheus :9153
+          
+              template ANY ANY fritz.box {
+                rcode NXDOMAIN
+                authority {{ '"{{ .Zone }} 3600 {{ .Class }} SOA ns1.home.net. dnsadmin.home.net (2022122100 14400 3600 604800 30)"' }}
+              }
+          
+              forward . /etc/resolv.conf {
+                except local fritz.box
+              }
+          
+              cache 30
+              loop
+              reload
+              loadbalance
+              import /etc/coredns/custom/*.override
+          }
+          import /etc/coredns/custom/*.server
+
+# Replicas, resources and anti-affinity are managed via coredns-extend.yaml
+# (HelmChartConfig in /var/lib/rancher/k3s/server/manifests/, deployed by k3sserver role)
+
+- name: restart coredns deployment
+  kubernetes.core.k8s:
+    state: patched
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: coredns
+        namespace: kube-system
+      spec:
+        template:
+          metadata:
+            labels:
+              redeploy: "{{ date.stdout }}"
+  when:
+    - corednsconfigmap.changed
+    - False
