@@ -1,0 +1,7 @@
+---
+# file: roles/nut/tasks/main.yml
+
+- name: configure NUT UPS monitoring
+  import_tasks: config_nut.yml
+  tags:
+    - nut

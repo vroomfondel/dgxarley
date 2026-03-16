@@ -1,0 +1,50 @@
+---
+# file: roles/nut/defaults/main.yml
+
+# UPS device configuration — Green Cell UPS (MEC/MEC0003, USB 0001:0000)
+# Uses Megatec protocol over USB; blazer_usb provides full metrics
+# (battery.charge, input/output voltage, ups.load, frequency)
+nut_ups_name: "greencell"
+nut_ups_driver: "blazer_usb"
+nut_ups_port: "auto"
+nut_ups_desc: "Green Cell UPS 600W"
+nut_ups_vendorid: "0001"
+nut_ups_productid: "0000"
+# langid_fix required for Green Cell USB communication
+# Battery voltage thresholds doubled: 2 batteries in series (27.7V full → 21.0V empty)
+# runtimecal: estimated runtime from 2×12V/7Ah (168Wh nominal), format: sec,load%,sec,load%
+#   Full load (600W, 100%): ~480s (80% inverter eff + Peukert)
+#   Half load (300W, 50%): ~1200s (85% inverter eff + Peukert)
+#   Tune after a real battery discharge test if needed.
+nut_ups_extra_options:
+  - "langid_fix = 0x409"
+  - "norating"
+  - "novendor"
+  - "default.battery.voltage.high = 27.6"
+  - "default.battery.voltage.low = 21.0"
+  - "runtimecal = 480,100,1200,50"
+  - 'override.device.mfr = "Green Cell"'
+  - 'override.device.model = "UPS 600W"'
+  - "override.ups.realpower.nominal = 600"
+
+# NUT mode: netserver allows remote clients (nut-exporter) to query upsd
+nut_mode: "netserver"
+nut_listen_address: "0.0.0.0"
+nut_listen_port: 3493
+
+# upsd users (override passwords via vault)
+nut_admin_user: "admin"
+nut_admin_password: "changeme"
+nut_monitor_user: "monuser"
+nut_monitor_password: "changeme"
+
+# Cluster shutdown on UPS critical battery
+# Nodes to kubectl drain before poweroff
+nut_shutdown_drain_nodes:
+  - spark1
+  - spark2
+
+# Hosts to SSH poweroff after drain (override via vault)
+nut_shutdown_ssh_hosts:
+  - "192.168.124.101"
+  - "192.168.124.102"

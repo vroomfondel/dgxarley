@@ -1,0 +1,14 @@
+# {{ ansible_managed }}
+
+[{{ nut_ups_name }}]
+    driver = {{ nut_ups_driver }}
+    port = {{ nut_ups_port }}
+    desc = "{{ nut_ups_desc }}"
+    vendorid = {{ nut_ups_vendorid }}
+    productid = {{ nut_ups_productid }}
+{% if nut_ups_subdriver is defined %}
+    subdriver = {{ nut_ups_subdriver }}
+{% endif %}
+{% for opt in nut_ups_extra_options | default([]) %}
+    {{ opt }}
+{% endfor %}

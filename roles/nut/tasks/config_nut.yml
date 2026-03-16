@@ -1,0 +1,119 @@
+---
+# config_nut.yml
+# Install and configure Network UPS Tools (NUT) for USB HID UPS monitoring.
+#
+# Requires:
+#   - wantsnut: true on the host
+#   - UPS connected via USB (detected as HID device)
+#
+# Usage:
+#   ansible-playbook common.yml --tags nut
+#   ansible-playbook common.yml --limit k3smaster --tags nut
+
+- name: install NUT packages
+  apt:
+    pkg:
+      - nut
+      - nut-client
+      - nut-server
+    state: present
+    update_cache: true
+
+- name: deploy udev rule to unbind kernel driver from UPS USB device
+  template:
+    src: etc_udev_rules.d_99-nut-ups.rules.j2
+    dest: /etc/udev/rules.d/99-nut-ups.rules
+    owner: root
+    group: root
+    mode: '0644'
+  register: nut_udev_rule
+
+- name: reload udev rules and re-trigger USB subsystem
+  shell: udevadm control --reload-rules && udevadm trigger --subsystem-match=usb
+  when: nut_udev_rule is changed
+
+- name: deploy nut.conf
+  template:
+    src: etc_nut_nut.conf.j2
+    dest: /etc/nut/nut.conf
+    owner: root
+    group: nut
+    mode: '0640'
+  notify: restart nut-server
+
+- name: deploy ups.conf
+  template:
+    src: etc_nut_ups.conf.j2
+    dest: /etc/nut/ups.conf
+    owner: root
+    group: nut
+    mode: '0640'
+  notify:
+    - restart nut-driver
+    - restart nut-server
+
+- name: deploy upsd.conf
+  template:
+    src: etc_nut_upsd.conf.j2
+    dest: /etc/nut/upsd.conf
+    owner: root
+    group: nut
+    mode: '0640'
+  notify: restart nut-server
+
+- name: deploy upsd.users
+  template:
+    src: etc_nut_upsd.users.j2
+    dest: /etc/nut/upsd.users
+    owner: root
+    group: nut
+    mode: '0640'
+  notify: restart nut-server
+
+- name: deploy upsmon.conf
+  template:
+    src: etc_nut_upsmon.conf.j2
+    dest: /etc/nut/upsmon.conf
+    owner: root
+    group: nut
+    mode: '0640'
+  notify: restart nut-monitor
+
+- name: deploy UPS cluster shutdown script
+  template:
+    src: nut_shutdown.sh.j2
+    dest: /usr/local/bin/nut_shutdown.sh
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: enable and start nut-server
+  service:
+    name: nut-server
+    state: started
+    enabled: true
+
+- name: enable and start nut-monitor
+  service:
+    name: nut-monitor
+    state: started
+    enabled: true
+
+- name: flush handlers before verify
+  meta: flush_handlers
+
+- name: verify UPS is detected by NUT
+  command: upsc {{ nut_ups_name }}@localhost
+  register: nut_ups_status
+  changed_when: false
+  failed_when: false
+
+- name: display UPS status
+  debug:
+    msg: "{{ nut_ups_status.stdout_lines[:15] }}"
+  when: nut_ups_status.rc == 0
+
+- name: warn if UPS not detected
+  debug:
+    msg: "WARNING — upsc could not query UPS '{{ nut_ups_name }}'. Check USB connection and driver."
+  when: nut_ups_status.rc != 0

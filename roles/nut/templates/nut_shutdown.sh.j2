@@ -1,0 +1,19 @@
+#!/bin/bash
+# {{ ansible_managed }}
+# UPS shutdown script — drain K3s workers and power off cluster nodes before local shutdown.
+set -euo pipefail
+
+logger -t nut-shutdown "UPS shutdown initiated — draining K3s workers and powering off cluster"
+
+{% for node in nut_shutdown_drain_nodes %}
+kubectl --context {{ kubeconfig_context_name }} drain {{ node }} --ignore-daemonsets --delete-emptydir-data --timeout=60s 2>&1 | logger -t nut-shutdown || true
+{% endfor %}
+
+sleep 5
+
+{% for host in nut_shutdown_ssh_hosts %}
+ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@{{ host }} 'shutdown -h now' 2>&1 | logger -t nut-shutdown || true
+{% endfor %}
+
+logger -t nut-shutdown "Powering off local host"
+/sbin/shutdown -h +0

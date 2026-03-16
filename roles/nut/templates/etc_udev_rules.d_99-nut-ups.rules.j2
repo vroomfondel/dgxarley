@@ -1,0 +1,4 @@
+# {{ ansible_managed }}
+# Unbind kernel usbfs/usbhid driver from UPS HID device so NUT's usbhid-ups can claim it.
+# Without this, NUT gets "Can't claim USB device" because the kernel driver holds the interface.
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="{{ nut_ups_vendorid }}", ATTR{idProduct}=="{{ nut_ups_productid }}", MODE="0660", GROUP="nut", RUN+="/bin/sh -c 'for iface in /sys$devpath:*; do [ -e \"$iface/driver/unbind\" ] && echo $(basename $iface) > $iface/driver/unbind; done; true'"
