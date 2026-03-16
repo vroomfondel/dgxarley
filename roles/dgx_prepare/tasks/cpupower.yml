@@ -1,0 +1,28 @@
+---
+- name: Install cpupower tools
+  ansible.builtin.apt:
+    name:
+      - linux-tools-common
+      - linux-tools-generic
+    state: present
+    update_cache: false
+
+- name: Disable CPU idle states immediately
+  ansible.builtin.command:
+    cmd: cpupower idle-set -D 0
+  changed_when: true
+
+- name: Deploy cpupower-idle-disable systemd service
+  ansible.builtin.template:
+    src: cpupower-idle-disable.service.j2
+    dest: /etc/systemd/system/cpupower-idle-disable.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: systemctl daemon-reload
+
+- name: Enable cpupower-idle-disable service
+  ansible.builtin.systemd:
+    name: cpupower-idle-disable.service
+    enabled: true
+    state: started

@@ -1,0 +1,67 @@
+---
+# Install CNI plugins not bundled with K3s (needed by Multus NetworkAttachmentDefinitions).
+# K3s bundles only: flannel, bridge, host-local, loopback, portmap, bandwidth, firewall.
+# We need: host-device (QSFP direct attach), static (IPAM for fixed IPs).
+#
+# Downloads the tarball on the Ansible controller (localhost) first, then extracts
+# and copies to the target nodes — the DGX Sparks may not have direct GitHub access.
+
+- name: Check installed CNI plugin versions
+  ansible.builtin.shell:
+    cmd: "/var/lib/rancher/k3s/data/cni/{{ item }} 2>&1 | head -1 | grep -oP 'v\\K[0-9.]+' || echo '0.0.0'"
+  loop: "{{ cni_extra_plugins }}"
+  register: _cni_plugin_versions
+  changed_when: false
+  failed_when: false
+
+- name: Determine which CNI plugins need installation or upgrade
+  ansible.builtin.set_fact:
+    _cni_plugins_missing: >-
+      {{ _cni_plugin_versions.results
+         | selectattr('stdout', 'version_compare', cni_plugins_version, '<')
+         | map(attribute='item') | list }}
+
+- name: Download CNI plugins tarball on controller
+  ansible.builtin.get_url:
+    url: "https://github.com/containernetworking/plugins/releases/download/v{{ cni_plugins_version }}/cni-plugins-linux-{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}-v{{ cni_plugins_version }}.tgz"
+    dest: "/tmp/cni-plugins-{{ ansible_architecture }}-v{{ cni_plugins_version }}.tgz"
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+  run_once: false
+  when: _cni_plugins_missing | length > 0
+
+- name: Extract missing CNI plugin binaries on controller
+  ansible.builtin.command:
+    cmd: "tar -xzf /tmp/cni-plugins-{{ ansible_architecture }}-v{{ cni_plugins_version }}.tgz -C /tmp/ ./{{ item }}"
+  loop: "{{ _cni_plugins_missing }}"
+  delegate_to: localhost
+  become: false
+  changed_when: true
+  when: _cni_plugins_missing | length > 0
+
+- name: Copy CNI plugins to target node
+  ansible.builtin.copy:
+    src: "/tmp/{{ item }}"
+    dest: "/var/lib/rancher/k3s/data/cni/{{ item }}"
+    mode: "0755"
+    owner: root
+    group: root
+  loop: "{{ _cni_plugins_missing }}"
+  when: _cni_plugins_missing | length > 0
+
+- name: Clean up controller temp files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ ['/tmp/cni-plugins-' + ansible_architecture + '-v' + cni_plugins_version + '.tgz'] + (_cni_plugins_missing | map('regex_replace', '^', '/tmp/') | list) }}"
+  delegate_to: localhost
+  become: false
+  when: _cni_plugins_missing | length > 0
+
+- name: Verify all extra CNI plugins are installed
+  ansible.builtin.stat:
+    path: "/var/lib/rancher/k3s/data/cni/{{ item }}"
+  loop: "{{ cni_extra_plugins }}"
+  register: _cni_verify
+  failed_when: not _cni_verify.stat.exists

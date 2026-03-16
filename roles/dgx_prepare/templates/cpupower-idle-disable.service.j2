@@ -1,0 +1,11 @@
+[Unit]
+Description=Disable CPU idle states for NCCL/RDMA performance
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/cpupower idle-set -D 0
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

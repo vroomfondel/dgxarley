@@ -1,0 +1,10 @@
+#!/{{ pytorch_venv_path | regex_replace('^/', '') }}/bin/python
+import warnings
+warnings.filterwarnings("ignore", message=".*cuda capability.*")
+import torch
+
+print(torch.cuda.mem_get_info())
+
+for i in range(torch.cuda.device_count()):
+    free, total = torch.cuda.mem_get_info(i)
+    print(f"GPU {i}: {free/1024**3:.1f} GiB frei / {total/1024**3:.1f} GiB gesamt")

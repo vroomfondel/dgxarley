@@ -1,0 +1,32 @@
+---
+- name: Configure QSFP network interfaces
+  ansible.builtin.import_tasks: qsfp_network.yml
+  tags: qsfp
+
+- name: Configure ulimits
+  ansible.builtin.import_tasks: ulimits.yml
+  tags: ulimits
+
+- name: NVIDIA CDI and driver setup
+  ansible.builtin.import_tasks: nvidia_setup.yml
+  tags: nvidia
+
+- name: Configure CPU power settings
+  ansible.builtin.import_tasks: cpupower.yml
+  tags: cpupower
+
+- name: Set kernel parameters
+  ansible.builtin.import_tasks: kernel_params.yml
+  tags: kernel
+
+- name: Disable GUI / graphical target
+  ansible.builtin.import_tasks: disable_gui.yml
+  tags: disable_gui
+
+- name: Install extra CNI plugins for Multus
+  ansible.builtin.import_tasks: cni_plugins.yml
+  tags: cni
+
+- name: Set up PyTorch virtual environment
+  ansible.builtin.import_tasks: pytorch_venv.yml
+  tags: pytorch

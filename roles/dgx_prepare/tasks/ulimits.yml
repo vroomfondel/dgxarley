@@ -1,0 +1,28 @@
+---
+- name: Set memlock soft limit to unlimited
+  community.general.pam_limits:
+    domain: "*"
+    limit_type: soft
+    limit_item: memlock
+    value: "{{ memlock_limit }}"
+
+- name: Set memlock hard limit to unlimited
+  community.general.pam_limits:
+    domain: "*"
+    limit_type: hard
+    limit_item: memlock
+    value: "{{ memlock_limit }}"
+
+- name: Set stack soft limit
+  community.general.pam_limits:
+    domain: "*"
+    limit_type: soft
+    limit_item: stack
+    value: "{{ stack_limit }}"
+
+- name: Set stack hard limit
+  community.general.pam_limits:
+    domain: "*"
+    limit_type: hard
+    limit_item: stack
+    value: "{{ stack_limit }}"

@@ -1,0 +1,56 @@
+---
+- name: Check if desktop metapackages are installed
+  ansible.builtin.shell: dpkg-query -W -f='${Package}\n' ubuntu-desktop ubuntu-desktop-minimal 2>/dev/null || true
+  register: desktop_pkgs_check
+  changed_when: false
+
+- name: Remove desktop metapackages (prevents autoremove conflicts)
+  ansible.builtin.apt:
+    name:
+      - ubuntu-desktop
+      - ubuntu-desktop-minimal
+    state: absent
+    purge: true
+  when: desktop_pkgs_check.stdout | length > 0
+
+- name: Autoremove orphaned desktop dependencies
+  ansible.builtin.apt:
+    autoremove: true
+  when: desktop_pkgs_check.stdout | length > 0
+
+- name: Check current default target
+  ansible.builtin.command: systemctl get-default
+  register: current_default_target
+  changed_when: false
+
+- name: Set default target to multi-user.target
+  ansible.builtin.command: systemctl set-default multi-user.target
+  when: current_default_target.stdout != 'multi-user.target'
+
+- name: Disable, stop and mask gdm3 service
+  ansible.builtin.systemd:
+    name: gdm3
+    state: stopped
+    enabled: false
+    masked: true
+
+- name: Disable and stop DGX dashboard services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - dgx-dashboard
+    - dgx-dashboard-admin
+    - cups
+    - cups.socket
+    - cups.path
+
+- name: Disable and stop Docker services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - docker
+    - docker.socket

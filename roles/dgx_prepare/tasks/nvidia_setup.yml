@@ -1,0 +1,32 @@
+---
+- name: Ensure /etc/cdi directory exists
+  ansible.builtin.file:
+    path: /etc/cdi
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Check if NVIDIA driver is loaded
+  ansible.builtin.command:
+    cmd: nvidia-smi --query-gpu=driver_version --format=csv,noheader
+  register: nvidia_driver_check
+  changed_when: false
+  failed_when: false
+
+- name: Generate NVIDIA CDI spec
+  ansible.builtin.command:
+    cmd: "nvidia-ctk cdi generate --output={{ nvidia_cdi_output }}"
+    creates: "{{ nvidia_cdi_output }}"
+  when: nvidia_driver_check.rc == 0
+
+- name: Verify nvidia-smi works
+  ansible.builtin.command:
+    cmd: nvidia-smi
+  register: nvidia_smi_result
+  changed_when: false
+
+- name: Fail if nvidia-smi returned non-zero exit code
+  ansible.builtin.fail:
+    msg: "nvidia-smi failed with rc={{ nvidia_smi_result.rc }}. Output: {{ nvidia_smi_result.stderr }}"
+  when: nvidia_smi_result.rc != 0

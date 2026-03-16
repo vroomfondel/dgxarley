@@ -1,0 +1,35 @@
+---
+- name: Ensure python3-venv is installed
+  ansible.builtin.apt:
+    name: python3-venv
+    state: present
+
+- name: Create PyTorch virtual environment
+  ansible.builtin.command:
+    cmd: python3 -m venv {{ pytorch_venv_path }}
+    creates: "{{ pytorch_venv_path }}/bin/activate"
+
+- name: Install PyTorch packages in venv
+  ansible.builtin.pip:
+    name: "{{ pytorch_packages }}"
+    virtualenv: "{{ pytorch_venv_path }}"
+    extra_args: "--index-url {{ pytorch_index_url }}"
+
+- name: Verify PyTorch CUDA availability
+  ansible.builtin.command:
+    cmd: "{{ pytorch_venv_path }}/bin/python -c \"import torch; print(torch.cuda.is_available())\""
+  register: pytorch_cuda_check
+  changed_when: false
+
+- name: Assert CUDA is available in PyTorch
+  ansible.builtin.assert:
+    that:
+      - "'True' in pytorch_cuda_check.stdout"
+    fail_msg: "PyTorch CUDA check failed: {{ pytorch_cuda_check.stdout }}"
+    success_msg: "PyTorch CUDA is available"
+
+- name: Deploy GPU memory check script
+  ansible.builtin.template:
+    src: root_check_ram_pytorch.py.j2
+    dest: /root/check_ram_pytorch.py
+    mode: "0755"

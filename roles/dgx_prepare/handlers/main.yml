@@ -1,0 +1,8 @@
+---
+- name: netplan apply
+  ansible.builtin.command:
+    cmd: netplan apply
+
+- name: systemctl daemon-reload
+  ansible.builtin.systemd:
+    daemon_reload: true

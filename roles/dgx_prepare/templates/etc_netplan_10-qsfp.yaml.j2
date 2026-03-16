@@ -1,0 +1,18 @@
+# QSFP112 Point-to-Point — managed by Ansible
+network:
+  version: 2
+  ethernets:
+{% for iface in qsfp_interfaces %}
+{% if loop.first %}
+    {{ iface }}:
+      mtu: {{ qsfp_mtu }}
+      addresses:
+        - {{ qsfp_ip }}/24
+      routes: []
+{% else %}
+    {{ iface }}:
+      mtu: {{ qsfp_mtu }}
+      dhcp4: false
+      dhcp6: false
+{% endif %}
+{% endfor %}

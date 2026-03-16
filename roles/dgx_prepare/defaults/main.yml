@@ -1,0 +1,21 @@
+---
+qsfp_mtu: 9000
+qsfp_interfaces:
+  - "enp1s0f0np0"
+  - "enp1s0f1np1"
+  - "enP2p1s0f0np0"
+  - "enP2p1s0f1np1"
+memlock_limit: "unlimited"
+stack_limit: 67108864
+nvidia_cdi_output: "/etc/cdi/nvidia.yaml"
+# Check latest: curl -s https://api.github.com/repos/containernetworking/plugins/releases/latest | jq -r .tag_name
+cni_plugins_version: "1.9.0"
+cni_extra_plugins:
+  - host-device
+  - static
+pytorch_venv_path: "/root/pytorch-env"
+pytorch_index_url: "https://download.pytorch.org/whl/cu130"
+pytorch_packages:
+  - torch
+  - torchvision
+  - torchaudio
