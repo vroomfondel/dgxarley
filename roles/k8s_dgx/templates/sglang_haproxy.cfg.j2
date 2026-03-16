@@ -1,0 +1,20 @@
+global
+    log stdout format raw local0
+
+defaults
+    mode http
+    log global
+    option httplog
+    option forwardfor
+    timeout connect 5s
+    timeout client  600s
+    timeout server  600s
+    log-format "%ci:%cp [%t] %ft %b/%s %Tq/%Tw/%Tc/%Tr/%Ta %ST %B %{+Q}r"
+
+frontend sglang
+    bind *:{{ sglang_port }}
+    http-request set-header X-Real-IP %[src]
+    default_backend sglang_back
+
+backend sglang_back
+    server sglang 127.0.0.1:{{ sglang_internal_port }}

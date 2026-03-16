@@ -1,0 +1,207 @@
+---
+# --- Pipelines Deployment & Service ---
+# Conditional on pipelines_enabled. When disabled, all resources are removed.
+
+- name: Create pipelines-config ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: pipelines-config
+        namespace: "{{ dgx_namespace }}"
+      data:
+        OLLAMA_BASE_URL: "http://ollama.ollama.svc.cluster.local:{{ ollama_port }}"
+        SGLANG_API_BASE_URL: "http://sglang.{{ dgx_namespace }}.svc.cluster.local:{{ sglang_port }}/v1"
+        PIPELINES_API_KEY: "{{ openwebui_secret_key }}"
+  when: pipelines_enabled
+
+- name: Create pipelines-seed ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: pipelines-seed
+        namespace: "{{ dgx_namespace }}"
+      data: >-
+        {{
+          lookup('template', 'pipelines_seed_data.yml.j2') | from_yaml
+          | combine({'requirements.txt': lookup('file', 'pipelines/requirements.txt')})
+        }}
+  when: pipelines_enabled and (pipelines_filters | default([]) | length > 0)
+
+- name: Deploy Pipelines Deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: pipelines
+        namespace: "{{ dgx_namespace }}"
+        labels:
+          app: pipelines
+        annotations:
+          keel.sh/policy: force
+          keel.sh/match-tag: "true"
+          keel.sh/pollSchedule: "@every 24h"
+          keel.sh/trigger: poll
+      spec:
+        replicas: 1
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: pipelines
+        template:
+          metadata:
+            labels:
+              app: pipelines
+          spec:
+            restartPolicy: Always
+            dnsConfig:
+              options:
+                - name: ndots
+                  value: "1"
+            nodeSelector:
+              kubernetes.io/arch: amd64
+            initContainers:
+              - name: seed-pipelines
+                image: busybox:latest
+                imagePullPolicy: IfNotPresent
+                command:
+                  - /bin/sh
+                  - -c
+                  - "cp -v /pipelines-seed/*.py /pipelines-seed/requirements.txt /app/pipelines/ 2>/dev/null || true"
+                volumeMounts:
+                  - name: pipelines-seed
+                    mountPath: /pipelines-seed
+                    readOnly: true
+                  - name: pipelines-data
+                    mountPath: /app/pipelines
+            containers:
+              - name: pipelines
+                image: "{{ pipelines_image }}"
+                imagePullPolicy: Always
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 256Mi
+                  limits:
+                    cpu: 500m
+                    memory: 1Gi
+                envFrom:
+                  - configMapRef:
+                      name: pipelines-config
+                env:
+                  - name: NODE_IP
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: status.hostIP
+                  - name: POD_IP
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: status.podIP
+                  - name: PIPELINES_REQUIREMENTS_PATH
+                    value: "/app/pipelines/requirements.txt"
+                ports:
+                  - containerPort: "{{ pipelines_port }}"
+                    name: http
+                startupProbe:
+                  httpGet:
+                    path: /
+                    port: "{{ pipelines_port }}"
+                  initialDelaySeconds: 5
+                  periodSeconds: 5
+                  failureThreshold: 30
+                  timeoutSeconds: 5
+                livenessProbe:
+                  httpGet:
+                    path: /
+                    port: "{{ pipelines_port }}"
+                  initialDelaySeconds: 30
+                  periodSeconds: 30
+                  failureThreshold: 3
+                  timeoutSeconds: 5
+                readinessProbe:
+                  httpGet:
+                    path: /
+                    port: "{{ pipelines_port }}"
+                  initialDelaySeconds: 10
+                  periodSeconds: 10
+                  failureThreshold: 3
+                  timeoutSeconds: 5
+                volumeMounts:
+                  - name: pipelines-data
+                    mountPath: /app/pipelines
+            volumes:
+              - name: pipelines-data
+                hostPath:
+                  path: /var/lib/pipelines-data
+                  type: DirectoryOrCreate
+              - name: pipelines-seed
+                configMap:
+                  name: pipelines-seed
+                  optional: true
+  when: pipelines_enabled
+
+- name: Create Pipelines Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: pipelines
+        namespace: "{{ dgx_namespace }}"
+      spec:
+        type: ClusterIP
+        selector:
+          app: pipelines
+        ports:
+          - name: http
+            port: "{{ pipelines_port }}"
+            targetPort: "{{ pipelines_port }}"
+            protocol: TCP
+  when: pipelines_enabled
+
+# --- Cleanup when pipelines_enabled is false ---
+
+- name: Remove Pipelines Deployment
+  kubernetes.core.k8s:
+    state: absent
+    api_version: apps/v1
+    kind: Deployment
+    name: pipelines
+    namespace: "{{ dgx_namespace }}"
+  when: not pipelines_enabled
+
+- name: Remove Pipelines Service
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Service
+    name: pipelines
+    namespace: "{{ dgx_namespace }}"
+  when: not pipelines_enabled
+
+- name: Remove pipelines-seed ConfigMap
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: ConfigMap
+    name: pipelines-seed
+    namespace: "{{ dgx_namespace }}"
+  when: not pipelines_enabled
+
+- name: Remove pipelines-config ConfigMap
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: ConfigMap
+    name: pipelines-config
+    namespace: "{{ dgx_namespace }}"
+  when: not pipelines_enabled

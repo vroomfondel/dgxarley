@@ -1,0 +1,468 @@
+---
+- name: Create SGLang ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: sglang-config
+        namespace: "{{ dgx_namespace }}"
+      data:
+        SGLANG_MODEL: "{{ sglang_model }}"
+        SGLANG_CONTEXT_LENGTH: "{{ sglang_context_length | string }}"
+        SGLANG_KV_CACHE_DTYPE: "{{ sglang_kv_cache_dtype }}"
+        SGLANG_MEM_FRACTION: "{{ sglang_mem_fraction_static }}"
+        SGLANG_REASONING_PARSER: "{{ sglang_reasoning_parser }}"
+        SGLANG_TOOL_CALL_PARSER: "{{ sglang_tool_call_parser }}"
+        SGLANG_SPECULATIVE_ENABLED: "{{ sglang_speculative_enabled | string | lower }}"
+        SGLANG_SPECULATIVE_ALGO: "{{ sglang_speculative_algo }}"
+        SGLANG_SPECULATIVE_NUM_STEPS: "{{ sglang_speculative_num_steps | string }}"
+        SGLANG_SPECULATIVE_EAGLE_TOPK: "{{ sglang_speculative_eagle_topk | string }}"
+        SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS: "{{ sglang_speculative_num_draft_tokens | string }}"
+        SGLANG_DIST_TIMEOUT: "{{ sglang_dist_timeout | string }}"
+        SGLANG_ATTENTION_BACKEND: "{{ sglang_attention_backend }}"
+        SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK: "0"
+        NCCL_SOCKET_IFNAME: "{{ nccl_socket_ifname }}"
+        NCCL_IB_DISABLE: "1"
+        NCCL_DEBUG: "INFO"
+
+- name: Create SGLang launch script ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: sglang-launch-script
+        namespace: "{{ dgx_namespace }}"
+      data:
+        launch.sh: "{{ lookup('file', role_path ~ '/files/sglang_launch.sh') }}"
+
+- name: Create SGLang model-download script ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: sglang-model-download-script
+        namespace: "{{ dgx_namespace }}"
+      data:
+        download_models.py: "{{ lookup('file', role_path ~ '/files/hf_preload_download.py') }}"
+
+- name: Create SGLang HAProxy config ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: sglang-haproxy-config
+        namespace: "{{ dgx_namespace }}"
+      data:
+        haproxy.cfg: "{{ lookup('template', 'sglang_haproxy.cfg.j2') }}"
+
+- name: Create SGLang ServiceAccount
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: sglang-head
+        namespace: "{{ dgx_namespace }}"
+
+- name: Create SGLang pod-reader Role
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        name: pod-reader
+        namespace: "{{ dgx_namespace }}"
+      rules:
+        - apiGroups: [""]
+          resources: ["pods"]
+          verbs: ["get", "list", "watch"]
+
+- name: Create SGLang RoleBinding
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: sglang-head-pod-reader
+        namespace: "{{ dgx_namespace }}"
+      subjects:
+        - kind: ServiceAccount
+          name: sglang-head
+          namespace: "{{ dgx_namespace }}"
+      roleRef:
+        kind: Role
+        name: pod-reader
+        apiGroup: rbac.authorization.k8s.io
+
+# Startup ordering: Worker MUST be deployed before head.
+# At the NCCL/PyTorch level, the head (rank 0) hosts the TCP rendezvous server
+# and the worker (rank 1) connects as a client with exponential backoff retries.
+# However, the head has a startupProbe on /v1/models which only passes after the
+# model is fully loaded — and model loading requires BOTH nodes to be connected
+# (tensor parallelism). If the worker waited for the head to be Ready, it would
+# deadlock: head can't become Ready without the worker, worker won't start without
+# the head. Instead, the worker starts first (no readinessProbe → immediately Ready),
+# and the head's wait-for-worker initContainer gates on that. When the head's sglang
+# process opens the rendezvous port, the worker (already retrying) connects instantly.
+- name: Deploy SGLang worker Deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: sglang-worker
+        namespace: "{{ dgx_namespace }}"
+        labels:
+          app: sglang
+          role: worker
+      spec:
+        replicas: 1
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: sglang
+            role: worker
+        template:
+          metadata:
+            labels:
+              app: sglang
+              role: worker
+            annotations:
+              k8s.v1.cni.cncf.io/networks: qsfp-direct-worker
+              kubectl.kubernetes.io/default-container: sglang
+          spec:
+            hostIPC: true                    # Shared Memory für NCCL
+            nodeSelector:
+              spark-id: "2"
+            initContainers:
+              - name: model-download
+                image: "{{ sglang_image }}"
+                command: ["python3", "/scripts/download_models.py"]
+                env:
+                  - name: HF_PRELOAD_MODELS
+                    value: "{{ sglang_model }}"
+                  - name: HF_TOKEN
+                    value: "{{ hf_token }}"
+                  - name: HF_HUB_DISABLE_PROGRESS_BARS
+                    value: "0"
+                volumeMounts:
+                  - name: hf-cache
+                    mountPath: /root/.cache/huggingface
+                  - name: model-download-script
+                    mountPath: /scripts
+                    readOnly: true
+            containers:
+              - name: sglang
+                image: "{{ sglang_image }}"
+                command: ["/bin/bash", "/scripts/launch.sh"]
+                envFrom:
+                  - configMapRef:
+                      name: sglang-config
+                env:
+                  - name: NODE_RANK
+                    value: "1"
+                  - name: SGLANG_HOST
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: status.podIP
+                  - name: TP
+                    value: "{{ sglang_tp | string }}"
+                  - name: NNODES
+                    value: "{{ sglang_nnodes | string }}"
+                  - name: QSFP_IP_SPARK1
+                    value: "{{ qsfp_ip_spark1 }}"
+                  - name: QSFP_IP_SPARK2
+                    value: "{{ qsfp_ip_spark2 }}"
+                  - name: NCCL_PORT
+                    value: "{{ nccl_bootstrap_port | string }}"
+                  - name: SGLANG_PORT
+                    value: "{{ sglang_port | string }}"
+                  - name: HF_TOKEN
+                    value: "{{ hf_token }}"
+                resources:
+                  limits:
+                    nvidia.com/gpu: "1"
+                securityContext:
+                  privileged: true
+                livenessProbe:
+                  httpGet:
+                    path: /health
+                    port: 8000
+                  initialDelaySeconds: 300
+                  periodSeconds: 30
+                  failureThreshold: 3
+                volumeMounts:
+                  - name: hf-cache
+                    mountPath: /root/.cache/huggingface
+                  - name: launch-script
+                    mountPath: /scripts
+                    readOnly: true
+            volumes:
+              - name: hf-cache
+                hostPath:
+                  path: "{{ hf_cache_path }}"
+                  type: DirectoryOrCreate
+              - name: model-download-script
+                configMap:
+                  name: sglang-model-download-script
+              - name: launch-script
+                configMap:
+                  name: sglang-launch-script
+                  defaultMode: 0755
+
+- name: Deploy SGLang head Deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: sglang-head
+        namespace: "{{ dgx_namespace }}"
+        labels:
+          app: sglang
+          role: head
+      spec:
+        replicas: 1
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: sglang
+            role: head
+        template:
+          metadata:
+            labels:
+              app: sglang
+              role: head
+            annotations:
+              k8s.v1.cni.cncf.io/networks: qsfp-direct
+              kubectl.kubernetes.io/default-container: sglang
+          spec:
+            serviceAccountName: sglang-head
+            hostIPC: true                    # Shared Memory für NCCL
+            nodeSelector:
+              spark-id: "1"
+            initContainers:
+              - name: model-download
+                image: "{{ sglang_image }}"
+                command: ["python3", "/scripts/download_models.py"]
+                env:
+                  - name: HF_PRELOAD_MODELS
+                    value: "{{ sglang_model }}"
+                  - name: HF_TOKEN
+                    value: "{{ hf_token }}"
+                  - name: HF_HUB_DISABLE_PROGRESS_BARS
+                    value: "0"
+                volumeMounts:
+                  - name: hf-cache
+                    mountPath: /root/.cache/huggingface
+                  - name: model-download-script
+                    mountPath: /scripts
+                    readOnly: true
+              - name: wait-for-worker
+                image: bitnami/kubectl:latest
+                command:
+                  - kubectl
+                  - wait
+                  - --for=condition=Ready
+                  - pod
+                  - -l
+                  - app=sglang,role=worker
+                  - -n
+                  - "{{ dgx_namespace }}"
+                  - --timeout=600s
+            containers:
+              - name: sglang
+                image: "{{ sglang_image }}"
+                command: ["/bin/bash", "/scripts/launch.sh"]
+                envFrom:
+                  - configMapRef:
+                      name: sglang-config
+                env:
+                  - name: NODE_RANK
+                    value: "0"
+                  - name: TP
+                    value: "{{ sglang_tp | string }}"
+                  - name: NNODES
+                    value: "{{ sglang_nnodes | string }}"
+                  - name: QSFP_IP_SPARK1
+                    value: "{{ qsfp_ip_spark1 }}"
+                  - name: QSFP_IP_SPARK2
+                    value: "{{ qsfp_ip_spark2 }}"
+                  - name: NCCL_PORT
+                    value: "{{ nccl_bootstrap_port | string }}"
+                  - name: SGLANG_PORT
+                    value: "{{ sglang_internal_port | string }}"
+                  - name: HF_TOKEN
+                    value: "{{ hf_token }}"
+                resources:
+                  limits:
+                    nvidia.com/gpu: "1"
+                securityContext:
+                  privileged: true
+                startupProbe:
+                  httpGet:
+                    path: /v1/models
+                    port: "{{ sglang_port }}"
+                  initialDelaySeconds: 30
+                  periodSeconds: 10
+                  failureThreshold: 120
+                readinessProbe:
+                  httpGet:
+                    path: /v1/models
+                    port: "{{ sglang_port }}"
+                  periodSeconds: 15
+                livenessProbe:
+                  httpGet:
+                    path: /v1/models
+                    port: "{{ sglang_port }}"
+                  periodSeconds: 30
+                  failureThreshold: 3
+                volumeMounts:
+                  - name: hf-cache
+                    mountPath: /root/.cache/huggingface
+                  - name: launch-script
+                    mountPath: /scripts
+                    readOnly: true
+              - name: proxy
+                image: haproxy:lts-alpine
+                args: []
+                volumeMounts:
+                  - name: haproxy-config
+                    mountPath: /usr/local/etc/haproxy
+                    readOnly: true
+                ports:
+                  - containerPort: "{{ sglang_port }}"
+                    name: http
+            volumes:
+              - name: hf-cache
+                hostPath:
+                  path: "{{ hf_cache_path }}"
+                  type: DirectoryOrCreate
+              - name: model-download-script
+                configMap:
+                  name: sglang-model-download-script
+              - name: launch-script
+                configMap:
+                  name: sglang-launch-script
+                  defaultMode: 0755
+              - name: haproxy-config
+                configMap:
+                  name: sglang-haproxy-config
+
+- name: Create SGLang Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: sglang
+        namespace: "{{ dgx_namespace }}"
+      spec:
+        type: ClusterIP
+        selector:
+          app: sglang
+          role: head
+        ports:
+          - name: http
+            port: "{{ sglang_port }}"
+            targetPort: "{{ sglang_port }}"
+            protocol: TCP
+
+- name: Create SGLang ip allowlist middleware
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: sglang-ip-allowlist
+        namespace: "{{ dgx_namespace }}"
+      spec:
+        ipAllowList:
+          sourceRange: "{{ traefik_internal_allowlist }}"
+
+- name: Create SGLang TLS certificate
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: "sglang.{{ dns_external_domain_suffix }}"
+        namespace: "{{ dgx_namespace }}"
+      spec:
+        dnsNames:
+          - "sglang.{{ dns_external_domain_suffix }}"
+        secretName: "sglang.{{ dns_external_domain_suffix }}"
+        issuerRef:
+          name: letsencrypt-production
+          kind: ClusterIssuer
+
+- name: Create SGLang http ingressroute with redirect
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: sglang-ingress
+        namespace: "{{ dgx_namespace }}"
+      spec:
+        entryPoints:
+          - web
+        routes:
+        - kind: Rule
+          match: "Host(`sglang.{{ dns_external_domain_suffix }}`)"
+          priority: 10
+          services:
+          - kind: Service
+            name: sglang
+            namespace: "{{ dgx_namespace }}"
+            passHostHeader: true
+            port: "{{ sglang_port }}"
+          middlewares:
+            - name: redirect-myhttps
+            - name: sglang-ip-allowlist
+
+- name: Create SGLang https ingressroute
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: sglang-https-ingress
+        namespace: "{{ dgx_namespace }}"
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - kind: Rule
+            match: "Host(`sglang.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            middlewares:
+              - name: sglang-ip-allowlist
+            services:
+              - kind: Service
+                name: sglang
+                namespace: "{{ dgx_namespace }}"
+                passHostHeader: true
+                port: "{{ sglang_port }}"
+        tls:
+          secretName: "sglang.{{ dns_external_domain_suffix }}"

@@ -1,0 +1,290 @@
+---
+- name: Create ollama namespace
+  kubernetes.core.k8s:
+    name: ollama
+    api_version: v1
+    kind: Namespace
+    state: present
+
+- name: Create ollama configmap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ollama-config
+        namespace: ollama
+      data:
+        OLLAMA_MODELS: "/ollama_models"
+        OLLAMA_NUM_PARALLEL: "2"
+        OLLAMA_MAX_LOADED_MODELS: "2"
+        OLLAMA_KEEP_ALIVE: "-1"
+        OLLAMA_FLASH_ATTENTION: "1"
+        OLLAMA_KV_CACHE_TYPE: "q8_0"
+        OLLAMA_CONTEXT_LENGTH: "8192"
+
+- name: Create ollama pull-models script configmap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ollama-pull-models-script
+        namespace: ollama
+      data:
+        pull-models.sh: |
+          #!/bin/bash
+          set -em
+          ollama serve &
+          until ollama list >/dev/null 2>&1; do
+            echo "waiting for ollama to be available in initContainer..."
+            sleep 1
+          done
+          IFS=',' read -ra models <<< "$OLLAMA_PRELOAD_MODELS"
+          for model in "${models[@]}"; do
+            echo "Pulling ${model} ..."
+            ollama pull "${model}"
+          done
+          kill %1
+
+- name: Create ollama warmup script configmap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ollama-warmup-script
+        namespace: ollama
+      data:
+        warmup.sh: |
+          #!/bin/sh
+          set -e
+          until ollama list >/dev/null 2>&1; do
+            date
+            echo "waiting for ollama to be ready..."
+            sleep 1
+          done
+          date
+          echo "installing curl..."
+          apt-get update -qq && apt-get install -y -qq curl >/dev/null
+          echo "loading {{ ollama_embedding_model }} into memory (num_ctx={{ ollama_embedding_model_max_ctx }})..."
+          curl -sf http://localhost:11434/api/embed \
+            -d '{"model":"{{ ollama_embedding_model }}","input":"warmup","options":{"num_ctx":{{ ollama_embedding_model_max_ctx }}}}'
+          echo
+          echo "done"
+          date
+
+- name: Create ollama service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: ollama
+        namespace: ollama
+        labels:
+          app: ollama
+      spec:
+        selector:
+          app: ollama
+        ports:
+          - port: "{{ ollama_port }}"
+            name: ollamaport
+            targetPort: "{{ ollama_port }}"
+
+- name: Create ollama deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ollama
+        namespace: ollama
+        labels:
+          app: ollama
+        annotations:
+          keel.sh/policy: force
+          keel.sh/match-tag: "true"
+          keel.sh/pollSchedule: "@every 24h"
+          keel.sh/trigger: poll
+      spec:
+        replicas: 1
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: ollama
+        template:
+          metadata:
+            labels:
+              app: ollama
+            annotations:
+              kubectl.kubernetes.io/default-container: ollama
+          spec:
+            restartPolicy: Always
+            nodeSelector:
+              spark-id: "1"
+            dnsConfig:
+              options:
+                - name: ndots
+                  value: "1"
+            initContainers:
+              - name: pull-models
+                image: ollama/ollama:latest
+                imagePullPolicy: Always
+                command: ["/bin/bash", "/scripts/pull-models.sh"]
+                envFrom:
+                  - configMapRef:
+                      name: ollama-config
+                env:
+                  - name: OLLAMA_PRELOAD_MODELS
+                    value: "{{ ollama_preload_models | join(',') }}"
+                resources:
+                  limits:
+                    nvidia.com/gpu: "1"
+                securityContext:
+                  privileged: true
+                volumeMounts:
+                  - name: ollama-data
+                    mountPath: /ollama_models
+                  - name: pull-models-script
+                    mountPath: /scripts
+            containers:
+              - name: ollama
+                image: ollama/ollama:latest
+                imagePullPolicy: Always
+                lifecycle:
+                  postStart:
+                    exec:
+                      command: ["/bin/sh", "/scripts/warmup.sh"]
+                envFrom:
+                  - configMapRef:
+                      name: ollama-config
+                tty: true
+                ports:
+                  - containerPort: "{{ ollama_port }}"
+                    name: ollamaport
+                resources:
+                  limits:
+                    nvidia.com/gpu: "1"
+                securityContext:
+                  privileged: true
+                volumeMounts:
+                  - name: ollama-data
+                    mountPath: /ollama_models
+                  - name: warmup-script
+                    mountPath: /scripts
+            volumes:
+              - name: ollama-data
+                hostPath:
+                  path: /var/lib/ollama-data
+                  type: DirectoryOrCreate
+              - name: pull-models-script
+                configMap:
+                  name: ollama-pull-models-script
+                  defaultMode: 0755
+              - name: warmup-script
+                configMap:
+                  name: ollama-warmup-script
+                  defaultMode: 0755
+
+- name: Create ollama ip-allowlist middleware
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: ollama-ip-allowlist
+        namespace: ollama
+      spec:
+        ipAllowList:
+          sourceRange: "{{ traefik_internal_allowlist }}"
+
+- name: Create ollama http to https redirect middleware
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: redirect-myhttps
+        namespace: ollama
+      spec:
+        redirectScheme:
+          scheme: https
+
+- name: Create ollama TLS certificate
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: "ollama.{{ dns_external_domain_suffix }}"
+        namespace: ollama
+      spec:
+        dnsNames:
+          - "ollama.{{ dns_external_domain_suffix }}"
+        secretName: "ollama.{{ dns_external_domain_suffix }}"
+        issuerRef:
+          name: letsencrypt-production
+          kind: ClusterIssuer
+
+- name: Create ollama http ingressroute with redirect
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: ollama-ingress
+        namespace: ollama
+      spec:
+        entryPoints:
+          - web
+        routes:
+        - kind: Rule
+          match: "Host(`ollama.{{ dns_external_domain_suffix }}`)"
+          priority: 10
+          services:
+          - kind: Service
+            name: ollama
+            namespace: ollama
+            passHostHeader: true
+            port: "{{ ollama_port }}"
+          middlewares:
+            - name: redirect-myhttps
+            - name: ollama-ip-allowlist
+
+- name: Create ollama https ingressroute
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: ollama-https-ingress
+        namespace: ollama
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - kind: Rule
+            match: "Host(`ollama.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            middlewares:
+              - name: ollama-ip-allowlist
+            services:
+              - kind: Service
+                name: ollama
+                namespace: ollama
+                passHostHeader: true
+                port: "{{ ollama_port }}"
+        tls:
+          secretName: "ollama.{{ dns_external_domain_suffix }}"

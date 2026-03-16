@@ -1,0 +1,25 @@
+---
+- name: Register DNS A records via nsupdate
+  community.general.nsupdate:
+    server: "{{ nsupdate_server }}"
+    zone: "{{ nsupdate_zone }}"
+    key_name: "{{ nsupdate_tsig_key_name }}"
+    key_secret: "{{ nsupdate_tsig_key_secret }}"
+    key_algorithm: "{{ nsupdate_tsig_algorithm }}"
+    record: "{{ item }}.{{ dns_external_domain_suffix }}."
+    type: A
+    ttl: "{{ nsupdate_ttl }}"
+    value: "{{ nsupdate_ingress_ip }}"
+    state: present
+  loop:
+    - ollama
+    - sglang
+    - openwebui
+    - searxng
+    - docling
+    - traefik
+    - prometheus
+    - promgrafana
+    - uptimekuma
+  loop_control:
+    label: "{{ item }}.{{ dns_external_domain_suffix }}"

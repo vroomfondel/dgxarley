@@ -1,0 +1,89 @@
+---
+- name: Deploy HF preload ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    context: "{{ kubeconfig_context_name }}"
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: hf-preload-script
+        namespace: "{{ dgx_namespace }}"
+      data:
+        download_models.py: "{{ lookup('file', role_path ~ '/files/hf_preload_download.py') }}"
+        run.sh: "{{ lookup('file', role_path ~ '/files/hf_preload_run.sh') }}"
+
+- name: Delete existing HF preload Job
+  kubernetes.core.k8s:
+    state: absent
+    context: "{{ kubeconfig_context_name }}"
+    api_version: batch/v1
+    kind: Job
+    name: hf-preload
+    namespace: "{{ dgx_namespace }}"
+  when: hf_preload_models | length > 0
+
+- name: Deploy HF preload Job
+  kubernetes.core.k8s:
+    state: present
+    context: "{{ kubeconfig_context_name }}"
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: hf-preload
+        namespace: "{{ dgx_namespace }}"
+      spec:
+        ttlSecondsAfterFinished: "{{ hf_preload_ttl }}"
+        backoffLimit: 1
+        template:
+          spec:
+            nodeSelector:
+              kubernetes.io/arch: arm64
+              # kubernetes.io/arch: amd64
+              spark-id: "2"
+            restartPolicy: Never
+            containers:
+              - name: download
+                image: "{{ sglang_image }}"
+                command: ["/bin/bash", "/scripts/run.sh"]
+                env:
+                  - name: HF_TOKEN
+                    value: "{{ hf_token }}"
+                  - name: HF_HUB_DISABLE_PROGRESS_BARS
+                    value: "0"
+                  - name: HF_PRELOAD_MODELS
+                    value: "{{ hf_preload_models | join(',') }}"
+                  - name: RSYNC_TARGETS
+                    value: "{{ hostvars['spark1']['ansible_host'] }}"
+                  - name: HF_CACHE_HOST_PATH
+                    value: "{{ hf_cache_path }}"
+                resources:
+                  requests:
+                    cpu: 500m
+                    memory: 2Gi
+                  limits:
+                    cpu: "4"
+                    memory: 8Gi
+                volumeMounts:
+                  - name: hf-cache
+                    mountPath: /root/.cache/huggingface
+                  - name: preload-script
+                    mountPath: /scripts
+                    readOnly: true
+                  - name: ssh-keys
+                    mountPath: /root/.ssh
+                    readOnly: true
+            volumes:
+              - name: hf-cache
+                hostPath:
+                  path: "{{ hf_cache_path }}"
+                  type: DirectoryOrCreate
+              - name: preload-script
+                configMap:
+                  name: hf-preload-script
+              - name: ssh-keys
+                hostPath:
+                  path: /root/.ssh
+                  type: Directory
+  when: hf_preload_models | length > 0

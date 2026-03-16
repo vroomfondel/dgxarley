@@ -1,0 +1,4 @@
+---
+{% for filter_file in pipelines_filters %}
+{{ filter_file }}: {{ lookup('file', 'pipelines/' + filter_file) | to_json }}
+{% endfor %}

@@ -1,0 +1,232 @@
+---
+# Traefik IP-Allowlist for internal services (overridden by vault)
+traefik_internal_allowlist:
+  - "192.168.123.0/24"
+  - "192.168.124.0/24"
+
+dgx_namespace: "dgx-ai"
+sglang_image: "scitrera/dgx-spark-sglang:0.5.9-t5"
+# Model profiles: context_length, kv_cache_dtype, mem_fraction_static
+sglang_model_profiles:
+  "Qwen/Qwen2.5-7B-Instruct":
+    info_url: "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct"
+    context_length: 32768
+    kv_cache_dtype: "fp8_e5m2"
+    mem_fraction_static: "0.85"
+    recommended_sampling:
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20
+      repetition_penalty: 1.05
+  "Qwen/Qwen2.5-14B-Instruct":
+    info_url: "https://huggingface.co/Qwen/Qwen2.5-14B-Instruct"
+    context_length: 32768
+    kv_cache_dtype: "fp8_e5m2"
+    mem_fraction_static: "0.80"
+    recommended_sampling:
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20
+      repetition_penalty: 1.05
+  "Qwen/Qwen2.5-32B-Instruct":
+    info_url: "https://huggingface.co/Qwen/Qwen2.5-32B-Instruct"
+    context_length: 32768
+    kv_cache_dtype: "fp8_e5m2"
+    mem_fraction_static: "0.50"
+    recommended_sampling:
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20
+      repetition_penalty: 1.05
+  "meta-llama/Llama-3.1-8B-Instruct":
+    info_url: "https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct"
+    context_length: 131072
+    kv_cache_dtype: "fp8_e5m2"
+    mem_fraction_static: "0.85"
+    recommended_sampling:
+      temperature: 0.6
+      top_p: 0.9
+  "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8":
+    info_url: "https://huggingface.co/Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+    context_length_max: 262144
+    context_length: 65536
+    kv_cache_dtype: "fp8_e5m2"
+    mem_fraction_static: "0.90"
+    reasoning_parser: "qwen3"
+    tool_call_parser: "qwen3_coder"
+    # non-thinking only — no <think> blocks
+    recommended_sampling:
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20
+  "Qwen/Qwen2.5-Coder-7B-Instruct":
+    info_url: "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct"
+    context_length: 32768
+    kv_cache_dtype: "fp8_e5m2"
+    mem_fraction_static: "0.5"
+    recommended_sampling:
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20
+      repetition_penalty: 1.1
+  "Qwen/Qwen2.5-Coder-14B-Instruct":
+    info_url: "https://huggingface.co/Qwen/Qwen2.5-Coder-14B-Instruct"
+    context_length: 32768
+    kv_cache_dtype: "fp8_e5m2"
+    mem_fraction_static: "0.50"
+    recommended_sampling:
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20
+      repetition_penalty: 1.05
+  "Qwen/Qwen2.5-Coder-32B-Instruct":
+    info_url: "https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct"
+    context_length: 32768
+    kv_cache_dtype: "fp8_e5m2"
+    mem_fraction_static: "0.50"
+    recommended_sampling:
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20
+      repetition_penalty: 1.05
+  "Qwen/Qwen3-Coder-30B-A3B-Instruct":
+    info_url: "https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct"
+    context_length: 262144
+    kv_cache_dtype: "fp8_e5m2"
+    mem_fraction_static: "0.70"
+    # non-thinking only — no <think> blocks
+    recommended_sampling:
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20
+      repetition_penalty: 1.05
+  "Qwen/Qwen3.5-35B-A3B":
+    info_url: "https://huggingface.co/Qwen/Qwen3.5-35B-A3B"
+    context_length: 262144
+    kv_cache_dtype: "fp8_e5m2"
+    mem_fraction_static: "0.50"
+    reasoning_parser: "qwen3"
+    tool_call_parser: "qwen3_coder"
+    # supports thinking (default) and non-thinking modes
+    recommended_sampling:
+      thinking:
+        temperature: 1.0
+        top_p: 0.95
+        top_k: 20
+        presence_penalty: 1.5
+      thinking_coding:
+        temperature: 0.6
+        top_p: 0.95
+        top_k: 20
+        presence_penalty: 0.0
+      non_thinking:
+        temperature: 0.7
+        top_p: 0.8
+        top_k: 20
+        presence_penalty: 1.5
+      non_thinking_reasoning:
+        temperature: 1.0
+        top_p: 1.0
+        top_k: 40
+        presence_penalty: 2.0
+
+# Speculative decoding (multi-token prediction) — disabled by default.
+# Increases output throughput (up to ~60%) at the cost of higher VRAM usage.
+# Speedup diminishes at high concurrency. Only works with models that have
+# trained MTP modules (e.g. Qwen3.5, DeepSeek-V3).
+sglang_speculative_enabled: false
+sglang_speculative_algo: "NEXTN"
+sglang_speculative_num_steps: 3
+sglang_speculative_eagle_topk: 1
+sglang_speculative_num_draft_tokens: 4
+
+# Select the active model — parameters are pulled from sglang_model_profiles
+#sglang_model: "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+#sglang_model: "Qwen/Qwen2.5-Coder-7B-Instruct"
+sglang_model: "Qwen/Qwen3.5-35B-A3B"
+sglang_context_length: "{{ sglang_model_profiles[sglang_model].context_length }}"
+sglang_kv_cache_dtype: "{{ sglang_model_profiles[sglang_model].kv_cache_dtype }}"
+sglang_mem_fraction_static: "{{ sglang_model_profiles[sglang_model].mem_fraction_static }}"
+sglang_reasoning_parser: "{{ sglang_model_profiles[sglang_model].reasoning_parser | default('') }}"
+sglang_tool_call_parser: "{{ sglang_model_profiles[sglang_model].tool_call_parser | default('') }}"
+sglang_tp: 2
+sglang_nnodes: 2
+sglang_port: 8000
+sglang_internal_port: 30080
+sglang_dist_timeout: 1800
+
+# Attention backend: per-model in sglang_model_profiles, defaults to "flashinfer".
+# Set to "triton" for hybrid GDN models (MoE+Mamba) on Blackwell GPUs.
+sglang_attention_backend: "{{ sglang_model_profiles[sglang_model].attention_backend | default('flashinfer') }}"
+
+ollama_preload_models:
+  - "bge-m3"
+  - "qwen3-coder:latest"
+  - "qwen2.5-coder:latest"
+
+ollama_embedding_model: "bge-m3"
+ollama_embedding_model_max_ctx: 8192
+ollama_port: 11434
+docling_port: 5001
+openwebui_image: "ghcr.io/open-webui/open-webui:main"
+pipelines_image: "ghcr.io/open-webui/pipelines:main"
+pipelines_port: 9099
+searxng_port: 8080
+# OpenWebUI configuration
+openwebui_secret_key: "CHANGEME_SECRET_KEY"
+openwebui_admin_name: "Admin User"
+openwebui_admin_email: "admin@example.com"
+openwebui_admin_password: "changeme"
+
+openwebui_embedding_engine: "ollama"
+openwebui_embedding_ollama_url: "http://ollama.ollama.svc.cluster.local:{{ ollama_port }}"
+openwebui_embedding_chunk_size: 20000
+openwebui_embedding_chunk_overlap: 750
+openwebui_embedding_chunk_min_size: 100
+openwebui_embedding_batch_size: 16
+
+openwebui_content_extraction_engine: "docling"
+openwebui_docling_server_url: "http://docling.docling.svc.cluster.local:{{ docling_port }}"
+# openwebui_tei_openai_api_base_url: "http://tei.ollama.svc.cluster.local:8080/v1"
+openwebui_searxng_query_url: "http://searxng.searxng.svc.cluster.local:{{ searxng_port }}/search?q=<query>"
+openwebui_web_search_result_count: 5
+
+# Pipelines (filter/function plugins for OpenWebUI)
+# Master toggle — controls Deployment, Service, and OpenAI connection registration.
+pipelines_enabled: true
+# Which pipeline filter scripts to seed (files in roles/k8s_dgx/files/pipelines/)
+pipelines_filters:
+  - "pipelines_self_reflection_filter.py"
+
+# OpenAI-compatible connections for OpenWebUI
+# Pipelines URL is appended automatically when pipelines_enabled is true.
+openwebui_connections_openai:
+  - "http://sglang.{{ dgx_namespace }}.svc.cluster.local:{{ sglang_port }}/v1"
+
+# QSFP IPs for NCCL bootstrap
+qsfp_ip_spark1: "10.10.10.0"
+qsfp_ip_spark2: "10.10.10.0"
+nccl_bootstrap_port: 50000
+nccl_socket_ifname: "net1"
+# HuggingFace cache paths on DGX nodes
+hf_cache_path: "/var/lib/hf-cache"
+hf_token: "hf_CHANGEME"
+# HuggingFace model pre-download Job
+hf_preload_models:
+  - "Qwen/Qwen3.5-35B-A3B"
+  - "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+  - "Qwen/Qwen2.5-Coder-7B-Instruct"
+  - "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
+
+hf_preload_ttl: 3600
+# NVIDIA GPU time-slicing: advertise each physical GPU as N logical replicas
+nvidia_gpu_timeslice_replicas: 4
+
+# nsupdate DNS registration
+nsupdate_server: "198.51.100.1"
+nsupdate_zone: "example.com"
+nsupdate_tsig_key_name: "dgx.example.com"
+nsupdate_tsig_key_secret: "CHANGEME_BASE64_TSIG_KEY"
+nsupdate_tsig_algorithm: "hmac-sha256"
+nsupdate_ttl: 3600
+nsupdate_ingress_ip: "192.168.101.100"

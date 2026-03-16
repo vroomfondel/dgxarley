@@ -1,0 +1,317 @@
+---
+- name: Create searxng namespace
+  kubernetes.core.k8s:
+    name: searxng
+    api_version: v1
+    kind: Namespace
+    state: present
+
+
+- name: Create searxng env configmap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: searxng-env-config
+        namespace: searxng
+      data:
+        GRANIAN_LOG_ACCESS_ENABLED: "true"
+
+
+- name: Create searxng configmap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: searxng
+        namespace: searxng
+      data:
+        limiter.toml: |-
+          [botdetection.ip_limit]
+          # activate link_token method in the ip_limit method
+          link_token = true
+          [botdetection.ip_lists]
+          pass_searxng_org = true
+        settings.yml: |
+          use_default_settings: true
+
+          general:
+            instance_name: 'dgx-searxng'
+
+          search:
+            autocomplete: 'google'
+            formats:
+              - html
+              - json
+
+          server:
+            secret_key: 'CHANGEME' # overwritten at runtime by ${SEARXNG_SECRET} env var
+            limiter: false
+            redis_url: "redis://redis.redis.svc.cluster.local:6379/3"
+
+          outgoing:
+            request_timeout: 10.0
+            source_ips: "0.0.0.0"
+
+          engines:
+            # default-enabled engines (explicit)
+            - name: google
+              disabled: false
+            - name: brave
+              disabled: true
+            - name: wikipedia
+              disabled: false
+            - name: wikidata
+              disabled: false
+            - name: startpage
+              disabled: false
+            # additionally enabled
+            - name: mojeek
+              disabled: false
+            - name: qwant
+              disabled: false
+            - name: bing
+              disabled: false
+            - name: wolframalpha
+              disabled: true
+            # disabled (broken/captcha)
+            - name: duckduckgo
+              disabled: true
+            - name: yep
+              disabled: true
+        uwsgi.ini: |
+          [uwsgi]
+          # Who will run the code
+          uid = searxng
+          gid = searxng
+
+          # Number of workers (usually CPU count)
+          # default value: %k (= number of CPU core, see Dockerfile)
+          workers = %k
+
+          # Number of threads per worker
+          # default value: 4 (see Dockerfile)
+          threads = 4
+
+          # The right granted on the created socket
+          chmod-socket = 666
+
+          # Plugin to use and interpreter config
+          single-interpreter = true
+          master = true
+          plugin = python3
+          lazy-apps = true
+          enable-threads = 4
+
+          # Module to import
+          module = searx.webapp
+
+          # Virtualenv and python path
+          pythonpath = /usr/local/searxng/
+          chdir = /usr/local/searxng/searx/
+
+          # automatically set processes name to something meaningful
+          auto-procname = true
+
+          # Disable request logging for privacy
+          disable-logging = true
+          log-5xx = true
+
+          # Set the max size of a request (request-body excluded)
+          buffer-size = 8192
+
+          # No keep alive
+          # See https://github.com/searx/searx-docker/issues/24
+          add-header = Connection: close
+
+          # uwsgi serves the static files
+          static-map = /static=/usr/local/searxng/searx/static
+          # expires set to one day
+          static-expires = /* 86400
+          static-gzip-all = True
+          offload-threads = 4
+
+
+- name: Create searxng service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      kind: Service
+      apiVersion: v1
+      metadata:
+        name: searxng
+        namespace: searxng
+        labels:
+          app: searxng
+      spec:
+        selector:
+          app: searxng
+        ports:
+          - port: 8080
+            name: searxng
+            targetPort: 8080
+            protocol: TCP
+
+
+- name: Create searxng deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: searxng
+        namespace: searxng
+        labels:
+          app: searxng
+        annotations:
+          keel.sh/policy: force
+          keel.sh/match-tag: "true"
+          keel.sh/pollSchedule: "@every 24h"
+          keel.sh/trigger: poll
+      spec:
+        replicas: 1
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: searxng
+        template:
+          metadata:
+            labels:
+              app: searxng
+          spec:
+            nodeSelector:
+              kubernetes.io/arch: amd64
+            dnsConfig:
+              options:
+                - name: ndots
+                  value: "1"
+            containers:
+              - image: docker.io/searxng/searxng:latest
+                name: searxng
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 256Mi
+                  limits:
+                    cpu: 500m
+                    memory: 512Mi
+                envFrom:
+                  - configMapRef:
+                      name: searxng-env-config
+                ports:
+                  - containerPort: 8080
+                    protocol: TCP
+                volumeMounts:
+                  - mountPath: /etc/searxng
+                    name: searxng
+            restartPolicy: Always
+            volumes:
+              - configMap:
+                  name: searxng
+                name: searxng
+
+
+- name: Create searxng ip allowlist middleware
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: searxng-ip-allowlist
+        namespace: searxng
+      spec:
+        ipAllowList:
+          sourceRange: "{{ traefik_internal_allowlist }}"
+
+
+- name: Create http to https redirect middleware
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: redirect-myhttps
+        namespace: searxng
+      spec:
+        redirectScheme:
+          scheme: https
+
+
+- name: Create searxng-tls-certificate
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: "searxng.{{ dns_external_domain_suffix }}"
+        namespace: searxng
+      spec:
+        dnsNames:
+          - "searxng.{{ dns_external_domain_suffix }}"
+        secretName: "searxng.{{ dns_external_domain_suffix }}"
+        issuerRef:
+          name: letsencrypt-production
+          kind: ClusterIssuer
+
+
+- name: Create searxng http ingressroute with redirect CRD for traefik
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: searxng-ingress
+        namespace: searxng
+      spec:
+        entryPoints:
+          - web
+        routes:
+        - kind: Rule
+          match: "Host(`searxng.{{ dns_external_domain_suffix }}`)"
+          priority: 10
+          services:
+          - kind: Service
+            name: searxng
+            namespace: searxng
+            passHostHeader: true
+            port: 8080
+          middlewares:
+            - name: redirect-myhttps
+            - name: searxng-ip-allowlist
+
+- name: Create searxng https ingressroute
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: searxnghttpsingress
+        namespace: searxng
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - kind: Rule
+            match: "Host(`searxng.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            middlewares:
+              - name: searxng-ip-allowlist
+            services:
+              - kind: Service
+                name: searxng
+                namespace: searxng
+                passHostHeader: true
+                port: 8080
+        tls:
+          secretName: "searxng.{{ dns_external_domain_suffix }}"

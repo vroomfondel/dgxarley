@@ -1,0 +1,473 @@
+---
+# --- PostgreSQL password lookup ---
+
+- name: Get openwebui database password from postgresql-secrets
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: postgresql-secrets
+    namespace: postgresql
+  register: postgresql_secrets_info
+
+- name: Set openwebui database password fact
+  set_fact:
+    openwebui_db_password: "{{ postgresql_secrets_info.resources[0].data.OPENWEBUI_POSTGRES_PASSWORD | b64decode }}"
+
+# --- Build dynamic OpenAI connection lists ---
+# Pipelines URL is only included when pipelines_enabled is true.
+
+- name: Build OpenAI connection URLs and keys
+  set_fact:
+    _openai_urls: "{{ openwebui_connections_openai + (pipelines_enabled | ternary([_pipelines_url], [])) }}"
+    _openai_keys: "{{ ([''] * openwebui_connections_openai | length) + (pipelines_enabled | ternary([openwebui_secret_key], [])) }}"
+  vars:
+    _pipelines_url: "http://pipelines.{{ dgx_namespace }}.svc.cluster.local:{{ pipelines_port }}"
+
+# --- Secrets & ConfigMaps ---
+
+- name: Create openwebui-db-secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: openwebui-db-secret
+        namespace: "{{ dgx_namespace }}"
+      type: Opaque
+      stringData:
+        DATABASE_URL: "postgresql://openwebui:{{ openwebui_db_password }}@postgresql.postgresql.svc.cluster.local:5432/openwebui"
+        PGVECTOR_DB_URL: "postgresql://openwebui:{{ openwebui_db_password }}@postgresql.postgresql.svc.cluster.local:5432/openwebui_vectors"
+
+- name: Create ollama-openwebui-config ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ollama-openwebui-config
+        namespace: "{{ dgx_namespace }}"
+      data:
+        WEBUI_SECRET_KEY: "{{ openwebui_secret_key }}"
+        ENABLE_LOGIN_FORM: "true"
+        SENTENCE_TRANSFORMERS_HOME: "/app/backend/data/cache/embedding/models"
+        VECTOR_DB: "pgvector"
+        RESET_CONFIG_ON_START: "true"
+        ENABLE_API_KEYS: "true"
+        USER_PERMISSIONS_FEATURES_API_KEYS: "true"
+        ENABLE_RAG_WEB_SEARCH: "true"
+        RAG_WEB_SEARCH_ENGINE: "searxng"
+        SEARXNG_QUERY_URL: "{{ openwebui_searxng_query_url }}"
+
+- name: Create openwebui-seed-config ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: openwebui-seed-config
+        namespace: "{{ dgx_namespace }}"
+      data:
+        config.json: |
+          {
+            "version": 0,
+            "ui": {
+              "default_models": "{{ sglang_model }}",
+              "enable_signup": true,
+              "default_user_role": "user",
+              "enable_community_sharing": false,
+              "enable_message_rating": true,
+              "user_permissions": {
+                "chat": {
+                  "deletion": true
+                }
+              }
+            },
+            "ollama": {
+              "enable": false,
+              "base_urls": [
+                "http://ollama.ollama.svc.cluster.local:{{ ollama_port }}"
+              ]
+            },
+            "openai": {
+              "enable": true,
+              "api_base_urls": {{ _openai_urls | to_json }},
+              "api_keys": {{ _openai_keys | to_json }},
+              "api_configs": {
+                "0": {
+                  "enable": true,
+                  "tags": [],
+                  "prefix_id": "",
+                  "model_ids": [],
+                  "connection_type": "local",
+                  "auth_type": "bearer",
+                  "key": ""
+                },
+                "1": {
+                  "enable": true,
+                  "tags": [],
+                  "prefix_id": "",
+                  "model_ids": [],
+                  "connection_type": "local",
+                  "auth_type": "bearer"
+                }
+              }
+            },
+            "auth": {
+              "admin": {
+                "show": true
+              },
+              "jwt_expiry": "-1",
+              "api_key": {
+                "enable": true,
+                "endpoint_restrictions": false,
+                "allowed_endpoints": ""
+              }
+            },
+            "rag": {
+              "chunk_size": {{ openwebui_embedding_chunk_size }},
+              "chunk_overlap": {{ openwebui_embedding_chunk_overlap }},
+              "chunk_min_size_target": {{ openwebui_embedding_chunk_min_size }},
+              "embedding_engine": "{{ openwebui_embedding_engine }}",
+              "embedding_model": "{{ ollama_embedding_model }}",
+              "embedding_batch_size": {{ openwebui_embedding_batch_size }},
+              "embedding_model_length_max": {{ ollama_embedding_model_max_ctx }},
+              "top_k": 8,
+              "relevance_threshold": 0.1,
+              "enable_hybrid_search": true,
+              "top_k_reranker": 3,
+              "reranking_engine": "",
+              "reranking_model": "",
+              "enable_markdown_header_text_splitter": true,
+              "CONTENT_EXTRACTION_ENGINE": "docling",
+              "docling_server_url": "{{ openwebui_docling_server_url }}",
+              "template": "Use the following context as your learned knowledge, inside <context></context> XML tags.\n<context>\n    [context]\n</context>\n\nWhen answer to user:\n- If you don't know, just say that you don't know.\n- If you don't know when you are not sure, ask for clarification.\nAvoid mentioning that you obtained the information from the context.\nAnd answer according to the language of the user's question.\n\nGiven the context information, answer the query.\nQuery: [query]",
+              "ollama": {
+                "url": "{{ openwebui_embedding_ollama_url }}"
+              },
+              "web": {
+                "search": {
+                  "enable": true,
+                  "engine": "searxng",
+                  "searxng_query_url": "{{ openwebui_searxng_query_url }}",
+                  "result_count": {{ openwebui_web_search_result_count }},
+                  "concurrent_requests": 10
+                }
+              }
+            },
+            "image_generation": {
+              "enable": false
+            },
+            "channels": {
+              "enable": false
+            }
+          }
+
+# --- OpenWebUI Deployment & Service ---
+
+- name: Deploy Open WebUI Deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: open-webui
+        namespace: "{{ dgx_namespace }}"
+        labels:
+          app: open-webui
+        annotations:
+          keel.sh/policy: force
+          keel.sh/match-tag: "true"
+          keel.sh/pollSchedule: "@every 24h"
+          keel.sh/trigger: poll
+      spec:
+        replicas: 1
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: open-webui
+        template:
+          metadata:
+            labels:
+              app: open-webui
+            annotations:
+              kubectl.kubernetes.io/default-container: open-webui
+          spec:
+            restartPolicy: Always
+            initContainers:
+              - name: seed-config
+                image: busybox:latest
+                imagePullPolicy: IfNotPresent
+                command: ["/bin/sh", "-c", "cp -v /config-seed/config.json /app/backend/data/config.json"]
+                volumeMounts:
+                  - name: openwebui-seed-config
+                    mountPath: /config-seed
+                    readOnly: true
+                  - name: openwebui-data
+                    mountPath: /app/backend/data
+            dnsConfig:
+              options:
+                - name: ndots
+                  value: "1"
+            nodeSelector:
+              kubernetes.io/arch: amd64
+            containers:
+              - name: open-webui
+                image: "{{ openwebui_image }}"
+                imagePullPolicy: Always
+                tty: true
+                resources:
+                  requests:
+                    cpu: 500m
+                    memory: 750Mi
+                  limits:
+                    cpu: 8000m
+                    memory: 2.25Gi
+                envFrom:
+                  - configMapRef:
+                      name: ollama-openwebui-config
+                  - secretRef:
+                      name: openwebui-db-secret
+                ports:
+                  - containerPort: 8080
+                    name: http
+                startupProbe:
+                  httpGet:
+                    path: /health
+                    port: 8080
+                  initialDelaySeconds: 10
+                  periodSeconds: 5
+                  failureThreshold: 30
+                  timeoutSeconds: 3
+                livenessProbe:
+                  httpGet:
+                    path: /health
+                    port: 8080
+                  periodSeconds: 30
+                  failureThreshold: 3
+                  timeoutSeconds: 3
+                readinessProbe:
+                  httpGet:
+                    path: /health
+                    port: 8080
+                  periodSeconds: 10
+                  failureThreshold: 3
+                  timeoutSeconds: 3
+                volumeMounts:
+                  - name: openwebui-data
+                    mountPath: /app/backend/data
+            volumes:
+              - name: openwebui-data
+                hostPath:
+                  path: /var/lib/openwebui-data
+                  type: DirectoryOrCreate
+              - name: openwebui-seed-config
+                configMap:
+                  name: openwebui-seed-config
+
+- name: Create Open WebUI Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: open-webui
+        namespace: "{{ dgx_namespace }}"
+      spec:
+        type: ClusterIP
+        selector:
+          app: open-webui
+        ports:
+          - name: http
+            port: 8080
+            targetPort: 8080
+            protocol: TCP
+
+- name: Create openwebui ip allowlist middleware
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: openwebui-ip-allowlist
+        namespace: "{{ dgx_namespace }}"
+      spec:
+        ipAllowList:
+          sourceRange: "{{ traefik_internal_allowlist }}"
+
+- name: Create http to https redirect middleware for openwebui
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: redirect-myhttps
+        namespace: "{{ dgx_namespace }}"
+      spec:
+        redirectScheme:
+          scheme: https
+
+- name: Create openwebui-tls-certificate
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: "openwebui.{{ dns_external_domain_suffix }}"
+        namespace: "{{ dgx_namespace }}"
+      spec:
+        dnsNames:
+          - "openwebui.{{ dns_external_domain_suffix }}"
+        secretName: "openwebui.{{ dns_external_domain_suffix }}"
+        issuerRef:
+          name: letsencrypt-production
+          kind: ClusterIssuer
+
+- name: Create openwebui http ingressroute with redirect CRD for traefik
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: openwebui-ingress
+        namespace: "{{ dgx_namespace }}"
+      spec:
+        entryPoints:
+          - web
+        routes:
+        - kind: Rule
+          match: "Host(`openwebui.{{ dns_external_domain_suffix }}`)"
+          priority: 10
+          services:
+          - kind: Service
+            name: open-webui
+            namespace: "{{ dgx_namespace }}"
+            passHostHeader: true
+            port: 8080
+          middlewares:
+            - name: redirect-myhttps
+            - name: openwebui-ip-allowlist
+
+- name: Create openwebui https ingressroute
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: openwebui-https-ingress
+        namespace: "{{ dgx_namespace }}"
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - kind: Rule
+            match: "Host(`openwebui.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            middlewares:
+              - name: openwebui-ip-allowlist
+            services:
+              - kind: Service
+                name: open-webui
+                namespace: "{{ dgx_namespace }}"
+                passHostHeader: true
+                port: 8080
+        tls:
+          secretName: "openwebui.{{ dns_external_domain_suffix }}"
+
+# --- Admin account & API key provisioning ---
+
+- name: Wait for Open WebUI to become healthy
+  ansible.builtin.uri:
+    url: "https://openwebui.{{ dns_external_domain_suffix }}/health"
+    method: GET
+    validate_certs: true
+    status_code: 200
+  register: openwebui_health
+  until: openwebui_health.status == 200
+  retries: 30
+  delay: 5
+
+- name: Try to sign in as admin
+  ansible.builtin.uri:
+    url: "https://openwebui.{{ dns_external_domain_suffix }}/api/v1/auths/signin"
+    method: POST
+    body_format: json
+    body:
+      email: "{{ openwebui_admin_email }}"
+      password: "{{ openwebui_admin_password }}"
+    validate_certs: true
+    status_code: [200, 401, 403]
+  register: openwebui_signin
+
+- name: Create admin account if it does not exist
+  ansible.builtin.uri:
+    url: "https://openwebui.{{ dns_external_domain_suffix }}/api/v1/auths/signup"
+    method: POST
+    body_format: json
+    body:
+      name: "{{ openwebui_admin_name }}"
+      email: "{{ openwebui_admin_email }}"
+      password: "{{ openwebui_admin_password }}"
+    validate_certs: true
+    status_code: 200
+  register: openwebui_signup
+  when: openwebui_signin.status != 200
+
+- name: Set admin JWT token
+  set_fact:
+    openwebui_admin_token: "{{ (openwebui_signin.json.token if openwebui_signin.status == 200 else openwebui_signup.json.token) }}"
+
+- name: Check for existing API key
+  ansible.builtin.uri:
+    url: "https://openwebui.{{ dns_external_domain_suffix }}/api/v1/auths/api_key"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ openwebui_admin_token }}"
+    validate_certs: true
+    status_code: [200]
+  register: openwebui_existing_api_key
+
+- name: Create API key if none exists
+  ansible.builtin.uri:
+    url: "https://openwebui.{{ dns_external_domain_suffix }}/api/v1/auths/api_key"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ openwebui_admin_token }}"
+    validate_certs: true
+    status_code: 200
+  register: openwebui_new_api_key
+  when: openwebui_existing_api_key.json.api_key is not defined or openwebui_existing_api_key.json.api_key == ""
+
+- name: Set admin API key fact
+  set_fact:
+    openwebui_admin_api_key: >-
+      {{ openwebui_new_api_key.json.api_key
+         if (openwebui_new_api_key is not skipped)
+         else openwebui_existing_api_key.json.api_key }}
+
+- name: Store admin API key in Secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: openwebui-admin-api-key
+        namespace: "{{ dgx_namespace }}"
+      type: Opaque
+      stringData:
+        api_key: "{{ openwebui_admin_api_key }}"
+
+- name: Display admin API key
+  debug:
+    msg: "OpenWebUI admin API key: {{ openwebui_admin_api_key }}"

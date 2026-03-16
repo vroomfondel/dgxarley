@@ -1,0 +1,222 @@
+---
+- name: Create docling namespace
+  kubernetes.core.k8s:
+    name: docling
+    api_version: v1
+    kind: Namespace
+    state: present
+
+- name: Create docling configmap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: docling-config
+        namespace: docling
+      data:
+        UVICORN_WORKERS: "1"
+        DOCLING_DEVICE: "cpu"
+        DOCLING_NUM_THREADS: "4"
+        HF_HOME: "/huggingface-cache"
+
+- name: Create docling service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: docling
+        namespace: docling
+        labels:
+          app: docling
+      spec:
+        selector:
+          app: docling
+        ports:
+          - port: "{{ docling_port }}"
+            name: docling-port
+            targetPort: "{{ docling_port }}"
+
+- name: Create docling deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: docling-deployment
+        namespace: docling
+        labels:
+          app: docling-deployment
+        annotations:
+          keel.sh/policy: force
+          keel.sh/match-tag: "true"
+          keel.sh/pollSchedule: "@every 24h"
+          keel.sh/trigger: poll
+      spec:
+        replicas: 1
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: docling
+        template:
+          metadata:
+            labels:
+              app: docling
+          spec:
+            restartPolicy: Always
+            nodeSelector:
+              kubernetes.io/hostname: "{{ k3s_master_node_hostname }}"
+            dnsConfig:
+              options:
+                - name: ndots
+                  value: "1"
+            containers:
+              - name: docling
+                image: quay.io/docling-project/docling-serve-cpu:latest
+                imagePullPolicy: Always
+                resources:
+                  requests:
+                    cpu: 500m
+                    memory: 1Gi
+                  limits:
+                    cpu: 4000m
+                    memory: 4Gi
+                envFrom:
+                  - configMapRef:
+                      name: docling-config
+                ports:
+                  - containerPort: "{{ docling_port }}"
+                    name: docling-port
+                readinessProbe:
+                  httpGet:
+                    path: /health
+                    port: "{{ docling_port }}"
+                  initialDelaySeconds: 30
+                  periodSeconds: 10
+                  failureThreshold: 3
+                  timeoutSeconds: 5
+                livenessProbe:
+                  httpGet:
+                    path: /health
+                    port: "{{ docling_port }}"
+                  initialDelaySeconds: 60
+                  periodSeconds: 30
+                  failureThreshold: 3
+                  timeoutSeconds: 5
+                startupProbe:
+                  httpGet:
+                    path: /health
+                    port: "{{ docling_port }}"
+                  initialDelaySeconds: 10
+                  periodSeconds: 10
+                  failureThreshold: 60
+                  timeoutSeconds: 5
+                volumeMounts:
+                  - name: hf-cache
+                    mountPath: /huggingface-cache
+            volumes:
+              - name: hf-cache
+                hostPath:
+                  path: /var/lib/docling-data
+                  type: DirectoryOrCreate
+
+- name: Create docling ip allowlist middleware
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: docling-ip-allowlist
+        namespace: docling
+      spec:
+        ipAllowList:
+          sourceRange: "{{ traefik_internal_allowlist }}"
+
+- name: Create http to https redirect middleware
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: redirect-myhttps
+        namespace: docling
+      spec:
+        redirectScheme:
+          scheme: https
+
+- name: Create docling TLS certificate
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: "docling.{{ dns_external_domain_suffix }}"
+        namespace: docling
+      spec:
+        dnsNames:
+          - "docling.{{ dns_external_domain_suffix }}"
+        secretName: "docling.{{ dns_external_domain_suffix }}"
+        issuerRef:
+          name: letsencrypt-production
+          kind: ClusterIssuer
+
+- name: Create docling http ingressroute with redirect
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: docling-ingress
+        namespace: docling
+      spec:
+        entryPoints:
+          - web
+        routes:
+        - kind: Rule
+          match: "Host(`docling.{{ dns_external_domain_suffix }}`)"
+          priority: 10
+          services:
+          - kind: Service
+            name: docling
+            namespace: docling
+            passHostHeader: true
+            port: "{{ docling_port }}"
+          middlewares:
+            - name: redirect-myhttps
+            - name: docling-ip-allowlist
+
+- name: Create docling https ingressroute
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: docling-https-ingress
+        namespace: docling
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - kind: Rule
+            match: "Host(`docling.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            middlewares:
+              - name: docling-ip-allowlist
+            services:
+              - kind: Service
+                name: docling
+                namespace: docling
+                passHostHeader: true
+                port: "{{ docling_port }}"
+        tls:
+          secretName: "docling.{{ dns_external_domain_suffix }}"

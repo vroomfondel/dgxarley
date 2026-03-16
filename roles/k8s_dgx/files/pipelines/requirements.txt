@@ -1,0 +1,3 @@
+# Additional Python dependencies for pipeline filters.
+# Installed at Pipelines container startup via PIPELINES_REQUIREMENTS_PATH.
+# Packages already in the base image (aiohttp, pydantic, requests) need not be listed.

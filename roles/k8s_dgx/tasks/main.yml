@@ -1,0 +1,44 @@
+---
+- name: Deploy dgx-ai namespace
+  ansible.builtin.import_tasks: namespace.yml
+  tags: namespace
+
+- name: Deploy NVIDIA device plugin
+  ansible.builtin.import_tasks: nvidia_device_plugin.yml
+  tags: nvidia
+
+- name: Deploy Multus CNI
+  ansible.builtin.import_tasks: multus.yml
+  tags: multus
+
+- name: Deploy SearXNG
+  ansible.builtin.import_tasks: searxng.yml
+  tags: searxng
+
+- name: Deploy SGLang distributed inference
+  ansible.builtin.import_tasks: sglang.yml
+  tags: sglang
+
+- name: Deploy Ollama embedding service
+  ansible.builtin.import_tasks: ollama.yml
+  tags: ollama
+
+- name: Deploy docling-serve
+  ansible.builtin.import_tasks: docling.yml
+  tags: docling
+
+- name: Deploy Open WebUI
+  ansible.builtin.import_tasks: openwebui.yml
+  tags: openwebui
+
+- name: Deploy Pipelines
+  ansible.builtin.import_tasks: pipelines.yml
+  tags: pipelines
+
+- name: Pre-download HuggingFace models
+  ansible.builtin.import_tasks: hf_preload.yml
+  tags: hf_preload
+
+- name: Register DNS A records for ingress services
+  ansible.builtin.import_tasks: dns.yml
+  tags: dns

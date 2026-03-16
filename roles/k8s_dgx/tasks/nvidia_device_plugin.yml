@@ -1,0 +1,5 @@
+---
+- name: Deploy NVIDIA device plugin DaemonSet
+  kubernetes.core.k8s:
+    state: present
+    template: "nvidia-device-plugin.yml.j2"
