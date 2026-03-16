@@ -1,0 +1,44 @@
+prefer-bundled-bin: true
+{% if k3s_cluster_init | default(false) %}
+cluster-init: true
+{% endif %}
+{% if isk3smaster is defined and isk3smaster %}
+disable:
+  - servicelb
+disable-network-policy: true
+cluster-cidr: "{{ cluster_cidr }}"
+service-cidr: "{{ service_cidr }}"
+node-ip: "{{ k3s_node_ip }}"
+bind-address: "{{ k3s_node_ip }}"
+node-external-ip: "{{ k3s_node_ip }}"
+# node-name: "{{ ansible_hostname }}"
+service-node-port-range: "22-32767"
+flannel-ipv6-masq: false
+kubelet-arg:
+  - "allowed-unsafe-sysctls=net.ipv4.*,net.ipv6.*"
+kube-proxy-arg:
+  - "nodeport-addresses=127.0.0.0/8"
+{% if k3s_node_labels is defined %}
+node-label:
+{% for label in k3s_node_labels %}
+  - "{{ label }}"
+{% endfor %}
+{% endif %}
+{% else %}
+node-ip: "{{ k3s_node_ip }}"
+# bind-address: "{{ k3s_node_ip }}"
+node-external-ip: "{{ k3s_node_ip }}"
+# node-name: "{{ ansible_hostname }}"
+kube-proxy-arg:
+  - "nodeport-addresses=127.0.0.0/8"
+{% if k3s_node_labels is defined %}
+node-label:
+{% for label in k3s_node_labels %}
+  - "{{ label }}"
+{% endfor %}
+{% endif %}
+{% endif %}
+
+# https://docs.k3s.io/networking/networking-services?_highlight=externaltrafficpolicy#usage
+# NOWN ISSUE
+# If external traffic reaches the node using a NAT (e.g. in public clouds) and you require externalTrafficPolicy=local for purposes such as client source IP preservation, please do not define the k3s config node-external-ip for any of the nodes, as that will not work correctly

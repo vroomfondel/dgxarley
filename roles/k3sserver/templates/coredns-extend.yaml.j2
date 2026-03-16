@@ -1,0 +1,30 @@
+---
+# HelmChartConfig for K3s CoreDNS
+# https://github.com/coredns/helm
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: coredns
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    replicaCount: {{ coredns_replicas }}
+    resources:
+      requests:
+        cpu: 100m
+        memory: 70Mi
+      limits:
+        cpu: 300m
+        memory: 170Mi
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: k8s-app
+                    operator: In
+                    values:
+                      - kube-dns
+              topologyKey: kubernetes.io/hostname

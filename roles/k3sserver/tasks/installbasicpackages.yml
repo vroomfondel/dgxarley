@@ -1,0 +1,25 @@
+---
+- name: install basic packages for this role
+  apt:
+    pkg:
+      - nfs-common
+      - curl
+      - runc
+    state: present
+
+- name: install basic packages for this role k3smaster
+  apt:
+    pkg:
+      - python3-kubernetes  # on k3s/k8s control nodes
+      - golang-go
+      - wakeonlan
+      - haproxy
+      - rsyslog
+      - conntrack
+      - sqlite3
+    state: present
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+

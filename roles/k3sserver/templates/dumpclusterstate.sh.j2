@@ -1,0 +1,63 @@
+#!/bin/bash
+
+if [ -e /etc/rancher/k3s/k3s.yaml ] ; then
+  KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+fi
+
+source ${HOME}/.bashrc
+echo KUBECONFIG1: $KUBECONFIG
+#/etc/kubernetes/admin.conf
+KUBECONFIG=${KUBECONFIG:=/etc/kubernetes/admin.conf}
+echo KUBECONFIG2: $KUBECONFIG
+#FOO="${VARIABLE:-default}"
+export KUBECONFIG
+
+today=$(date +%Y%m%d)
+
+
+
+cd ${HOME}
+if ! [ -d clusterstate ] ; then
+        mkdir -p clusterstate
+fi
+cd ${HOME}/clusterstate
+
+opwd="$(pwd)"
+cd /tmp
+
+ddm=$(date +%Y%m%d_%H%M%S)
+
+kubectl cluster-info dump --all-namespaces -o yaml --output-directory=/tmp/clusterstate_${ddm}/
+kubectl get secrets -A -o yaml > clusterstate_${ddm}/SECRETS.yaml
+
+echo create tgz without logs: $(pwd)/clusterstate_nologs_${ddm}.tgz
+tar -czvf clusterstate_nologs_${ddm}.tgz --exclude=logs.txt clusterstate_${ddm}
+
+echo creating k3s datastore backup
+K3S_DB="/var/lib/rancher/k3s/server/db/state.db"
+if [ -f "$K3S_DB" ]; then
+        sqlite3 "$K3S_DB" ".backup /tmp/k3s_state_${ddm}.db"
+        tar -czvf k3s_state_${ddm}.tgz -C /tmp k3s_state_${ddm}.db
+        rm -f /tmp/k3s_state_${ddm}.db
+else
+        echo "WARN: $K3S_DB not found, skipping datastore backup"
+        tar -czvf k3s_state_${ddm}.tgz --files-from /dev/null
+fi
+
+if ! [ -d "${opwd}/clusterstate_backups" ] ; then
+        mkdir -p "${opwd}/clusterstate_backups" ;
+fi
+
+cp -v $(pwd)/clusterstate_nologs_${ddm}.tgz "${opwd}/clusterstate_backups/"
+cp -v $(pwd)/k3s_state_${ddm}.tgz "${opwd}/clusterstate_backups/"
+
+rc cp -q --continue-on-error clusterstate_nologs_${ddm}.tgz {{ rustfs_rc_alias }}/{{ rustfs_rc_backup_bucket }}/clusterstate/${today}/
+rc cp -q --continue-on-error k3s_state_${ddm}.tgz {{ rustfs_rc_alias }}/{{ rustfs_rc_backup_bucket }}/clusterstate/${today}/
+
+if [ -t 0 ] ; then
+	rm -rvf clusterstate_nologs_${ddm}.tgz k3s_state_${ddm}.tgz /tmp/clusterstate_${ddm}/
+else
+        rm -rf clusterstate_nologs_${ddm}.tgz k3s_state_${ddm}.tgz /tmp/clusterstate_${ddm}/
+fi
+
+

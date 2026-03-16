@@ -1,0 +1,41 @@
+---
+# file: roles/k3sserver/tasks/rsyslog.yml
+
+- name: Configure rsyslog to listen on UDP port 514
+  lineinfile:
+    path: /etc/rsyslog.conf
+    regexp: '^#?module\(load="imudp"\)'
+    line: 'module(load="imudp")'
+  notify: restart rsyslog
+
+- name: Configure rsyslog UDP input port
+  lineinfile:
+    path: /etc/rsyslog.conf
+    regexp: '^#?input\(type="imudp" port="514"\)'
+    line: 'input(type="imudp" port="514")'
+    insertafter: 'module\(load="imudp"\)'
+  notify: restart rsyslog
+
+- name: Configure rsyslog to listen on TCP port 514
+  lineinfile:
+    path: /etc/rsyslog.conf
+    regexp: '^#?module\(load="imtcp"\)'
+    line: 'module(load="imtcp")'
+  notify: restart rsyslog
+
+- name: Configure rsyslog TCP input port
+  lineinfile:
+    path: /etc/rsyslog.conf
+    regexp: '^#?input\(type="imtcp" port="514"\)'
+    line: 'input(type="imtcp" port="514")'
+    insertafter: 'module\(load="imtcp"\)'
+  notify: restart rsyslog
+
+- name: Configure rsyslog to forward remote messages to journal
+  copy:
+    dest: /etc/rsyslog.d/10-remote-to-journal.conf
+    src: "etc_rsyslog.d_10-remote-to-journal.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart rsyslog

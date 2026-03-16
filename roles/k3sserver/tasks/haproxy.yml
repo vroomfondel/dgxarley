@@ -1,0 +1,31 @@
+---
+- name: ensure haproxy and rsyslog is installed for k3smaster
+  apt:
+    pkg:
+      - haproxy
+      - rsyslog
+    state: present
+#  notify:
+#    - restart rsyslog
+#    - restart haproxy
+
+- name: copy haproxy.cfg to k3smaster
+  template:
+    src: "etc_haproxy_haproxy.cfg.j2"
+    dest: "/etc/haproxy/haproxy.cfg"
+  notify: restart haproxy
+
+- name: ensure /var/log/haproxy.log file exists
+  copy:
+    content: ""
+    dest: /var/log/haproxy.log
+    force: false
+    group: adm
+    owner: syslog
+    mode: 0644
+
+- name: copy rsylog-haproxy.conf to k3smaster
+  copy:
+    src: "etc_rsyslog.d_49-haproxy.conf"
+    dest: "/etc/rsyslog.d/49-haproxy.conf"
+  notify: restart rsyslog

@@ -1,0 +1,215 @@
+---
+- name: ensure k3smaster is set in /etc/hosts for non-k3smaster
+  lineinfile:
+    path: /etc/hosts
+    regexp: '\sk3smaster\s*$'
+    line: "{{ k3smasterip }}	k3smaster"
+  when:
+    - k3smasterip is defined
+    - isk3smaster is not defined or not isk3smaster
+
+- name: ensure k3smaster is set in /etc/hosts for k3smaster to 127.0.0.1
+  lineinfile:
+    path: /etc/hosts
+    regexp: '\sk3smaster\s*$'
+    line: "127.0.0.1	k3smaster"
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: ensure /etc/rancher/k3s exists
+  file:
+    path: /etc/rancher/k3s
+    state: directory
+    owner: root
+    group: root
+    mode: 0766
+
+- name: copy template /etc/rancher/k3s/config.yaml
+  template:
+    src: "etc_rancher_k3s_config.yaml.j2"
+    dest: "/etc/rancher/k3s/config.yaml"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Populate service facts
+  service_facts:
+  no_log: true
+
+#- name: Print service facts
+#  ansible.builtin.debug:
+#    msg: "Service: {{ services[item].name }} is in state {{ services[item].state }}"
+#    # value.name }} is in status {{ item.value.state }}"
+#  with_items: "{{ services }}"
+#  when:
+#    - inventory_hostname == "acerrevo.local"
+
+#- name: Print service facts
+#  ansible.builtin.debug:
+#    msg: "Service: {{ services[item].name }} is in state {{ services[item].state }}"
+#    # value.name }} is in status {{ item.value.state }}"
+#  with_items: "{{ services }}"
+#  when:
+#    - services is defined
+
+
+- name: check if /etc/rancher/k3s/config.yaml exists
+  stat:
+    path: "/etc/rancher/k3s/config.yaml"
+  register: k3sconf
+
+
+- name: copy k3s_install_server.sh script
+  template:
+    src: "k3s_install_server.sh.j2"
+    dest: "/root/k3s_install_server.sh"
+    owner: root
+    group: root
+    mode: "u=rwx,g=rw,o="
+  when:
+    - k3sconf.stat.exists == True
+    - isk3smaster is defined
+    - isk3smaster
+  register: k3s_install_server
+
+- name: execute curl installer for k3s-server
+  shell: "/root/k3s_install_server.sh"
+  args:
+    chdir: /root
+  when:
+    - k3sconf.stat.exists == True
+    - isk3smaster is defined
+    - isk3smaster
+    - (services is defined and 'k3s.service' not in services) or k3s_install_server.changed
+
+
+- name: ensure /var/lib/rancher/k3s/server/manifests exists
+  file:
+    path: /var/lib/rancher/k3s/server/manifests
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: copy traefik-extend.yaml to k3smaster
+  template:
+    src: "traefik-extend.yaml.j2"
+    dest: "/var/lib/rancher/k3s/server/manifests/traefik-extend.yaml"
+  tags:
+    - traefik-extend
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+  # notify: restart k3s
+
+- name: copy metrics-server-extend.yaml to k3smaster
+  copy:
+    src: "metrics-server-extend.yaml"
+    dest: "/var/lib/rancher/k3s/server/manifests/metrics-server-extend.yaml"
+  tags:
+    - metrics-server-extend
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: copy local-path-provisioner-extend.yaml to k3smaster
+  copy:
+    src: "local-path-provisioner-extend.yaml"
+    dest: "/var/lib/rancher/k3s/server/manifests/local-path-provisioner-extend.yaml"
+  tags:
+    - local-path-provisioner-extend
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: template coredns-extend.yaml to k3smaster
+  template:
+    src: "coredns-extend.yaml.j2"
+    dest: "/var/lib/rancher/k3s/server/manifests/coredns-extend.yaml"
+  tags:
+    - coredns-extend
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+
+- name: slurp node-token from k3s-master
+  slurp:
+      src: /var/lib/rancher/k3s/server/node-token
+  register: slurpedtoken
+  delegate_to: "{{ groups['k3sserver'] | map('extract', hostvars) | selectattr('isk3smaster', 'defined') | selectattr('isk3smaster') | map(attribute='inventory_hostname') | first }}"
+  run_once: yes
+
+- name: set info for others
+  set_fact:
+      k3stoken: "{{ slurpedtoken.content | b64decode }}"
+  delegate_to: "{{ item }}"
+  loop: "{{ ansible_play_batch }}"
+  run_once: yes
+
+- name: print k3s token to screen
+  debug:
+    msg: "k3stoken: {{ k3stoken }}"
+  when:
+    - k3stoken is defined
+
+- name: copy k3s_install_agent.sh script
+  template:
+    src: "k3s_install_agent.sh.j2"
+    dest: "/root/k3s_install_agent.sh"
+    owner: root
+    group: root
+    mode: "u=rwx,g=rw,o="
+  when:
+    - k3sconf.stat.exists == True
+    - isk3smaster is not defined or not isk3smaster
+  register: k3s_install_agent
+
+
+
+- name: execute curl installer for k3s-agent
+  shell: "/root/k3s_install_agent.sh"
+  args:
+    chdir: /root
+  when:
+    - k3sconf.stat.exists == True
+    - services is defined
+    - isk3smaster is not defined or not isk3smaster
+    - (services is defined and 'k3s-agent.service' not in services) or k3s_install_agent.changed
+
+
+
+# das command wird "später" im kubectlstuff für den check, ob der cert-manager funktioniert gebraucht!
+#- name: Check if cmctl is installed
+#  shell: which cmctl
+#  register: cmctl_check
+#  changed_when: false
+#  failed_when: false
+#
+#- name: install cmctl on EXEC-HOST
+#  shell: >
+#      OS=$(go env GOOS); ARCH=$(go env GOARCH) ;
+#      if [ "$(id -u)" = "0" ]; then
+#        INSTALL_DIR=/usr/local/bin;
+#      else
+#        INSTALL_DIR=$HOME/.local/bin;
+#        mkdir -p $INSTALL_DIR;
+#      fi;
+#      echo GO_OS: $OS;
+#      echo GO_ARCH: $ARCH;
+#      echo INSTALL_DIR: $INSTALL_DIR;
+#      URL=https://github.com/cert-manager/cmctl/releases/latest/download/cmctl_${OS}_${ARCH};
+#      echo -e "\nURL: $URL\n";
+#      curl -fsSL -o cmctl $URL &&
+#      chmod a+x cmctl &&
+#      mv -v cmctl $INSTALL_DIR/
+#  args:
+#    chdir: /tmp
+#  register: cmtclout
+#  when: cmctl_check.rc != 0
+
+

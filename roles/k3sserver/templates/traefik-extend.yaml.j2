@@ -1,0 +1,92 @@
+---
+# kubectl apply -f https://raw.githubusercontent.com/traefik/traefik/v3.6/docs/content/reference/dynamic-configuration/kubernetes-crd-rbac.yml
+# kubectl apply -f https://raw.githubusercontent.com/traefik/traefik/v3.6/docs/content/reference/dynamic-configuration/kubernetes-crd-definition-v1.yml
+#root@acerrevo ~ # kubectl apply -f https://raw.githubusercontent.com/traefik/traefik/v2.10/docs/content/reference/dynamic-configuration/kubernetes-crd-rbac.yml
+#root@acerrevo ~ # kubectl apply -f https://raw.githubusercontent.com/traefik/traefik/v2.10/docs/content/reference/dynamic-configuration/kubernetes-crd-definition-v1.yml
+# kubectl apply -f https://raw.githubusercontent.com/traefik/traefik/v2.11/docs/content/reference/dynamic-configuration/kubernetes-crd-rbac.yml
+# root@argras1 /var/lib/rancher/k3s/server/manifests # cat traefik-extend.yaml
+# KUBE_EDITOR=vim kubectl edit clusterroles traefik
+# https://github.com/k3s-io/k3s/issues/8755
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    deployment:
+      replicas: 1
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: traefik
+              topologyKey: kubernetes.io/hostname
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+                - key: kubernetes.io/hostname
+                  operator: In
+                  values:
+                    - {{ k3s_master_node_hostname }}
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    logs:
+      general:
+        level: INFO
+      access:
+        enabled: true
+        format: json  # common or json
+    service:
+      #externalTrafficPolicy: local
+      ipFamilies:
+        - IPv4
+      ipFamilyPolicy: SingleStack
+    ingressRoute:
+      dashboard:
+        # -- Create an IngressRoute for the dashboard
+        enabled: true
+    #core:
+    #  defaultRuleSyntax: v2
+    dashboard.enabled: true
+    api.dashboard: true
+    # externalTrafficPolicy: local
+    additionalArguments:
+      - "--ping"
+    ports:
+      traefik:
+        port: 8080
+        exposedPort: 8080
+        nodePort: 30808
+        expose:
+          default: true
+      web:
+        port: 8181
+        exposedPort: 8181
+        nodePort: 30080
+        proxyProtocol:
+          insecure: true
+          #trustedIPs: [ ]
+          #  - <proxy-ip>
+          #  - 127.0.0.1
+        #forwardedHeaders:
+        #  insecure: true
+          #trustedIPs:
+          #  - <proxy-ip>
+          #  - 127.0.0.1
+      websecure:
+        port: 4430
+        exposedPort: 4430
+        nodePort: 30443
+        proxyProtocol:
+          insecure: true

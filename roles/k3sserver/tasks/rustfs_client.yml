@@ -1,0 +1,79 @@
+---
+# Install rustfs-cli (rc) on all k3sservers
+# Reference: /home/thiess/pythondev_workspace/ansible/roles/rustfs/tasks/install_rc.yml
+
+- name: fetch latest rustfs-cli release tag from GitHub
+  uri:
+    url: https://api.github.com/repos/rustfs/cli/releases?per_page=1
+    return_content: true
+  register: rustfs_cli_github_releases
+  delegate_to: localhost
+  become: false
+  check_mode: false
+
+- name: set rustfs_rc_version from latest GitHub release
+  set_fact:
+    rustfs_rc_version: "{{ (rustfs_cli_github_releases.json | first).tag_name }}"
+
+- name: check current rc version
+  command: /usr/local/bin/rc --version
+  register: rc_current_version
+  changed_when: false
+  failed_when: false
+
+- name: set rc arch mapping
+  set_fact:
+    rustfs_arch_rc: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+- name: install rc binary
+  when: >-
+    rc_current_version.rc != 0 or
+    (rustfs_rc_version | regex_replace('^v', '')) != (rc_current_version.stdout | default('') | split | last)
+  block:
+    - name: download rc tarball
+      get_url:
+        url: "https://github.com/rustfs/cli/releases/download/{{ rustfs_rc_version }}/rustfs-cli-linux-{{ rustfs_arch_rc }}-{{ rustfs_rc_version }}.tar.gz"
+        dest: /tmp/rc.tar.gz
+        mode: "0644"
+        force: true
+
+    - name: extract rc binary
+      unarchive:
+        src: /tmp/rc.tar.gz
+        dest: /usr/local/bin/
+        remote_src: true
+        mode: "0755"
+
+    - name: make rc binary executable
+      file:
+        path: /usr/local/bin/rc
+        mode: "0755"
+
+    - name: remove rc tarball
+      file:
+        path: /tmp/rc.tar.gz
+        state: absent
+
+- name: configure rc {{ rustfs_rc_alias }} alias
+  command: >
+    rc alias set {{ rustfs_rc_alias }}
+    {{ rustfs_rc_endpoint }}
+    {{ rustfs_rc_access_key }}
+    {{ rustfs_rc_secret_key }}
+  changed_when: true
+
+- name: check if {{ rustfs_rc_alias }} backup bucket exists
+  command: rc ls {{ rustfs_rc_alias }}/{{ rustfs_rc_backup_bucket }}
+  register: bucket_check
+  changed_when: false
+  failed_when: false
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: create {{ rustfs_rc_alias }} backup bucket
+  command: rc mb {{ rustfs_rc_alias }}/{{ rustfs_rc_backup_bucket }}
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+    - bucket_check.rc | default(0) != 0

@@ -1,0 +1,17 @@
+---
+# HelmChartConfig for K3s local-path-provisioner
+# https://github.com/rancher/local-path-provisioner
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: local-path-provisioner
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi

@@ -1,0 +1,78 @@
+---
+- name: ensure basic packages for this group are installed
+  import_tasks: installbasicpackages.yml
+  tags:
+    - installbasicpackages
+
+- name: ensure nfs-mountdir is there
+  file:
+    path: /mnt/nfs
+    state: directory
+    owner: root
+    group: root
+    mode: 0777
+
+
+- name: ensure nfs is mounted in /etc/fstab
+  ansible.posix.mount:
+    path: /mnt/nfs
+    src: "{{ nfsmasterip }}:/k3shared"
+    fstype: nfs4
+    opts: "defaults,noatime,nodiratime,_netdev"
+    dump: 0
+    passno: 0
+    state: mounted
+  when:
+    - nfsmasterip is defined
+
+
+#- name: ensure nfs is actually mounted to /mnt/nfs
+#  ansible.posix.mount:
+#    path: /mnt/nfs
+#    state: mounted
+
+
+- name: ensure cgroup v2 memory/cpuset enabled on RPi
+  import_tasks: ensure_cgroups.yml
+  tags:
+    - cgroups
+    - k3sinstall
+
+- name: import k3sinstall.yml to install clients and server and join them together
+  import_tasks: k3sinstall.yml
+  tags:
+    - k3sinstall
+
+- name: merge kubeconfig to local control node
+  import_tasks: kubeconfig.yml
+  tags:
+    - k3sinstall
+    - kubeconfig
+
+- name: crontab
+  import_tasks: crontab.yml
+  tags:
+    - crontab
+
+- name: import haproxy.yml if isk3smaster is defined and true
+  import_tasks: haproxy.yml
+  tags:
+    - haproxy
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: configure rsyslog for remote logging from pods
+  import_tasks: rsyslog.yml
+  tags:
+    - rsyslog
+
+- name: install rustfs-cli on all k3sservers
+  import_tasks: rustfs_client.yml
+  tags:
+    - rustfs
+
+- name: debug also non-master k3sservers
+  debug:
+    msg: "DONE ON: {{ inventory_hostname }}"
+

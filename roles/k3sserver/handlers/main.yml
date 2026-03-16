@@ -1,0 +1,14 @@
+---
+# handlers file for k3sserver
+- name: restart rsyslog
+  service:
+    name: rsyslog
+    state: restarted
+
+- name: restart haproxy
+  service:
+    name: haproxy
+    state: restarted
+
+- name: sysctl reload
+  command: sysctl -p

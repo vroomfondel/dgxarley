@@ -1,0 +1,50 @@
+---
+- name: deploy dumpclusterstate.sh to k3smaster
+  template:
+    src: "dumpclusterstate.sh.j2"
+    dest: "/root/dumpclusterstate.sh"
+    owner: root
+    group: root
+    mode: "u=rwx,g=rw,o="
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: Creates PATH entries for crontab
+  cron:
+    name: PATH
+    env: yes
+    job: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games"
+
+- name: crictl prune cronjobs
+  cron:
+    name: "{{ item.name }}"
+    minute: "{{ item.minute }}"
+    hour: "{{ item.hour }}"
+    job: "{{ item.cmd }}"
+    disabled: "{{ item.disabled }}"
+  with_items:
+    - { name: "prune cri images on disk", cmd: "crictl rmi --prune", minute: "0", hour: "17", disabled: "no" }
+
+- name: add crontabs on k3smaster
+  cron:
+    name: "{{ item.name }}"
+    minute: "{{ item.minute }}"
+    hour: "{{ item.hour }}"
+    weekday: "{{ item.weekday }}"
+    job: "{{ item.cmd }}"
+    disabled: "{{ item.disabled }}"
+  with_items:
+    - { name: "dumpclusterstate", cmd: "/root/dumpclusterstate.sh", minute: "0", hour: "22", weekday: "*", disabled: "no" }
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: remove k3smaster crontabs from non-master nodes
+  cron:
+    name: "{{ item }}"
+    state: absent
+  loop:
+    - dumpclusterstate
+  when:
+    - isk3smaster is not defined or not isk3smaster

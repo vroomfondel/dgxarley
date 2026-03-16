@@ -1,0 +1,35 @@
+#!/bin/bash
+
+#scriptisintty=0
+#if [ -t 0 ] ; then
+#        scriptisintty=1
+#fi
+
+#save current stdout+stderr streams...
+exec 3>&1
+exec 4>&2
+
+#if [ ${scriptisintty} -eq 0 ] ; then
+#       #NOTHING TO THE SCREEN...
+#        exec 1> >(tee -a ${logfile} >/dev/null) 2> >(tee -a ${logfile} >(tee ${logfile}_err >/dev/null)>&4)
+#else
+#       #to the screen and logfile
+#        exec 1> >(tee ${logfile}) 2> >(tee ${logfile}_err)
+#fi
+
+
+d=$(date +%Y%m%d_%H%M%S)
+
+LOG="/var/log/k3s_install_server_${d}.log"
+
+exec > >(tee -i ${LOG})
+exec 2>&1
+
+
+export INSTALL_K3S_VERSION={{ k3s_version }}
+
+curl -sfL https://get.k3s.io |  sh -s - server
+
+#reset redirections...
+exec 1>&3 3>&-
+exec 2>&4 4>&-
