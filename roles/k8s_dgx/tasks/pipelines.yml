@@ -15,6 +15,7 @@
         OLLAMA_BASE_URL: "http://ollama.ollama.svc.cluster.local:{{ ollama_port }}"
         SGLANG_API_BASE_URL: "http://sglang.{{ dgx_namespace }}.svc.cluster.local:{{ sglang_port }}/v1"
         PIPELINES_API_KEY: "{{ openwebui_secret_key }}"
+        SELF_REFLECTION_ENABLED: "{{ openwebui_self_reflection_enabled | default(false) | string }}"
   when: pipelines_enabled
 
 - name: Create pipelines-seed ConfigMap
