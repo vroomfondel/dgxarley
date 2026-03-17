@@ -143,7 +143,8 @@ sglang_speculative_num_draft_tokens: 4
 # Select the active model — parameters are pulled from sglang_model_profiles
 #sglang_model: "Qwen/Qwen3-Coder-30B-A3B-Instruct"
 #sglang_model: "Qwen/Qwen2.5-Coder-7B-Instruct"
-sglang_model: "Qwen/Qwen3.5-35B-A3B"
+#sglang_model: "Qwen/Qwen3.5-35B-A3B"
+sglang_model: "Qwen/Qwen3-235B-A22B-Instruct-2507-FP8"
 sglang_context_length: "{{ sglang_model_profiles[sglang_model].context_length }}"
 sglang_kv_cache_dtype: "{{ sglang_model_profiles[sglang_model].kv_cache_dtype }}"
 sglang_mem_fraction_static: "{{ sglang_model_profiles[sglang_model].mem_fraction_static }}"

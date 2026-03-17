@@ -92,6 +92,7 @@
       - dkms
       - tmux
       - nvme-cli
+      - nvtop
     state: present
     update_cache: true
   tags:
