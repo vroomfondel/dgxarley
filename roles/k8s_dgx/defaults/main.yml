@@ -11,12 +11,11 @@ sglang_model_profiles:
   "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ":
     info_url: "https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
     # 32B dense, AWQ 4-bit (~19 GB / ~9.7 GB per GPU with TP=2)
-    load_format: "sharded_state"  # default: auto
+    # Auto-detection reads quant_method from config.json → AWQMarlinConfig.
+    # Explicit "awq" also works for dense models but is unnecessary.
     context_length: 32768
     kv_cache_dtype: "fp8_e5m2"
     mem_fraction_static: "0.50"
-    # quantization: "awq"  # loading this fails -> loads more than 109GB into ram even for this model!
-    # quantization: "moe_wna16"  # this is not a moe model -> no need fo moe_wna16 # TODO: check!
     recommended_sampling:
       temperature: 0.7
       top_p: 0.8
@@ -26,9 +25,10 @@ sglang_model_profiles:
     info_url: "https://huggingface.co/unsloth/Qwen3-235B-A22B-Instruct-2507-FP8"
     # load_format: "sharded_state"  # default: auto
     context_length_max: 262144
+    #context_length: 32768
     context_length: 65536
     kv_cache_dtype: "fp8_e5m2"
-    mem_fraction_static: "0.85"
+    mem_fraction_static: "0.9"
     disable_deep_gemm: true
     fp8_gemm_runner_backend: "cutlass"
     attention_backend: "triton"
@@ -43,9 +43,10 @@ sglang_model_profiles:
     # 235B/22B MoE, AWQ 4-bit (~124 GB / ~62 GB per GPU with TP=2)
     #load_format: "sharded_state"  # default: auto
     context_length_max: 262144
-    context_length: 65536
+    #context_length: 65536
+    context_length: 32768
     kv_cache_dtype: "fp8_e5m2"
-    mem_fraction_static: "0.80"
+    mem_fraction_static: "0.90"
     # quantization: "moe_wna16" avoids the Marlin repack that causes OOM on
     # memory-constrained GPUs. Auto-detect (no flag) creates AWQMarlinConfig which
     # works correctly but needs ~109 GB peak during repack (old+new tensors coexist).
@@ -54,6 +55,8 @@ sglang_model_profiles:
     # for FusedMoE → falls through to unquantized FP16 → OOM.
     quantization: "moe_wna16"
     tool_call_parser: "qwen3_coder"
+    # TODO: check if setting attention_backend is necessary/beneficial
+    # TODO: it takes about 10minutes to load the weights -> is that appropriate? any means to speeding it up?
     # non-thinking only — no <think> blocks, no reasoning_parser needed
     recommended_sampling:
       temperature: 0.7
@@ -158,10 +161,12 @@ sglang_speculative_num_draft_tokens: 4
 #sglang_model: "Qwen/Qwen3-Next-80B-A3B-Instruct-FP8"
 #sglang_model: "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
 #sglang_model: "Qwen/Qwen3.5-35B-A3B-FP8"
-sglang_model: "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
-#sglang_model: "QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ"
 #sglang_model: "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
 
+sglang_model: "QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ"
+
+# works
+#sglang_model: "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
 
 sglang_context_length: "{{ sglang_model_profiles[sglang_model].context_length }}"
 sglang_kv_cache_dtype: "{{ sglang_model_profiles[sglang_model].kv_cache_dtype }}"
@@ -180,6 +185,11 @@ sglang_disable_deep_gemm: "{{ sglang_model_profiles[sglang_model].disable_deep_g
 # On GB10/SM121, "auto" selects flashinfer which uses trtllm backend — unsupported
 # on SM121. FP8 models must use "cutlass" explicitly.
 sglang_fp8_gemm_runner_backend: "{{ sglang_model_profiles[sglang_model].fp8_gemm_runner_backend | default('auto') }}"
+# Maximum batch size for CUDA graph capture. Lower values reduce startup time.
+# Set to 0 to disable CUDA graph capture entirely (--disable-cuda-graph).
+# Default: 128 (SGLang default is 256, reduced for faster startup)
+sglang_cuda_graph_max_bs: 128
+
 sglang_tp: 2
 sglang_nnodes: 2
 sglang_port: 8000
