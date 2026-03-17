@@ -17,12 +17,12 @@
         namespace: ollama
       data:
         OLLAMA_MODELS: "/ollama_models"
-        OLLAMA_NUM_PARALLEL: "2"
-        OLLAMA_MAX_LOADED_MODELS: "2"
-        OLLAMA_KEEP_ALIVE: "-1"
-        OLLAMA_FLASH_ATTENTION: "1"
-        OLLAMA_KV_CACHE_TYPE: "q8_0"
-        OLLAMA_CONTEXT_LENGTH: "8192"
+        OLLAMA_NUM_PARALLEL: "{{ ollama_embed_num_parallel | string }}"
+        OLLAMA_MAX_LOADED_MODELS: "{{ ollama_embed_max_loaded_models | string }}"
+        OLLAMA_KEEP_ALIVE: "{{ ollama_embed_keep_alive | string }}"
+        OLLAMA_FLASH_ATTENTION: "{{ ollama_embed_flash_attention | string }}"
+        OLLAMA_KV_CACHE_TYPE: "{{ ollama_embed_kv_cache_type }}"
+        OLLAMA_CONTEXT_LENGTH: "{{ ollama_embed_context_length | string }}"
 
 - name: Create ollama-embed pull-models script configmap
   kubernetes.core.k8s:
