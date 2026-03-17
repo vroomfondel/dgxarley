@@ -54,9 +54,12 @@ sglang_model_profiles:
     # --quantization awq is WRONG for MoE: AWQConfig.get_quant_method() returns None
     # for FusedMoE → falls through to unquantized FP16 → OOM.
     quantization: "moe_wna16"
+    attention_backend: "triton"
     tool_call_parser: "qwen3_coder"
-    # TODO: check if setting attention_backend is necessary/beneficial
-    # TODO: it takes about 10minutes to load the weights -> is that appropriate? any means to speeding it up?
+    # Hybrid MoE with Mamba/SSM layers — requires triton attention backend
+    # (same as Qwen3-Next/Qwen3.5 hybrids; flashinfer can't handle mixed arch).
+    # Weight loading (~170s for 25 shards) can be halved with pre-sharding:
+    # run sglang_shard job, then enable load_format: "sharded_state" above.
     # non-thinking only — no <think> blocks, no reasoning_parser needed
     recommended_sampling:
       temperature: 0.7
