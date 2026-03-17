@@ -203,24 +203,49 @@ sglang_attention_backend: "{{ sglang_model_profiles[sglang_model].attention_back
 ollama_replicas: 1
 ollama_embed_replicas: 1
 
+# Ollama model profiles
+ollama_model_profiles:
+  "qwen3-coder:latest":
+    info_url: "https://ollama.com/library/qwen3-coder"
+    # 30B total / 3.3B active MoE, latest tag = 30b (~19 GB)
+    context_length: 262144
+  "qwen2.5-coder:latest":
+    info_url: "https://ollama.com/library/qwen2.5-coder"
+    # 7B dense, latest tag = 7b (~4.7 GB)
+    context_length: 32768
+  "qwen2.5-coder:14b":
+    info_url: "https://ollama.com/library/qwen2.5-coder:14b"
+    # 14B dense (~9 GB)
+    context_length: 32768
+
+# Ollama embedding model profiles
+ollama_embed_model_profiles:
+  "bge-m3":
+    info_url: "https://ollama.com/library/bge-m3"
+    # BAAI BGE-M3 multilingual embedding (~1.2 GB)
+    context_length: 8192
+
+# Active ollama model — parameters pulled from ollama_model_profiles
+ollama_model: "qwen3-coder:latest"
 ollama_preload_models:
-  - "qwen2.5-coder:latest"
-  # - "qwen3-coder:latest"
+  - "{{ ollama_model }}"
 
+# Active ollama embedding model — parameters pulled from ollama_embed_model_profiles
+ollama_embed_model: "bge-m3"
 ollama_embed_preload_models:
-  - "bge-m3"
+  - "{{ ollama_embed_model }}"
 
-ollama_embedding_model: "bge-m3"
-ollama_embedding_model_max_ctx: 8192
+ollama_embedding_model: "{{ ollama_embed_model }}"
+ollama_embedding_model_max_ctx: "{{ ollama_embed_model_profiles[ollama_embed_model].context_length }}"
 ollama_port: 11434
 
 # Ollama runtime config
-ollama_num_parallel: 2
+ollama_num_parallel: 1
 ollama_max_loaded_models: 1
 ollama_keep_alive: "-1"
 ollama_flash_attention: 1
 ollama_kv_cache_type: "q8_0"
-ollama_context_length: 32768
+ollama_context_length: "{{ ollama_model_profiles[ollama_model].context_length }}"
 
 # Ollama-embed runtime config (embedding-only instance)
 ollama_embed_num_parallel: 2
@@ -228,7 +253,7 @@ ollama_embed_max_loaded_models: 1
 ollama_embed_keep_alive: "-1"
 ollama_embed_flash_attention: 1
 ollama_embed_kv_cache_type: "q8_0"
-ollama_embed_context_length: "{{ ollama_embedding_model_max_ctx }}"
+ollama_embed_context_length: "{{ ollama_embed_model_profiles[ollama_embed_model].context_length }}"
 
 docling_port: 5001
 openwebui_image: "ghcr.io/open-webui/open-webui:main"

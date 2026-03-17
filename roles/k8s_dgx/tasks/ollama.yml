@@ -150,8 +150,6 @@
                 volumeMounts:
                   - name: ollama-data
                     mountPath: /ollama_models
-                  - name: warmup-script
-                    mountPath: /scripts
             volumes:
               - name: ollama-data
                 hostPath:
