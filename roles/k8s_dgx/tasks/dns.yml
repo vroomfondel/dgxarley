@@ -13,6 +13,7 @@
     state: present
   loop:
     - ollama
+    - ollama-embed
     - sglang
     - openwebui
     - searxng

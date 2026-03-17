@@ -161,13 +161,16 @@ sglang_dist_timeout: 1800
 sglang_attention_backend: "{{ sglang_model_profiles[sglang_model].attention_backend | default('flashinfer') }}"
 
 ollama_preload_models:
-  - "bge-m3"
-  - "qwen3-coder:latest"
   - "qwen2.5-coder:latest"
+  - "qwen3-coder:latest"
+
+ollama_embed_preload_models:
+  - "bge-m3"
 
 ollama_embedding_model: "bge-m3"
 ollama_embedding_model_max_ctx: 8192
 ollama_port: 11434
+
 docling_port: 5001
 openwebui_image: "ghcr.io/open-webui/open-webui:main"
 pipelines_image: "ghcr.io/open-webui/pipelines:main"
@@ -180,7 +183,7 @@ openwebui_admin_email: "admin@example.com"
 openwebui_admin_password: "changeme"
 
 openwebui_embedding_engine: "ollama"
-openwebui_embedding_ollama_url: "http://ollama.ollama.svc.cluster.local:{{ ollama_port }}"
+openwebui_embedding_ollama_url: "http://ollama-embed.ollama.svc.cluster.local:{{ ollama_port }}"
 openwebui_embedding_chunk_size: 20000
 openwebui_embedding_chunk_overlap: 750
 openwebui_embedding_chunk_min_size: 100

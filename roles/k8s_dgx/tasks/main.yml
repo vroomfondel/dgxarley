@@ -19,9 +19,13 @@
   ansible.builtin.import_tasks: sglang.yml
   tags: sglang
 
-- name: Deploy Ollama embedding service
+- name: Deploy Ollama
   ansible.builtin.import_tasks: ollama.yml
   tags: ollama
+
+- name: Deploy Ollama embedding service
+  ansible.builtin.import_tasks: ollama_embed.yml
+  tags: ollama_embed
 
 - name: Deploy docling-serve
   ansible.builtin.import_tasks: docling.yml
