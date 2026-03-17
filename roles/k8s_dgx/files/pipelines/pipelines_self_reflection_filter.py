@@ -13,16 +13,23 @@ import aiohttp
 
 # Read SGLang endpoint from environment (set via pipelines-config ConfigMap).
 # Fallback to a sensible cluster-internal default.
-_DEFAULT_SGLANG_URL = os.environ.get(
+_DEFAULT_SGLANG_URL: str = os.environ.get(
     "SGLANG_API_BASE_URL", "http://localhost:8000/v1"
 )
+
+_DEFAULT_SELF_REFLECTION_ENABLED: bool = os.environ.get(
+    "SELF_REFLECTION_ENABLED", "false"
+).lower() in ("true", "1", "yes")
 
 
 class Pipeline:
     class Valves(BaseModel):
         pipelines: List[str] = ["*"]
         priority: int = 0
-        reflection_enabled: bool = True
+        reflection_enabled: bool = Field(
+            default=_DEFAULT_SELF_REFLECTION_ENABLED,
+            description="Enable self-reflection quality check on LLM responses (from SELF_REFLECTION_ENABLED env)",
+        )
         api_base_url: str = Field(
             default=_DEFAULT_SGLANG_URL,
             description="SGLang OpenAI-compatible API endpoint (from SGLANG_API_BASE_URL env)",
@@ -72,6 +79,9 @@ class Pipeline:
         print("Self-Reflection Filter stopped")
 
     async def inlet(self, body: dict, user: Optional[dict] = None) -> dict:
+        if not self.valves.reflection_enabled:
+            return body
+
         # Remember per-chat flags for outlet (web_search, etc.)
         chat_id = body.get("chat_id", "")
         features = body.get("features", {})
