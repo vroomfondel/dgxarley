@@ -299,6 +299,32 @@ Formel: `2 (K+V) × 94 Layers × 4 KV-Heads × 128 Dim × Bytes/Element`
 |Mehrere Dokumente vergleichen|30K–60K|✅|
 |Ein ganzes Buch (300+ Seiten)|150K+|❌ (→ RAG nutzen)|
 
+#### SGLang KV-Cache vs. Ollama: Dynamischer Token-Pool
+
+> [!important] KV-Cache-Missverständnis aus der Ollama-Welt
+> In Ollama reserviert `num_ctx` (Context Length) den **kompletten** KV-Cache für so viele Tokens pro Slot. Eine Context Length von 262K bedeutet: Ollama reserviert 262K Tokens Speicher *pro gleichzeitigem Request* — auch wenn die eigentliche Konversation nur 3K Tokens braucht. Das macht große Context Lengths in Ollama extrem teuer.
+>
+> **SGLang funktioniert grundlegend anders.** Der Parameter `--context-length` setzt nur die *maximale Sequenzlänge*, die ein einzelner Request nutzen darf. Der KV-Cache ist ein **gemeinsamer dynamischer Token-Pool** — Tokens werden bei Bedarf allokiert und sofort wieder freigegeben, wenn ein Request abgeschlossen ist. Die Poolgröße wird durch `--mem-fraction-static` bestimmt (Anteil des GPU-Speichers für den KV-Cache), nicht durch die Context Length.
+>
+> **Praxisbeispiel** (Qwen3-235B-AWQ, `moe_wna16`, TP=2, FP8 KV-Cache):
+>
+> | Parameter | Wert |
+> |---|---|
+> | Modellgewichte (pro GPU) | ~59 GB |
+> | `mem_fraction_static` | 0.70 |
+> | KV-Cache-Poolgröße | ~20 GB (K: 9,9 GB + V: 9,9 GB) |
+> | **Gesamte Token-Kapazität** | **~441K Tokens** |
+> | `context_length` (max pro Request) | 262.144 |
+>
+> Mit 441K Tokens im Pool und einem typischen Chat-Request von ~3K Tokens:
+> - **~150 gleichzeitige Requests** passen in den KV-Cache
+> - Ein einzelner Request kann bis zu 262K Tokens nutzen (das volle Kontextfenster)
+> - Mehrere Long-Context-Requests (z.B. 3× 100K) funktionieren ebenfalls, sie teilen sich den Pool dynamisch
+>
+> Die `lpm`-Scheduling-Policy (Longest Prefix Match) bringt eine weitere Optimierung: Abgeschlossene Requests hinterlassen ihre Prefix-Tokens in einem **Radix Cache**. Wenn der nächste Request denselben System-Prompt hat, werden diese Tokens wiederverwendet (`#cached-token > 0` in den Logs) — der Prefill wird komplett übersprungen.
+>
+> **Fazit**: Keine Angst vor großen `context_length`-Werten in SGLang. Der KV-Cache-Pool passt sich dynamisch an. Die echten Constraints sind Decode-Throughput (NCCL-Bandbreite zwischen Nodes) und die Gesamtpoolgröße (gesteuert über `mem_fraction_static`) — nicht die konfigurierte Context Length.
+
 ### FP8 vs. Q4_K_XL: Welches Quantisierungsformat?
 
 | |**FP8 + SGLang (NCCL)** ⭐ Empfohlen|**Q4_K_XL + llama.cpp (RPC)**|

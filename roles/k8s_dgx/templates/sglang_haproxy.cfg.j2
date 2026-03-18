@@ -7,8 +7,8 @@ defaults
     option httplog
     option forwardfor
     timeout connect 5s
-    timeout client  600s
-    timeout server  600s
+    timeout client  {{ sglang_haproxy_timeout }}s
+    timeout server  {{ sglang_haproxy_timeout }}s
     log-format "%ci:%cp [%t] %ft %b/%s %Tq/%Tw/%Tc/%Tr/%Ta %ST %B %{+Q}r"
 
 frontend sglang

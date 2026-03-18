@@ -22,7 +22,13 @@ sglang_model_profiles:
       top_k: 20
       repetition_penalty: 1.05
   "unsloth/Qwen3-235B-A22B-Instruct-2507-FP8":
+    # DISCOURAGED on 2× DGX Spark (128 GB each). FP8 weights alone consume ~118.5 GB
+    # per GPU (TP=2), leaving only ~9.5 GB for CUDA context, activations, and KV cache.
+    # Realistic context_length is ~32K with minimal concurrency. The ~1-2% quality gain
+    # over AWQ 4-bit does not justify 8× less context and near-zero request parallelism.
+    # Prefer the AWQ profile below (62 GB/GPU → 66 GB free → 262K context comfortably).
     info_url: "https://huggingface.co/unsloth/Qwen3-235B-A22B-Instruct-2507-FP8"
+    # 235B/22B MoE, FP8 (~237 GB / ~118.5 GB per GPU with TP=2)
     # load_format: "sharded_state"  # default: auto
     context_length_max: 262144
     #context_length: 32768
@@ -59,8 +65,8 @@ sglang_model_profiles:
     attention_backend: "triton"
     disable_deep_gemm: true
     tool_call_parser: "qwen3_coder"
-    # Hybrid MoE with Mamba/SSM layers — requires triton attention backend
-    # (same as Qwen3-Next/Qwen3.5 hybrids; flashinfer can't handle mixed arch).
+    # Standard MoE (128 experts, 8 active) — triton attention backend required
+    # on SM121 (flashinfer has edge cases with large MoE models).
     # Weight loading (~170s for 25 shards) can be halved with pre-sharding:
     # run sglang_shard job, then enable load_format: "sharded_state" above.
     # non-thinking only — no <think> blocks, no reasoning_parser needed
@@ -71,6 +77,7 @@ sglang_model_profiles:
     sampling_overrides:
       repetition_penalty: 1.1
       frequency_penalty: 0.3
+      presence_penalty: 1.0  # https://huggingface.co/QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ#best-practices
   "Qwen/Qwen3-Next-80B-A3B-Instruct-FP8":
     info_url: "https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct-FP8"
     context_length_max: 262144
@@ -175,7 +182,7 @@ sglang_speculative_num_draft_tokens: 4
 sglang_model: "QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ"
 
 # works
-# sglang_model: "QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ"
+# sglang_model: "QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ"  #load_format: "sharded_state" UND "auto"
 # sglang_model: "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
 
 sglang_context_length: "{{ sglang_model_profiles[sglang_model].context_length }}"
@@ -209,6 +216,7 @@ sglang_tp: 2
 sglang_nnodes: 2
 sglang_port: 8000
 sglang_internal_port: 30080
+sglang_haproxy_timeout: 1800
 sglang_dist_timeout: 1800
 
 # Max concurrent requests. Limits how many requests SGLang processes in parallel.
@@ -334,6 +342,7 @@ hf_preload_models:
   - "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
   - "Qwen/Qwen3-Next-80B-A3B-Instruct-FP8"
   - "Qwen/Qwen3-Coder-30B-A3B-Instruct"
+  #- "unsloth/Qwen3-235B-A22B-Instruct-2507-FP8"
 
 hf_preload_ttl: 3600
 # NVIDIA GPU time-slicing: advertise each physical GPU as N logical replicas
