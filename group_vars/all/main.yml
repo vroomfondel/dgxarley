@@ -56,8 +56,9 @@ grafana_admin_password: "changeme"
 grafana_root_url: "https://grafana.example.com"
 
 # Keel
-keel_webhook_endpoint: "https://webhooks.example.com/keel?code=changeme"
 keel_basic_auth_password: "changeme"
+keel_gotify_token: "CHANGEME_GOTIFY_TOKEN"
+keel_gotify_url: "https://gotify.example.com"
 
 # Alertmanager
 alertmanager_smtp_smarthost: "mail.example.com:25"

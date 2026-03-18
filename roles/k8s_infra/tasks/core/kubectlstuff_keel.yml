@@ -161,7 +161,7 @@
                       fieldRef:
                         fieldPath: metadata.namespace
                   - name: WEBHOOK_ENDPOINT
-                    value: "{{ keel_webhook_endpoint }}"
+                    value: "http://keel-gotify-bridge.keel.svc.cluster.local:8080/webhook"
                   # Basic auth (to enable UI/API)
                   - name: BASIC_AUTH_USER
                     value: admin
@@ -197,3 +197,125 @@
                 hostPath:
                   path: "{{ k8s_infra_data_base }}/keel"
                   type: DirectoryOrCreate
+
+# =============================================================================
+# KEEL GOTIFY BRIDGE (Secret, ConfigMap, Deployment, Service)
+# =============================================================================
+
+- name: Create keel-gotify-secrets
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: keel-gotify-secrets
+        namespace: keel
+      type: Opaque
+      stringData:
+        GOTIFY_TOKEN: "{{ keel_gotify_token }}"
+        GOTIFY_URL: "{{ keel_gotify_url }}"
+
+- name: Create keel-gotify-bridge-script ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: keel-gotify-bridge-script
+        namespace: keel
+      data:
+        bridge.py: "{{ lookup('file', 'keel_gotify_bridge.py') }}"
+
+- name: Create keel-gotify-bridge Deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: keel-gotify-bridge
+        namespace: keel
+      spec:
+        replicas: 1
+        selector:
+          matchLabels:
+            app: keel-gotify-bridge
+        template:
+          metadata:
+            labels:
+              app: keel-gotify-bridge
+            annotations:
+              keel.sh/policy: force
+              keel.sh/match-tag: "true"
+              keel.sh/pollSchedule: "@every 24h"
+              keel.sh/trigger: poll
+          spec:
+            nodeSelector:
+              kubernetes.io/arch: amd64
+            containers:
+              - name: bridge
+                image: python:3.14-slim-trixie
+                command: ["/bin/sh", "-c"]
+                args:
+                  - |
+                    apt update && apt -y install tini procps && \
+                    pip install --no-cache-dir requests && \
+                    touch /tmp/startup-complete && \
+                    exec tini -- python /app/bridge.py
+                ports:
+                  - containerPort: 8080
+                    name: http
+                startupProbe:
+                  exec:
+                    command: ["test", "-f", "/tmp/startup-complete"]
+                  failureThreshold: 30
+                  periodSeconds: 2
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: http
+                  periodSeconds: 10
+                readinessProbe:
+                  httpGet:
+                    path: /readyz
+                    port: http
+                  periodSeconds: 5
+                env:
+                  - name: TINI_SUBREAPER
+                    value: "1"
+                envFrom:
+                  - secretRef:
+                      name: keel-gotify-secrets
+                volumeMounts:
+                  - name: script
+                    mountPath: /app
+                resources:
+                  requests:
+                    cpu: 15m
+                    memory: 50Mi
+                  limits:
+                    cpu: 1500m
+                    memory: 450Mi
+            volumes:
+            - name: script
+              configMap:
+                name: keel-gotify-bridge-script
+                defaultMode: 0755
+
+- name: Create keel-gotify-bridge Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: keel-gotify-bridge
+        namespace: keel
+      spec:
+        selector:
+          app: keel-gotify-bridge
+        ports:
+        - port: 8080
+          targetPort: http

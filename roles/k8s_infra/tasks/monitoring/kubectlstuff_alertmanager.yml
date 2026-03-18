@@ -90,7 +90,7 @@
         name: gotify-bridge-script
         namespace: monitoring
       data:
-        bridge.py: "{{ lookup('file', 'gotify_bridge.py') }}"
+        bridge.py: "{{ lookup('file', 'alertmgr_gotify_bridge.py') }}"
 
 - name: Create alertmanager-gotify-bridge Deployment
   kubernetes.core.k8s:

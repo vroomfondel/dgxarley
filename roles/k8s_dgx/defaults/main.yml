@@ -76,8 +76,8 @@ sglang_model_profiles:
       top_p: 0.95
       top_k: 20
 #      min_p: 0
-    sampling_overrides:
-      presence_penalty: 1.0
+#    sampling_overrides:
+#      presence_penalty: 1.0
   "QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ":
     info_url: "https://huggingface.co/QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ"
     # 235B/22B MoE, AWQ 4-bit (~124 GB / ~62 GB per GPU with TP=2)
