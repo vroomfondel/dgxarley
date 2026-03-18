@@ -58,24 +58,191 @@ from openwebui_integration_test import (
 # Default model from Ansible defaults (the model currently deployed to SGLang)
 _CONFIGURED_MODEL: str = _dgx_defaults.get("sglang_model", "")
 
-# Default prompts for parallel load testing — varied to avoid prefix cache hits
+# Default prompts for parallel load testing — varied to avoid prefix cache hits.
+# Each prompt includes a role definition and a multi-part question to increase
+# complexity and input token count.
 PARALLEL_PROMPTS = [
-    "What are the main differences between TCP and UDP? Explain with examples.",
-    "Write a Python function that finds all prime numbers up to N using the Sieve of Eratosthenes.",
-    "Explain the concept of quantum entanglement to a 12-year-old.",
-    "What were the key causes and consequences of the French Revolution?",
-    "Design a REST API for a todo-list application. Include endpoints, methods, and example payloads.",
-    "Compare and contrast functional programming and object-oriented programming.",
-    "Explain how a transformer neural network works, step by step.",
-    "What is the significance of Gödel's incompleteness theorems?",
-    "Write a bash script that monitors disk usage and sends an alert when any partition exceeds 90%.",
-    "Explain the difference between symmetric and asymmetric encryption with real-world examples.",
-    "How does garbage collection work in Java vs Python vs Rust?",
-    "What is the CAP theorem and why does it matter for distributed systems?",
-    "Explain the Monty Hall problem and why switching doors is optimal.",
-    "Write a SQL query to find the top 3 customers by total spend per month for the last year.",
-    "What are the pros and cons of microservices vs monolithic architecture?",
-    "Explain how DNS resolution works from typing a URL to loading a webpage.",
+    (
+        "You are a senior network engineer with 15 years of experience designing "
+        "enterprise-grade infrastructure. You have deep expertise in protocol design, "
+        "packet-level analysis, and performance tuning for high-throughput systems.\n\n"
+        "A junior colleague is confused about when to use TCP vs UDP and keeps defaulting "
+        "to TCP for everything, including real-time game state updates. Explain the main "
+        "differences between TCP and UDP, covering reliability guarantees, ordering, "
+        "congestion control, and overhead. Provide concrete examples of when each protocol "
+        "is the right choice and explain the trade-offs involved. Include a brief discussion "
+        "of QUIC and how it blurs the line between the two."
+    ),
+    (
+        "You are a computer science professor who specializes in algorithms and "
+        "computational complexity. You are known for making dry topics engaging by "
+        "connecting them to real-world applications and historical anecdotes.\n\n"
+        "A student has asked you to explain the Sieve of Eratosthenes. Write a Python "
+        "function that finds all prime numbers up to N using this algorithm, then walk "
+        "through the code step by step. Discuss the time and space complexity, compare it "
+        "to trial division, and mention the Sieve of Atkin as an alternative. Bonus: show "
+        "how to adapt the sieve for segmented operation when N is very large."
+    ),
+    (
+        "You are a science communicator who has spent a decade writing for popular science "
+        "magazines. You have a gift for using vivid analogies and everyday objects to make "
+        "abstract physics concepts accessible to young readers.\n\n"
+        "A curious 12-year-old has asked you: 'What is quantum entanglement and why does "
+        "Einstein call it spooky?' Explain the concept in a way that is accurate but uses "
+        "analogies they can relate to. Cover what entanglement is, how scientists create "
+        "entangled particles, what Bell's theorem tells us, and why this matters for "
+        "technologies like quantum computing and quantum cryptography. Avoid oversimplifying "
+        "to the point of being misleading."
+    ),
+    (
+        "You are a historian specializing in 18th-century European political revolutions. "
+        "You have published extensively on the social and economic underpinnings of "
+        "revolutionary movements and you are passionate about drawing parallels to "
+        "contemporary political dynamics.\n\n"
+        "A graduate student is preparing for their comprehensive exams and needs a thorough "
+        "overview of the French Revolution. Cover the key causes — economic crisis, social "
+        "inequality, Enlightenment philosophy, and the fiscal mismanagement of the Ancien "
+        "Régime. Trace the major phases from the Estates-General through the Terror to "
+        "Napoleon's rise. Discuss the lasting consequences for European politics, the concept "
+        "of human rights, and the ripple effects on subsequent revolutions worldwide."
+    ),
+    (
+        "You are a seasoned backend architect who has designed APIs for products serving "
+        "millions of users. You are opinionated about REST best practices, consistent error "
+        "handling, and pragmatic versioning strategies.\n\n"
+        "A startup team is building their first production API for a collaborative todo-list "
+        "application. Design a REST API that covers CRUD operations for users, lists, and "
+        "items, plus sharing and collaboration features. Include endpoint paths, HTTP methods, "
+        "request/response payloads with example JSON, pagination strategy, authentication "
+        "approach, and error response format. Discuss trade-offs you considered, such as "
+        "nested vs flat resource URLs and optimistic vs pessimistic concurrency control."
+    ),
+    (
+        "You are a polyglot software engineer who has shipped production code in Haskell, "
+        "Scala, Java, Python, and TypeScript. You are frequently invited to speak at "
+        "conferences about paradigm trade-offs and you maintain a popular blog on the topic.\n\n"
+        "A bootcamp graduate who learned JavaScript is trying to understand the difference "
+        "between functional programming and object-oriented programming. Compare and contrast "
+        "the two paradigms, covering core principles (immutability, first-class functions, "
+        "encapsulation, inheritance), state management, testability, and real-world suitability. "
+        "Use concrete code examples in Python or JavaScript to illustrate key differences. "
+        "Discuss hybrid approaches and when blending paradigms makes practical sense."
+    ),
+    (
+        "You are a deep learning researcher at a top AI lab. You contributed to the original "
+        "implementation of several attention variants and have taught a graduate seminar on "
+        "sequence modeling for three consecutive years.\n\n"
+        "A machine learning engineer who is comfortable with CNNs and RNNs but new to "
+        "transformers has asked you to explain how a transformer neural network works. Walk "
+        "through the architecture step by step: input embeddings, positional encoding, "
+        "multi-head self-attention (including the Q/K/V projections and scaled dot-product "
+        "attention), feed-forward layers, layer normalization, and the encoder-decoder "
+        "structure. Explain why attention replaced recurrence and discuss recent developments "
+        "like rotary positional embeddings, flash attention, and mixture-of-experts layers."
+    ),
+    (
+        "You are a mathematical logician and philosopher of mathematics. You hold a chair "
+        "at a research university and have spent your career studying the foundations of "
+        "mathematics, formal systems, and the limits of provability.\n\n"
+        "A philosophy student with solid but not expert-level math background has asked you "
+        "about Gödel's incompleteness theorems. Explain the first and second theorems, their "
+        "proofs at a high level (Gödel numbering, the diagonal lemma, self-reference), and "
+        "their philosophical significance. Discuss implications for Hilbert's program, the "
+        "relationship to Turing's halting problem, and common misconceptions — for example, "
+        "why the theorems do not mean 'math is broken' or 'there are truths we can never know.'"
+    ),
+    (
+        "You are a senior DevOps engineer and SRE who manages infrastructure for a "
+        "large-scale SaaS platform. You are pragmatic, favor simple and composable shell "
+        "scripts over complex tooling, and always think about failure modes and alerting.\n\n"
+        "Write a bash script that monitors disk usage across all mounted partitions and sends "
+        "an alert when any partition exceeds 90%% utilization. The script should be idempotent, "
+        "log its findings with timestamps, support both email and webhook-based alerting, and "
+        "handle edge cases like read-only filesystems and tmpfs mounts. Include inline comments "
+        "explaining your design choices and discuss how you would schedule and test this script "
+        "in a production environment."
+    ),
+    (
+        "You are a cybersecurity consultant who advises Fortune 500 companies on their "
+        "encryption strategies. You hold CISSP and OSCP certifications and have a talent for "
+        "explaining complex cryptographic concepts to non-technical executives.\n\n"
+        "A CTO without a security background needs to understand the difference between "
+        "symmetric and asymmetric encryption. Explain both approaches, covering key generation, "
+        "performance characteristics, and typical use cases. Provide real-world examples: TLS "
+        "handshakes, PGP email, disk encryption, and digital signatures. Discuss hybrid "
+        "approaches (e.g., envelope encryption), key management challenges, and the looming "
+        "impact of quantum computing on current cryptographic standards."
+    ),
+    (
+        "You are a programming language runtime engineer who has contributed to the CPython "
+        "interpreter, the HotSpot JVM, and the Rust compiler. You are deeply familiar with "
+        "the trade-offs between manual memory management, tracing GC, and ownership systems.\n\n"
+        "A systems programmer who is evaluating languages for a new latency-sensitive service "
+        "wants to understand how garbage collection works in Java, Python, and Rust. Compare "
+        "the approaches: Java's generational GC with G1/ZGC, Python's reference counting plus "
+        "cycle detector, and Rust's ownership/borrowing model with no runtime GC. Discuss "
+        "pause times, throughput overhead, memory fragmentation, and how each approach affects "
+        "application design. Include practical advice on when each model shines and struggles."
+    ),
+    (
+        "You are a distributed systems architect who has built and operated globally "
+        "distributed databases. You worked on infrastructure at a FAANG company and have "
+        "first-hand experience with the pain of partition events in production.\n\n"
+        "A backend engineer designing their first multi-region service has asked about the "
+        "CAP theorem. Explain what CAP states, define consistency, availability, and partition "
+        "tolerance precisely, and discuss why 'pick two out of three' is an oversimplification. "
+        "Cover the PACELC extension, give concrete examples of CP and AP systems (e.g., "
+        "ZooKeeper vs Cassandra), and explain how modern systems like CockroachDB and Spanner "
+        "navigate these trade-offs. Offer practical guidance for choosing the right consistency "
+        "model based on business requirements."
+    ),
+    (
+        "You are a mathematics professor who specializes in probability theory and Bayesian "
+        "reasoning. You are known for your engaging lecture style and for using interactive "
+        "demonstrations to build intuition about counterintuitive results.\n\n"
+        "A student is frustrated because the Monty Hall problem 'doesn't make sense' to them — "
+        "they insist it should be 50/50 after a door is opened. Explain the problem clearly, "
+        "prove why switching doors gives a 2/3 probability of winning, and address the common "
+        "intuitive objections. Use multiple explanations: enumeration of all outcomes, Bayesian "
+        "updating, and the generalization to N doors. Discuss why human intuition fails here "
+        "and connect this to broader lessons about conditional probability."
+    ),
+    (
+        "You are a senior data engineer and analytics consultant who has optimized SQL queries "
+        "for data warehouses processing petabytes of data. You think carefully about query "
+        "plans, index usage, and the practical differences between database engines.\n\n"
+        "A junior analyst needs to write a SQL query that finds the top 3 customers by total "
+        "spend per month for the last year. Write the query using window functions and CTEs, "
+        "explain each clause, and discuss performance considerations. Then show alternative "
+        "approaches: a correlated subquery version and a LATERAL JOIN version. Compare their "
+        "execution plans conceptually and advise on indexing strategy. Assume a PostgreSQL "
+        "database with tables `customers(id, name)` and `orders(id, customer_id, amount, "
+        "created_at)`."
+    ),
+    (
+        "You are a principal software architect who has led the migration of a major "
+        "e-commerce platform from a monolith to microservices — and later consolidated some "
+        "services back. You have strong opinions informed by hard-won experience about when "
+        "each approach is appropriate.\n\n"
+        "A VP of Engineering at a mid-size startup (50 engineers, Series B) is deciding whether "
+        "to decompose their growing monolith into microservices. Present a balanced analysis of "
+        "the pros and cons of microservices vs monolithic architecture. Cover deployment "
+        "complexity, team autonomy, data consistency, operational overhead, debugging difficulty, "
+        "and organizational fit (Conway's Law). Include a decision framework for when to stay "
+        "monolithic, when to adopt microservices, and when a modular monolith is the pragmatic "
+        "middle ground."
+    ),
+    (
+        "You are a staff infrastructure engineer who has operated authoritative and recursive "
+        "DNS infrastructure at scale. You have debugged countless 'DNS is always the problem' "
+        "incidents and you understand every layer from stub resolvers to root servers.\n\n"
+        "A frontend developer who only knows that 'DNS turns names into IPs' wants a deeper "
+        "understanding. Explain the full DNS resolution process from the moment a user types a "
+        "URL in their browser to when the page starts loading. Cover the browser cache, OS stub "
+        "resolver, recursive resolver, root/TLD/authoritative queries, DNSSEC validation, "
+        "caching and TTLs, and the role of anycast. Discuss common failure modes, how CDNs use "
+        "DNS for load balancing, and emerging standards like DNS-over-HTTPS and DNS-over-QUIC."
+    ),
 ]
 
 
@@ -136,6 +303,7 @@ class RequestStats:
     prompt: str
     status: str = "pending"  # pending, streaming, done, error
     output: str = ""
+    thinking: str = ""
     ttft: float = 0.0  # time to first token
     total_time: float = 0.0
     output_tokens: int = 0
@@ -150,7 +318,7 @@ class RequestStats:
             t = self.total_time
         else:
             t = (time.monotonic() - self._start) if self._start else 0
-        tokens = self.output_tokens if self.output_tokens > 0 else len(self.output) // 4
+        tokens = self.output_tokens if self.output_tokens > 0 else (len(self.output) + len(self.thinking)) // 4
         if t > 0 and tokens > 0:
             return tokens / t
         return 0.0
@@ -199,7 +367,7 @@ async def stream_request(
             url,
             json=payload,
             headers={"Content-Type": "application/json"},
-            timeout=aiohttp.ClientTimeout(total=600, connect=10),
+            timeout=aiohttp.ClientTimeout(total=1800, connect=10),
         ) as resp:
             if resp.status != 200:
                 stats.status = "error"
@@ -224,6 +392,12 @@ async def stream_request(
                     stats.prompt_tokens = u.get("prompt_tokens", 0)
                 choice = (chunk.get("choices") or [None])[0]
                 delta = (choice or {}).get("delta", {})
+                reasoning = delta.get("reasoning_content", "")
+                if reasoning:
+                    if not stats._first_token:
+                        stats._first_token = True
+                        stats.ttft = time.monotonic() - stats._start
+                    stats.thinking += reasoning
                 content = delta.get("content", "")
                 if content:
                     if not stats._first_token:
@@ -245,11 +419,11 @@ async def stream_request(
     if stats.status != "error":
         stats.status = "done"
     # Estimate tokens from output length if usage wasn't reported
-    if stats.output_tokens == 0 and stats.output:
-        stats.output_tokens = len(stats.output) // 4  # rough estimate
+    if stats.output_tokens == 0 and (stats.output or stats.thinking):
+        stats.output_tokens = (len(stats.output) + len(stats.thinking)) // 4  # rough estimate
 
 
-def build_live_display(all_stats: list[RequestStats]) -> Table:
+def build_live_display(all_stats: list[RequestStats], verbose: bool = False) -> Table:
     """Build a rich Table showing all parallel request states."""
     # Summary stats at the top
     done = [s for s in all_stats if s.status == "done"]
@@ -302,7 +476,11 @@ def build_live_display(all_stats: list[RequestStats]) -> Table:
             style = "yellow"
             tps = f" {s.tokens_per_sec:.1f} t/s" if s._first_token else ""
             header = f"[yellow]#{s.request_id} streaming {elapsed:.1f}s{tps}[/]"
-            body = Text(s.output_tail(max_chars), style="white")
+            if verbose and s.thinking:
+                display = f"[thinking]\n{s.thinking[-max_chars // 2:]}\n[/thinking]\n{s.output_tail(max_chars // 2)}"
+            else:
+                display = s.output_tail(max_chars)
+            body = Text(display, style="white")
         elif s.status == "done":
             style = "green"
             header = (
@@ -310,7 +488,11 @@ def build_live_display(all_stats: list[RequestStats]) -> Table:
                 f"TTFT={s.ttft:.2f}s | {s.total_time:.1f}s | "
                 f"{s.output_tokens} tok | {s.tokens_per_sec:.1f} t/s"
             )
-            body = Text(s.output_tail(max_chars), style="white")
+            if verbose and s.thinking:
+                display = f"[thinking]\n{s.thinking[-max_chars // 2:]}\n[/thinking]\n{s.output_tail(max_chars // 2)}"
+            else:
+                display = s.output_tail(max_chars)
+            body = Text(display, style="white")
         else:
             style = "red"
             header = f"[red]#{s.request_id} ERROR[/]"
@@ -331,7 +513,7 @@ def build_live_display(all_stats: list[RequestStats]) -> Table:
     return outer
 
 
-def print_final_summary(all_stats: list[RequestStats], wall_time: float) -> None:
+def print_final_summary(all_stats: list[RequestStats], wall_time: float, verbose: bool = False) -> None:
     """Print a final results table after all requests complete."""
     console = Console()
     console.print()
@@ -388,6 +570,13 @@ def print_final_summary(all_stats: list[RequestStats], wall_time: float) -> None
     # Full output log for each request
     console.print()
     for s in all_stats:
+        if s.thinking and verbose:
+            console.print(Panel(
+                Text(s.thinking, style="dim cyan"),
+                title=f"[bold]#{s.request_id} thinking[/]",
+                border_style="cyan",
+                expand=True,
+            ))
         if s.output:
             console.print(Panel(
                 Text(s.output),
@@ -411,6 +600,7 @@ async def run_parallel_test(
     preset: str | None,
     prompts: list[str],
     max_tokens: int|None,
+    verbose: bool = False,
 ) -> None:
     """Run n parallel streaming requests with live display."""
     # Build payload template
@@ -462,7 +652,7 @@ async def run_parallel_test(
         ]
 
         # Live display updates while requests stream
-        with Live(build_live_display(all_stats), console=console, refresh_per_second=4) as live:
+        with Live(build_live_display(all_stats, verbose), console=console, refresh_per_second=4) as live:
             # Start all tasks
             pending = set()
             for t in tasks:
@@ -472,13 +662,13 @@ async def run_parallel_test(
                 done_tasks, pending = await asyncio.wait(
                     pending, timeout=0.25, return_when=asyncio.FIRST_COMPLETED
                 )
-                live.update(build_live_display(all_stats))
+                live.update(build_live_display(all_stats, verbose))
 
             # Final update
             live.update(build_live_display(all_stats))
 
     wall_time = time.monotonic() - wall_start
-    print_final_summary(all_stats, wall_time)
+    print_final_summary(all_stats, wall_time, verbose)
 
 
 # ---------------------------------------------------------------------------
@@ -552,6 +742,7 @@ def main() -> None:
             preset=args.preset,
             prompts=prompts,
             max_tokens=args.max_tokens,
+            verbose=verbose,
         ))
 
     # Sequential tests
