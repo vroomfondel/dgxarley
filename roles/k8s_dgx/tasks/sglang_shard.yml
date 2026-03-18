@@ -243,6 +243,10 @@
                     value: "1"
                   - name: NCCL_DEBUG
                     value: "INFO"
+                  - name: RSYNC_TARGET
+                    value: "{{ hostvars['spark2']['ansible_host'] }}"
+                  - name: HF_CACHE_HOST_PATH
+                    value: "{{ hf_cache_path }}"
                 resources:
                   limits:
                     nvidia.com/gpu: "1"
@@ -253,6 +257,9 @@
                     mountPath: /root/.cache/huggingface
                   - name: shard-script
                     mountPath: /scripts
+                    readOnly: true
+                  - name: ssh-keys
+                    mountPath: /root/.ssh
                     readOnly: true
             volumes:
               - name: hf-cache
@@ -266,3 +273,7 @@
                 configMap:
                   name: sglang-shard-script
                   defaultMode: 0755
+              - name: ssh-keys
+                hostPath:
+                  path: /root/.ssh
+                  type: Directory
