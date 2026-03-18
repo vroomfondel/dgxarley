@@ -103,12 +103,15 @@ def build_payload(
     if no_think:
         payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
 
-    if thinking_budget is not None:
-        reasoning_parser = _MODEL_PROFILES.get(model_id, {}).get("reasoning_parser", "")
+    # thinking_budget: CLI arg overrides profile default
+    profile = _MODEL_PROFILES.get(model_id, {})
+    effective_budget = thinking_budget if thinking_budget is not None else profile.get("thinking_budget")
+    if effective_budget is not None:
+        reasoning_parser = profile.get("reasoning_parser", "")
         processor = _THINKING_BUDGET_PROCESSORS.get(reasoning_parser)
         if processor:
             payload["custom_logit_processor"] = processor
-            payload["custom_params"] = {"thinking_budget": thinking_budget}
+            payload["custom_params"] = {"thinking_budget": effective_budget}
 
     return payload
 

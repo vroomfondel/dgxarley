@@ -699,11 +699,14 @@ async def run_parallel_test(
             payload["max_tokens"] = max_tokens
         if no_think:
             payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
-        if thinking_budget is not None and _thinking_processor:
+        # thinking_budget: CLI arg overrides profile default
+        _profile = _dgx_defaults.get("sglang_model_profiles", {}).get(model_id, {})
+        _effective_budget = thinking_budget if thinking_budget is not None else _profile.get("thinking_budget")
+        if _effective_budget is not None and _thinking_processor:
             # thinking_budget uses SGLang's custom logit processor, NOT chat_template_kwargs.
             # The processor forces </think> after N thinking tokens by manipulating logits.
             payload["custom_logit_processor"] = _thinking_processor
-            payload["custom_params"] = {"thinking_budget": thinking_budget}
+            payload["custom_params"] = {"thinking_budget": _effective_budget}
         # Apply preset sampling params
         if preset and preset in presets:
             p = presets[preset]

@@ -71,20 +71,23 @@ sglang_model_profiles:
     # run sglang_shard job, then enable load_format: "sharded_state" above.
     # thinking only!
     reasoning_parser: "qwen3"  #deepseek-r1
+    # thinking_budget: caps reasoning tokens via Qwen3ThinkingBudgetLogitProcessor.
+    # This is NOT a sampling param — it uses SGLang's custom logit processor.
+    # Set per-profile here, override per-request via --thinking-budget CLI arg.
+    thinking_budget: 4096
     recommended_sampling:
       temperature: 0.6
       top_p: 0.95
       top_k: 20
 #      min_p: 0
     sampling_overrides:
-      presence_penalty: 1.2
+      presence_penalty: 1.5
       temperature: 0.6
       top_p: 0.95
-      top_k: 40
-      min_p: 0.15
-      # thinking_budget: 4096
-      # repetition_penalty: 1.1
-      # frequency_penalty: 0.3
+      top_k: 20
+      #min_p: 0.15
+      # repetition_penalty: 1.55
+      frequency_penalty: 0.3
   "QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ":
     info_url: "https://huggingface.co/QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ"
     # 235B/22B MoE, AWQ 4-bit (~124 GB / ~62 GB per GPU with TP=2)
