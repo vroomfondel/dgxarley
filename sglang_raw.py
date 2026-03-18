@@ -380,7 +380,8 @@ def main():
         blob = payload["custom_logit_processor"]
         # Extract class name from the dill-serialized reference
         try:
-            cls_name = bytes.fromhex(json.loads(blob)["callable"]).split(b"\x94")[-3].decode()
+            parts = bytes.fromhex(json.loads(blob)["callable"]).split(b"\x94")
+            cls_name = parts[1].lstrip(b"\x8c\x21\x20").decode()
         except Exception:
             cls_name = "(serialized)"
         display_payload["custom_logit_processor"] = cls_name
