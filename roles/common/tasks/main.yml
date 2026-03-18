@@ -87,6 +87,19 @@
   when:
     - "'k3sserver' in group_names"
 
+- name: raise inotify limits for K3s/containerd/systemd
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_set: true
+    reload: true
+  loop:
+    - { key: fs.inotify.max_user_instances, value: "1024" }
+    - { key: fs.inotify.max_user_watches, value: "524288" }
+  tags:
+    - sysctl
+    - inotify
+
 - name: enable IPv4 forwarding (gateway hosts)
   sysctl:
     name: net.ipv4.ip_forward
