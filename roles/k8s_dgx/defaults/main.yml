@@ -41,7 +41,7 @@ sglang_model_profiles:
   "QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ":
     info_url: "https://huggingface.co/QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ"
     # 235B/22B MoE, AWQ 4-bit (~124 GB / ~62 GB per GPU with TP=2)
-    #load_format: "sharded_state"  # default: auto
+    load_format: "sharded_state"  # default: auto
     context_length_max: 262144
     #context_length: 262144
     context_length: 131072

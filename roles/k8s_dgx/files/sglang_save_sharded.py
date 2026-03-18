@@ -4,6 +4,13 @@ Runs as a multi-node job (one process per TP rank). Each rank's Engine
 loads only its portion of the model, then saves its shard locally.
 After completion each node has its rank's files under the sharded path.
 
+Architecture:
+    Engine() on rank 1 (worker) BLOCKS — it runs the scheduler event loop
+    in-process and never returns. The worker's scheduler receives the
+    save_sharded_model RPC via broadcast from the head's scheduler.
+    Therefore, only rank 0's script calls save_sharded_model(); rank 1
+    just needs to start Engine() and stay alive.
+
 Environment variables (set via ConfigMap):
     SGLANG_MODEL          Model ID (e.g. QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ)
     SGLANG_QUANTIZATION   Quantization method (e.g. awq, gptq, or empty)
@@ -48,9 +55,9 @@ def main():
     print(f"[rank {node_rank}] Output:       {output_dir}", flush=True)
 
     # Check if already sharded
-    marker = Path(output_dir) / ".shard_complete"
-    if marker.exists():
-        print(f"[rank {node_rank}] Sharded checkpoint already exists, skipping.", flush=True)
+    # Check if already sharded (index.json is written last by ShardedStateLoader)
+    if (Path(output_dir) / "model.safetensors.index.json").exists():
+        print(f"[rank {node_rank}] Sharded checkpoint already exists (index.json found), skipping.", flush=True)
         sys.exit(0)
 
     # Ensure the model is downloaded locally
@@ -72,6 +79,11 @@ def main():
         "nnodes": nnodes,
         "node_rank": node_rank,
         "dist_init_addr": nccl_init_addr,
+        # Shard job only needs to load weights and save — no inference.
+        # Minimize KV cache and skip CUDA graph capture to avoid OOM.
+        "mem_fraction_static": 0.60,
+        "context_length": 128,
+        "disable_cuda_graph": True,
     }
     if quantization:
         engine_kwargs["quantization"] = quantization
@@ -79,25 +91,38 @@ def main():
     if os.environ.get("SGLANG_ENABLE_JIT_DEEPGEMM", "").lower() == "false":
         print(f"[rank {node_rank}] DeepGemm JIT disabled", flush=True)
 
-    print(f"[rank {node_rank}] Initializing Engine...", flush=True)
-    llm = Engine(**engine_kwargs)
-
+    # Ensure output dir exists before Engine (scheduler saves to this path)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
-    print(f"[rank {node_rank}] Saving sharded state to {output_dir}...", flush=True)
-    # Workaround for SGLang 0.5.9 API mismatch: the RPC dispatcher unpacks
-    # parameters as **kwargs, but the mixin expects a single positional `params`
-    # dict. Wrapping in params={...} makes both sides agree.
-    # If upgraded past 0.5.9 where mixin uses **kwargs directly, revert to:
-    #   llm.save_sharded_model(path=output_dir, max_size=5 * 1024**3)
-    llm.save_sharded_model(
-        params={
-            "path": output_dir,
-            "pattern": None,
-            "max_size": 5 * 1024**3,  # 5 GB per shard file
-        }
-    )
 
-    # Copy metadata files (only rank 0 needs to, but doing it on both is idempotent)
+    print(f"[rank {node_rank}] Initializing Engine...", flush=True)
+
+    if node_rank != 0:
+        # Worker: Engine() BLOCKS on rank != 0 — it runs the scheduler event
+        # loop in-process and never returns. The scheduler receives the
+        # save_sharded_model RPC via broadcast from the head and writes the
+        # rank-1 shard files to output_dir. When the head exits and NCCL
+        # disconnects, SGLang sends SIGQUIT killing this process. The launch
+        # shell script handles post-save cleanup (metadata copy + marker).
+        llm = Engine(**engine_kwargs)
+        # If Engine() ever returns on worker, just exit cleanly.
+        sys.exit(0)
+    else:
+        # Head: Engine() returns on rank 0, allowing us to call RPCs.
+        llm = Engine(**engine_kwargs)
+
+        print(f"[rank {node_rank}] Saving sharded state to {output_dir}...", flush=True)
+        # Workaround for SGLang 0.5.9: the RPC dispatcher unpacks parameters
+        # as **kwargs, but the mixin expects a single positional `params` dict.
+        llm.save_sharded_model(
+            params={
+                "path": output_dir,
+                "pattern": None,
+                "max_size": 5 * 1024**3,  # 5 GB per shard file
+            }
+        )
+        print(f"[rank {node_rank}] save_sharded_model returned.", flush=True)
+
+    # Copy metadata files (config.json, tokenizer, etc.)
     for file in os.listdir(local_path):
         src = os.path.join(local_path, file)
         dst = os.path.join(output_dir, file)
@@ -111,8 +136,8 @@ def main():
         else:
             shutil.copy(src, dst)
 
-    # Write completion marker
-    marker.write_text(f"model={model_id}\ntp={tp}\nnode_rank={node_rank}\nquantization={quantization}\n")
+    # model.safetensors.index.json is written by ShardedStateLoader.save_model
+    # as the last step — serves as the completion marker.
     print(f"[rank {node_rank}] Sharding complete.", flush=True)
 
 

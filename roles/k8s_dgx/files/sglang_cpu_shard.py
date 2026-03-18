@@ -507,9 +507,8 @@ def main():
         print(f"[rank {rank}] *** DRY RUN — no files will be written ***", flush=True)
 
     # Check completion marker
-    marker = output_dir / ".shard_complete"
-    if marker.exists() and not dry_run:
-        print(f"[rank {rank}] Sharded checkpoint already exists, skipping.", flush=True)
+    if (output_dir / "model.safetensors.index.json").exists() and not dry_run:
+        print(f"[rank {rank}] Sharded checkpoint already exists (index.json found), skipping.", flush=True)
         sys.exit(0)
 
     # Resolve local model path (model-download initContainer already fetched it)
@@ -617,10 +616,19 @@ def main():
         else:
             shutil.copy(item, dst)
 
-    # Completion marker
-    marker.write_text(
-        f"model={model_id}\ntp={tp}\nnode_rank={rank}\nmethod=cpu_shard\n"
-    )
+    # Write index file (serves as completion marker — written last after all parts)
+    import json
+    weight_map_out = {}
+    for part_idx in range(writer.part):
+        filename = f"model-rank-{rank}-part-{part_idx}.safetensors"
+        filepath = output_dir / filename
+        if filepath.exists():
+            from safetensors import safe_open
+            with safe_open(str(filepath), framework="pt") as f:
+                for key in f.keys():
+                    weight_map_out[key] = filename
+    index_data = {"metadata": {"model": model_id, "tp": tp, "rank": rank, "method": "cpu_shard"}, "weight_map": weight_map_out}
+    (output_dir / "model.safetensors.index.json").write_text(json.dumps(index_data, indent=2))
     print(f"[rank {rank}] CPU sharding complete.", flush=True)
 
 

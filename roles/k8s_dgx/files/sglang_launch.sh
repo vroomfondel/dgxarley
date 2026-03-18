@@ -21,9 +21,9 @@ echo "QSFP peer ${peer} reachable."
 # When load_format is sharded_state, wait for the shard marker then use sharded path
 model_path="$SGLANG_MODEL"
 if [ "$SGLANG_LOAD_FORMAT" = "sharded_state" ]; then
-  model_slug=$(echo "$SGLANG_MODEL" | tr '/' '--')
+  model_slug=$(echo "$SGLANG_MODEL" | sed 's|/|--|g')
   sharded_path="/root/.cache/huggingface/sharded/${model_slug}-TP${TP}"
-  marker="${sharded_path}/.shard_complete"
+  marker="${sharded_path}/model.safetensors.index.json"
   echo "Waiting for sharded checkpoint at ${marker} ..."
   while [ ! -f "$marker" ]; do
     echo "  $(date '+%H:%M:%S') shard not ready yet, waiting 30s ..."
