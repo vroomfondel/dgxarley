@@ -1,4 +1,3 @@
-ops
 .proxyai
 .venv/
 __pycache__/
@@ -8,8 +7,6 @@ __pycache__/
 .mypy_cache/
 *.local
 *.local.*
-
-nsupdate_test.sh
 
 CLAUDE.md
 

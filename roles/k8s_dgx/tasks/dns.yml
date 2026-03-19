@@ -22,5 +22,7 @@
     - prometheus
     - promgrafana
     - uptimekuma
+    - litellm
+    - policy-reporter
   loop_control:
     label: "{{ item }}.{{ dns_external_domain_suffix }}"

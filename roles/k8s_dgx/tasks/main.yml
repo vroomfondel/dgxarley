@@ -39,6 +39,10 @@
   ansible.builtin.import_tasks: pipelines.yml
   tags: pipelines
 
+- name: Deploy LiteLLM proxy
+  ansible.builtin.import_tasks: litellm.yml
+  tags: litellm
+
 - name: Pre-download HuggingFace models
   ansible.builtin.import_tasks: hf_preload.yml
   tags: hf_preload
