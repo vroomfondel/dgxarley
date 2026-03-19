@@ -24,12 +24,13 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import requests
 
 from dgxarley.integration.sglang_raw import build_payload, _CONFIGURED_MODEL
-from dgxarley.integration.streaming_repetition_guard import RepetitionGuard, GuardConfig
+from dgxarley.integration.streaming_repetition_guard import RepetitionGuard
 from dgxarley.integration.repetition_detector import detect_repetition
 
 # ──────────────────────────────────────────────────────────────
@@ -323,10 +324,8 @@ def main() -> None:
     else:
         prompt_names = [args.prompt]
 
-    results = []
-    for prompt_name in prompt_names:
+    def _run_one(prompt_name: str) -> dict:
         prompt_text = TEST_PROMPTS[prompt_name]
-
         payload = build_payload(
             model_id, prompt_text, args.max_tokens, args.thinking_budget, args.no_think,
             temperature=args.temperature,
@@ -337,12 +336,8 @@ def main() -> None:
             frequency_penalty=args.frequency_penalty,
             repetition_penalty=args.repetition_penalty,
         )
-
-        # Print progress to stderr (stdout is reserved for JSON)
         print(f"[{prompt_name}] Testing with max_tokens={args.max_tokens} ...", file=sys.stderr)
         result = run_test(url, payload, prompt_name, args.save_output, results_dir)
-        results.append(result)
-
         status = "GUARD" if result.get("guard_triggered") else result.get("finish_reason", "?")
         rep = result.get("repetition", {})
         print(
@@ -351,6 +346,21 @@ def main() -> None:
             f"rep={rep.get('overall', 0):.3f} ({rep.get('severity', '?')})",
             file=sys.stderr,
         )
+        return result
+
+    # Run prompts in parallel when --prompt all (SGLang handles concurrent
+    # requests via its scheduler; MoE models leave enough GPU headroom).
+    if len(prompt_names) > 1:
+        with ThreadPoolExecutor(max_workers=len(prompt_names)) as pool:
+            futures = {pool.submit(_run_one, name): name for name in prompt_names}
+            results_map: dict[str, dict] = {}
+            for future in as_completed(futures):
+                name = futures[future]
+                results_map[name] = future.result()
+            # Preserve original prompt order in output
+            results = [results_map[name] for name in prompt_names]
+    else:
+        results = [_run_one(prompt_names[0])]
 
     # Output JSON to stdout
     if len(results) == 1:
