@@ -1,0 +1,77 @@
+{
+  "project": "Qwen 235B Sampling Parameter Tuning",
+  "stories": [
+    {
+      "id": "QT-001",
+      "title": "Baseline establishment at max_tokens=4096",
+      "type": "test",
+      "priority": 1,
+      "passes": false,
+      "description": "Run test_params.py with current user params (temp=0.6, top_p=0.95, top_k=40, min_p=0.1, pp=1.0, fp=0.0, rp=0.0) at max_tokens=4096 for all 3 prompts (analytical, creative, technical). Record repetition scores, finish_reason, completion_tokens, elapsed_s. Write baseline results table to progress.txt. Passes when: all 3 prompts tested, results documented."
+    },
+    {
+      "id": "QT-002",
+      "title": "Anti-repetition penalty sweep",
+      "type": "test",
+      "priority": 2,
+      "passes": false,
+      "description": "Sweep presence_penalty: [0.0, 0.5, 1.0, 1.5, 2.0] (analytical prompt, max_tokens=4096). With best pp, sweep frequency_penalty: [0.0, 0.3, 0.5, 0.8]. With best pp+fp, sweep repetition_penalty: [0.0, 1.0, 1.03, 1.05, 1.1]. Pick combo with lowest repetition + highest quality. Note: repetition_penalty=0.0 may be SGLang's 'disabled'; 1.0 is the CTRL-style neutral value. Passes when: best penalty combo identified and documented in progress.txt."
+    },
+    {
+      "id": "QT-003",
+      "title": "Temperature sweep",
+      "type": "test",
+      "priority": 3,
+      "passes": false,
+      "description": "Sweep temperature: [0.4, 0.5, 0.6, 0.7, 0.8, 1.0] with best penalties from QT-002. Analytical prompt, max_tokens=4096. Test top 2-3 candidates across all 3 prompts. Passes when: best temperature documented in progress.txt."
+    },
+    {
+      "id": "QT-004",
+      "title": "Nucleus/Top-K/Min-P sweep",
+      "type": "test",
+      "priority": 4,
+      "passes": false,
+      "description": "Sweep top_p: [0.8, 0.9, 0.95, 1.0]. Sweep top_k: [-1, 20, 40, 60]. Sweep min_p: [0.0, 0.05, 0.1, 0.15, 0.2]. One-at-a-time with best params from QT-002/003. Passes when: best truncation params documented in progress.txt."
+    },
+    {
+      "id": "QT-005",
+      "title": "Combined validation at max_tokens=4096",
+      "type": "validate",
+      "priority": 5,
+      "passes": false,
+      "description": "Run all 3 prompts with combined best params at max_tokens=4096. Accept criterion: all repetition scores < 0.05 (severity: 'none'). If any prompt fails, adjust and retest. Passes when: all 3 prompts pass at severity 'none'."
+    },
+    {
+      "id": "QT-006",
+      "title": "Scale to max_tokens=8192",
+      "type": "validate",
+      "priority": 6,
+      "passes": false,
+      "description": "Test combined params at 8192 with all 3 prompts. May need to increase penalties for longer output. Passes when: all repetition scores < 0.10."
+    },
+    {
+      "id": "QT-007",
+      "title": "Scale to max_tokens=12288",
+      "type": "validate",
+      "priority": 7,
+      "passes": false,
+      "description": "Test at 12288 with all 3 prompts. Passes when: all repetition scores < 0.10."
+    },
+    {
+      "id": "QT-008",
+      "title": "Scale to max_tokens=16384",
+      "type": "validate",
+      "priority": 8,
+      "passes": false,
+      "description": "Test at 16384 — the target. Passes when: all repetition scores < 0.10 and output quality acceptable."
+    },
+    {
+      "id": "QT-009",
+      "title": "Final validation and commit",
+      "type": "commit",
+      "priority": 9,
+      "passes": false,
+      "description": "Run final validation at both 4096 and 16384 with all prompts. Write optimal params as sampling_overrides under the model's profile in roles/k8s_dgx/defaults/main.yml. Document complete results summary table in progress.txt. Commit with 'ops: [QT-009] - optimal sampling parameters for Qwen3-235B-A22B-Thinking-2507-AWQ'. Passes when: Ansible defaults updated, committed, all validation passes."
+    }
+  ]
+}
