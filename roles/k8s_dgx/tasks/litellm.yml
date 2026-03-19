@@ -1,0 +1,249 @@
+---
+- name: Create litellm namespace
+  kubernetes.core.k8s:
+    name: "{{ litellm_namespace }}"
+    api_version: v1
+    kind: Namespace
+    state: present
+  when: litellm_enabled
+
+- name: Create litellm config
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: litellm-config
+        namespace: "{{ litellm_namespace }}"
+      data:
+        config.yaml: |
+          model_list:
+          {% for entry in litellm_model_list %}
+            - model_name: "{{ entry.model_name }}"
+              litellm_params:
+                model: "{{ entry.litellm_params.model }}"
+                api_base: "{{ entry.litellm_params.api_base }}"
+                api_key: "{{ entry.litellm_params.api_key | default('none') }}"
+          {% endfor %}
+
+          litellm_settings:
+          {% for key, value in litellm_settings.items() %}
+            {{ key }}: {{ value | to_json }}
+          {% endfor %}
+  when: litellm_enabled
+
+- name: Create litellm service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      kind: Service
+      apiVersion: v1
+      metadata:
+        name: litellm
+        namespace: "{{ litellm_namespace }}"
+        labels:
+          app: litellm
+      spec:
+        selector:
+          app: litellm
+        ports:
+          - port: "{{ litellm_port }}"
+            name: litellm
+            targetPort: "{{ litellm_port }}"
+            protocol: TCP
+  when: litellm_enabled
+
+- name: Create litellm deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: litellm
+        namespace: "{{ litellm_namespace }}"
+        labels:
+          app: litellm
+        annotations:
+          keel.sh/policy: force
+          keel.sh/match-tag: "true"
+          keel.sh/pollSchedule: "@every 24h"
+          keel.sh/trigger: poll
+      spec:
+        replicas: 1
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: litellm
+        template:
+          metadata:
+            labels:
+              app: litellm
+            annotations:
+              checksum/config: "{{ litellm_model_list | to_json | hash('sha256') }}"
+          spec:
+            nodeSelector:
+              kubernetes.io/arch: amd64
+            dnsConfig:
+              options:
+                - name: ndots
+                  value: "1"
+            containers:
+              - name: litellm
+                image: "{{ litellm_image }}"
+                imagePullPolicy: Always
+                args:
+                  - "--config"
+                  - "/app/config.yaml"
+                  - "--port"
+                  - "{{ litellm_port | string }}"
+                ports:
+                  - containerPort: "{{ litellm_port }}"
+                    protocol: TCP
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 256Mi
+                  limits:
+                    cpu: "1"
+                    memory: 512Mi
+                readinessProbe:
+                  httpGet:
+                    path: /health/readiness
+                    port: "{{ litellm_port }}"
+                  initialDelaySeconds: 10
+                  periodSeconds: 15
+                livenessProbe:
+                  httpGet:
+                    path: /health/liveliness
+                    port: "{{ litellm_port }}"
+                  initialDelaySeconds: 15
+                  periodSeconds: 30
+                volumeMounts:
+                  - name: config
+                    mountPath: /app/config.yaml
+                    subPath: config.yaml
+                    readOnly: true
+            restartPolicy: Always
+            volumes:
+              - name: config
+                configMap:
+                  name: litellm-config
+  when: litellm_enabled
+
+- name: Create litellm ip-allowlist middleware
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: litellm-ip-allowlist
+        namespace: "{{ litellm_namespace }}"
+      spec:
+        ipAllowList:
+          sourceRange: "{{ traefik_internal_allowlist }}"
+  when: litellm_enabled
+
+- name: Create litellm http to https redirect middleware
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: redirect-myhttps
+        namespace: "{{ litellm_namespace }}"
+      spec:
+        redirectScheme:
+          scheme: https
+  when: litellm_enabled
+
+- name: Create litellm TLS certificate
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: "litellm.{{ dns_external_domain_suffix }}"
+        namespace: "{{ litellm_namespace }}"
+      spec:
+        dnsNames:
+          - "litellm.{{ dns_external_domain_suffix }}"
+        secretName: "litellm.{{ dns_external_domain_suffix }}"
+        issuerRef:
+          name: letsencrypt-production
+          kind: ClusterIssuer
+  when: litellm_enabled
+
+- name: Create litellm http ingressroute with redirect
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: litellm-ingress
+        namespace: "{{ litellm_namespace }}"
+      spec:
+        entryPoints:
+          - web
+        routes:
+        - kind: Rule
+          match: "Host(`litellm.{{ dns_external_domain_suffix }}`)"
+          priority: 10
+          services:
+          - kind: Service
+            name: litellm
+            namespace: "{{ litellm_namespace }}"
+            passHostHeader: true
+            port: "{{ litellm_port }}"
+          middlewares:
+            - name: redirect-myhttps
+            - name: litellm-ip-allowlist
+  when: litellm_enabled
+
+- name: Create litellm https ingressroute
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: litellm-https-ingress
+        namespace: "{{ litellm_namespace }}"
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - kind: Rule
+            match: "Host(`litellm.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            middlewares:
+              - name: litellm-ip-allowlist
+            services:
+              - kind: Service
+                name: litellm
+                namespace: "{{ litellm_namespace }}"
+                passHostHeader: true
+                port: "{{ litellm_port }}"
+        tls:
+          secretName: "litellm.{{ dns_external_domain_suffix }}"
+  when: litellm_enabled
+
+- name: Register DNS A record for litellm
+  community.general.nsupdate:
+    server: "{{ nsupdate_server }}"
+    zone: "{{ nsupdate_zone }}"
+    key_name: "{{ nsupdate_tsig_key_name }}"
+    key_secret: "{{ nsupdate_tsig_key_secret }}"
+    key_algorithm: "{{ nsupdate_tsig_algorithm }}"
+    record: "litellm.{{ dns_external_domain_suffix }}."
+    type: A
+    ttl: "{{ nsupdate_ttl }}"
+    value: "{{ nsupdate_ingress_ip }}"
+    state: present
+  when: litellm_enabled
