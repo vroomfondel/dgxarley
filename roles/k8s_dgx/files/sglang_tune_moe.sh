@@ -65,25 +65,29 @@ curl -fsSL "${base_url}/common_utils.py" -o "${workdir}/common_utils.py"
 # Create __init__.py so common_utils can be imported
 touch "${workdir}/__init__.py"
 
-# Patch: upstream get_model_config() calls config.get_text_config() before
-# accessing config.architectures, but the text_config sub-object doesn't carry
-# the architectures field (it's only on the top-level multimodal config).
-# This breaks Qwen3.5 MoE (Qwen3_5MoeForConditionalGeneration).
-# Fix: save architectures before unwrapping text_config.
+# Patch: upstream get_model_config() calls config.get_text_config() which loses
+# top-level attributes (architectures, quantization_config) that only exist on
+# the multimodal config, not on the text sub-config.
+# This breaks Qwen3.5 MoE: architectures=None crash + block_shape not detected.
+# Fix: preserve both across the unwrap.
 python3 -c "
-import pathlib, re
+import pathlib
 p = pathlib.Path('${workdir}/common_utils.py')
 src = p.read_text()
 old = '''    if hasattr(config, \"text_config\"):
         config = config.get_text_config()'''
 new = '''    if hasattr(config, \"text_config\"):
         _architectures = config.architectures
+        _quant_config = getattr(config, \"quantization_config\", None)
         config = config.get_text_config()
         if config.architectures is None:
-            config.architectures = _architectures'''
+            config.architectures = _architectures
+        if not hasattr(config, \"quantization_config\") and _quant_config is not None:
+            config.quantization_config = _quant_config'''
 if old in src:
-    p.write_text(src.replace(old, new, 1))
-    print('Patched common_utils.py: preserve architectures across text_config unwrap')
+    src = src.replace(old, new, 1)
+    p.write_text(src)
+    print('Patched common_utils.py: preserve architectures + quantization_config across text_config unwrap')
 else:
     print('WARNING: patch target not found in common_utils.py — upstream may have fixed this')
 "
@@ -100,13 +104,14 @@ src = p.read_text()
 
 # 1) Replace tqdm loop with print-based progress + batch_size header
 old_loop = '        for config in tqdm(search_space):'
-new_loop = '''        print(f'\\n--- batch_size={num_tokens}: tuning {len(search_space)} configs ---', flush=True)
+new_loop = '''        print(flush=True)
+        print(f\"--- batch_size={num_tokens}: tuning {len(search_space)} configs ---\", flush=True)
         _total = len(search_space)
         for _cfg_idx, config in enumerate(search_space, 1):
             if _cfg_idx == 1 or _cfg_idx % 50 == 0 or _cfg_idx == _total:
                 _pct = _cfg_idx / _total * 100
-                _best_str = f'best={best_time:.1f}us' if best_time < float('inf') else 'searching...'
-                print(f'  batch_size={num_tokens}: [{_cfg_idx}/{_total}] ({_pct:.0f}%) {_best_str}', flush=True)'''
+                _best_str = f\"best={best_time:.1f}us\" if best_time < float(\"inf\") else \"searching...\"
+                print(f\"  batch_size={num_tokens}: [{_cfg_idx}/{_total}] ({_pct:.0f}%) {_best_str}\", flush=True)'''
 if old_loop in src:
     src = src.replace(old_loop, new_loop, 1)
     print('Patched: replaced Ray tqdm with print progress + batch_size header')
@@ -115,7 +120,8 @@ else:
 
 # 2) Add tuning plan summary in main() before _distribute
 old_dist = '        configs = _distribute('
-new_dist = '''        print(f'\\nTuning plan: {len(batch_sizes)} batch sizes {batch_sizes} x {len(search_space)} configs = {len(batch_sizes) * len(search_space)} total benchmarks', flush=True)
+new_dist = '''        print(flush=True)
+        print(f\"Tuning plan: {len(batch_sizes)} batch sizes {batch_sizes} x {len(search_space)} configs = {len(batch_sizes) * len(search_space)} total benchmarks\", flush=True)
         configs = _distribute('''
 if old_dist in src:
     src = src.replace(old_dist, new_dist, 1)
