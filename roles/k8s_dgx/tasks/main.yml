@@ -39,19 +39,11 @@
   ansible.builtin.import_tasks: pipelines.yml
   tags: pipelines
 
-- name: Skip LiteLLM — litellm_enabled is false
-  ansible.builtin.debug:
-    msg: "LiteLLM deployment skipped (litellm_enabled={{ litellm_enabled }}). Set litellm_enabled: true to deploy."
-  when: not litellm_enabled
-  tags: litellm
+
 
 - name: Deploy LiteLLM proxy
-  ansible.builtin.include_tasks:
-    file: litellm.yml
-    apply:
-      tags: litellm
+  ansible.builtin.import_tasks: litellm.yml
   tags: litellm
-  when: litellm_enabled
 
 - name: Deploy vLLM distributed inference
   ansible.builtin.import_tasks: vllm.yml

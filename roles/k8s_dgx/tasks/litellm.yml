@@ -29,7 +29,7 @@
             - model_name: "{{ entry.model_name }}"
               litellm_params:
           {% for key, value in entry.litellm_params.items() %}
-          {% if value is defined and value is not none %}
+          {% if value is defined and value is not none and value != omit %}
                 {{ key }}: {{ value | to_json }}
           {% endif %}
           {% endfor %}

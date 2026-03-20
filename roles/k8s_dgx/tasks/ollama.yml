@@ -24,6 +24,38 @@
         OLLAMA_KV_CACHE_TYPE: "{{ ollama_kv_cache_type }}"
         OLLAMA_CONTEXT_LENGTH: "{{ ollama_context_length | string }}"
 
+- name: Create ollama TLS HAProxy config (shared by ollama + ollama-embed)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: ollama-tls-haproxy-config
+        namespace: ollama
+      data:
+        haproxy.cfg: |
+          global
+            log stdout format raw local0
+          defaults
+            mode http
+            timeout connect 5s
+            timeout client 1800s
+            timeout server 1800s
+          frontend tls_front
+            bind *:{{ ollama_tls_port }} ssl crt /etc/haproxy/tls/server.pem
+            default_backend ollama_back
+          backend ollama_back
+            server local 127.0.0.1:{{ ollama_port }}
+        start.sh: |
+          #!/bin/sh
+          set -e
+          openssl req -x509 -nodes -newkey rsa:2048 \
+            -keyout /etc/haproxy/tls/key.pem -out /etc/haproxy/tls/cert.pem \
+            -days 3650 -subj '/CN=ollama'
+          cat /etc/haproxy/tls/cert.pem /etc/haproxy/tls/key.pem > /etc/haproxy/tls/server.pem
+          exec haproxy -f /etc/haproxy/haproxy.cfg
+
 - name: Create ollama pull-models script configmap
   kubernetes.core.k8s:
     state: present
@@ -68,6 +100,9 @@
           - port: "{{ ollama_port }}"
             name: ollamaport
             targetPort: "{{ ollama_port }}"
+          - port: "{{ ollama_tls_port }}"
+            name: tls
+            targetPort: "{{ ollama_tls_port }}"
 
 - name: Create ollama deployment
   kubernetes.core.k8s:
@@ -150,6 +185,23 @@
                 volumeMounts:
                   - name: ollama-data
                     mountPath: /ollama_models
+              - name: tls-proxy
+                image: haproxy:lts-alpine
+                command: ["/bin/sh", "/scripts/start.sh"]
+                ports:
+                  - containerPort: "{{ ollama_tls_port }}"
+                    name: tls
+                volumeMounts:
+                  - name: tls-haproxy-config
+                    mountPath: /etc/haproxy/haproxy.cfg
+                    subPath: haproxy.cfg
+                    readOnly: true
+                  - name: tls-haproxy-config
+                    mountPath: /scripts/start.sh
+                    subPath: start.sh
+                    readOnly: true
+                  - name: tls-cert
+                    mountPath: /etc/haproxy/tls
             volumes:
               - name: ollama-data
                 hostPath:
@@ -159,6 +211,12 @@
                 configMap:
                   name: ollama-pull-models-script
                   defaultMode: 0755
+              - name: tls-haproxy-config
+                configMap:
+                  name: ollama-tls-haproxy-config
+                  defaultMode: 0755
+              - name: tls-cert
+                emptyDir: {}
 #              - name: warmup-script
 #                configMap:
 #                  name: ollama-warmup-script

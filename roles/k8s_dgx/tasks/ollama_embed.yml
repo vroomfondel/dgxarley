@@ -95,6 +95,9 @@
           - port: "{{ ollama_port }}"
             name: ollamaport
             targetPort: "{{ ollama_port }}"
+          - port: "{{ ollama_tls_port }}"
+            name: tls
+            targetPort: "{{ ollama_tls_port }}"
 
 - name: Create ollama-embed deployment
   kubernetes.core.k8s:
@@ -179,6 +182,23 @@
                     mountPath: /ollama_models
                   - name: warmup-script
                     mountPath: /scripts
+              - name: tls-proxy
+                image: haproxy:lts-alpine
+                command: ["/bin/sh", "/scripts-tls/start.sh"]
+                ports:
+                  - containerPort: "{{ ollama_tls_port }}"
+                    name: tls
+                volumeMounts:
+                  - name: tls-haproxy-config
+                    mountPath: /etc/haproxy/haproxy.cfg
+                    subPath: haproxy.cfg
+                    readOnly: true
+                  - name: tls-haproxy-config
+                    mountPath: /scripts-tls/start.sh
+                    subPath: start.sh
+                    readOnly: true
+                  - name: tls-cert
+                    mountPath: /etc/haproxy/tls
             volumes:
               - name: ollama-embed-data
                 hostPath:
@@ -192,6 +212,12 @@
                 configMap:
                   name: ollama-embed-warmup-script
                   defaultMode: 0755
+              - name: tls-haproxy-config
+                configMap:
+                  name: ollama-tls-haproxy-config
+                  defaultMode: 0755
+              - name: tls-cert
+                emptyDir: {}
 
 - name: Create ollama ip-allowlist middleware
   kubernetes.core.k8s:

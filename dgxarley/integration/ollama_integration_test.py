@@ -43,10 +43,15 @@ OLLAMA_URL: str = os.environ.get("OLLAMA_URL", "https://ollama.example.com")
 LITELLM_URL: str = os.environ.get("LITELLM_URL", "https://litellm.example.com")
 TIMEOUT: tuple[int, int] = (10, 120)
 
-# Models expected to be loaded (from ollama_preload_models in defaults)
-EXPECTED_MODELS: list[str] = ["bge-m3", "qwen3-coder", "qwen2.5-coder"]
-EMBEDDING_MODEL: str = "bge-m3"
-CHAT_MODEL: str = "qwen2.5-coder:latest"
+# Models expected to be available.
+# Ollama native: from ollama_preload_models in defaults
+# LiteLLM: from litellm_model_list in defaults (only Ollama-backed models)
+EXPECTED_MODELS_OLLAMA: list[str] = ["bge-m3", "qwen2.5-coder:latest"]
+EXPECTED_MODELS_LITELLM: list[str] = ["bge-m3", "qwen2.5-coder:latest"]
+EMBEDDING_MODEL_OLLAMA: str = "bge-m3"
+EMBEDDING_MODEL_LITELLM: str = "bge-m3"
+CHAT_MODEL_OLLAMA: str = "qwen2.5-coder:latest"
+CHAT_MODEL_LITELLM: str = "qwen2.5-coder:latest"
 
 # Runtime mode — set by CLI --via-litellm or env var USE_LITELLM=1
 USE_LITELLM: bool = os.environ.get("USE_LITELLM", "").lower() in ("1", "true", "yes")
@@ -60,6 +65,18 @@ def _base_url() -> str:
 
 def _mode_label() -> str:
     return "LiteLLM (OpenAI)" if USE_LITELLM else "Ollama (native)"
+
+
+def _expected_models() -> list[str]:
+    return EXPECTED_MODELS_LITELLM if USE_LITELLM else EXPECTED_MODELS_OLLAMA
+
+
+def _embedding_model() -> str:
+    return EMBEDDING_MODEL_LITELLM if USE_LITELLM else EMBEDDING_MODEL_OLLAMA
+
+
+def _chat_model() -> str:
+    return CHAT_MODEL_LITELLM if USE_LITELLM else CHAT_MODEL_OLLAMA
 
 
 class TestResult:
@@ -108,7 +125,7 @@ def test_list_models() -> TestResult:
             resp = requests.get(f"{url}/api/tags", timeout=TIMEOUT)
             resp.raise_for_status()
             models = [m["name"] for m in resp.json().get("models", [])]
-        missing = [e for e in EXPECTED_MODELS if not any(e in m for m in models)]
+        missing = [e for e in _expected_models() if not any(e in m for m in models)]
         ok = len(missing) == 0
         detail = f"found: {models}" if ok else f"missing: {missing}, found: {models}"
         return TestResult("list_models", ok, time.monotonic() - t0, detail)
@@ -125,7 +142,7 @@ def test_model_info() -> TestResult:
     try:
         resp = requests.post(
             f"{OLLAMA_URL}/api/show",
-            json={"name": CHAT_MODEL},
+            json={"name": _chat_model()},
             timeout=TIMEOUT,
         )
         resp.raise_for_status()
@@ -147,7 +164,7 @@ def test_embeddings() -> TestResult:
             resp = requests.post(
                 f"{url}/v1/embeddings",
                 json={
-                    "model": EMBEDDING_MODEL,
+                    "model": _embedding_model(),
                     "input": ["Hello world", "Integration test embedding"],
                 },
                 timeout=TIMEOUT,
@@ -159,7 +176,7 @@ def test_embeddings() -> TestResult:
             resp = requests.post(
                 f"{url}/api/embed",
                 json={
-                    "model": EMBEDDING_MODEL,
+                    "model": _embedding_model(),
                     "input": ["Hello world", "Integration test embedding"],
                 },
                 timeout=TIMEOUT,
@@ -188,7 +205,7 @@ def test_chat_non_streaming() -> TestResult:
             resp = requests.post(
                 f"{url}/v1/chat/completions",
                 json={
-                    "model": CHAT_MODEL,
+                    "model": _chat_model(),
                     "messages": [{"role": "user", "content": "What is 2+2? Answer with just the number."}],
                     "stream": False,
                     "max_tokens": 16,
@@ -203,7 +220,7 @@ def test_chat_non_streaming() -> TestResult:
             resp = requests.post(
                 f"{url}/api/chat",
                 json={
-                    "model": CHAT_MODEL,
+                    "model": _chat_model(),
                     "messages": [{"role": "user", "content": "What is 2+2? Answer with just the number."}],
                     "stream": False,
                     "options": {"num_predict": 16},
@@ -229,7 +246,7 @@ def test_chat_streaming() -> TestResult:
             resp = requests.post(
                 f"{url}/v1/chat/completions",
                 json={
-                    "model": CHAT_MODEL,
+                    "model": _chat_model(),
                     "messages": [{"role": "user", "content": "Say 'hello world' and nothing else."}],
                     "stream": True,
                     "max_tokens": 32,
@@ -258,7 +275,7 @@ def test_chat_streaming() -> TestResult:
             resp = requests.post(
                 f"{url}/api/chat",
                 json={
-                    "model": CHAT_MODEL,
+                    "model": _chat_model(),
                     "messages": [{"role": "user", "content": "Say 'hello world' and nothing else."}],
                     "stream": True,
                     "options": {"num_predict": 32},
@@ -296,7 +313,7 @@ def main() -> None:
         help="Test via LiteLLM proxy (OpenAI-compatible API) instead of Ollama native API",
     )
     args = parser.parse_args()
-    USE_LITELLM = args.via_litellm
+    USE_LITELLM = args.via_litellm or os.environ.get("USE_LITELLM", "").lower() in ("1", "true", "yes")
 
     print(f"Ollama integration tests — {_base_url()} ({_mode_label()})\n")
 

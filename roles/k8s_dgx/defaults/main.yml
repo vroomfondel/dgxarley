@@ -448,7 +448,8 @@ ollama_embed_model_profiles:
     context_length: 8192
 
 # Active ollama model — parameters pulled from ollama_model_profiles
-ollama_model: "qwen3-coder:latest"
+#ollama_model: "qwen3-coder:latest"
+ollama_model: "qwen2.5-coder:latest"
 ollama_preload_models:
   - "{{ ollama_model }}"
 
@@ -460,6 +461,10 @@ ollama_embed_preload_models:
 ollama_embedding_model: "{{ ollama_embed_model }}"
 ollama_embedding_model_max_ctx: "{{ ollama_embed_model_profiles[ollama_embed_model].context_length }}"
 ollama_port: 11434
+# TLS port for HAProxy sidecar — LiteLLM's ollama/ provider forces TLS on all
+# connections. Each Ollama pod runs an HAProxy sidecar (self-signed cert) that
+# terminates TLS and proxies to localhost:ollama_port.
+ollama_tls_port: 11435
 
 # Ollama runtime config
 ollama_num_parallel: 1
@@ -590,16 +595,21 @@ litellm_model_list:
       repetition_penalty: "{{ _sglang_sampling_defaults.repetition_penalty | default(omit) }}"
       min_p: "{{ _sglang_sampling_defaults.min_p | default(omit) }}"
 
+  # Ollama models via native LiteLLM providers (ollama/ for embeddings,
+  # ollama_chat/ for chat). LiteLLM's ollama provider forces TLS on all
+  # connections — each Ollama pod runs a stunnel sidecar (self-signed cert,
+  # port {{ ollama_tls_port }}) so the native provider works over HTTPS.
+  # ssl_verify: false skips certificate verification for the self-signed cert.
   - model_name: "{{ ollama_embed_model }}"
     litellm_params:
       model: "ollama/{{ ollama_embed_model }}"
-      api_base: "http://ollama-embed.ollama.svc.cluster.local:{{ ollama_port }}"
-      api_key: "none"
+      api_base: "https://ollama-embed.ollama.svc.cluster.local:{{ ollama_tls_port }}"
+      ssl_verify: false
   - model_name: "{{ ollama_model }}"
     litellm_params:
-      model: "ollama/{{ ollama_model }}"
-      api_base: "http://ollama.ollama.svc.cluster.local:{{ ollama_port }}"
-      api_key: "none"
+      model: "ollama_chat/{{ ollama_model }}"
+      api_base: "https://ollama.ollama.svc.cluster.local:{{ ollama_tls_port }}"
+      ssl_verify: false
 
 
 # litellm_settings: rendered as the litellm_settings block in config.yaml
