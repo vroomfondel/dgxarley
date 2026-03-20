@@ -177,6 +177,9 @@ fi
 if [ -n "$SGLANG_FP8_GEMM_RUNNER_BACKEND" ] && [ "$SGLANG_FP8_GEMM_RUNNER_BACKEND" != "auto" ]; then
   args+=(--fp8-gemm-backend "$SGLANG_FP8_GEMM_RUNNER_BACKEND")
 fi
+if [ -n "$SGLANG_FP4_GEMM_BACKEND" ] && [ "$SGLANG_FP4_GEMM_BACKEND" != "auto" ]; then
+  args+=(--fp4-gemm-backend "$SGLANG_FP4_GEMM_BACKEND")
+fi
 if [ "$SGLANG_CUDA_GRAPH_MAX_BS" = "0" ]; then
   args+=(--disable-cuda-graph)
 elif [ -n "$SGLANG_CUDA_GRAPH_MAX_BS" ] && [ "$SGLANG_CUDA_GRAPH_MAX_BS" != "256" ]; then

@@ -47,6 +47,7 @@ sglang_model_profiles:
       top_p: 0.8
       top_k: 20
   "QuantTrio/Qwen3-235B-A22B-Thinking-2507-AWQ":
+    # NOTE: i cannot get this to work properly - NGRAM repeats, loops etc... stepping away from this model for now...
     info_url: "https://huggingface.co/QuantTrio/Qwen3-235B-A22B-Thinking-2507-AWQ"
     # 235B/22B MoE, AWQ 4-bit (~124 GB / ~62 GB per GPU with TP=2)
     load_format: "sharded_state"  # default: auto
@@ -71,7 +72,6 @@ sglang_model_profiles:
     # moe_wna16 uses Triton INT4 kernels directly — no repack, peak = final ~62 GB.
     # --quantization awq is WRONG for MoE: AWQConfig.get_quant_method() returns None
     # for FusedMoE → falls through to unquantized FP16 → OOM.
-    #
     #
     #● Für AWQ MoE-Modelle (wie eure Qwen3-235B) die relevanten Optionen in SGLang 0.5.9:
     #
@@ -343,6 +343,11 @@ sglang_disable_deep_gemm: "{{ sglang_model_profiles[sglang_model].disable_deep_g
 # On GB10/SM121, "auto" selects flashinfer which uses trtllm backend — unsupported
 # on SM121. FP8 models must use "cutlass" explicitly.
 sglang_fp8_gemm_runner_backend: "{{ sglang_model_profiles[sglang_model].fp8_gemm_runner_backend | default('auto') }}"
+# FP4 GEMM backend: "auto" (default), "flashinfer_cudnn", "cutlass".
+# Controls the GEMM kernel for W4A4 (FP4) quantized models. Not relevant for
+# AWQ (W4A16) or FP8 models — those use FP16/FP8 GEMM paths respectively.
+# On SM120 (Blackwell), "auto" selects flashinfer_cudnn (cuDNN-optimized kernels).
+sglang_fp4_gemm_backend: "{{ sglang_model_profiles[sglang_model].fp4_gemm_backend | default('auto') }}"
 # Maximum batch size for CUDA graph capture. Lower values reduce startup time.
 # Set to 0 to disable CUDA graph capture entirely (--disable-cuda-graph).
 # Default: 128 (SGLang default is 256, reduced for faster startup)

@@ -27,6 +27,7 @@
         SGLANG_DIST_TIMEOUT: "{{ sglang_dist_timeout | string }}"
         SGLANG_ATTENTION_BACKEND: "{{ sglang_attention_backend }}"
         SGLANG_FP8_GEMM_RUNNER_BACKEND: "{{ sglang_fp8_gemm_runner_backend }}"
+        SGLANG_FP4_GEMM_BACKEND: "{{ sglang_fp4_gemm_backend }}"
         SGLANG_CUDA_GRAPH_MAX_BS: "{{ sglang_cuda_graph_max_bs | string }}"
         SGLANG_SERVED_MODEL_NAME: "{{ sglang_served_model_name }}"
         SGLANG_CHAT_TEMPLATE_KWARGS: "{{ sglang_chat_template_kwargs | to_json }}"
