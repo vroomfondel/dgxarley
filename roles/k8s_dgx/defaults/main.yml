@@ -5,7 +5,9 @@ traefik_internal_allowlist:
   - "192.168.124.0/24"
 
 dgx_namespace: "dgx-ai"
-sglang_image: "scitrera/dgx-spark-sglang:0.5.9-t5"
+#sglang_image: "scitrera/dgx-spark-sglang:0.5.9-t5"
+sglang_image: "scitrera/dgx-spark-sglang:0.5.9-dev2-acab24a7-t5"
+
 # Model profiles: context_length, kv_cache_dtype, mem_fraction_static
 sglang_model_profiles:
   "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ":
