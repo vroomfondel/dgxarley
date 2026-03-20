@@ -1,11 +1,17 @@
 ---
+#- name: Skip LiteLLM — litellm_enabled is false
+#  ansible.builtin.debug:
+#    msg: "LiteLLM deployment skipped (litellm_enabled={{ litellm_enabled }}). Set litellm_enabled: true to deploy."
+#  when: not litellm_enabled
+#  tags: litellm
+
 - name: Create litellm namespace
   kubernetes.core.k8s:
     name: "{{ litellm_namespace }}"
     api_version: v1
     kind: Namespace
     state: present
-  when: litellm_enabled
+
 
 - name: Create litellm config
   kubernetes.core.k8s:
@@ -22,16 +28,18 @@
           {% for entry in litellm_model_list %}
             - model_name: "{{ entry.model_name }}"
               litellm_params:
-                model: "{{ entry.litellm_params.model }}"
-                api_base: "{{ entry.litellm_params.api_base }}"
-                api_key: "{{ entry.litellm_params.api_key | default('none') }}"
+          {% for key, value in entry.litellm_params.items() %}
+          {% if value is defined and value is not none %}
+                {{ key }}: {{ value | to_json }}
+          {% endif %}
+          {% endfor %}
           {% endfor %}
 
           litellm_settings:
           {% for key, value in litellm_settings.items() %}
             {{ key }}: {{ value | to_json }}
           {% endfor %}
-  when: litellm_enabled
+  
 
 - name: Create litellm service
   kubernetes.core.k8s:
@@ -52,7 +60,7 @@
             name: litellm
             targetPort: "{{ litellm_port }}"
             protocol: TCP
-  when: litellm_enabled
+
 
 - name: Create litellm deployment
   kubernetes.core.k8s:
@@ -71,7 +79,7 @@
           keel.sh/pollSchedule: "@every 24h"
           keel.sh/trigger: poll
       spec:
-        replicas: 1
+        replicas: "{{ 1 if litellm_enabled else 0}}"
         strategy:
           type: Recreate
         selector:
@@ -105,10 +113,10 @@
                 resources:
                   requests:
                     cpu: 100m
-                    memory: 256Mi
+                    memory: 512Mi
                   limits:
                     cpu: "1"
-                    memory: 512Mi
+                    memory: 1536Mi
                 readinessProbe:
                   httpGet:
                     path: /health/readiness
@@ -131,7 +139,7 @@
               - name: config
                 configMap:
                   name: litellm-config
-  when: litellm_enabled
+
 
 - name: Create litellm ip-allowlist middleware
   kubernetes.core.k8s:
@@ -145,7 +153,7 @@
       spec:
         ipAllowList:
           sourceRange: "{{ traefik_internal_allowlist }}"
-  when: litellm_enabled
+
 
 - name: Create litellm http to https redirect middleware
   kubernetes.core.k8s:
@@ -159,7 +167,7 @@
       spec:
         redirectScheme:
           scheme: https
-  when: litellm_enabled
+
 
 - name: Create litellm TLS certificate
   kubernetes.core.k8s:
@@ -177,7 +185,7 @@
         issuerRef:
           name: letsencrypt-production
           kind: ClusterIssuer
-  when: litellm_enabled
+
 
 - name: Create litellm http ingressroute with redirect
   kubernetes.core.k8s:
@@ -204,7 +212,7 @@
           middlewares:
             - name: redirect-myhttps
             - name: litellm-ip-allowlist
-  when: litellm_enabled
+
 
 - name: Create litellm https ingressroute
   kubernetes.core.k8s:
@@ -232,7 +240,7 @@
                 port: "{{ litellm_port }}"
         tls:
           secretName: "litellm.{{ dns_external_domain_suffix }}"
-  when: litellm_enabled
+
 
 - name: Register DNS A record for litellm
   community.general.nsupdate:
@@ -246,4 +254,4 @@
     ttl: "{{ nsupdate_ttl }}"
     value: "{{ nsupdate_ingress_ip }}"
     state: present
-  when: litellm_enabled
+
