@@ -7,7 +7,7 @@ built around two NVIDIA DGX Spark (ARM64) GPU nodes managed by an x86 control-pl
 
 | Node | Hardware | Arch | Role |
 |------|----------|------|------|
-| **elite800** | HP EliteDesk 800 G4 | x86_64 | K3s Master, Control-Plane, Frontend Services |
+| **k3smaster** | HP EliteDesk 800 G4 | x86_64 | K3s Master, Control-Plane, Frontend Services |
 | **spark1** | DGX Spark / ASUS Ascent GX10 | ARM64 | SGLang Head, Ollama Embedding |
 | **spark2** | DGX Spark / ASUS Ascent GX10 | ARM64 | SGLang Worker, docling-serve |
 
@@ -20,7 +20,7 @@ built around two NVIDIA DGX Spark (ARM64) GPU nodes managed by an x86 control-pl
 ### Physical Topology
 
 ```
-                                  Netgear S3300-54X (3-Unit Stack)
+                                  Netgear S3300-52X (3-Unit Stack)
                                   ================================
                                      Unit 1        Unit 2        Unit 3
                                   +-----------+ +-----------+ +-----------+
@@ -40,7 +40,7 @@ built around two NVIDIA DGX Spark (ARM64) GPU nodes managed by an x86 control-pl
                                   +-------------+   |               argras1
                                   | ether1 <----+   |               192.168.30.x
                                   |   (Netgear uplink)
-                                  | ether3 -------> elite800
+                                  | ether3 -------> k3smaster
                                   |   (OVS trunk)   enx6c1ff7c1da8d (USB 2.5G NIC)
                                   | ether5 -------> spark1 (eth0, VLAN 20 access)
                                   | ether7 -------> spark2 (eth0, VLAN 20 access)
@@ -53,13 +53,13 @@ built around two NVIDIA DGX Spark (ARM64) GPU nodes managed by an x86 control-pl
 
 | VLAN | Subnet | Purpose | Nodes |
 |------|--------|---------|-------|
-| 10 | 192.168.10.0/24 | Primary LAN, Management, DNS, GW | elite800 |
+| 10 | 192.168.10.0/24 | Primary LAN, Management, DNS, GW | k3smaster |
 | 20 | 192.168.20.0/24 | K3s cluster network (API, Flannel, inter-node) | all three nodes |
-| 30 | 192.168.30.0/24 | Home network (Fritz!Box), see VLAN translation below | elite800 |
-| 40 | 192.168.40.0/24 | Passthrough | elite800 |
-| 50 | 192.168.50.0/24 | Passthrough | elite800 |
-| 60 | 192.168.60.0/24 | Passthrough | elite800 |
-| 70 | 192.168.70.0/24 | Passthrough | elite800 |
+| 30 | 192.168.30.0/24 | Home network (Fritz!Box), see VLAN translation below | k3smaster |
+| 40 | 192.168.40.0/24 | Passthrough | k3smaster |
+| 50 | 192.168.50.0/24 | Passthrough | k3smaster |
+| 60 | 192.168.60.0/24 | Passthrough | k3smaster |
+| 70 | 192.168.70.0/24 | Passthrough | k3smaster |
 | -- | 10.10.10.0/24 | QSFP point-to-point (NCCL, MTU 9000) | spark1, spark2 |
 | -- | 10.68.0.0/16 | K3s Pod CIDR | internal |
 | -- | 10.69.0.0/16 | K3s Service CIDR | internal |
@@ -70,7 +70,7 @@ built around two NVIDIA DGX Spark (ARM64) GPU nodes managed by an x86 control-pl
 
 All nodes use an Open vSwitch bridge (name configured in vault).
 
-**elite800** (full VLAN trunk):
+**k3smaster** (full VLAN trunk):
 - Uplink: `enx6c1ff7c1da8d` (Realtek r8152 USB 2.5GbE)
 - Mode: `native-untagged` on primary VLAN
 - Trunks: all VLANs
@@ -80,7 +80,7 @@ All nodes use an Open vSwitch bridge (name configured in vault).
 **spark1 / spark2** (single VLAN):
 - Uplink: `eth0`
 - K3s cluster VLAN only, untagged
-- Default route via elite800
+- Default route via k3smaster
 
 ### VLAN 1-to-30 Translation
 
@@ -94,20 +94,20 @@ is resolved by the MikroTik CRS310 which acts as a VLAN translator:
   vlan-ids=30  tagged=ether3  untagged=ether1
 /interface/bridge/port
   ether1  pvid=30    # Netgear uplink: untagged ingress → home VLAN
-  ether3  pvid=10    # elite800 trunk: home VLAN tagged
+  ether3  pvid=10    # k3smaster trunk: home VLAN tagged
 ```
 
 **Traffic flow:**
 ```
-Outbound (elite800 → Fritz!Box):
-  elite800 <bridge>.30 → VLAN 30 tagged → MikroTik ether3
+Outbound (k3smaster → Fritz!Box):
+  k3smaster <bridge>.30 → VLAN 30 tagged → MikroTik ether3
   → bridge strips tag → ether1 untagged → Netgear port 3
   → PVID=1 → VLAN 1 → Fritz!Box (untagged)
 
-Inbound (Fritz!Box → elite800):
+Inbound (Fritz!Box → k3smaster):
   Fritz!Box untagged → Netgear PVID=1 → VLAN 1
   → port 3 untagged → MikroTik ether1 → PVID=30
-  → bridge → ether3 VLAN 30 tagged → elite800 OVS → <bridge>.30
+  → bridge → ether3 VLAN 30 tagged → k3smaster OVS → <bridge>.30
 ```
 
 **Netgear port 3 (Unit 2) config:**
@@ -118,14 +118,14 @@ Inbound (Fritz!Box → elite800):
 
 ### Policy Routing (fwmark / connmark)
 
-For connections initiated FROM the home network to elite800's primary LAN address,
+For connections initiated FROM the home network to k3smaster's primary LAN address,
 return traffic must go back via the primary LAN VLAN (not directly via the home VLAN interface). This is handled by
 iptables connmark + ip rules in `iptables.sh.j2`:
 
 ```
 # PREROUTING: mark inbound connections from home network arriving on primary LAN
 iptables -t mangle -A HTFWMARK_PRE -i <bridge>.<primary-vlan> -s <home-subnet> \
-  -d <elite800-primary-ip> -m conntrack --ctstate NEW -j CONNMARK --set-mark <mark>
+  -d <k3smaster-primary-ip> -m conntrack --ctstate NEW -j CONNMARK --set-mark <mark>
 
 # OUTPUT: restore connection marks for reply routing
 iptables -t mangle -A HTFWMARK_OUT -j CONNMARK --restore-mark
@@ -144,14 +144,14 @@ via the primary gateway.
 | `common` | all | Base packages, SSH hardening, Fail2ban, Postfix relay, iptables/ipset, Netplan + OVS, Avahi, sysstat, smartd, locale |
 | `dgx_prepare` | dgxsparks | QSFP netplan (4x ConnectX-7, MTU 9000), ulimits (memlock=unlimited), NVIDIA CDI, cpupower idle disable, kernel tuning (net buffers, vm.overcommit) |
 | `k3sserver` | k3sserver | K3s install (server on master, agent on sparks), kubeconfig merge to control node, HAProxy, Traefik, CoreDNS, rsyslog, NFS (optional) |
-| `k8s_dgx` | elite800 | K8s workloads: Multus, NVIDIA device plugin, SGLang (distributed), Ollama, Open WebUI, SearXNG, docling-serve |
-| `k8s_infra` | elite800 | K8s infrastructure: cert-manager, ESO/Kyverno, Keel, Tang, NFD, Sealed Secrets, PostgreSQL, Redis, Prometheus/Grafana/Alertmanager, Loki, Uptime Kuma |
-| `clevis` | elite800 | LUKS auto-unlock via Tang/NBDE |
+| `k8s_dgx` | k3smaster | K8s workloads: Multus, NVIDIA device plugin, SGLang (distributed), Ollama, Open WebUI, SearXNG, docling-serve |
+| `k8s_infra` | k3smaster | K8s infrastructure: cert-manager, ESO/Kyverno, Keel, Tang, NFD, Sealed Secrets, PostgreSQL, Redis, Prometheus/Grafana/Alertmanager, Loki, Uptime Kuma |
+| `clevis` | k3smaster | LUKS auto-unlock via Tang/NBDE |
 
 ## K8s Infrastructure (`k8s_infra` role)
 
 Cluster-level services deployed via `k8s_infra.yml` (runs locally, applies manifests via `kubernetes.core.k8s`).
-All persistent data uses hostPath volumes under `/var/lib/k8s-data/` on elite800 (no NFS, no Ceph).
+All persistent data uses hostPath volumes under `/var/lib/k8s-data/` on k3smaster (no NFS, no Ceph).
 
 | Component | Namespace | Description |
 |-----------|-----------|-------------|
@@ -252,13 +252,13 @@ Two-node tensor-parallel setup across both DGX Sparks:
 
 | Service | Node | Port | Notes |
 |---------|------|------|-------|
-| Open WebUI | elite800 | 30000 (NodePort) | Frontend, connects to SGLang via ClusterIP |
-| Pipelines | elite800 | 9099 (ClusterIP) | Open WebUI function pipelines |
+| Open WebUI | k3smaster | 30000 (NodePort) | Frontend, connects to SGLang via ClusterIP |
+| Pipelines | k3smaster | 9099 (ClusterIP) | Open WebUI function pipelines |
 | Ollama | spark1 | 11434 (ClusterIP) | Embedding model `bge-m3` |
 | docling-serve | spark2 | 5001 (ClusterIP) | Document processing (GPU, privileged) |
-| SearXNG | elite800 | 8080 (ClusterIP) | Metasearch engine |
-| HAProxy | elite800 | 80, 443 | TCP passthrough to Traefik (PROXY Protocol v2) |
-| Traefik | elite800 | 30080, 30443 (NodePort) | Ingress controller |
+| SearXNG | k3smaster | 8080 (ClusterIP) | Metasearch engine |
+| HAProxy | k3smaster | 80, 443 | TCP passthrough to Traefik (PROXY Protocol v2) |
+| Traefik | k3smaster | 30080, 30443 (NodePort) | Ingress controller |
 
 ### NVIDIA Device Plugin
 
@@ -398,7 +398,7 @@ add name=bridge vlan-filtering=yes
 
 /interface/bridge/port
 add interface=ether1 bridge=bridge pvid=30 comment="Uplink (Netgear)"
-add interface=ether3 bridge=bridge pvid=10 comment="elite800 OVS trunk"
+add interface=ether3 bridge=bridge pvid=10 comment="k3smaster OVS trunk"
 add interface=ether5 bridge=bridge pvid=20 comment="spark1 access"
 add interface=ether7 bridge=bridge pvid=20 comment="spark2 access"
 
@@ -408,7 +408,7 @@ add bridge=bridge vlan-ids=10 tagged=bridge,ether1 untagged=ether3 \
 add bridge=bridge vlan-ids=20 tagged=bridge,ether1,ether3 untagged=ether5,ether7 \
     comment="K3s Cluster"
 add bridge=bridge vlan-ids=30 tagged=ether3 untagged=ether1 \
-    comment="Home network (Netgear VLAN1 untagged <-> elite800 tagged)"
+    comment="Home network (Netgear VLAN1 untagged <-> k3smaster tagged)"
 add bridge=bridge vlan-ids=40 tagged=ether1,ether3 comment="passthrough"
 add bridge=bridge vlan-ids=50 tagged=ether1,ether3 comment="passthrough"
 add bridge=bridge vlan-ids=60 tagged=ether1,ether3 comment="passthrough"
@@ -430,7 +430,7 @@ add dst-address=0.0.0.0/0 gateway=192.168.10.x
 |------|---------|--------|----------|
 | 10 | LAN / Management | bridge, ether1 | ether3 |
 | 20 | K3s Cluster | bridge, ether1, ether3 | ether5, ether7 |
-| 30 | Home network ↔ elite800 tagged | ether3 | ether1 |
+| 30 | Home network ↔ k3smaster tagged | ether3 | ether1 |
 | 40 | passthrough | ether1, ether3 | — |
 | 50 | passthrough | ether1, ether3 | — |
 | 60 | passthrough | ether1, ether3 | — |
@@ -444,7 +444,7 @@ add dst-address=0.0.0.0/0 gateway=192.168.10.x
 |------|-------------|---------------|--------------|
 | bridge (CPU) | 10, 20 | 1 (pvid) | MikroTik itself (mgmt interfaces) |
 | ether1 | 10, 20, 40, 50, 60, 70, 1 | 30 (pvid) | Netgear S3300 uplink |
-| ether3 | 20, 30, 40, 50, 60, 70, 1 | 10 (pvid) | elite800 OVS trunk |
+| ether3 | 20, 30, 40, 50, 60, 70, 1 | 10 (pvid) | k3smaster OVS trunk |
 | ether5 | — | 20 (pvid) | spark1 (eth0) |
 | ether7 | — | 20 (pvid) | spark2 (eth0) |
 
@@ -474,3 +474,23 @@ and were adapted for this cluster.
 `common` and `k3sserver`: no OVS, no knxd, no MQTT, simplified HAProxy/Traefik.
 `k8s_infra`: stripped of nfsprovisioner, rookceph, keycloak, mariadb, influxdb, chromadb;
 storage changed from NFS/Ceph PVCs to hostPath.
+
+
+
+## License
+This project is licensed under the LGPL where applicable/possible — see [LICENSE.md](LICENSE.md). Some files/parts may use other licenses: [MIT](LICENSEMIT.md) | [GPL](LICENSEGPL.md) | [LGPL](LICENSELGPL.md). Always check per‑file headers/comments.
+
+
+## Authors
+- Repo owner (primary author)
+- Additional attributions are noted inline in code comments
+
+
+## Acknowledgments
+- Inspirations and snippets are referenced in code comments where appropriate.
+
+
+## ⚠️ Note
+
+This is a development/experimental project. For production use, review security settings, customize configurations, and test thoroughly in your environment. Provided "as is" without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose and noninfringement. In no event shall the authors or copyright holders be liable for any claim, damages or other liability, whether in an action of contract, tort or otherwise, arising from, out of or in connection with the software or the use or other dealings in the software. Use at your own risk.
+
