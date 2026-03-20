@@ -375,13 +375,19 @@ def create_sglang_client(verbose: bool = False) -> SGLangClient:
         SystemExit: If the server serves a different model than requested.
     """
     model_id = resolve_model_id()
-    sglang_url = os.environ.get("SGLANG_URL", "")
-    if not sglang_url:
-        raise ValueError(
-            "Set SGLANG_URL environment variable (e.g. https://sglang.dgx.example.com)"
-        )
+    use_litellm = os.environ.get("USE_LITELLM", "").lower() in ("1", "true", "yes")
+    if use_litellm:
+        sglang_url = os.environ.get("LITELLM_URL", "")
+        if not sglang_url:
+            raise ValueError("USE_LITELLM is set but LITELLM_URL is missing")
+        label = "LiteLLM proxy"
+    else:
+        sglang_url = os.environ.get("SGLANG_URL", "")
+        if not sglang_url:
+            raise ValueError("Set SGLANG_URL environment variable (e.g. https://sglang.dgx.example.com)")
+        label = "SGLang direct"
     validate_model(sglang_url, model_id)
-    print(f"[SGLang direct] {sglang_url} model={model_id}")
+    print(f"[{label}] {sglang_url} model={model_id}")
     return SGLangClient(sglang_url, model_id, verbose=verbose)
 
 
@@ -1024,9 +1030,10 @@ def main() -> None:
     if "parallel" in tests:
         tests.discard("parallel")
         model_id = resolve_model_id()
-        sglang_url = os.environ.get("SGLANG_URL", "")
+        use_litellm = os.environ.get("USE_LITELLM", "").lower() in ("1", "true", "yes")
+        sglang_url = os.environ.get("LITELLM_URL", "") if use_litellm else os.environ.get("SGLANG_URL", "")
         if not sglang_url:
-            raise ValueError("Set SGLANG_URL environment variable")
+            raise ValueError("Set SGLANG_URL (or LITELLM_URL with USE_LITELLM=true)")
         validate_model(sglang_url, model_id)
         prompts: list[str] = [args.prompt] * args.num_requests if args.prompt else random.sample(PARALLEL_PROMPTS, len(PARALLEL_PROMPTS))
         asyncio.run(run_parallel_test(
