@@ -124,6 +124,18 @@
                     value: "{{ sglang_model }}"
                   - name: SGLANG_QUANTIZATION
                     value: "{{ sglang_quantization }}"
+                  - name: SGLANG_ATTENTION_BACKEND
+                    value: "{{ sglang_attention_backend }}"
+                  - name: SGLANG_SPECULATIVE_ENABLED
+                    value: "{{ sglang_speculative_enabled | string | lower }}"
+                  - name: SGLANG_SPECULATIVE_ALGO
+                    value: "{{ sglang_speculative_algo }}"
+                  - name: SGLANG_SPECULATIVE_NUM_STEPS
+                    value: "{{ sglang_speculative_num_steps | string }}"
+                  - name: SGLANG_SPECULATIVE_EAGLE_TOPK
+                    value: "{{ sglang_speculative_eagle_topk | string }}"
+                  - name: SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS
+                    value: "{{ sglang_speculative_num_draft_tokens | string }}"
                   - name: QSFP_IP_SPARK1
                     value: "{{ qsfp_ip_spark1 }}"
                   - name: QSFP_IP_SPARK2
@@ -242,6 +254,18 @@
                     value: "{{ sglang_model }}"
                   - name: SGLANG_QUANTIZATION
                     value: "{{ sglang_quantization }}"
+                  - name: SGLANG_ATTENTION_BACKEND
+                    value: "{{ sglang_attention_backend }}"
+                  - name: SGLANG_SPECULATIVE_ENABLED
+                    value: "{{ sglang_speculative_enabled | string | lower }}"
+                  - name: SGLANG_SPECULATIVE_ALGO
+                    value: "{{ sglang_speculative_algo }}"
+                  - name: SGLANG_SPECULATIVE_NUM_STEPS
+                    value: "{{ sglang_speculative_num_steps | string }}"
+                  - name: SGLANG_SPECULATIVE_EAGLE_TOPK
+                    value: "{{ sglang_speculative_eagle_topk | string }}"
+                  - name: SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS
+                    value: "{{ sglang_speculative_num_draft_tokens | string }}"
                   - name: QSFP_IP_SPARK1
                     value: "{{ qsfp_ip_spark1 }}"
                   - name: QSFP_IP_SPARK2

@@ -37,6 +37,7 @@ from pathlib import Path
 def main():
     model_id = os.environ.get("SGLANG_MODEL", "")
     quantization = os.environ.get("SGLANG_QUANTIZATION", "") or None
+    attention_backend = os.environ.get("SGLANG_ATTENTION_BACKEND", "") or None
     tp = int(os.environ.get("TP", "2"))
     ep = int(os.environ.get("EP", "1"))
     nnodes = int(os.environ.get("NNODES", "2"))
@@ -97,6 +98,13 @@ def main():
         engine_kwargs["ep_size"] = ep
     if quantization:
         engine_kwargs["quantization"] = quantization
+    if attention_backend:
+        engine_kwargs["attention_backend"] = attention_backend
+    # Speculative decoding params (speculative_algo, etc.) are NOT passed to
+    # Engine — they only affect inference, not weight sharding. The shard job
+    # loads and saves weights identically regardless of speculative mode.
+    # They are still used for directory naming (shard_suffix) so the sharded
+    # path matches what the runtime launch script expects.
 
     if os.environ.get("SGLANG_ENABLE_JIT_DEEPGEMM", "").lower() == "false":
         print(f"[rank {node_rank}] DeepGemm JIT disabled", flush=True)

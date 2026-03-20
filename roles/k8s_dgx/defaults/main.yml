@@ -255,12 +255,21 @@ sglang_model_profiles:
     load_format: "sharded_state"  # default: auto
     context_length: 262144
     kv_cache_dtype: "fp8_e4m3"
+    # quantization: "auto"
     mem_fraction_static: "0.70"
     attention_backend: "triton"
     disable_deep_gemm: true
     fp8_gemm_runner_backend: "cutlass"
     reasoning_parser: "qwen3"
     tool_call_parser: "qwen3_coder"
+    #     quantization: "moe_wna16"
+    #    attention_backend: "triton"
+    #    disable_deep_gemm: true
+    # Expert parallelism: monkey-patched at runtime (see Thinking profile comment).
+    ep_size: 2
+    # EPLB disabled: see Thinking profile comment (Qwen3MoE missing attribute).
+    enable_eplb: true
+    enable_expert_distribution_metrics: true
     # Qwen3.5: all models think by default (no separate -Thinking variant).
     # Control via enable_thinking=false in API or chat_template_kwargs.
     # Server-side defaults use "thinking" mode sampling (the default mode).
@@ -278,7 +287,7 @@ sglang_model_profiles:
 # verifies in one step. Increases throughput (up to ~60%) at the cost of
 # higher VRAM usage. Speedup diminishes at high concurrency.
 # Requires models with trained speculative modules (not all models have these).
-sglang_speculative_enabled: true
+sglang_speculative_enabled: false
 # Algorithm:
 #   "NEXTN" — Multi-Token Prediction. Uses the model's own MTP heads to predict
 #             N tokens ahead. Requires trained MTP modules (Qwen3.5, DeepSeek-V3).
