@@ -65,6 +65,10 @@
   ansible.builtin.import_tasks: sglang_cpu_shard.yml
   tags: sglang_cpu_shard
 
+- name: Tune SGLang MoE Triton kernel configs for GPU
+  ansible.builtin.import_tasks: sglang_tune_moe.yml
+  tags: sglang_tune_moe
+
 - name: Register DNS A records for ingress services
   ansible.builtin.import_tasks: dns.yml
   tags: dns

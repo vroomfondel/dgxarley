@@ -1,0 +1,105 @@
+---
+# Tune fused MoE Triton kernel configs for the GPU on spark1.
+# Sweeps ~1280 kernel configurations (block sizes, warp counts, pipeline stages)
+# and writes the optimal config as a JSON file. SGLang reads these at runtime
+# via SGLANG_MOE_CONFIG_DIR to avoid "Using default MoE kernel config" warnings.
+#
+# Usage:
+#   ansible-playbook k8s_dgx.yml --tags sglang_tune_moe
+#
+# Prerequisites:
+# - Model must be downloaded (run hf_preload first)
+# - SGLang pods should be scaled to 0 (avoid GPU contention / measurement noise)
+# - After completion, redeploy SGLang to pick up the new SGLANG_MOE_CONFIG_DIR env var
+
+- name: Create SGLang MoE tuning script ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: sglang-tune-moe-script
+        namespace: "{{ dgx_namespace }}"
+      data:
+        tune_moe.sh: "{{ lookup('file', role_path ~ '/files/sglang_tune_moe.sh') }}"
+
+- name: Delete existing SGLang MoE tuning Job
+  kubernetes.core.k8s:
+    state: absent
+    api_version: batch/v1
+    kind: Job
+    name: sglang-tune-moe
+    namespace: "{{ dgx_namespace }}"
+
+- name: Deploy SGLang MoE tuning Job
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: sglang-tune-moe
+        namespace: "{{ dgx_namespace }}"
+        labels:
+          app: sglang-tune-moe
+      spec:
+        ttlSecondsAfterFinished: 3600
+        backoffLimit: 0
+        template:
+          metadata:
+            labels:
+              app: sglang-tune-moe
+          spec:
+            enableServiceLinks: false
+            nodeSelector:
+              spark-id: "1"
+            restartPolicy: Never
+            containers:
+              - name: tune
+                image: "{{ sglang_image }}"
+                command: ["/bin/bash", "/scripts/tune_moe.sh"]
+                env:
+                  - name: SGLANG_MODEL
+                    value: "{{ sglang_model }}"
+                  - name: TP
+                    value: "{{ sglang_tp | string }}"
+                  - name: EP
+                    value: "{{ sglang_ep | string }}"
+                  - name: HF_TOKEN
+                    value: "{{ hf_token }}"
+                  - name: MOE_CONFIG_DIR
+                    value: "{{ sglang_moe_config_dir }}"
+                  - name: HF_CACHE_HOST_PATH
+                    value: "{{ hf_cache_path }}"
+                  - name: RSYNC_TARGET
+                    value: "{{ hostvars['spark2']['ansible_host'] }}"
+                  - name: FORCE_RETUNE
+                    value: "false"
+                resources:
+                  limits:
+                    nvidia.com/gpu: "1"
+                securityContext:
+                  privileged: true
+                volumeMounts:
+                  - name: hf-cache
+                    mountPath: /root/.cache/huggingface
+                  - name: tune-script
+                    mountPath: /scripts
+                    readOnly: true
+                  - name: ssh-keys
+                    mountPath: /root/.ssh
+                    readOnly: true
+            volumes:
+              - name: hf-cache
+                hostPath:
+                  path: "{{ hf_cache_path }}"
+                  type: DirectoryOrCreate
+              - name: tune-script
+                configMap:
+                  name: sglang-tune-moe-script
+                  defaultMode: 0755
+              - name: ssh-keys
+                hostPath:
+                  path: /root/.ssh
+                  type: Directory

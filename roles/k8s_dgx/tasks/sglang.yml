@@ -37,6 +37,7 @@
         SGLANG_ENABLE_JIT_DEEPGEMM: "{{ 'false' if sglang_disable_deep_gemm | bool else 'true' }}"
         # Fix CUDA allocator fragmentation during AWQ Marlin repack (SGLang #11471)
         PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+        SGLANG_MOE_CONFIG_DIR: "{{ sglang_moe_config_dir }}"
         SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK: "0"
         NCCL_SOCKET_IFNAME: "{{ nccl_socket_ifname }}"
         NCCL_IB_DISABLE: "1"

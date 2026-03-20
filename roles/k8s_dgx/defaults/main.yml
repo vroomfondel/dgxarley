@@ -270,8 +270,8 @@ sglang_model_profiles:
     # Expert parallelism: monkey-patched at runtime (see Thinking profile comment).
     ep_size: 2
     # EPLB disabled: see Thinking profile comment (Qwen3MoE missing attribute).
-    enable_eplb: false  # does not work on this model
-    enable_expert_distribution_metrics: false # could enable for information purposes...
+    enable_eplb: false  # does not work on this model -> even with 0.5.9-dev2-acab24a7-t5
+    enable_expert_distribution_metrics: true # could enable for information purposes...
     # Qwen3.5: all models think by default (no separate -Thinking variant).
     # Control via enable_thinking=false in API or chat_template_kwargs.
     # Server-side defaults use "thinking" mode sampling (the default mode).
@@ -395,6 +395,11 @@ sglang_attention_backend: "{{ sglang_model_profiles[sglang_model].attention_back
 # NOTE: thinking_budget does NOT go here — it uses SGLang's custom logit processor
 # system (Qwen3ThinkingBudgetLogitProcessor), set per request via custom_params.
 sglang_chat_template_kwargs: "{{ sglang_model_profiles[sglang_model].chat_template_kwargs | default({}) }}"
+
+# MoE Triton kernel config directory (host path, under hf_cache_path).
+# Tuned configs are produced by the sglang_tune_moe Job.
+sglang_moe_config_path: "{{ hf_cache_path }}/moe_configs"
+sglang_moe_config_dir: "/root/.cache/huggingface/moe_configs"
 
 # ============================================================================
 # vLLM — drop-in alternative to SGLang for distributed LLM inference.
