@@ -84,7 +84,7 @@ bge-m3 mit `--gpu-memory-utilization 0.05` auf einem vollwertigen vLLM-Container
 ## 1b. Kritische Erkenntnisse aus der K3s/Ansible-Implementierung
 
 > [!success] Status: Produktiv
-> Das gesamte Setup ist als Ansible-Playbook-Suite (`dgxarley`) implementiert und läuft produktiv auf einem 3-Node K3s-Cluster (elite800 + spark1 + spark2). Die folgenden Erkenntnisse wurden während der Implementierung gewonnen und sind im Hauptdokument an den relevanten Stellen eingearbeitet.
+> Das gesamte Setup ist als Ansible-Playbook-Suite (`dgxarley`) implementiert und läuft produktiv auf einem 3-Node K3s-Cluster (k3smaster + spark1 + spark2). Die folgenden Erkenntnisse wurden während der Implementierung gewonnen und sind im Hauptdokument an den relevanten Stellen eingearbeitet.
 
 ### SGLang EADDRINUSE-Bug & HAProxy-Sidecar-Pattern
 
@@ -140,7 +140,7 @@ Ansible-Templates mit Jinja2 `{% for %}`-Loops an Spalte 0 innerhalb von ConfigM
 
 ### nsupdate DNS-Registrierung
 
-Zone muss `elasticc.io` (Parent-Zone) sein, nicht `dgx.elasticc.io`. Records als FQDN mit Trailing Dot (z.B. `ollama.dgx.elasticc.io.`). Der TSIG-Key `dgx.elasticc.io` ist nur für Records unter `dgx.elasticc.io` autorisiert.
+Zone muss `elasticc.io` (Parent-Zone) sein, nicht `dgx.example.com`. Records als FQDN mit Trailing Dot (z.B. `ollama.dgx.example.com.`). Der TSIG-Key `dgx.example.com` ist nur für Records unter `dgx.example.com` autorisiert.
 
 ### HF Preload Job: Delete-and-Recreate
 
@@ -755,7 +755,7 @@ Oder in den **Admin Settings → Documents**:
 
 > Für weitere Open-WebUI-Embedding-Details siehe: **[openwebui detailinfo § Embedding-Anbindung](DGX%20Spark%20Setup%20-%20openwebui%20detailinfo.md#12-embedding-anbindung-an-open-webui)**
 
-### Document Extraction: docling-serve (implementiert auf elite800, CPU)
+### Document Extraction: docling-serve (implementiert auf k3smaster, CPU)
 
 [docling-serve](https://github.com/docling-project/docling-serve) läuft als eigenständiger REST-Service für PDF-/Dokument-Extraktion. GPU-Beschleunigung bringt **3–5× Speedup** für die Layout-Erkennung (der Flaschenhals bei PDF-Verarbeitung).
 
@@ -946,7 +946,7 @@ spec:
 > Die Layout-Modelle werden nur bei PDF-Uploads geladen und verarbeiten. Im Idle belegt Docling nur den Basis-Container (~500 MB). Der volle GPU-Speicher wird nur bei aktiver Dokumentverarbeitung beansprucht — **nicht dauerhaft wie SGLang oder Ollama**.
 
 > [!info] Implementierungsstatus
-> In der produktiven Implementierung läuft docling auf **elite800** (CPU-Modus, `quay.io/docling-project/docling-serve-cpu:latest`) im Namespace `docling` — nicht auf Spark 2 wie ursprünglich geplant. Grund: CPU-Performance ist für die aktuelle Last ausreichend, und die GPU auf den Sparks wird vollständig für SGLang/Ollama genutzt. GPU-Migration bleibt als Upgrade-Pfad erhalten.
+> In der produktiven Implementierung läuft docling auf **k3smaster** (CPU-Modus, `quay.io/docling-project/docling-serve-cpu:latest`) im Namespace `docling` — nicht auf Spark 2 wie ursprünglich geplant. Grund: CPU-Performance ist für die aktuelle Last ausreichend, und die GPU auf den Sparks wird vollständig für SGLang/Ollama genutzt. GPU-Migration bleibt als Upgrade-Pfad erhalten.
 
 #### Anbindung an Open WebUI
 
@@ -1043,7 +1043,7 @@ Kombiniere **Ansatz A + B**: Der System-Prompt erzwingt strukturiertes Denken in
 
 ```mermaid
 graph TB
-    subgraph elite800["🖥️ HP EliteDesk 800 G4 — x86_64"]
+    subgraph k3smaster["🖥️ HP EliteDesk 800 G4 — x86_64"]
         direction LR
         e_pad[ ] ~~~ owui["Open WebUI :3000"] ~~~ pipe["Pipelines :9099"] ~~~ searx["SearXNG :8080"]
     end
@@ -1074,7 +1074,7 @@ graph TB
 
 ```mermaid
 graph TB
-    subgraph elite800_k["🖥️ HP EliteDesk 800 G4 — K3s Server"]
+    subgraph k3smaster_k["🖥️ HP EliteDesk 800 G4 — K3s Server"]
         direction LR
         ek_pad[ ] ~~~ owui_k["Open WebUI :30000"] ~~~ pipe_k["Pipelines :9099"] ~~~ searx_k["SearXNG :8080"]
     end
@@ -1104,7 +1104,7 @@ graph TB
 
 ```
 NAME      STATUS   ROLES                  AGE   VERSION
-elite800  Ready    control-plane,master   10d   v1.35.2+k3s1
+k3smaster  Ready    control-plane,master   10d   v1.35.2+k3s1
 spark-1   Ready    <none>                 10d   v1.35.2+k3s1
 spark-2   Ready    <none>                 10d   v1.35.2+k3s1
 ```
@@ -1362,7 +1362,7 @@ sudo systemctl enable sglang-worker.service
 
 ```bash
 curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server" sh -s - \
-  --node-label node-role=elite800 \
+  --node-label node-role=k3smaster \
   --write-kubeconfig-mode 644
 
 # Token für Agents auslesen:
@@ -1374,14 +1374,14 @@ sudo cat /var/lib/rancher/k3s/server/node-token
 ```bash
 # Auf Spark 1:
 curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="agent" sh -s - \
-  --server https://<ELITE800-IP>:6443 \
+  --server https://<K3SMASTER-IP>:6443 \
   --token <TOKEN> \
   --node-label spark-id=1 \
   --node-label nvidia.com/gpu.present=true
 
 # Auf Spark 2:
 curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="agent" sh -s - \
-  --server https://<ELITE800-IP>:6443 \
+  --server https://<K3SMASTER-IP>:6443 \
   --token <TOKEN> \
   --node-label spark-id=2 \
   --node-label nvidia.com/gpu.present=true
@@ -1934,7 +1934,7 @@ spec:
         app: open-webui
     spec:
       nodeSelector:
-        node-role: elite800
+        node-role: k3smaster
       containers:
         - name: open-webui
           image: ghcr.io/open-webui/open-webui:main
@@ -1966,7 +1966,7 @@ spec:
       nodePort: 30000
 ```
 
-Erreichbar unter `http://<ELITE800-IP>:30000`.
+Erreichbar unter `http://<K3SMASTER-IP>:30000`.
 
 #### Pipelines Deployment + Service
 
@@ -1987,7 +1987,7 @@ spec:
         app: pipelines
     spec:
       nodeSelector:
-        node-role: elite800
+        node-role: k3smaster
       containers:
         - name: pipelines
           image: ghcr.io/open-webui/pipelines:main
@@ -2131,7 +2131,7 @@ kubectl -n dgx-ai get pods -o wide
 curl http://<IP-SPARK-1>:8000/v1/models
 
 # Open WebUI erreichbar?
-curl -s http://<ELITE800-IP>:30000 | head -5
+curl -s http://<K3SMASTER-IP>:30000 | head -5
 
 # SGLang-Logs auf Fehler prüfen
 kubectl -n dgx-ai logs deployment/sglang-head --tail=50
@@ -2185,7 +2185,7 @@ huggingface-cli download Qwen/Qwen3-235B-A22B-Instruct-2507-FP8
 
 ### Variante B: K3s-Cluster
 
-4. **K3s Server installieren** (HP EliteDesk 800 G4): Install-Befehl aus Abschnitt 8c, Node-Label `node-role=elite800`
+4. **K3s Server installieren** (HP EliteDesk 800 G4): Install-Befehl aus Abschnitt 8c, Node-Label `node-role=k3smaster`
 
 5. **K3s Agents installieren** (Spark 1 + 2): Install-Befehle aus Abschnitt 8c, Labels `spark-id=1` / `spark-id=2`
 
@@ -2211,7 +2211,7 @@ huggingface-cli download Qwen/Qwen3-235B-A22B-Instruct-2507-FP8
 
 16. **Open WebUI + Pipelines deployen**: `kubectl apply` der restlichen Manifeste
 
-17. **Open WebUI aufrufen**: `http://<ELITE800-IP>:30000`
+17. **Open WebUI aufrufen**: `http://<K3SMASTER-IP>:30000`
 
 18. **Konfigurieren + Testen**: Admin Settings (Embedding → Ollama), Reflexions-Pipeline importieren, Analyse-Frage stellen
     
@@ -2226,18 +2226,18 @@ Neben den AI-Workloads wurde ein vollständiger Infrastruktur-Stack via Ansible-
 
 ### TLS & Ingress
 
-- **cert-manager** (v1.19.2) mit Let's Encrypt DNS-01 (RFC2136 gegen `138.201.156.48:53`, TSIG-Key `dgx.elasticc.io`)
+- **cert-manager** (v1.19.2) mit Let's Encrypt DNS-01 (RFC2136 gegen `198.51.100.1:53`, TSIG-Key `dgx.example.com`)
 - **Traefik** (K3s-integriert) mit IP-Allowlist (VLAN 101/188/191)
-- **HAProxy** auf elite800 als Host-Service: TCP-Passthrough mit PROXY Protocol v2 an Traefik NodePorts (30080/30443)
-- Alle Services erreichbar unter `*.dgx.elasticc.io` mit gültigem TLS
+- **HAProxy** auf k3smaster als Host-Service: TCP-Passthrough mit PROXY Protocol v2 an Traefik NodePorts (30080/30443)
+- Alle Services erreichbar unter `*.dgx.example.com` mit gültigem TLS
 
 ### Monitoring
 
 - **Prometheus** — scrapet kubelets, cAdvisor, CoreDNS, Traefik, KSM, node-exporter
-- **Grafana** — lokale Auth, vorkonfigurierte K8s-Dashboards (dotdc), `promgrafana.dgx.elasticc.io`
+- **Grafana** — lokale Auth, vorkonfigurierte K8s-Dashboards (dotdc), `promgrafana.dgx.example.com`
 - **Loki** (v3.6) — Filesystem-Backend (TSDB v13), Single-Node; Promtail-DaemonSet sammelt Pod-Logs
-- **Alertmanager** — Alerts via E-Mail und Gotify (`gotify.heidk8.elasticc.io`)
-- **Uptime Kuma** — `uptimekuma.dgx.elasticc.io`
+- **Alertmanager** — Alerts via E-Mail und Gotify (`gotify.example.com`)
+- **Uptime Kuma** — `uptimekuma.dgx.example.com`
 
 ### Datenbanken
 
@@ -2252,11 +2252,11 @@ Neben den AI-Workloads wurde ein vollständiger Infrastruktur-Stack via Ansible-
 
 ### Weitere
 
-- **Keel** — Automatische Image-Updates (Daily Poll, Webhooks an `webhooks.heidk8.elasticc.io`)
+- **Keel** — Automatische Image-Updates (Daily Poll, Webhooks an `webhooks.example.com`)
 - **Node Feature Discovery** — CPU-Feature-Labels (AVX2, ASIMD) für Node-Affinity
-- **DNS** — A-Records via `nsupdate` (HMAC-SHA256, TSIG) unter `dgx.elasticc.io`
+- **DNS** — A-Records via `nsupdate` (HMAC-SHA256, TSIG) unter `dgx.example.com`
 
-Alle persistenten Daten liegen unter `/var/lib/k8s-data/` auf elite800 (hostPath, kein NFS/Ceph).
+Alle persistenten Daten liegen unter `/var/lib/k8s-data/` auf k3smaster (hostPath, kein NFS/Ceph).
 
 ---
 

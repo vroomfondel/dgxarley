@@ -1,3 +1,5 @@
+![Cumulative Clones](https://img.shields.io/endpoint?logo=github&url=https://gist.githubusercontent.com/vroomfondel/3e9b5513788bd4a8af48560724376534/raw/dgxarley_clone_count.json)
+
 # DGX Spark Cluster — Ansible Repository
 
 Ansible-Repository for deploying a heterogeneous K3s cluster for distributed LLM inference,

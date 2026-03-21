@@ -96,7 +96,7 @@ GLM-5 (Zhipu AI / Z.ai, Release Februar 2026) ist mit 744B Parametern und 40B ak
 | NVFP4 (Blackwell-nativ) | ~400 GB (geschätzt) | 4 | ~112 GB | SGLang — **existiert noch nicht** |
 | UD-Q2_K_XL (GGUF) | ~281 GB | 3 | ~103 GB | llama.cpp — Qualität fragwürdig |
 
-**FP8 mit 8× Spark ist technisch machbar** — SGLang unterstützt Multi-Node nativ via NCCL, und die 200 Gbit/s Interconnect reichen für die All-to-All-Kommunikation der 40B aktiven MoE-Parameter. Allerdings: 8 Sparks brauchen 2× MikroTik CRS812 oder einen Enterprise-Switch (Mellanox SN3700), plus ~27.600 € für 6 zusätzliche Sparks. Das HF-empfohlene TP=8-Setup ist 1:1 abbildbar.
+**FP8 mit 8× Spark ist technisch machbar** — SGLang unterstützt Multi-Node nativ via NCCL, und die 200 Gbit/s Interconnect reichen für die All-to-All-Kommunikation der 40B aktiven MoE-Parameter. Allerdings: 8 Sparks brauchen 2× MikroTik CRS812 oder einen Enterprise-Switch (Mellanox SN3700). Das HF-empfohlene TP=8-Setup ist 1:1 abbildbar.
 
 **AWQ auf 4–5× Spark ist der Sweet Spot für SGLang:**
 
@@ -124,7 +124,6 @@ llama-server \
 > | | **Qwen3-235B-FP8** (aktuell) | **GLM-5-AWQ** | **GLM-5-Q4_K_XL** |
 > |---|---|---|---|
 > | **Sparks** | 2 | 4–5 | 4 |
-> | **Hardware-Kosten** | ~6.000 € + DAC | ~12.000–15.450 € + Switch + DACs | ~12.000 € + Switch + DACs |
 > | **Decode-Speed** | ~25 t/s (SGLang+NCCL/RDMA) | ~15–20 t/s (SGLang+NCCL/RDMA) | ~10–15 t/s (llama.cpp RPC/TCP) |
 > | **Quantisierungs-Qualität** | FP8 ≈ 99% von BF16 | AWQ ≈ 95–97% von BF16 | Q4 ≈ 92–95% von BF16 |
 > | **Aktive Parameter** | 22B (MoE) | 40B (MoE) | 40B (MoE) |
@@ -175,43 +174,6 @@ MikroTik CRS812 DDQ
 - Auto-Negotiation auf den QSFP-DD-Ports deaktivieren
 - QSFP-DD-Port manuell auf 2×200G splitten
 
-### Preise in Deutschland (Stand Februar 2026)
-
-#### Switch
-
-|Anbieter|Preis (inkl. MwSt.)|Verfügbarkeit|Quelle|
-|---|---|---|---|
-|**idealo.de** (günstigster)|**ab 1.047 €**|Lieferbar|[idealo.de](https://www.idealo.de/preisvergleich/OffersOfProduct/209057897_-crs812-ddq-mikrotik.html)|
-|**Geizhals**|ab 1.050 €|Lieferbar|[geizhals.de](https://geizhals.de/mikrotik-cloud-router-switch-crs812-ddq-rackmount-50g-managed-switch-crs812-8ds-2dq-2ddq-rm-a3636266.html)|
-|**NAS Store**|1.099 €|Versandbereit 2–4 Werktage|nasstore.de|
-|**Galaxus.de**|1.208 €|Lieferbar|[galaxus.de](https://www.galaxus.de/de/s1/product/mikrotik-crs812-ddq-14-ports-netzwerk-switch-62437969)|
-
-#### Kabel
-
-|Kabel|Stück|Preis pro Stück|Anbieter|
-|---|---|---|---|
-|200G QSFP56 DAC, 0.5m (Mellanox-kompatibel)|2|~79 €|[FS.com DE](https://www.fs.com/de/products/115634.html)|
-|400G QSFP-DD → 2×200G QSFP56 Breakout DAC, 1.5m|1|~157 €|[FS.com DE](https://www.fs.com/de/products/182806.html)|
-
-> **Hinweis zu den Kabeln**: Die FS.com-Kabel sind als Mellanox/NVIDIA-kompatibel zertifiziert und werden explizit für DGX Spark Dual-System Interconnect beworben. Alternativ bietet BlueOptics 200G DAC für ~123 €/Stk an.
-
-#### Gesamtkalkulation (nur Netzwerk-Erweiterung)
-
-|Posten|Kosten|
-|---|---|
-|MikroTik CRS812 DDQ|~1.050 €|
-|2× 200G QSFP56 DAC (0.5m)|~158 €|
-|1× 400G→2×200G Breakout DAC (1.5m)|~157 €|
-|**Summe Netzwerk**|**~1.365 €**|
-
-#### Gesamtkalkulation (inkl. 2 zusätzlicher Sparks)
-
-|Posten|Kosten|
-|---|---|
-|2× DGX Spark (je ~3.450 € )|~6.900 €|
-|Netzwerk (Switch + Kabel)|~1.365 €|
-|**Gesamt**|**~8.265 €**|
-
 ### Was bringt 4× Spark?
 
 |Eigenschaft|2× Spark (aktuell)|4× Spark|
@@ -232,7 +194,6 @@ Falls du über 6 Sparks hinaus skalieren willst oder Enterprise-Support benötig
 
 |Eigenschaft|MikroTik CRS812 DDQ|Mellanox SN3700 (refurbished)|
 |---|---|---|
-|**Preis**|~1.050 €|~14.000 € (Reef Telecom)|
 |**Max. 200G-Ports**|4 (2 nativ + 2 via Breakout)|**32 nativ**|
 |**Max. Sparks (1 Switch)**|6|32|
 |**RoCE/RDMA**|✅ Grundlegend|✅ Nativ optimiert, GPUDirect|
@@ -266,12 +227,6 @@ Für ein Heim-/Büro-Setup mit ≤6 Sparks ist der CRS812 DDQ die klare Wahl. De
 - **MikroTik CRS812 DDQ (Produktseite)**: mikrotik.com/product/crs812_ddq
 
 - **MikroTik CRS812 DDQ Review (ServeTheHome)**: servethehome.com — CRS812-8DS-2DQ-2DDQ-RM Review
-
-- **CRS812 DDQ Preisvergleich (idealo.de)**: idealo.de/preisvergleich/OffersOfProduct/209057897
-
-- **200G QSFP56 DAC für DGX Spark (FS.com DE)**: fs.com/de/products/115634.html
-
-- **400G→2×200G Breakout DAC (FS.com DE)**: fs.com/de/products/182806.html
 
 - **NVIDIA Forum: Multi-Spark Switch-Empfehlungen**: forums.developer.nvidia.com/t/connecting-multiple-dgx-spark-units-ethernet-switch-recommendations/345839
 

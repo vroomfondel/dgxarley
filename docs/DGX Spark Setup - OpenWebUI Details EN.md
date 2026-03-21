@@ -83,12 +83,12 @@ WEBUI_URL=<Base URL of the Open WebUI instance>
 Additionally, Open WebUI supports **Trusted Headers** for operation behind an authentication proxy (OAuth2-Proxy, Cloudflare Access, etc.).
 
 > [!success] Implementation Status
-> Open WebUI is running in production in the K3s cluster (namespace `dgx-ai`) on elite800 with:
+> Open WebUI is running in production in the K3s cluster (namespace `dgx-ai`) on k3smaster with:
 > - **PostgreSQL backend** (`xomoxcc/postgreslocaled:latest` with pgvector extension) instead of SQLite — DBs: `openwebui` + `openwebui_vectors`
 > - **Admin account + API key** are provisioned idempotently via REST API and stored in the K8s Secret `openwebui-admin-api-key`
 > - **Config seeding**: `config.json` is written at every pod start via a busybox initContainer (`RESET_CONFIG_ON_START=true`)
 > - **RAG configuration**: pgvector backend, `chunk_size=20000`, `chunk_overlap=750`, hybrid search enabled
-> - **Accessible at**: `https://openwebui.dgx.elasticc.io` (cert-manager TLS)
+> - **Accessible at**: `https://openwebui.dgx.example.com` (cert-manager TLS)
 
 ---
 
@@ -363,7 +363,7 @@ environment:
 ```
 
 > [!success] Implemented SearXNG Configuration
-> SearXNG runs in its own namespace `searxng` on elite800:
+> SearXNG runs in its own namespace `searxng` on k3smaster:
 > - **Enabled engines**: Google, Bing, Wikipedia, Wikidata, Startpage, Mojeek, Qwant
 > - **Disabled engines**: DuckDuckGo, Brave
 > - **Backend**: Redis (`redis.redis.svc:6379/3`)
@@ -522,7 +522,7 @@ synthesis = await generate(
 
 In Open WebUI Admin Settings → Documents:
 - Embedding Engine: **OpenAI**
-- API Base URL: `http://<ELITE800-IP>:8001/v3`
+- API Base URL: `http://<k3smaster-IP>:8001/v3`
 - Model: `bge-m3`
 
 ### Alternative: Via Integrated Engine (no separate service)
