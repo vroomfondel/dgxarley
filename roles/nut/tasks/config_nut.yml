@@ -9,6 +9,37 @@
 # Usage:
 #   ansible-playbook common.yml --tags nut
 #   ansible-playbook common.yml --limit k3smaster --tags nut
+#
+# ─── MEMO: Enabling a second identical UPS ─────────────────────────────
+#
+# When two identical UPS units (same USB vendor:product ID) are connected,
+# they must be distinguished by USB bus/port. Steps:
+#
+#  1. Connect both UPS units, then determine bus/port:
+#       lsusb                      # → Bus 001 Device 003: ID 0001:0000 ...
+#       nut-scanner -U             # shows detected UPS with USB attributes
+#
+#  2. defaults/main.yml: uncomment the nut_ups_secondary_* variables,
+#     fill in bus values from step 1 (nut_ups_bus / nut_ups_secondary_bus).
+#
+#  3. etc_udev_rules.d_99-nut-ups.rules.j2: uncomment the symlink rule
+#     and adjust the KERNELS path (from: udevadm info -a /dev/bus/usb/001/003).
+#     → Stable /dev/ups-1 and /dev/ups-2 symlinks instead of changing bus IDs.
+#
+#  4. etc_nut_ups.conf.j2: uncomment the second [ups] section.
+#
+#  5. etc_nut_upsmon.conf.j2: uncomment the second MONITOR line.
+#
+#  6. handlers/main.yml: uncomment the second nut-driver handler.
+#
+#  7. Deploy:
+#       ansible-playbook common.yml --tags nut
+#
+#  8. Verify:
+#       upsc greencell@localhost
+#       upsc greencell2@localhost
+#
+# ────────────────────────────────────────────────────────────────────────
 
 - name: install NUT packages
   apt:

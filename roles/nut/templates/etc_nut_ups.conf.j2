@@ -6,9 +6,35 @@
     desc = "{{ nut_ups_desc }}"
     vendorid = {{ nut_ups_vendorid }}
     productid = {{ nut_ups_productid }}
+{% if nut_ups_bus is defined %}
+    bus = {{ nut_ups_bus }}
+{% endif %}
 {% if nut_ups_subdriver is defined %}
     subdriver = {{ nut_ups_subdriver }}
 {% endif %}
 {% for opt in nut_ups_extra_options | default([]) %}
     {{ opt }}
 {% endfor %}
+
+{# ─── Second identical UPS ────────────────────────────────────────────── #}
+{# Uncomment when nut_ups_secondary_name is defined in defaults            #}
+{#
+{% if nut_ups_secondary_name is defined %}
+
+[{{ nut_ups_secondary_name }}]
+    driver = {{ nut_ups_secondary_driver }}
+    port = {{ nut_ups_secondary_port }}
+    desc = "{{ nut_ups_secondary_desc }}"
+    vendorid = {{ nut_ups_secondary_vendorid }}
+    productid = {{ nut_ups_secondary_productid }}
+{% if nut_ups_secondary_bus is defined %}
+    bus = {{ nut_ups_secondary_bus }}
+{% endif %}
+{% if nut_ups_secondary_subdriver is defined %}
+    subdriver = {{ nut_ups_secondary_subdriver }}
+{% endif %}
+{% for opt in nut_ups_secondary_extra_options | default(nut_ups_extra_options) | default([]) %}
+    {{ opt }}
+{% endfor %}
+{% endif %}
+#}

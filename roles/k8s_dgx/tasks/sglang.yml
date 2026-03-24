@@ -201,7 +201,7 @@
               checksum/config: "{{ (sglang_model ~ sglang_context_length ~ sglang_kv_cache_dtype ~ sglang_mem_fraction_static ~ sglang_quantization ~ sglang_load_format ~ sglang_attention_backend ~ sglang_ep) | hash('sha256') }}"
           spec:
             enableServiceLinks: false         # prevent K8s SGLANG_PORT=tcp://... injection
-            hostIPC: true                    # Shared Memory für NCCL
+            hostIPC: true                    # shared memory for NCCL
             nodeSelector:
               spark-id: "2"
             initContainers:
@@ -315,7 +315,7 @@
           spec:
             serviceAccountName: sglang-head
             enableServiceLinks: false         # prevent K8s SGLANG_PORT=tcp://... injection
-            hostIPC: true                    # Shared Memory für NCCL
+            hostIPC: true                    # shared memory for NCCL
             nodeSelector:
               spark-id: "1"
             initContainers:

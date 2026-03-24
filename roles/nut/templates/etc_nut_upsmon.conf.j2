@@ -1,6 +1,8 @@
 # {{ ansible_managed }}
 
 MONITOR {{ nut_ups_name }}@localhost 1 {{ nut_admin_user }} {{ nut_admin_password }} master
+{# Second UPS — uncomment when nut_ups_secondary_name is defined: #}
+{# MONITOR {{ nut_ups_secondary_name | default("greencell2") }}@localhost 1 {{ nut_admin_user }} {{ nut_admin_password }} master #}
 
 SHUTDOWNCMD "/usr/local/bin/nut_shutdown.sh"
 

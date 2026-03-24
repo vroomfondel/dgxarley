@@ -27,6 +27,34 @@ nut_ups_extra_options:
   - 'override.device.model = "UPS 600W"'
   - "override.ups.realpower.nominal = 600"
 
+# ─── Second identical UPS (commented out) ──────────────────────────────
+# Two identical UPS units share the same vendor:product ID (0001:0000).
+# Distinguish them via USB bus ("bus") or stable udev symlinks ("port").
+#
+# Determine bus/port:
+#   lsusb                  → Bus 001 Device 003: ID 0001:0000 ...
+#   nut-scanner -U         → shows bus/device per detected UPS
+#
+# Option A — via bus= (simple, but not reboot-stable):
+#   nut_ups_bus: "001"
+#   nut_ups_secondary_bus: "002"
+#
+# Option B — via udev symlink (reboot-stable, preferred):
+#   Uncomment symlinks in etc_udev_rules.d_99-nut-ups.rules.j2,
+#   then use port instead of auto:
+#   nut_ups_port: "/dev/ups-1"        # instead of "auto"
+#   nut_ups_secondary_port: "/dev/ups-2"
+#
+# nut_ups_secondary_name: "greencell2"
+# nut_ups_secondary_driver: "blazer_usb"
+# nut_ups_secondary_port: "auto"         # or "/dev/ups-2" with udev symlink
+# nut_ups_secondary_bus: "002"           # only for Option A (without udev symlink)
+# nut_ups_secondary_desc: "Green Cell UPS 600W (2)"
+# nut_ups_secondary_vendorid: "0001"
+# nut_ups_secondary_productid: "0000"
+# nut_ups_secondary_extra_options: "{{ nut_ups_extra_options }}"
+# ────────────────────────────────────────────────────────────────────────
+
 # NUT mode: netserver allows remote clients (nut-exporter) to query upsd
 nut_mode: "netserver"
 nut_listen_address: "0.0.0.0"
