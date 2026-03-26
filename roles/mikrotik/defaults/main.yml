@@ -14,6 +14,12 @@ mikrotik_bridge_ports:
   - interface: ether7
     pvid: 191
     comment: "spark2 access"
+  - interface: ether6
+    pvid: 191
+    comment: "spark3 access"
+  - interface: ether8
+    pvid: 191
+    comment: "spark4 access"
 
 mikrotik_bridge_vlans:
   - vlan_ids: 101
@@ -21,7 +27,7 @@ mikrotik_bridge_vlans:
     untagged: "ether3"
   - vlan_ids: 191
     tagged: "bridge,ether1,ether3"
-    untagged: "ether5,ether7"
+    untagged: "ether5,ether7,ether6,ether8"
   - vlan_ids: 188
     tagged: "ether3"
     untagged: "ether1"
