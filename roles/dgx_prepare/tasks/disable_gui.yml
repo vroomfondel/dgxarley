@@ -46,6 +46,34 @@
     - cups.socket
     - cups.path
 
+- name: Disable Plymouth splash screen services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+  loop:
+    - plymouth-start
+    - plymouth-read-write
+    - plymouth-quit
+    - plymouth-quit-wait
+  failed_when: false
+
+- name: Read current kernel cmdline
+  ansible.builtin.slurp:
+    src: /etc/kernel/cmdline
+  register: _kernel_cmdline_raw
+
+- name: Remove splash and quiet from kernel cmdline
+  ansible.builtin.copy:
+    content: "{{ _kernel_cmdline_raw.content | b64decode | regex_replace('\\s*(splash|quiet)', '') | trim }}\n"
+    dest: /etc/kernel/cmdline
+    mode: "0644"
+  register: _kernel_cmdline_changed
+  when: _kernel_cmdline_raw.content | b64decode is search('splash|quiet')
+
+- name: Update bootloader after cmdline change
+  ansible.builtin.command: bootctl update
+  when: _kernel_cmdline_changed is changed
+
 - name: Disable and stop Docker services
   ansible.builtin.systemd:
     name: "{{ item }}"
@@ -54,3 +82,4 @@
   loop:
     - docker
     - docker.socket
+  failed_when: false
