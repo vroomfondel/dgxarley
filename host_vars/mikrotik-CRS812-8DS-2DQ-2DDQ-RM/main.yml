@@ -35,3 +35,14 @@ mikrotik_mgmt_interfaces:
     address: "192.168.124.2/24"
 
 mikrotik_default_gateway: "192.168.123.1"
+
+# RoCE/RDMA lossless Ethernet on QSFP ports
+mikrotik_qsfp_roce_ports:
+  - name: qsfp1
+    egress_rate: "200.0Gbps"
+  - name: qsfp2
+    egress_rate: "200.0Gbps"
+  - name: qsfp3
+    egress_rate: "200.0Gbps"
+  - name: qsfp4
+    egress_rate: "200.0Gbps"

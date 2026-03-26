@@ -1,2 +1,10 @@
 ---
 mikrotik_bridge_name: bridge
+
+# RoCE/RDMA lossless Ethernet — only active when qsfp_switch: true
+mikrotik_qsfp_roce_ports: []
+mikrotik_qsfp_l2mtu: 9500
+mikrotik_roce_dscp_data: 26
+mikrotik_roce_dscp_cnp: 48
+mikrotik_roce_traffic_class: 3
+mikrotik_cnp_traffic_class: 6

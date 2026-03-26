@@ -1,0 +1,152 @@
+---
+# RoCE/RDMA lossless Ethernet configuration for CRS812 QSFP ports.
+# Requires RouterOS v7.23+ (PFC, ECN, lossless-traffic-class support).
+# Gated by qsfp_switch | default(false) on each task (static import gotcha).
+
+# 1. Jumbo frames on QSFP ports
+- name: Set l2mtu={{ mikrotik_qsfp_l2mtu }} on QSFP port {{ item.name }}
+  community.routeros.command:
+    commands:
+      - >-
+        /interface/ethernet/set [find default-name={{ item.name }}]
+        l2mtu={{ mikrotik_qsfp_l2mtu }}
+  loop: "{{ mikrotik_qsfp_roce_ports }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: false
+  when: qsfp_switch | default(false)
+
+# 2. QoS profile for RoCE data traffic
+- name: Ensure QoS profile roce (tc={{ mikrotik_roce_traffic_class }})
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/interface/ethernet/switch/qos/profile/find
+        name=roce]] = 0)
+        do={ /interface/ethernet/switch/qos/profile/add
+        name=roce traffic-class={{ mikrotik_roce_traffic_class }} }
+        else={ /interface/ethernet/switch/qos/profile/set
+        [find name=roce]
+        traffic-class={{ mikrotik_roce_traffic_class }} }
+  changed_when: false
+  when: qsfp_switch | default(false)
+
+# 3. QoS profile for CNP (Congestion Notification Packets)
+- name: Ensure QoS profile cnp (tc={{ mikrotik_cnp_traffic_class }})
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/interface/ethernet/switch/qos/profile/find
+        name=cnp]] = 0)
+        do={ /interface/ethernet/switch/qos/profile/add
+        name=cnp traffic-class={{ mikrotik_cnp_traffic_class }} }
+        else={ /interface/ethernet/switch/qos/profile/set
+        [find name=cnp]
+        traffic-class={{ mikrotik_cnp_traffic_class }} }
+  changed_when: false
+  when: qsfp_switch | default(false)
+
+# 4. DSCP → QoS profile mapping for RoCE data (DSCP 26 / AF31)
+- name: Ensure DSCP={{ mikrotik_roce_dscp_data }} maps to profile roce
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/interface/ethernet/switch/qos/map/ip/find
+        dscp={{ mikrotik_roce_dscp_data }}]] = 0)
+        do={ /interface/ethernet/switch/qos/map/ip/add
+        dscp={{ mikrotik_roce_dscp_data }} profile=roce }
+        else={ /interface/ethernet/switch/qos/map/ip/set
+        [find dscp={{ mikrotik_roce_dscp_data }}] profile=roce }
+  changed_when: false
+  when: qsfp_switch | default(false)
+
+# 5. DSCP → QoS profile mapping for CNP (DSCP 48 / CS6)
+- name: Ensure DSCP={{ mikrotik_roce_dscp_cnp }} maps to profile cnp
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/interface/ethernet/switch/qos/map/ip/find
+        dscp={{ mikrotik_roce_dscp_cnp }}]] = 0)
+        do={ /interface/ethernet/switch/qos/map/ip/add
+        dscp={{ mikrotik_roce_dscp_cnp }} profile=cnp }
+        else={ /interface/ethernet/switch/qos/map/ip/set
+        [find dscp={{ mikrotik_roce_dscp_cnp }}] profile=cnp }
+  changed_when: false
+  when: qsfp_switch | default(false)
+
+# 6. Tx queue scheduling + ECN
+- name: Configure Tx queue {{ mikrotik_roce_traffic_class }} (high-priority, ECN=yes)
+  community.routeros.command:
+    commands:
+      - >-
+        /interface/ethernet/switch/qos/tx-manager/queue/set
+        {{ mikrotik_roce_traffic_class }}
+        schedule=high-priority-group weight=1 ecn=yes
+  changed_when: false
+  when: qsfp_switch | default(false)
+
+- name: Configure Tx queue {{ mikrotik_cnp_traffic_class }} (strict-priority)
+  community.routeros.command:
+    commands:
+      - >-
+        /interface/ethernet/switch/qos/tx-manager/queue/set
+        {{ mikrotik_cnp_traffic_class }}
+        schedule=strict-priority
+  changed_when: false
+  when: qsfp_switch | default(false)
+
+# 7. PFC profile for RoCE traffic class
+- name: Ensure PFC profile pfc-tc{{ mikrotik_roce_traffic_class }}
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/interface/ethernet/switch/qos/priority-flow-control/find
+        name=pfc-tc{{ mikrotik_roce_traffic_class }}]] = 0)
+        do={ /interface/ethernet/switch/qos/priority-flow-control/add
+        name=pfc-tc{{ mikrotik_roce_traffic_class }}
+        rx=yes traffic-class={{ mikrotik_roce_traffic_class }} tx=yes }
+        else={ /interface/ethernet/switch/qos/priority-flow-control/set
+        [find name=pfc-tc{{ mikrotik_roce_traffic_class }}]
+        rx=yes traffic-class={{ mikrotik_roce_traffic_class }} tx=yes }
+  changed_when: false
+  when: qsfp_switch | default(false)
+
+# 8. Apply PFC + trust-l3 to each QSFP port
+- name: Apply PFC + trust to QSFP port {{ item.name }} ({{ item.egress_rate }})
+  community.routeros.command:
+    commands:
+      - >-
+        /interface/ethernet/switch/qos/port/set {{ item.name }}
+        egress-rate-queue{{ mikrotik_roce_traffic_class }}={{ item.egress_rate }}
+        pfc=pfc-tc{{ mikrotik_roce_traffic_class }}
+        trust-l3=keep
+  loop: "{{ mikrotik_qsfp_roce_ports }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: false
+  when: qsfp_switch | default(false)
+
+# 9. Global lossless settings, QoS HW offload, DCBX
+- name: Set lossless traffic class and buffer allocation
+  community.routeros.command:
+    commands:
+      - >-
+        /interface/ethernet/switch/qos/settings/set
+        lossless-traffic-class={{ mikrotik_roce_traffic_class }}
+        lossless-buffers=auto
+  changed_when: false
+  when: qsfp_switch | default(false)
+
+- name: Enable QoS hardware offloading
+  community.routeros.command:
+    commands:
+      - /interface/ethernet/switch/set switch1 qos-hw-offloading=yes
+  changed_when: false
+  when: qsfp_switch | default(false)
+
+- name: Enable LLDP DCBX
+  community.routeros.command:
+    commands:
+      - /ip/neighbor/discovery-settings/set lldp-dcbx=yes
+  changed_when: false
+  when: qsfp_switch | default(false)

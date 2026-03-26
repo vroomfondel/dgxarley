@@ -13,3 +13,5 @@
   tags: [mikrotik_dhcp, mikrotik]
 - import_tasks: nat.yml
   tags: [mikrotik_nat, mikrotik]
+- import_tasks: qsfp_roce.yml
+  tags: [mikrotik_roce, mikrotik]
