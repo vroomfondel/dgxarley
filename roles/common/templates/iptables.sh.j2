@@ -65,6 +65,11 @@ iptables -A HTSTUFFIN -s 127.0.0.1/32 -j RETURN
 iptables -A HTSTUFFIN -s {{ qsfp_network }} -j RETURN
 {% endif %}
 
+{% if qsfp_vf_network is defined %}
+# QSFP point-to-point interconnect VF — accept all traffic (NCCL, iperf, etc.)
+iptables -A HTSTUFFIN -s {{ qsfp_vf_network }} -j RETURN
+{% endif %}
+
 # dhcp
 iptables -A HTSTUFFIN -p udp -m state --state NEW -m multiport --dport 67,68 -m set --match-set localnets src -j RETURN
 

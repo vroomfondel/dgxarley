@@ -9,11 +9,17 @@
 #   - host-device CNI plugin in /var/lib/rancher/k3s/data/cni/ (not K3s-bundled)
 #   - static IPAM CNI plugin in /var/lib/rancher/k3s/data/cni/ (not K3s-bundled)
 #
-# The NetworkAttachmentDefinitions use host-device CNI to attach the QSFP P2P interface
-# (enP2p1s0f0np0, ConnectX-7, PCI bus 0002:01:00.0) with static IPs on 10.10.10.0/24.
-# Note: enP2p1s0f0np0 has a capital P (PCI domain 0002). Do not confuse with
-# enp1s0f0np0 (lowercase, PCI domain 0000, port 0 — typically DOWN/unused).
+# PF NADs (qsfp-direct, qsfp-direct-worker):
+#   Move the whole PF into the pod namespace with a hardcoded static IP.
+#   Used when qsfp_sriov_enabled=false (pods reference by simple NAD name).
 #
+# VF NADs (qsfp-vf0 .. qsfp-vfN):
+#   One per SR-IOV Virtual Function, no hardcoded IP.
+#   Pods specify which NAD + IP via annotation JSON:
+#     k8s.v1.cni.cncf.io/networks: '[{"name":"qsfp-vf0","ips":["10.10.10.1/24"]}]'
+#   Allows multiple pods to use QSFP simultaneously on different VFs.
+#
+# Both sets are always created — unused NADs are harmless.
 # NADs are created in both sglang and vllm namespaces so either engine can use QSFP.
 
 - name: Apply Multus CNI thick DaemonSet
@@ -35,7 +41,9 @@
   retries: 30
   delay: 10
 
-- name: Create NetworkAttachmentDefinition for QSFP direct (spark1 head)
+# --- PF NADs (hardcoded IPs) ---
+
+- name: Create NAD for QSFP direct (PF, head IP)
   kubernetes.core.k8s:
     state: present
     definition:
@@ -49,7 +57,7 @@
           {
             "cniVersion": "0.3.1",
             "type": "host-device",
-            "device": "enP2p1s0f0np0",
+            "device": "{{ qsfp_sriov_pf_iface | default('enp1s0f0np0') }}",
             "ipam": {
               "type": "static",
               "addresses": [
@@ -63,7 +71,7 @@
     - "{{ sglang_namespace }}"
     - "{{ vllm_namespace }}"
 
-- name: Create NetworkAttachmentDefinition for QSFP direct worker (spark-2 worker)
+- name: Create NAD for QSFP direct worker (PF, worker IP)
   kubernetes.core.k8s:
     state: present
     definition:
@@ -77,7 +85,7 @@
           {
             "cniVersion": "0.3.1",
             "type": "host-device",
-            "device": "enP2p1s0f0np0",
+            "device": "{{ qsfp_sriov_pf_iface | default('enp1s0f0np0') }}",
             "ipam": {
               "type": "static",
               "addresses": [
@@ -90,3 +98,26 @@
   loop:
     - "{{ sglang_namespace }}"
     - "{{ vllm_namespace }}"
+
+# --- VF NADs (no hardcoded IPs, pods set IP via annotation JSON) ---
+
+- name: Create NADs for QSFP SR-IOV VFs
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: k8s.cni.cncf.io/v1
+      kind: NetworkAttachmentDefinition
+      metadata:
+        name: "qsfp-vf{{ item.1 }}"
+        namespace: "{{ item.0 }}"
+      spec:
+        config: |
+          {
+            "cniVersion": "0.3.1",
+            "type": "host-device",
+            "device": "{{ qsfp_sriov_vf_prefix | default('enp1s0f0') }}v{{ item.1 }}",
+            "ipam": {
+              "type": "static"
+            }
+          }
+  loop: "{{ [sglang_namespace, vllm_namespace] | product(range(0, qsfp_sriov_numvfs | default(4) | int)) | list }}"

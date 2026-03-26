@@ -82,7 +82,7 @@
               app: sglang-shard
               role: worker
             annotations:
-              k8s.v1.cni.cncf.io/networks: qsfp-direct-worker
+              k8s.v1.cni.cncf.io/networks: "{{ '[{\"name\":\"qsfp-vf' ~ qsfp_sriov_assignments.sglang_shard.vf ~ '\",\"ips\":[\"' ~ qsfp_sriov_assignments.sglang_shard.worker_ip ~ '/24\"]}]' if qsfp_sriov_enabled | default(false) else 'qsfp-direct-worker' }}"
           spec:
             serviceAccountName: sglang-head
             enableServiceLinks: false
@@ -129,9 +129,9 @@
                   - name: SGLANG_FP4_GEMM_BACKEND
                     value: "{{ sglang_fp4_gemm_backend }}"
                   - name: QSFP_IP_SPARK1
-                    value: "{{ qsfp_ip_spark1 }}"
+                    value: "{{ qsfp_sriov_assignments.sglang_shard.head_ip if qsfp_sriov_enabled | default(false) else qsfp_ip_spark1 }}"
                   - name: QSFP_IP_SPARK2
-                    value: "{{ qsfp_ip_spark2 }}"
+                    value: "{{ qsfp_sriov_assignments.sglang_shard.worker_ip if qsfp_sriov_enabled | default(false) else qsfp_ip_spark2 }}"
                   - name: NCCL_PORT
                     value: "{{ nccl_bootstrap_port | string }}"
                   - name: HF_TOKEN
@@ -192,7 +192,7 @@
               app: sglang-shard
               role: head
             annotations:
-              k8s.v1.cni.cncf.io/networks: qsfp-direct
+              k8s.v1.cni.cncf.io/networks: "{{ '[{\"name\":\"qsfp-vf' ~ qsfp_sriov_assignments.sglang_shard.vf ~ '\",\"ips\":[\"' ~ qsfp_sriov_assignments.sglang_shard.head_ip ~ '/24\"]}]' if qsfp_sriov_enabled | default(false) else 'qsfp-direct' }}"
           spec:
             serviceAccountName: sglang-head
             enableServiceLinks: false
@@ -251,9 +251,9 @@
                   - name: SGLANG_FP4_GEMM_BACKEND
                     value: "{{ sglang_fp4_gemm_backend }}"
                   - name: QSFP_IP_SPARK1
-                    value: "{{ qsfp_ip_spark1 }}"
+                    value: "{{ qsfp_sriov_assignments.sglang_shard.head_ip if qsfp_sriov_enabled | default(false) else qsfp_ip_spark1 }}"
                   - name: QSFP_IP_SPARK2
-                    value: "{{ qsfp_ip_spark2 }}"
+                    value: "{{ qsfp_sriov_assignments.sglang_shard.worker_ip if qsfp_sriov_enabled | default(false) else qsfp_ip_spark2 }}"
                   - name: NCCL_PORT
                     value: "{{ nccl_bootstrap_port | string }}"
                   - name: HF_TOKEN

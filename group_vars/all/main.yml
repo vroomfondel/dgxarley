@@ -44,8 +44,44 @@ nsupdate_ttl: 3600
 nsupdate_ingress_ip: "192.168.124.100"
 
 # QSFP IPs for NCCL bootstrap
-qsfp_ip_spark1: "10.10.10.0"
-qsfp_ip_spark2: "10.10.10.0"
+qsfp_ip_spark1: "10.10.10.101"
+qsfp_ip_spark2: "10.10.10.102"
+qsfp_ip_spark3: "10.10.10.103"
+qsfp_ip_spark4: "10.10.10.104"
+
+
+# SR-IOV: create Virtual Functions on the QSFP PF used by Multus.
+# Used by both dgx_prepare (creates VFs on hosts) and k8s_dgx (selects NADs).
+qsfp_sriov_enabled: true
+# VF interface name prefix (kernel drops "npN" from VF names: enp1s0f0np0 → enp1s0f0vX)
+qsfp_sriov_vf_prefix: "enp1s0f0"
+
+# SR-IOV VF assignments per deployment.
+# Each deployment gets its own VF index + dedicated IPs per spark node.
+# This allows multiple engines to run on different VFs simultaneously.
+# vf: which VF index (maps to NAD qsfp-vfN and interface <prefix>vN)
+# head_ip / worker_ip: QSFP IPs assigned to pods via Multus annotation
+qsfp_sriov_assignments:
+  sglang:
+    vf: 0
+    head_ip: "10.10.10.201"
+    worker_ip: "10.10.10.202"
+  vllm:
+    vf: 1
+    head_ip: "10.10.10.203"
+    worker_ip: "10.10.10.204"
+  sglang_shard:
+    vf: 2
+    head_ip: "10.10.10.205"
+    worker_ip: "10.10.10.206"
+  vllm_shard:
+    vf: 3
+    head_ip: "10.10.10.207"
+    worker_ip: "10.10.10.208"
+  iperf_test:
+    vf: 7
+    server_ip: "10.10.10.241"
+    client_ip: "10.10.10.242"
 
 # PostgreSQL
 postgresql_postgres_password: "changeme"

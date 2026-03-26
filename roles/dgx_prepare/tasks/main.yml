@@ -3,6 +3,10 @@
   ansible.builtin.import_tasks: qsfp_network.yml
   tags: qsfp
 
+- name: Configure SR-IOV on QSFP interface
+  ansible.builtin.import_tasks: qsfp_sriov.yml
+  tags: qsfp_sriov
+
 - name: Configure ulimits
   ansible.builtin.import_tasks: ulimits.yml
   tags: ulimits

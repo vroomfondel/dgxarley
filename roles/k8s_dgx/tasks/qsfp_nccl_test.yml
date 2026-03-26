@@ -1,0 +1,198 @@
+---
+# NCCL all-reduce benchmark across two DGX Spark nodes via QSFP SR-IOV VFs.
+# Uses torch.distributed for multi-node init (no MPI needed).
+#
+# Usage: ansible-playbook k8s_dgx.yml --tags qsfp_nccl
+# GPU time-slicing (nvidia_gpu_timeslice_replicas: 4) allows this to run alongside SGLang.
+
+- name: Ensure nccl-test namespace exists
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: nccl-test
+
+- name: Create QSFP VF NAD in nccl-test namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: k8s.cni.cncf.io/v1
+      kind: NetworkAttachmentDefinition
+      metadata:
+        name: "qsfp-vf{{ qsfp_sriov_assignments.iperf_test.vf }}"
+        namespace: nccl-test
+      spec:
+        config: |
+          {
+            "cniVersion": "0.3.1",
+            "type": "host-device",
+            "device": "{{ qsfp_sriov_vf_prefix }}v{{ qsfp_sriov_assignments.iperf_test.vf }}",
+            "ipam": {
+              "type": "static"
+            }
+          }
+
+- name: Create NCCL test scripts ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: nccl-test-scripts
+        namespace: nccl-test
+      data:
+        run.sh: "{{ lookup('file', role_path ~ '/files/nccl_test_run.sh') }}"
+        nccl_bench.py: "{{ lookup('file', role_path ~ '/files/nccl_bench.py') }}"
+
+# Head (rank 0) must start first — torch.distributed tcp init listens on MASTER_ADDR
+- name: Deploy NCCL test head — rank 0 (spark1)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: nccl-head
+        namespace: nccl-test
+        annotations:
+          k8s.v1.cni.cncf.io/networks: '[{"name":"qsfp-vf{{ qsfp_sriov_assignments.iperf_test.vf }}","ips":["{{ qsfp_sriov_assignments.iperf_test.server_ip }}/24"]}]'
+      spec:
+        nodeSelector:
+          spark-id: "1"
+        hostIPC: true
+        containers:
+          - name: nccl
+            image: "{{ sglang_image }}"
+            securityContext:
+              privileged: true
+            command: ["bash", "/scripts/run.sh"]
+            env:
+              - name: NCCL_SOCKET_IFNAME
+                value: "net1"
+              - name: NCCL_DEBUG
+                value: "INFO"
+              - name: MASTER_ADDR
+                value: "{{ qsfp_sriov_assignments.iperf_test.server_ip }}"
+              - name: MASTER_PORT
+                value: "48000"
+              - name: WORLD_SIZE
+                value: "2"
+              - name: RANK
+                value: "0"
+              - name: PEER_IP
+                value: "{{ qsfp_sriov_assignments.iperf_test.client_ip }}"
+            volumeMounts:
+              - name: scripts
+                mountPath: /scripts
+                readOnly: true
+            resources:
+              limits:
+                nvidia.com/gpu: "1"
+        volumes:
+          - name: scripts
+            configMap:
+              name: nccl-test-scripts
+              defaultMode: 0755
+        restartPolicy: Never
+        terminationGracePeriodSeconds: 5
+
+- name: Wait for head pod to be Running
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    name: nccl-head
+    namespace: nccl-test
+  register: _nccl_head_wait
+  until: >
+    _nccl_head_wait.resources | length > 0 and
+    _nccl_head_wait.resources[0].status.phase == 'Running'
+  retries: 30
+  delay: 5
+
+# Worker (rank 1) connects to head's MASTER_ADDR
+- name: Deploy NCCL test worker — rank 1 (spark2)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: nccl-worker
+        namespace: nccl-test
+        annotations:
+          k8s.v1.cni.cncf.io/networks: '[{"name":"qsfp-vf{{ qsfp_sriov_assignments.iperf_test.vf }}","ips":["{{ qsfp_sriov_assignments.iperf_test.client_ip }}/24"]}]'
+      spec:
+        nodeSelector:
+          spark-id: "2"
+        hostIPC: true
+        containers:
+          - name: nccl
+            image: "{{ sglang_image }}"
+            securityContext:
+              privileged: true
+            command: ["bash", "/scripts/run.sh"]
+            env:
+              - name: NCCL_SOCKET_IFNAME
+                value: "net1"
+              - name: NCCL_DEBUG
+                value: "INFO"
+              - name: MASTER_ADDR
+                value: "{{ qsfp_sriov_assignments.iperf_test.server_ip }}"
+              - name: MASTER_PORT
+                value: "48000"
+              - name: WORLD_SIZE
+                value: "2"
+              - name: RANK
+                value: "1"
+              - name: PEER_IP
+                value: "{{ qsfp_sriov_assignments.iperf_test.server_ip }}"
+            volumeMounts:
+              - name: scripts
+                mountPath: /scripts
+                readOnly: true
+            resources:
+              limits:
+                nvidia.com/gpu: "1"
+        volumes:
+          - name: scripts
+            configMap:
+              name: nccl-test-scripts
+              defaultMode: 0755
+        restartPolicy: Never
+        terminationGracePeriodSeconds: 5
+
+- name: Wait for NCCL test to complete (10 min timeout)
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    name: nccl-head
+    namespace: nccl-test
+  register: _nccl_head
+  until: >
+    _nccl_head.resources | length > 0 and
+    _nccl_head.resources[0].status.phase in ['Succeeded', 'Failed']
+  retries: 120
+  delay: 5
+
+- name: Fetch NCCL head logs
+  kubernetes.core.k8s_log:
+    name: nccl-head
+    namespace: nccl-test
+    container: nccl
+  register: _nccl_head_log
+
+- name: Show NCCL all-reduce benchmark results
+  ansible.builtin.debug:
+    msg: "{{ _nccl_head_log.log }}"
+
+- name: Cleanup NCCL test namespace
+  kubernetes.core.k8s:
+    state: absent
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: nccl-test

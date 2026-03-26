@@ -16,3 +16,11 @@ network:
       dhcp6: false
 {% endif %}
 {% endfor %}
+{% if qsfp_sriov_enabled | default(false) %}
+{% for vf_idx in range(0, qsfp_sriov_numvfs | default(8) | int) %}
+    {{ qsfp_sriov_vf_prefix }}v{{ vf_idx }}:
+      mtu: {{ qsfp_mtu }}
+      dhcp4: false
+      dhcp6: false
+{% endfor %}
+{% endif %}

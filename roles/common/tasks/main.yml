@@ -21,6 +21,17 @@
     name: debug-shell
     enabled: false
 
+- name: disable and mask ModemManager (no modems on servers)
+  systemd_service:
+    name: ModemManager
+    state: stopped
+    enabled: false
+    masked: true
+  failed_when: false
+  tags:
+    - modemmanager
+    - netplan
+
 - name: set networkdwait var and installnetplan
   import_tasks: installnetplan.yml
   tags:

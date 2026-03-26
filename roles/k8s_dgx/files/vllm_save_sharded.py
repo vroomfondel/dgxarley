@@ -41,7 +41,7 @@ def main():
     ep = int(os.environ.get("EP", "1"))
     nnodes = int(os.environ.get("NNODES", "2"))
     node_rank = int(os.environ.get("NODE_RANK", "0"))
-    master_addr = os.environ.get("QSFP_IP_SPARK1", "10.10.10.1")
+    master_addr = os.environ.get("QSFP_IP_SPARK1", "10.10.10.101")
     nccl_port = os.environ.get("NCCL_PORT", "50000")
 
     if not model_id:

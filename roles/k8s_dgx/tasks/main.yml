@@ -72,3 +72,13 @@
 - name: Register DNS A records for ingress services
   ansible.builtin.import_tasks: dns.yml
   tags: dns
+
+- name: QSFP SR-IOV iperf3 connectivity test
+  ansible.builtin.import_tasks: qsfp_iperf_test.yml
+  tags: qsfp_iperf
+
+- name: QSFP SR-IOV NCCL all_reduce benchmark
+  ansible.builtin.import_tasks: qsfp_nccl_test.yml
+  tags:
+    - qsfp_nccl
+    - never

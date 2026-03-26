@@ -1,0 +1,96 @@
+---
+# Enable or disable SR-IOV Virtual Functions on the QSFP PF.
+# Gated by qsfp_sriov_enabled (default: false).
+
+- name: Resolve sysfs path for QSFP PF
+  ansible.builtin.stat:
+    path: "/sys/bus/pci/devices/{{ qsfp_sriov_pf_pci }}/sriov_totalvfs"
+  register: _sriov_sysfs
+
+- name: Fail if PF does not support SR-IOV
+  ansible.builtin.fail:
+    msg: "PCI device {{ qsfp_sriov_pf_pci }} does not expose sriov_totalvfs — SR-IOV not supported"
+  when: qsfp_sriov_enabled and not _sriov_sysfs.stat.exists
+
+- name: Read max supported VFs
+  ansible.builtin.slurp:
+    src: "/sys/bus/pci/devices/{{ qsfp_sriov_pf_pci }}/sriov_totalvfs"
+  register: _sriov_max_raw
+  when: qsfp_sriov_enabled
+
+- name: Validate requested VF count
+  ansible.builtin.fail:
+    msg: "Requested {{ qsfp_sriov_numvfs }} VFs but PF only supports {{ _sriov_max_raw.content | b64decode | trim }}"
+  when: qsfp_sriov_enabled and (qsfp_sriov_numvfs | int) > (_sriov_max_raw.content | b64decode | trim | int)
+
+- name: Deploy SR-IOV systemd service
+  ansible.builtin.template:
+    src: qsfp_sriov.service.j2
+    dest: /etc/systemd/system/qsfp-sriov.service
+    mode: "0644"
+  register: _sriov_unit
+  when: qsfp_sriov_enabled
+
+- name: Enable and start SR-IOV service
+  ansible.builtin.systemd:
+    name: qsfp-sriov.service
+    daemon_reload: "{{ _sriov_unit is changed }}"
+    enabled: true
+    state: started
+  when: qsfp_sriov_enabled
+
+- name: Assign deterministic MAC addresses to VF interfaces
+  ansible.builtin.shell: |
+    ip link set {{ qsfp_sriov_vf_prefix }}v{{ item }} down && \
+    ip link set {{ qsfp_sriov_vf_prefix }}v{{ item }} address {{ '02:00:0a:0a:%02x:%02x' | format(host_octet | int, item) }} && \
+    ip link set {{ qsfp_sriov_vf_prefix }}v{{ item }} up
+  loop: "{{ range(0, qsfp_sriov_numvfs | int) | list }}"
+  when: qsfp_sriov_enabled
+  changed_when: false
+  failed_when: false
+
+- name: Apply netplan for VF MTU settings
+  ansible.builtin.command: netplan apply
+  when: qsfp_sriov_enabled
+  changed_when: false
+
+- name: Read current VF count
+  ansible.builtin.slurp:
+    src: "/sys/bus/pci/devices/{{ qsfp_sriov_pf_pci }}/sriov_numvfs"
+  register: _sriov_cur_raw
+  when: qsfp_sriov_enabled
+
+- name: Restart SR-IOV service if VF count changed
+  ansible.builtin.systemd:
+    name: qsfp-sriov.service
+    state: restarted
+  when: >
+    qsfp_sriov_enabled and
+    (_sriov_cur_raw.content | b64decode | trim | int) != (qsfp_sriov_numvfs | int)
+
+- name: Stop, disable and remove SR-IOV service
+  when: not qsfp_sriov_enabled
+  block:
+    - name: Check if SR-IOV service exists
+      ansible.builtin.stat:
+        path: /etc/systemd/system/qsfp-sriov.service
+      register: _sriov_unit_file
+
+    - name: Disable SR-IOV VFs
+      ansible.builtin.shell: echo 0 > /sys/bus/pci/devices/{{ qsfp_sriov_pf_pci }}/sriov_numvfs
+      when: _sriov_unit_file.stat.exists
+      failed_when: false
+
+    - name: Stop and disable SR-IOV service
+      ansible.builtin.systemd:
+        name: qsfp-sriov.service
+        state: stopped
+        enabled: false
+        daemon_reload: true
+      when: _sriov_unit_file.stat.exists
+      failed_when: false
+
+    - name: Remove SR-IOV service file
+      ansible.builtin.file:
+        path: /etc/systemd/system/qsfp-sriov.service
+        state: absent

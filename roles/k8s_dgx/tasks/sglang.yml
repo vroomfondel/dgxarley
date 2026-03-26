@@ -195,7 +195,7 @@
               app: sglang
               role: worker
             annotations:
-              k8s.v1.cni.cncf.io/networks: qsfp-direct-worker
+              k8s.v1.cni.cncf.io/networks: "{{ '[{\"name\":\"qsfp-vf' ~ qsfp_sriov_assignments.sglang.vf ~ '\",\"ips\":[\"' ~ qsfp_sriov_assignments.sglang.worker_ip1 ~ '/24\"]}]' if qsfp_sriov_enabled | default(false) else 'qsfp-direct-worker' }}"
               kubectl.kubernetes.io/default-container: sglang
               checksum/launch-script: "{{ lookup('file', role_path ~ '/files/sglang_launch.sh') | hash('sha256') }}"
               checksum/config: "{{ (sglang_model ~ sglang_context_length ~ sglang_kv_cache_dtype ~ sglang_mem_fraction_static ~ sglang_quantization ~ sglang_load_format ~ sglang_attention_backend ~ sglang_ep) | hash('sha256') }}"
@@ -242,9 +242,9 @@
                   - name: NNODES
                     value: "{{ sglang_nnodes | string }}"
                   - name: QSFP_IP_SPARK1
-                    value: "{{ qsfp_ip_spark1 }}"
+                    value: "{{ qsfp_sriov_assignments.sglang.head_ip if qsfp_sriov_enabled | default(false) else qsfp_ip_spark1 }}"
                   - name: QSFP_IP_SPARK2
-                    value: "{{ qsfp_ip_spark2 }}"
+                    value: "{{ qsfp_sriov_assignments.sglang.worker_ip1 if qsfp_sriov_enabled | default(false) else qsfp_ip_spark2 }}"
                   - name: NCCL_PORT
                     value: "{{ nccl_bootstrap_port | string }}"
                   - name: SGLANG_PORT
@@ -308,7 +308,7 @@
               app: sglang
               role: head
             annotations:
-              k8s.v1.cni.cncf.io/networks: qsfp-direct
+              k8s.v1.cni.cncf.io/networks: "{{ '[{\"name\":\"qsfp-vf' ~ qsfp_sriov_assignments.sglang.vf ~ '\",\"ips\":[\"' ~ qsfp_sriov_assignments.sglang.head_ip ~ '/24\"]}]' if qsfp_sriov_enabled | default(false) else 'qsfp-direct' }}"
               kubectl.kubernetes.io/default-container: sglang
               checksum/launch-script: "{{ lookup('file', role_path ~ '/files/sglang_launch.sh') | hash('sha256') }}"
               checksum/config: "{{ (sglang_model ~ sglang_context_length ~ sglang_kv_cache_dtype ~ sglang_mem_fraction_static ~ sglang_quantization ~ sglang_load_format ~ sglang_attention_backend ~ sglang_ep) | hash('sha256') }}"
@@ -364,9 +364,9 @@
                   - name: NNODES
                     value: "{{ sglang_nnodes | string }}"
                   - name: QSFP_IP_SPARK1
-                    value: "{{ qsfp_ip_spark1 }}"
+                    value: "{{ qsfp_sriov_assignments.sglang.head_ip if qsfp_sriov_enabled | default(false) else qsfp_ip_spark1 }}"
                   - name: QSFP_IP_SPARK2
-                    value: "{{ qsfp_ip_spark2 }}"
+                    value: "{{ qsfp_sriov_assignments.sglang.worker_ip1 if qsfp_sriov_enabled | default(false) else qsfp_ip_spark2 }}"
                   - name: NCCL_PORT
                     value: "{{ nccl_bootstrap_port | string }}"
                   - name: SGLANG_PORT

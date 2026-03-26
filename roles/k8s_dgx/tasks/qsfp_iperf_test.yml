@@ -1,0 +1,123 @@
+---
+# Ephemeral iperf3 test over QSFP SR-IOV VFs.
+# Deploys server on spark1, client on spark2, runs test, prints result, cleans up.
+# Usage: ansible-playbook k8s_dgx.yml --tags qsfp_iperf
+
+- name: Ensure iperf test namespace exists
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: qsfp-test
+
+- name: Create iperf3 VF NADs in test namespace
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: k8s.cni.cncf.io/v1
+      kind: NetworkAttachmentDefinition
+      metadata:
+        name: "qsfp-vf{{ item }}"
+        namespace: qsfp-test
+      spec:
+        config: |
+          {
+            "cniVersion": "0.3.1",
+            "type": "host-device",
+            "device": "{{ qsfp_sriov_vf_prefix }}v{{ item }}",
+            "ipam": {
+              "type": "static"
+            }
+          }
+  loop:
+    - "{{ qsfp_sriov_assignments.iperf_test.vf }}"
+
+- name: Deploy iperf3 server pod (spark1)
+  kubernetes.core.k8s:
+    state: present
+    wait: true
+    wait_timeout: 60
+    definition:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: iperf-server
+        namespace: qsfp-test
+        annotations:
+          k8s.v1.cni.cncf.io/networks: '[{"name":"qsfp-vf{{ qsfp_sriov_assignments.iperf_test.vf }}","ips":["{{ qsfp_sriov_assignments.iperf_test.server_ip }}/24"]}]'
+      spec:
+        nodeSelector:
+          spark-id: "1"
+        containers:
+          - name: iperf
+            image: networkstatic/iperf3:latest
+            command: ["iperf3", "-s"]
+        restartPolicy: Never
+        terminationGracePeriodSeconds: 5
+
+- name: Deploy iperf3 client pod (spark2)
+  kubernetes.core.k8s:
+    state: present
+    wait: true
+    wait_timeout: 60
+    definition:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: iperf-client
+        namespace: qsfp-test
+        annotations:
+          k8s.v1.cni.cncf.io/networks: '[{"name":"qsfp-vf{{ qsfp_sriov_assignments.iperf_test.vf }}","ips":["{{ qsfp_sriov_assignments.iperf_test.client_ip }}/24"]}]'
+      spec:
+        nodeSelector:
+          spark-id: "2"
+        containers:
+          - name: iperf
+            image: networkstatic/iperf3:latest
+            command:
+              - sh
+              - -c
+              - "sleep 3 && iperf3 -c {{ qsfp_sriov_assignments.iperf_test.server_ip }} -t 10 -P 4 --bind {{ qsfp_sriov_assignments.iperf_test.client_ip }} && sleep 3600"
+        restartPolicy: Never
+        terminationGracePeriodSeconds: 5
+
+- name: Wait for client to complete iperf test
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    name: iperf-client
+    namespace: qsfp-test
+  register: _iperf_client
+  until: >
+    _iperf_client.resources | length > 0 and
+    _iperf_client.resources[0].status.containerStatuses | default([]) | length > 0 and
+    (_iperf_client.resources[0].status.containerStatuses[0].state.running is defined or
+     _iperf_client.resources[0].status.containerStatuses[0].state.terminated is defined)
+  retries: 30
+  delay: 5
+
+- name: Wait for iperf3 results (30s timeout)
+  ansible.builtin.pause:
+    seconds: 20
+
+- name: Fetch iperf3 client logs
+  kubernetes.core.k8s_log:
+    name: iperf-client
+    namespace: qsfp-test
+    container: iperf
+  register: _iperf_result
+
+- name: Show iperf3 results
+  ansible.builtin.debug:
+    msg: "{{ _iperf_result.log }}"
+
+- name: Cleanup iperf test pods and namespace
+  kubernetes.core.k8s:
+    state: absent
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: qsfp-test
