@@ -1,0 +1,37 @@
+---
+# Dummy values — overridden by vault.yml
+
+ansible_host: "192.168.123.3"
+ansible_password: "changeme"
+serial_number: "CHANGEME"
+# ansible_private_key_file: "~/.ssh/id_ed25519"
+# ansible_network_cli_ssh_type: libssh
+ansible_ssh_user: "mikrotikadmin"
+
+mikrotik_bridge_name: bridge
+
+# TODO: HT2026-03-26 set correct ports
+mikrotik_bridge_ports:
+  - interface: ether1
+    pvid: 124
+    comment: "Uplink (Mikrotik CRS310-8G-2S)"
+  - interface: qsfp1
+    comment: "spark1 qsfp access"
+  - interface: qsfp2
+    comment: "spark2 qsfp access"
+  - interface: qsfp3
+    comment: "spark3 qsfp access"
+  - interface: qsfp4
+    comment: "spark4 qsfp access"
+
+mikrotik_bridge_vlans:
+  - vlan_ids: 124
+    tagged: "bridge,ether1"
+    untagged: "ether3"
+
+mikrotik_mgmt_interfaces:
+  - name: vlan124-mgmt
+    vlan_id: 124
+    address: "192.168.124.2/24"
+
+mikrotik_default_gateway: "192.168.123.1"
