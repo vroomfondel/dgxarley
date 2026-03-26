@@ -57,10 +57,13 @@ fi
 curl_flags='--silent --show-error --remote-name --remote-time --max-time 150
         --write-out %{http_code}'
 
-if [ "$1" = "-v" ]; then
-        curl_flags="--verbose $curl_flags"
-        curl_keep_stderr=true
-fi
+force=false
+for arg in "$@"; do
+        case "$arg" in
+                -v) curl_flags="--verbose $curl_flags"; curl_keep_stderr=true ;;
+                --force) force=true ;;
+        esac
+done
 
 new_files=""
 old_files=""
@@ -105,7 +108,24 @@ else
 	done
 
         log_this "download: ${new_files:-none}${old_files:+, existing: $old_files}"
-        do_ipset=${new_files:+$new_files $old_files}  # do both if any is new
+        if [ "$force" = true ]; then
+                # Force: rebuild from all current zone files, remove stale ones
+                do_ipset=""
+                for i in ${geoallow[*]}; do
+                        [ -f "${i}.zone" ] && do_ipset+="${do_ipset:+ }${i}.zone"
+                done
+                for f in *.zone; do
+                        [ -f "$f" ] || continue
+                        zone_country="${f%.zone}"
+                        if [[ ! " ${geoallow[*]} " =~ " ${zone_country} " ]]; then
+                                rm -f "$f"
+                                log_this "removed stale zone file: $f"
+                        fi
+                done
+                log_this "force rebuild: ${do_ipset:-none}"
+        else
+                do_ipset=${new_files:+$new_files $old_files}  # do both if any is new
+        fi
 fi
 
 # process blocks, if any
