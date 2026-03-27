@@ -461,6 +461,10 @@ sglang_attention_backend: "{{ sglang_model_profiles[sglang_model].attention_back
 # Used for enable_thinking etc. — NOT for sampling params.
 # NOTE: thinking_budget does NOT go here — it uses SGLang's custom logit processor
 # system (Qwen3ThinkingBudgetLogitProcessor), set per request via custom_params.
+# Dual-layer reasoning defaults: chat_template_kwargs from the active model profile
+# flows to BOTH (1) SGLang server via --chat-template-kwargs (server-wide default)
+# and (2) LiteLLM extra_body via _sglang_extra_body_defaults (client-visible default).
+# Per-request extra_body from clients overrides both layers.
 sglang_chat_template_kwargs: "{{ sglang_model_profiles[sglang_model].chat_template_kwargs | default({}) }}"
 
 # MoE Triton kernel config directory (host path, under hf_cache_path).
