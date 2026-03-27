@@ -38,3 +38,7 @@
 - name: Set up PyTorch virtual environment
   ansible.builtin.import_tasks: pytorch_venv.yml
   tags: pytorch
+
+- name: Ensure SSH keys and cross-trust between sparks
+  ansible.builtin.import_tasks: ssh_keys.yml
+  tags: ssh_keys

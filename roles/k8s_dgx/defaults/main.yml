@@ -318,6 +318,36 @@ sglang_model_profiles:
       temperature: 1.0
       top_p: 0.95
       top_k: 40
+  "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4":
+    info_url: "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
+    # 120B/12B LatentMoE (Mamba2-Transformer hybrid), NVFP4 quantized (~67 GB weights).
+    # Fits on 1× DGX Spark (128 GB) with ~61 GB free for KV cache — no multi-node needed.
+    # Context: 256K default, up to 1M with SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1.
+    # Reasoning ON/OFF via chat_template_kwargs: enable_thinking (true/false), low_effort (true/false).
+    # Multi-Token Prediction (MTP) enables native speculative decoding.
+    # Supported languages: EN, FR, DE, IT, JA, ES, ZH.
+    # Recommended launch (NVIDIA model card):
+    #   sglang serve --model-path nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4 \
+    #     --trust-remote-code --reasoning-parser nemotron_3 --tool-call-parser qwen3_coder
+    load_format: "sharded_state"
+    context_length: 262144
+    quantization: "modelopt_fp4"
+    trust_remote_code: true
+    kv_cache_dtype: "fp8_e4m3"
+    ep_size: 2
+    mem_fraction_static: "0.80"
+    attention_backend: "triton"
+    reasoning_parser: "nemotron_3"
+    tool_call_parser: "qwen3_coder"
+    chat_template_kwargs:
+      enable_thinking: true
+      low_effort: false
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95
+
+
+
 
 # Speculative decoding — predicts multiple tokens per forward pass, then
 # verifies in one step. Increases throughput (up to ~60%) at the cost of
@@ -662,6 +692,16 @@ _sglang_sampling_defaults: >-
   {{ sglang_model_profiles[sglang_model].recommended_sampling | default({})
      | combine(sglang_model_profiles[sglang_model].sampling_overrides | default({})) }}
 
+# extra_body defaults for the active SGLang model: chat_template_kwargs (reasoning
+# toggles like enable_thinking, low_effort). Passed as LiteLLM extra_body so clients
+# inherit reasoning defaults without explicit per-request config. Also flows to
+# SGLang server via --chat-template-kwargs (sglang_chat_template_kwargs) as a
+# server-side default. Per-request extra_body from clients overrides these.
+_sglang_extra_body_defaults: >-
+  {{ {'chat_template_kwargs': sglang_model_profiles[sglang_model].chat_template_kwargs}
+     if sglang_model_profiles[sglang_model].chat_template_kwargs is defined
+     else {} }}
+
 litellm_enabled: true
 litellm_namespace: "litellm"
 litellm_image: "ghcr.io/berriai/litellm:main-latest"
@@ -686,6 +726,8 @@ litellm_model_list:
       frequency_penalty: "{{ _sglang_sampling_defaults.frequency_penalty | default(omit) }}"
       repetition_penalty: "{{ _sglang_sampling_defaults.repetition_penalty | default(omit) }}"
       min_p: "{{ _sglang_sampling_defaults.min_p | default(omit) }}"
+      # Reasoning defaults from _sglang_extra_body_defaults (chat_template_kwargs):
+      extra_body: "{{ _sglang_extra_body_defaults if _sglang_extra_body_defaults else omit }}"
 
   # Ollama models via native LiteLLM providers (ollama/ for embeddings,
   # ollama_chat/ for chat). LiteLLM's ollama provider forces TLS on all
