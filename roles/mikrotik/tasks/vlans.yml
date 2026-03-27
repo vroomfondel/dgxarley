@@ -1,5 +1,5 @@
 ---
-- name: Configure bridge VLAN {{ item.vlan_ids }}
+- name: Configure bridge VLAN
   community.routeros.command:
     commands:
       - >-

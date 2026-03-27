@@ -1,5 +1,5 @@
 ---
-- name: Ensure srcnat rule — {{ item.comment }}
+- name: Ensure srcnat rule
   community.routeros.command:
     commands:
       - >-

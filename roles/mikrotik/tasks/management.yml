@@ -1,5 +1,5 @@
 ---
-- name: Ensure VLAN interface {{ item.name }} exists
+- name: Ensure VLAN interface exists
   community.routeros.command:
     commands:
       - >-
@@ -11,7 +11,7 @@
     label: "{{ item.name }}"
   changed_when: false
 
-- name: Ensure IP address on {{ item.name }}
+- name: Ensure IP address on VLAN interface
   community.routeros.command:
     commands:
       - >-

@@ -4,7 +4,7 @@
 # Gated by qsfp_switch | default(false) on each task (static import gotcha).
 
 # 1. Jumbo frames on QSFP ports
-- name: Set l2mtu={{ mikrotik_qsfp_l2mtu }} on QSFP port {{ item.name }}
+- name: Set l2mtu on QSFP port
   community.routeros.command:
     commands:
       - >-
@@ -112,7 +112,7 @@
   when: qsfp_switch | default(false)
 
 # 8. Apply PFC + trust-l3 to each QSFP port
-- name: Apply PFC + trust to QSFP port {{ item.name }} ({{ item.egress_rate }})
+- name: Apply PFC + trust to QSFP port
   community.routeros.command:
     commands:
       - >-

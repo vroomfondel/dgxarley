@@ -1,5 +1,5 @@
 ---
-- name: Ensure IP pool {{ item.pool_name }}
+- name: Ensure IP pool
   community.routeros.command:
     commands:
       - >-
@@ -11,7 +11,7 @@
     label: "{{ item.pool_name }}"
   changed_when: false
 
-- name: Ensure DHCP network for {{ item.network }}
+- name: Ensure DHCP network
   community.routeros.command:
     commands:
       - >-
@@ -25,7 +25,7 @@
     label: "{{ item.network }}"
   changed_when: false
 
-- name: Ensure DHCP server {{ item.name }}
+- name: Ensure DHCP server
   community.routeros.command:
     commands:
       - >-

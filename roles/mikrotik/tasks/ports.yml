@@ -1,5 +1,5 @@
 ---
-- name: Configure bridge port {{ item.interface }} (pvid={{ item.pvid }})
+- name: Configure bridge port
   community.routeros.command:
     commands:
       - >-
