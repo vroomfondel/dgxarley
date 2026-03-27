@@ -41,6 +41,8 @@
         SGLANG_REASONING_PARSER: "{{ sglang_reasoning_parser }}"
         SGLANG_TOOL_CALL_PARSER: "{{ sglang_tool_call_parser }}"
         SGLANG_QUANTIZATION: "{{ sglang_quantization }}"
+        SGLANG_TRUST_REMOTE_CODE: "{{ sglang_trust_remote_code | string | lower }}"
+        SGLANG_MOE_RUNNER_BACKEND: "{{ sglang_moe_runner_backend }}"
         SGLANG_LOAD_FORMAT: "{{ sglang_load_format }}"
         SGLANG_MAX_RUNNING_REQUESTS: "{{ sglang_max_running_requests | string }}"
         SGLANG_SCHEDULE_POLICY: "{{ sglang_schedule_policy }}"

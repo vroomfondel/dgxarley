@@ -139,6 +139,12 @@ fi
 if [ -n "$SGLANG_QUANTIZATION" ]; then
   args+=(--quantization "$SGLANG_QUANTIZATION")
 fi
+if [ "$SGLANG_TRUST_REMOTE_CODE" = "true" ]; then
+  args+=(--trust-remote-code)
+fi
+if [ -n "$SGLANG_MOE_RUNNER_BACKEND" ]; then
+  args+=(--moe-runner-backend "$SGLANG_MOE_RUNNER_BACKEND")
+fi
 if [ -n "$SGLANG_REASONING_PARSER" ]; then
   args+=(--reasoning-parser "$SGLANG_REASONING_PARSER")
 fi
