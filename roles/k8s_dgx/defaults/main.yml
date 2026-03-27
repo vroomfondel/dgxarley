@@ -330,6 +330,7 @@ sglang_model_profiles:
     #   sglang serve --model-path nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4 \
     #     --trust-remote-code --reasoning-parser nemotron_3 --tool-call-parser qwen3_coder
     load_format: "sharded_state"
+    #load_format: "auto"
     context_length: 262144
     quantization: "modelopt_fp4"
     trust_remote_code: true

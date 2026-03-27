@@ -23,6 +23,8 @@ _Extracted from [DGX Spark Setup EN](DGX%20Spark%20Setup%20EN.md) — contains f
 
 - **llama.cpp NCCL Support**: Actively discussed in the community. If this lands, you'd get the stability of llama.cpp with the bandwidth of NCCL — that would be a game changer.
 
+- **TurboQuant — 3.5-Bit KV Cache Compression** (Google, ICLR 2026): Compresses the KV cache to 3.5 bits per element — provably lossless, no calibration, online per-token. Uses PolarQuant + QJL residual correction ("just sign bits and matrix multiplies"), no Tensor Core dependencies, SM121-compatible. On **unified memory systems like the GB10, every saved GB counts twice** ("saves DGX twice"): once for capacity (more room for model weights or longer contexts) and once for bandwidth (less memory bandwidth consumed by KV cache → more available for compute). A 128K-context session on a 32B model shrinks from ~30 GB to ~6 GB KV cache (5× compression). Early benchmarks on DGX Spark show promising results (GLM-4.7-Flash INT4 AutoRound: TQ3 13–21% faster than FP8 KV cache at identical quality). CUDA kernels are still in early development (unoptimized, naive loops); production-ready integration into SGLang/vLLM is pending. Independent of weight quantization (NVFP4, FP8) — can be combined with any weight precision. Source: [NVIDIA Forum: Why TurboQuant saves DGX twice](https://forums.developer.nvidia.com/t/why-turboquant-saves-dgx-twice/364736)
+
 ### Outlook: Multiple AI Pods per DGX Spark Node
 
 The current setup uses **one AI pod per node** (SGLang Head on Spark 1, Worker on Spark 2). If in the future multiple smaller models should run in parallel on a single Spark, two bottlenecks need to be addressed:
@@ -287,3 +289,5 @@ For a home/office setup with ≤6 Sparks, the CRS812 DDQ is the clear choice. Yo
 - **NVFP4 on DGX Spark** (20% faster than AWQ, Blackwell-native): [forums.developer.nvidia.com](https://forums.developer.nvidia.com/t/we-unlocked-nvfp4-on-the-dgx-spark-20-faster-than-awq/361163)
 
 - **GPU Time-Slicing in Kubernetes** (NVIDIA GPU Operator Docs): [docs.nvidia.com](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/gpu-sharing.html)
+
+- **TurboQuant — 3.5-Bit KV Cache Compression** (Google, ICLR 2026, DGX Spark benchmarks): [forums.developer.nvidia.com](https://forums.developer.nvidia.com/t/why-turboquant-saves-dgx-twice/364736)

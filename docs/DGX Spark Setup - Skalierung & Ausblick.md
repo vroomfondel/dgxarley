@@ -23,6 +23,8 @@ _Ausgelagert aus [DGX Spark Setup](DGX%20Spark%20Setup.md) — enthält Zukunfts
 
 - **llama.cpp NCCL-Support**: In der Community aktiv diskutiert. Wenn das kommt, hätte man die Stabilität von llama.cpp mit der Bandbreite von NCCL — wäre ein Gamechanger.
 
+- **TurboQuant — 3.5-Bit KV-Cache-Kompression** (Google, ICLR 2026): Komprimiert den KV-Cache auf 3.5 Bit pro Element — beweisbar verlustfrei, ohne Kalibrierung, online per Token. Nutzt PolarQuant + QJL-Residualkorrektur ("just sign bits and matrix multiplies"), keine Tensor-Core-Abhängigkeiten, SM121-kompatibel. Auf **Unified-Memory-Systemen wie dem GB10 zählt jedes gesparte GB doppelt** ("saves DGX twice"): einmal Kapazität (mehr Platz für Modell oder längere Kontexte) und einmal Bandbreite (weniger Speicherbandbreite für KV-Cache → mehr für Compute). Ein 128K-Kontext bei einem 32B-Modell schrumpft von ~30 GB auf ~6 GB KV-Cache (5× Kompression). Erste Benchmarks auf DGX Spark zeigen vielversprechende Ergebnisse (GLM-4.7-Flash INT4 AutoRound: TQ3 13–21% schneller als FP8-KV bei identischer Qualität). Die CUDA-Kernel sind noch in früher Entwicklung (unoptimiert, naive Loops); produktionsreife Integration in SGLang/vLLM steht noch aus. Unabhängig von Weight-Quantisierung (NVFP4, FP8) — lässt sich mit jeder Weight-Precision kombinieren. Quelle: [NVIDIA Forum: Why TurboQuant saves DGX twice](https://forums.developer.nvidia.com/t/why-turboquant-saves-dgx-twice/364736)
+
 ### Ausblick: Mehrere AI-Pods pro DGX Spark Node
 
 Das aktuelle Setup nutzt **einen AI-Pod pro Node** (SGLang Head auf Spark 1, Worker auf Spark 2). Falls zukünftig mehrere kleinere Modelle parallel auf einem Spark laufen sollen, sind zwei Engpässe zu lösen:
@@ -287,3 +289,5 @@ Für ein Heim-/Büro-Setup mit ≤6 Sparks ist der CRS812 DDQ die klare Wahl. De
 - **NVFP4 auf DGX Spark** (20% schneller als AWQ, Blackwell-nativ): [forums.developer.nvidia.com](https://forums.developer.nvidia.com/t/we-unlocked-nvfp4-on-the-dgx-spark-20-faster-than-awq/361163)
 
 - **GPU Time-Slicing in Kubernetes** (NVIDIA GPU Operator Docs): [docs.nvidia.com](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/gpu-sharing.html)
+
+- **TurboQuant — 3.5-Bit KV-Cache-Kompression** (Google, ICLR 2026, DGX-Spark-Benchmarks): [forums.developer.nvidia.com](https://forums.developer.nvidia.com/t/why-turboquant-saves-dgx-twice/364736)
