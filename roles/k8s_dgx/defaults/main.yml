@@ -301,9 +301,22 @@ sglang_model_profiles:
     #   python3 -m sglang.launch_server --model nvidia/MiniMax-M2.5-NVFP4 --tensor-parallel-size 8 \
     #     --quantization modelopt_fp4 --trust-remote-code --reasoning-parser minimax-append-think \
     #     --tool-call-parser minimax-m2 --moe-runner-backend flashinfer_cutlass --attention-backend flashinfer
-    load_format: "sharded_state"
+    # load_format: "sharded_state" — disabled for NVFP4 because:
+    # 1. NVFP4 process_weights_after_loading runs on the empty model first, then
+    #    shard tensors are copied in. This double-processing eats ~4 GB extra memory
+    #    vs. the default loader (streaming weights → process once), leaving less
+    #    headroom for CUDA graph capture.
+    # 2. No real speedup observed with TP=2 EP=2: NVFP4 weight loading is dominated
+    #    by process_weights_after_loading (scale recalibration, FP4 repacking), not
+    #    by file I/O. Sharded loading skips the slow safetensors redistribute but
+    #    the post-processing cost remains the same (~360s either way).
+    # load_format: "sharded_state"
     context_length: 196608
     quantization: "modelopt_fp4"
+    # trust_remote_code: required because MiniMax-M2.5 ships custom model code
+    # (minimax_m2.py, custom tokenizer) in the HF repo that SGLang must execute.
+    # Without it, transformers refuses to load the model class. Safe here because
+    # the code comes from NVIDIA's official nvidia/MiniMax-M2.5-NVFP4 repo.
     trust_remote_code: true
     moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
@@ -336,6 +349,13 @@ sglang_model_profiles:
     #load_format: "auto"
     context_length: 262144
     quantization: "modelopt_fp4"
+    # moe_runner_backend: required with EP>1 on NVFP4. Without it, SGLang's
+    # auto-select falls through to cutlass_moe_fp4 which has an assertion bug
+    # ("Number of experts must match") with EP>1. flashinfer_cutlass bypasses
+    # this and correctly handles EP-partitioned expert weights.
+    # NVIDIA's Advanced Deployment Guide doesn't specify a backend, but uses
+    # EP=TP which implies the flashinfer path (same as MiniMax-M2.5-NVFP4).
+    moe_runner_backend: "flashinfer_cutlass"
     trust_remote_code: true
     kv_cache_dtype: "fp8_e4m3"
     ep_size: 2
