@@ -46,6 +46,19 @@
     - cups.socket
     - cups.path
 
+- name: Mask PipeWire user services globally
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    masked: true
+    scope: global
+  loop:
+    - pipewire.service
+    - pipewire.socket
+    - pipewire-pulse.service
+    - pipewire-pulse.socket
+    - wireplumber.service
+  failed_when: false
+
 - name: Disable Plymouth splash screen services
   ansible.builtin.systemd:
     name: "{{ item }}"
@@ -57,22 +70,42 @@
     - plymouth-quit-wait
   failed_when: false
 
-- name: Read current kernel cmdline
+- name: Check if systemd-boot cmdline exists
+  ansible.builtin.stat:
+    path: /etc/kernel/cmdline
+  register: _kernel_cmdline_file
+
+- name: Read current kernel cmdline (systemd-boot)
   ansible.builtin.slurp:
     src: /etc/kernel/cmdline
   register: _kernel_cmdline_raw
+  when: _kernel_cmdline_file.stat.exists
 
-- name: Remove splash and quiet from kernel cmdline
+- name: Remove splash and quiet from kernel cmdline (systemd-boot)
   ansible.builtin.copy:
     content: "{{ _kernel_cmdline_raw.content | b64decode | regex_replace('\\s*(splash|quiet)', '') | trim }}\n"
     dest: /etc/kernel/cmdline
     mode: "0644"
   register: _kernel_cmdline_changed
-  when: _kernel_cmdline_raw.content | b64decode is search('splash|quiet')
+  when:
+    - _kernel_cmdline_file.stat.exists
+    - _kernel_cmdline_raw.content | b64decode is search('splash|quiet')
 
-- name: Update bootloader after cmdline change
+- name: Update bootloader after cmdline change (systemd-boot)
   ansible.builtin.command: bootctl update
   when: _kernel_cmdline_changed is changed
+
+- name: Remove splash and quiet from GRUB config
+  ansible.builtin.lineinfile:
+    path: /etc/default/grub
+    regexp: '^GRUB_CMDLINE_LINUX_DEFAULT='
+    line: 'GRUB_CMDLINE_LINUX_DEFAULT=""'
+  register: _grub_cmdline_changed
+  when: not _kernel_cmdline_file.stat.exists
+
+- name: Update GRUB after cmdline change
+  ansible.builtin.command: update-grub
+  when: _grub_cmdline_changed is changed
 
 - name: Disable and stop Docker services
   ansible.builtin.systemd:
