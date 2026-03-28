@@ -18,6 +18,16 @@ until ping -c10 -W1 "$peer" ; do
 done
 echo "QSFP peer ${peer} reachable."
 
+# Version gate: warn if the container image changed — patches below may need review.
+# Dev builds report __version__=0.0.0 (no setuptools-scm), so we check the image
+# tag (injected as SGLANG_IMAGE env var by Ansible) instead of the Python version.
+# The grep guards still prevent patching if the target code has changed.
+SGLANG_EXPECTED_IMAGE="scitrera/dgx-spark-sglang:0.5.9-dev2-acab24a7-t5"
+if [ -n "$SGLANG_IMAGE" ] && [ "$SGLANG_IMAGE" != "$SGLANG_EXPECTED_IMAGE" ]; then
+  echo "WARNING: SGLang image changed (expected ${SGLANG_EXPECTED_IMAGE}, got ${SGLANG_IMAGE})."
+  echo "         Monkey-patches may no longer apply or may need updating."
+fi
+
 # When load_format is sharded_state, wait for the shard marker then use sharded path
 model_path="$SGLANG_MODEL"
 if [ "$SGLANG_LOAD_FORMAT" = "sharded_state" ]; then
@@ -104,6 +114,43 @@ with open(f, 'w') as fh:
     fh.write(code)
 print("Patched moe_wna16.py: EP-aware expert_id + tp_rank remapping for qzeros")
 PATCH_QZEROS_EOF
+fi
+
+# Patch modelopt_quant.py: EP-aware input_scale slicing (SGLang 0.5.9 bug).
+# In process_weights_after_loading(), the fallback else-branch computes
+# w13_input_scale and w2_input_scale with shape (num_experts,) but multiplies
+# them with w13_weight_scale_2 / w2_weight_scale_2 which are (num_local_experts,).
+# With EP=2 on MiniMax-M2.5 (256 experts): (256,) * (128,) → RuntimeError.
+# The cutedsl branch has _slice_scale() but the else-branch is missing it.
+# Fix: slice input_scale to local experts in the else-branch.
+MODELOPT_QUANT="/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/quantization/modelopt_quant.py"
+if grep -q 'w13_input_scale\.max(dim=-1)' "$MODELOPT_QUANT" 2>/dev/null; then
+  python3 << 'PATCH_MODELOPT_EOF'
+import sys
+f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/quantization/modelopt_quant.py"
+with open(f) as fh:
+    code = fh.read()
+old = '''        else:
+            w13_input_scale = layer.w13_input_scale.max(dim=-1).values.to(torch.float32)
+            w2_input_scale = layer.w2_input_scale'''
+new = '''        else:
+            w13_input_scale = layer.w13_input_scale.max(dim=-1).values.to(torch.float32)
+            w2_input_scale = layer.w2_input_scale
+            # EP-aware slicing: input_scale has shape (num_experts,) but must match
+            # weight_scale_2 which is (num_local_experts,). No-op when ep_size=1.
+            if layer.moe_ep_size > 1:
+                _ep_start = layer.moe_ep_rank * layer.num_local_experts
+                _ep_end = _ep_start + layer.num_local_experts
+                w13_input_scale = w13_input_scale[_ep_start:_ep_end]
+                w2_input_scale = w2_input_scale[_ep_start:_ep_end]'''
+if old not in code:
+    print("modelopt_quant.py else-branch: already patched or source changed, skipping")
+    sys.exit(0)
+code = code.replace(old, new, 1)
+with open(f, 'w') as fh:
+    fh.write(code)
+print("Patched modelopt_quant.py: EP-aware input_scale slicing in else-branch")
+PATCH_MODELOPT_EOF
 fi
 
 args=(
