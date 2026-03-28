@@ -231,6 +231,8 @@
                   - configMapRef:
                       name: sglang-config
                 env:
+                  - name: SGLANG_IMAGE
+                    value: "{{ sglang_image }}"
                   - name: NODE_RANK
                     value: "1"
                   - name: SGLANG_HOST
@@ -357,6 +359,8 @@
                   - configMapRef:
                       name: sglang-config
                 env:
+                  - name: SGLANG_IMAGE
+                    value: "{{ sglang_image }}"
                   - name: NODE_RANK
                     value: "0"
                   - name: TP
