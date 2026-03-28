@@ -112,6 +112,8 @@
                 image: "{{ sglang_image }}"
                 command: ["/bin/bash", "/scripts/launch.sh"]
                 env:
+                  - name: SGLANG_IMAGE
+                    value: "{{ sglang_image }}"
                   - name: NODE_RANK
                     value: "1"
                   - name: TP
@@ -136,6 +138,8 @@
                     value: "{{ nccl_bootstrap_port | string }}"
                   - name: HF_TOKEN
                     value: "{{ hf_token }}"
+                  - name: SGLANG_MEM_FRACTION
+                    value: "{{ sglang_mem_fraction_static }}"
                   - name: SGLANG_ENABLE_JIT_DEEPGEMM
                     value: "{{ 'false' if sglang_disable_deep_gemm | bool else 'true' }}"
                   - name: PYTORCH_CUDA_ALLOC_CONF
@@ -234,6 +238,8 @@
                 image: "{{ sglang_image }}"
                 command: ["/bin/bash", "/scripts/launch.sh"]
                 env:
+                  - name: SGLANG_IMAGE
+                    value: "{{ sglang_image }}"
                   - name: NODE_RANK
                     value: "0"
                   - name: TP
@@ -258,6 +264,8 @@
                     value: "{{ nccl_bootstrap_port | string }}"
                   - name: HF_TOKEN
                     value: "{{ hf_token }}"
+                  - name: SGLANG_MEM_FRACTION
+                    value: "{{ sglang_mem_fraction_static }}"
                   - name: SGLANG_ENABLE_JIT_DEEPGEMM
                     value: "{{ 'false' if sglang_disable_deep_gemm | bool else 'true' }}"
                   - name: PYTORCH_CUDA_ALLOC_CONF
