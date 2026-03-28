@@ -34,6 +34,7 @@ import asyncio
 import json
 import os
 import random
+import sys
 import time
 from dataclasses import dataclass, field
 
@@ -477,6 +478,7 @@ async def stream_request(
     url: str,
     payload: dict[str, object],
     stats: RequestStats,
+    no_guard: str | None = None,
 ) -> None:
     """Stream a single chat completion and update a RequestStats object in-place.
 
@@ -487,7 +489,8 @@ async def stream_request(
 
     A :class:`RepetitionGuard` monitors both content and reasoning streams;
     if repetition is detected the stream is aborted and ``stats`` is marked
-    with ``repetition_stopped=True``.
+    with ``repetition_stopped=True``. Pass ``no_guard`` to disable the guard
+    for ``"content"``, ``"reasoning"``, or ``"both"`` streams.
 
     Args:
         session: An active :class:`aiohttp.ClientSession` to use for the request.
@@ -498,8 +501,10 @@ async def stream_request(
         stats: The :class:`RequestStats` instance to update throughout
             streaming. Modified in place.
     """
-    content_guard = RepetitionGuard()
-    reasoning_guard = RepetitionGuard()
+    _skip_content = no_guard in ("content", "both")
+    _skip_reasoning = no_guard in ("reasoning", "both")
+    content_guard = None if _skip_content else RepetitionGuard()
+    reasoning_guard = None if _skip_reasoning else RepetitionGuard()
 
     stats.status = "streaming"
     stats._start = time.monotonic()
@@ -541,38 +546,40 @@ async def stream_request(
                         stats._first_token = True
                         stats.ttft = time.monotonic() - stats._start
                     stats.thinking += reasoning
-                    result = reasoning_guard.feed(reasoning)
-                    if result.should_stop:
-                        stats.status = "error"
-                        stats.repetition_stopped = True
-                        stats.repetition_reason = result.detail
-                        stats.repetition_diagnostics = {
-                            "source": "reasoning",
-                            **result.diagnostics,
-                            "guard_stats": reasoning_guard.get_stats(),
-                        }
-                        stats.error = f"repetition: {result.reason.name} — {result.detail}"
-                        stats.clean_output = reasoning_guard.get_clean_text()
-                        return
+                    if reasoning_guard:
+                        result = reasoning_guard.feed(reasoning)
+                        if result.should_stop:
+                            stats.status = "error"
+                            stats.repetition_stopped = True
+                            stats.repetition_reason = result.detail
+                            stats.repetition_diagnostics = {
+                                "source": "reasoning",
+                                **result.diagnostics,
+                                "guard_stats": reasoning_guard.get_stats(),
+                            }
+                            stats.error = f"repetition: {result.reason.name} — {result.detail}"
+                            stats.clean_output = reasoning_guard.get_clean_text()
+                            return
                 content = delta.get("content", "")
                 if content:
                     if not stats._first_token:
                         stats._first_token = True
                         stats.ttft = time.monotonic() - stats._start
                     stats.output += content
-                    result = content_guard.feed(content)
-                    if result.should_stop:
-                        stats.status = "error"
-                        stats.repetition_stopped = True
-                        stats.repetition_reason = result.detail
-                        stats.repetition_diagnostics = {
-                            "source": "content",
-                            **result.diagnostics,
-                            "guard_stats": content_guard.get_stats(),
-                        }
-                        stats.error = f"repetition: {result.reason.name} — {result.detail}"
-                        stats.clean_output = content_guard.get_clean_text()
-                        return
+                    if content_guard:
+                        result = content_guard.feed(content)
+                        if result.should_stop:
+                            stats.status = "error"
+                            stats.repetition_stopped = True
+                            stats.repetition_reason = result.detail
+                            stats.repetition_diagnostics = {
+                                "source": "content",
+                                **result.diagnostics,
+                                "guard_stats": content_guard.get_stats(),
+                            }
+                            stats.error = f"repetition: {result.reason.name} — {result.detail}"
+                            stats.clean_output = content_guard.get_clean_text()
+                            return
 
     except Exception as e:
         import traceback
@@ -859,6 +866,7 @@ async def run_parallel_test(
     verbose: bool = False,
     thinking_budget: int | None = None,
     no_think: bool = False,
+    no_guard: str | None = None,
 ) -> None:
     """Run ``n`` parallel streaming requests with a live Rich display.
 
@@ -941,27 +949,63 @@ async def run_parallel_test(
 
     wall_start = time.monotonic()
 
-    async with aiohttp.ClientSession() as session:
-        tasks = [
-            stream_request(session, url, payloads[i], all_stats[i])
-            for i in range(n)
-        ]
+    # "q" key listener: pressing q cancels all pending requests and prints
+    # the summary with whatever has been collected so far.
+    abort_requested = False
 
-        # Live display updates while requests stream
-        with Live(build_live_display(all_stats, verbose), console=console, refresh_per_second=4) as live:
-            # Start all tasks
-            pending = set()
-            for t in tasks:
-                pending.add(asyncio.ensure_future(t))
+    def _on_stdin_ready() -> None:
+        nonlocal abort_requested
+        ch = sys.stdin.read(1)
+        if ch.lower() == "q":
+            abort_requested = True
 
-            while pending:
-                done_tasks, pending = await asyncio.wait(
-                    pending, timeout=0.25, return_when=asyncio.FIRST_COMPLETED
-                )
+    loop = asyncio.get_event_loop()
+    # Only register stdin reader if stdin is a TTY (not piped)
+    if sys.stdin.isatty():
+        import tty, termios
+        old_settings = termios.tcgetattr(sys.stdin)
+        tty.setcbreak(sys.stdin.fileno())  # char-at-a-time, no echo
+        loop.add_reader(sys.stdin.fileno(), _on_stdin_ready)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            tasks = [
+                stream_request(session, url, payloads[i], all_stats[i], no_guard=no_guard)
+                for i in range(n)
+            ]
+
+            # Live display updates while requests stream
+            with Live(build_live_display(all_stats, verbose), console=console, refresh_per_second=4) as live:
+                # Start all tasks
+                pending = set()
+                for t in tasks:
+                    pending.add(asyncio.ensure_future(t))
+
+                while pending:
+                    done_tasks, pending = await asyncio.wait(
+                        pending, timeout=0.25, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    live.update(build_live_display(all_stats, verbose))
+
+                    if abort_requested:
+                        for t in pending:
+                            t.cancel()
+                        # Wait for cancellations to propagate
+                        if pending:
+                            await asyncio.wait(pending, timeout=2)
+                        for s in all_stats:
+                            if s.status == "streaming":
+                                s.status = "aborted"
+                                s.total_time = time.monotonic() - s._start
+                        console.print("\n[bold yellow]Aborted by user (q pressed)[/]")
+                        break
+
+                # Final update
                 live.update(build_live_display(all_stats, verbose))
-
-            # Final update
-            live.update(build_live_display(all_stats, verbose))
+    finally:
+        if sys.stdin.isatty():
+            loop.remove_reader(sys.stdin.fileno())
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
 
     wall_time = time.monotonic() - wall_start
     print_final_summary(all_stats, wall_time, verbose)
@@ -1038,6 +1082,15 @@ def main() -> None:
         action="store_true",
         help="Disable thinking/reasoning (sets enable_thinking=false via chat_template_kwargs)",
     )
+    parser.add_argument(
+        "--no-guard",
+        nargs="?",
+        const="both",
+        default=None,
+        metavar="STREAM",
+        help="Disable streaming repetition guard. "
+             "Values: content, reasoning, both (default: both if flag given without value)",
+    )
     args = parser.parse_args()
 
     verbose: bool = args.verbose
@@ -1066,6 +1119,7 @@ def main() -> None:
             verbose=verbose,
             thinking_budget=args.thinking_budget,
             no_think=no_think,
+            no_guard=args.no_guard,
         ))
 
     # Sequential tests

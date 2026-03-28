@@ -431,6 +431,14 @@ class RepetitionGuard:
 
             if best_pat_len >= min_pat:
                 pattern_text: str = tail[-best_pat_len:]
+
+                # Skip markdown structural patterns (table separators, thematic
+                # breaks, horizontal rules). These are inherently repetitive
+                # (e.g. "---|---|---") but are not content loops.
+                stripped: str = pattern_text.strip()
+                if re.fullmatch(r"[\s|:*_\-=]+", stripped):
+                    return None
+
                 self._mark_loop_start()
                 return FeedResult(
                     should_stop=True,
