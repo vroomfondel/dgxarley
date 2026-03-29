@@ -820,34 +820,6 @@ def print_final_summary(all_stats: list[RequestStats], wall_time: float, verbose
 
     console.print(table)
 
-    done = [s for s in all_stats if s.status == "done"]
-    if done:
-        total_out = sum(s.output_tokens for s in done)
-        total_prompt = sum(s.prompt_tokens for s in done)
-        total_think_est = sum(len(s.thinking) // 4 for s in done)
-        total_content_est = sum(len(s.output) // 4 for s in done)
-        avg_ttft = sum(s.ttft for s in done) / len(done)
-        avg_tps = sum(s.tokens_per_sec for s in done) / len(done)
-        p50_ttft = sorted(s.ttft for s in done)[len(done) // 2]
-        p50_tps = sorted(s.tokens_per_sec for s in done)[len(done) // 2]
-
-        agg = Table(title="Aggregate Stats", show_lines=True)
-        agg.add_column("Metric", style="bold")
-        agg.add_column("Value", justify="right")
-        agg.add_row("Wall time", f"{wall_time:.1f}s")
-        agg.add_row("Successful requests", str(len(done)))
-        agg.add_row("Failed requests", str(len(all_stats) - len(done)))
-        agg.add_row("Total prompt tokens", str(total_prompt))
-        agg.add_row("Total output tokens", str(total_out))
-        agg.add_row("  Think tokens (est.)", f"~{total_think_est}")
-        agg.add_row("  Content tokens (est.)", f"~{total_content_est}")
-        agg.add_row("Aggregate throughput", f"{total_out / wall_time:.1f} tok/s")
-        agg.add_row("Avg TTFT", f"{avg_ttft:.2f}s")
-        agg.add_row("P50 TTFT", f"{p50_ttft:.2f}s")
-        agg.add_row("Avg per-request tok/s", f"{avg_tps:.1f}")
-        agg.add_row("P50 per-request tok/s", f"{p50_tps:.1f}")
-        console.print(agg)
-
     # Full output log for each request
     console.print()
     for s in all_stats:
@@ -899,6 +871,35 @@ def print_final_summary(all_stats: list[RequestStats], wall_time: float, verbose
                     expand=True,
                 )
             )
+
+    # Aggregate stats at the end (after details, so no scrolling needed)
+    done = [s for s in all_stats if s.status == "done"]
+    if done:
+        total_out = sum(s.output_tokens for s in done)
+        total_prompt = sum(s.prompt_tokens for s in done)
+        total_think_est = sum(len(s.thinking) // 4 for s in done)
+        total_content_est = sum(len(s.output) // 4 for s in done)
+        avg_ttft = sum(s.ttft for s in done) / len(done)
+        avg_tps = sum(s.tokens_per_sec for s in done) / len(done)
+        p50_ttft = sorted(s.ttft for s in done)[len(done) // 2]
+        p50_tps = sorted(s.tokens_per_sec for s in done)[len(done) // 2]
+
+        agg = Table(title="Aggregate Stats", show_lines=True)
+        agg.add_column("Metric", style="bold")
+        agg.add_column("Value", justify="right")
+        agg.add_row("Wall time", f"{wall_time:.1f}s")
+        agg.add_row("Successful requests", str(len(done)))
+        agg.add_row("Failed requests", str(len(all_stats) - len(done)))
+        agg.add_row("Total prompt tokens", str(total_prompt))
+        agg.add_row("Total output tokens", str(total_out))
+        agg.add_row("  Think tokens (est.)", f"~{total_think_est}")
+        agg.add_row("  Content tokens (est.)", f"~{total_content_est}")
+        agg.add_row("Aggregate throughput", f"{total_out / wall_time:.1f} tok/s")
+        agg.add_row("Avg TTFT", f"{avg_ttft:.2f}s")
+        agg.add_row("P50 TTFT", f"{p50_ttft:.2f}s")
+        agg.add_row("Avg per-request tok/s", f"{avg_tps:.1f}")
+        agg.add_row("P50 per-request tok/s", f"{p50_tps:.1f}")
+        console.print(agg)
 
 
 async def run_parallel_test(

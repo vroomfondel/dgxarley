@@ -566,6 +566,11 @@ def stream_and_display(
     console.print(f"\n[bold green]Done[/] in {elapsed:.1f}s | {chunk_count} chunks")
     if usage_info:
         console.print(f"[bold]Usage:[/] {json.dumps(usage_info)}")
+    console.print(
+        f"[bold]Estimate:[/] estimate_thinking_tokens={tp.thinking_tokens_est}"
+        f" estimate_content_tokens={tp.content_tokens_est}"
+        f" estimate_total_tokens={tp.total_tokens_est}"
+    )
     if guard_status:
         console.print(f"[bold red]Repetition guard:[/] {guard_status}")
         for label, g in [("thinking", thinking_guard), ("content", content_guard)]:
