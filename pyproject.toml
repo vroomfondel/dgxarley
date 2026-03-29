@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "dgxarley"
 dynamic = ["version"]
 requires-python = ">=3.14"
+readme = "README_pypi.md"
 dependencies = [
     "requests",
     "rich",
