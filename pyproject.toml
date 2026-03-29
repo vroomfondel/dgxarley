@@ -12,6 +12,7 @@ authors = [
 ]
 license-files = ["LICENSE.md"]
 keywords = ["llm", "inference", "sglang", "ollama", "openwebui", "dgx", "k3s", "streaming", "repetition-detection"]
+description = "Integration testing, streaming utilities, and repetition detection for distributed LLM inference on DGX Spark clusters"
 
 # https://pypi.org/classifiers/
 classifiers = [

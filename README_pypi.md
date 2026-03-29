@@ -17,13 +17,13 @@ Tooling for the DGX Arley K3s inference cluster — integration tests, streaming
 
 ![sglang-raw: rendered response + raw JSON chunks](https://raw.githubusercontent.com/vroomfondel/dgxarley/main/media/Bildschirmfoto_2026-03-18_17-29-30_blurred.png)
 
-Dual-panel Rich TUI: top half renders the AI response in real time, bottom half shows raw JSON SSE stream chunks (`chat_completion_chunk`, `choices`, `delta`, `finish_reason`).
+Dual-panel Rich TUI for inspecting SGLang's OpenAI-compatible streaming API in real time. The top half renders the AI response as it arrives, while the bottom half displays the raw JSON SSE stream chunks — showing fields like `chat_completion_chunk`, `choices`, `delta`, `finish_reason`, and `model`. Useful for debugging streaming behaviour, verifying token delivery, and understanding the wire format of the API.
 
 ### `sglang-raw` — Think/text token classification
 
 ![sglang-raw: token table with think/text classification](https://raw.githubusercontent.com/vroomfondel/dgxarley/main/media/Bildschirmfoto_2026-03-18_17-35-04_blurred.png)
 
-Token-level stream inspection with columns for type (`think` vs `text`), content, finish reason, and token count — visualizing the separation of reasoning and output tokens.
+Token-level stream inspection with per-chunk breakdown in a structured table. Columns show the token type (`think` vs `text`), content, finish reason, and cumulative token count — visualizing how reasoning tokens (from `<think>...</think>` blocks) are separated from the actual output tokens. This view helps when tuning thinking budgets, verifying `reasoning_parser` behaviour, or diagnosing unexpected token classification.
 
 ## What's included
 
