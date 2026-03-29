@@ -676,8 +676,10 @@ def build_live_display(all_stats: list[RequestStats], verbose: bool = False) -> 
         agg_time = max(s.total_time for s in done) if done else 0
         avg_ttft = sum(s.ttft for s in done) / len(done)
         avg_tps = sum(s.tokens_per_sec for s in done) / len(done)
+        agg_think = sum(len(s.thinking) // 4 for s in done)
+        agg_content = sum(len(s.output) // 4 for s in done)
         summary.add_row(
-            f"[bold]Aggregate:[/] {agg_tokens} tokens",
+            f"[bold]Aggregate:[/] {agg_tokens} tok [dim](T~{agg_think}/C~{agg_content})[/]",
             f"[bold]Elapsed:[/] {agg_time:.1f}s",
             f"[bold]Avg TTFT:[/] {avg_ttft:.2f}s",
             f"[bold]Avg tok/s:[/] {avg_tps:.1f}",
@@ -777,6 +779,8 @@ def print_final_summary(all_stats: list[RequestStats], wall_time: float, verbose
     table.add_column("TTFT", justify="right")
     table.add_column("Total", justify="right")
     table.add_column("Prompt tok", justify="right")
+    table.add_column("Think tok", justify="right")
+    table.add_column("Content tok", justify="right")
     table.add_column("Output tok", justify="right")
     table.add_column("tok/s", justify="right")
     table.add_column("Finish", justify="center")
@@ -796,12 +800,16 @@ def print_final_summary(all_stats: list[RequestStats], wall_time: float, verbose
             finish = f"[yellow]{finish} (thinking only!)[/]"
         elif s.finish_reason == "length":
             finish = f"[yellow]{finish}[/]"
+        think_est = len(s.thinking) // 4 if s.thinking else 0
+        content_est = len(s.output) // 4 if s.output else 0
         table.add_row(
             str(s.request_id),
             status,
             f"{s.ttft:.2f}s" if s.ttft > 0 else "-",
             f"{s.total_time:.1f}s",
             str(s.prompt_tokens),
+            f"~{think_est}" if think_est else "-",
+            f"~{content_est}" if content_est else "-",
             str(s.output_tokens),
             f"{s.tokens_per_sec:.1f}" if s.tokens_per_sec > 0 else "-",
             finish,
@@ -814,6 +822,8 @@ def print_final_summary(all_stats: list[RequestStats], wall_time: float, verbose
     if done:
         total_out = sum(s.output_tokens for s in done)
         total_prompt = sum(s.prompt_tokens for s in done)
+        total_think_est = sum(len(s.thinking) // 4 for s in done)
+        total_content_est = sum(len(s.output) // 4 for s in done)
         avg_ttft = sum(s.ttft for s in done) / len(done)
         avg_tps = sum(s.tokens_per_sec for s in done) / len(done)
         p50_ttft = sorted(s.ttft for s in done)[len(done) // 2]
@@ -827,6 +837,8 @@ def print_final_summary(all_stats: list[RequestStats], wall_time: float, verbose
         agg.add_row("Failed requests", str(len(all_stats) - len(done)))
         agg.add_row("Total prompt tokens", str(total_prompt))
         agg.add_row("Total output tokens", str(total_out))
+        agg.add_row("  Think tokens (est.)", f"~{total_think_est}")
+        agg.add_row("  Content tokens (est.)", f"~{total_content_est}")
         agg.add_row("Aggregate throughput", f"{total_out / wall_time:.1f} tok/s")
         agg.add_row("Avg TTFT", f"{avg_ttft:.2f}s")
         agg.add_row("P50 TTFT", f"{p50_ttft:.2f}s")
