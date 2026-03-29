@@ -1,7 +1,6 @@
 -r requirements.txt
 
---extra-index-url https://download.pytorch.org/whl/cu129
-torch==2.11.0+cu129
+
 pre-commit
 black
 Pillow
