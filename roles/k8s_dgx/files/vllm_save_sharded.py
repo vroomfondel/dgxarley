@@ -34,9 +34,37 @@ import sys
 from pathlib import Path
 
 
-def main():
+def main() -> None:
+    """Entry point for the vLLM multi-node sharding job.
+
+    Reads configuration from environment variables, ensures the model is
+    downloaded locally, then initialises a distributed vLLM ``LLM``
+    instance across all nodes.  On rank 0 (head) ``save_sharded_state``
+    is called to write shard files and model metadata to *output_dir*.
+    On rank != 0 (workers) ``LLM()`` blocks indefinitely handling
+    executor RPCs from the head; the process exits once the head
+    disconnects and NCCL sends SIGQUIT.
+
+    Environment variables consumed:
+        VLLM_MODEL: HuggingFace model ID.
+        VLLM_QUANTIZATION: Optional quantization method string.
+        TP: Tensor-parallel size (default ``2``).
+        EP: Expert-parallel size (default ``1``).
+        NNODES: Total node count (default ``2``).
+        NODE_RANK: Rank of this process (default ``0``).
+        QSFP_IP_SPARK1: NCCL master address (default ``10.10.10.101``).
+        NCCL_PORT: NCCL bootstrap port (default ``50000``).
+        SHARD_OUTPUT_DIR: Override the computed output directory.
+        SGLANG_ENABLE_JIT_DEEPGEMM: If ``"false"``, log that DeepGemm
+            JIT is disabled (env passthrough, no functional effect here).
+
+    Raises:
+        SystemExit: With code 1 when ``VLLM_MODEL`` is not set; with
+            code 0 on successful completion or when an existing sharded
+            checkpoint is detected.
+    """
     model_id = os.environ.get("VLLM_MODEL", "")
-    quantization = os.environ.get("VLLM_QUANTIZATION", "") or None
+    quantization: str | None = os.environ.get("VLLM_QUANTIZATION", "") or None
     tp = int(os.environ.get("TP", "2"))
     ep = int(os.environ.get("EP", "1"))
     nnodes = int(os.environ.get("NNODES", "2"))
@@ -83,9 +111,9 @@ def main():
     os.environ["MASTER_PORT"] = nccl_port
 
     # Create LLM with multi-node TP params
-    from vllm import LLM
+    from vllm import LLM  # type: ignore[import-not-found]
 
-    llm_kwargs = {
+    llm_kwargs: dict[str, object] = {
         "model": local_path,
         "tensor_parallel_size": tp,
         # Multi-node without Ray requires "mp" executor backend
@@ -118,6 +146,7 @@ def main():
         # shell script handles post-save cleanup (metadata copy + marker).
         llm = LLM(**llm_kwargs)
         # If LLM() ever returns on worker, just exit cleanly.
+        del llm
         sys.exit(0)
     else:
         # Head: LLM() returns on rank 0, allowing us to call save.

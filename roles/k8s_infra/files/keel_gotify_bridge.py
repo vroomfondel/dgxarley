@@ -19,12 +19,29 @@ GOTIFY_URL = os.environ.get("GOTIFY_URL", "https://gotify.example.com")
 GOTIFY_TOKEN = os.environ.get("GOTIFY_TOKEN", "")
 
 
-def pp(msg):
+def pp(msg: object) -> None:
+    """Print a message to stderr.
+
+    Args:
+        msg: The message to print. Accepts any object; converted via ``str()``.
+    """
     print(msg, file=sys.stderr)
 
 
 class WebhookHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
+    """HTTP request handler that bridges Keel webhooks to Gotify notifications.
+
+    Responds to health-check GET requests on ``/healthz`` and ``/readyz``, and
+    processes Keel webhook POST requests on ``/webhook`` by forwarding them as
+    Gotify push notifications.
+    """
+
+    def do_GET(self) -> None:
+        """Handle GET requests.
+
+        Returns HTTP 200 with body ``OK`` for ``/healthz`` and ``/readyz``
+        health-check paths. All other paths return HTTP 404.
+        """
         if self.path in ("/healthz", "/readyz"):
             self.send_response(200)
             self.end_headers()
@@ -33,7 +50,16 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def do_POST(self):
+    def do_POST(self) -> None:
+        """Handle POST requests.
+
+        Accepts a JSON payload on ``/webhook`` with the Keel notification
+        format ``{"name": "...", "message": "...", "createdAt": "..."}``,
+        constructs a Gotify message from it, and POSTs it to the Gotify server
+        configured via ``GOTIFY_URL`` and ``GOTIFY_TOKEN``. Returns HTTP 200 on
+        success, HTTP 500 if the payload cannot be parsed or forwarded, and
+        HTTP 404 for any other path.
+        """
         if self.path == "/webhook":
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)

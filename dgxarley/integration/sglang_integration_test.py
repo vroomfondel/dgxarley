@@ -66,7 +66,7 @@ from .openwebui_integration_test import (
 )
 
 # Default model from Ansible defaults (the model currently deployed to SGLang)
-_CONFIGURED_MODEL: str = _dgx_defaults.get("sglang_model", "")
+_CONFIGURED_MODEL: str = _dgx_defaults.get("sglang_model", "")  # type: ignore[assignment]
 
 
 def _serialize_logit_processor(module: str, cls_name: str) -> str:
@@ -441,7 +441,7 @@ class RequestStats:
     error: str = ""
     repetition_stopped: bool = False
     repetition_reason: str = ""
-    repetition_diagnostics: dict = field(default_factory=dict)
+    repetition_diagnostics: dict[str, object] = field(default_factory=dict)
     clean_output: str = ""
     _start: float = field(default=0.0, repr=False)
     _first_token: bool = field(default=False, repr=False)
@@ -565,6 +565,7 @@ async def stream_request(
                                 **result.diagnostics,
                                 "guard_stats": reasoning_guard.get_stats(),
                             }
+                            assert result.reason is not None
                             stats.error = f"repetition: {result.reason.name} — {result.detail}"
                             stats.clean_output = reasoning_guard.get_clean_text()
                             return
@@ -585,6 +586,7 @@ async def stream_request(
                                 **result.diagnostics,
                                 "guard_stats": content_guard.get_stats(),
                             }
+                            assert result.reason is not None
                             stats.error = f"repetition: {result.reason.name} — {result.detail}"
                             stats.clean_output = content_guard.get_clean_text()
                             return
@@ -919,7 +921,7 @@ async def run_parallel_test(
     presets = load_sampling_presets(model_id)
     default_preset = pick_default_preset(presets)
     # Resolve the thinking budget logit processor for this model's reasoning_parser
-    _reasoning_parser = _dgx_defaults.get("sglang_model_profiles", {}).get(model_id, {}).get("reasoning_parser", "")
+    _reasoning_parser = _dgx_defaults.get("sglang_model_profiles", {}).get(model_id, {}).get("reasoning_parser", "")  # type: ignore[attr-defined]
     _thinking_processor = _THINKING_BUDGET_PROCESSORS.get(_reasoning_parser)
     if preset is None:
         preset = default_preset
@@ -944,7 +946,7 @@ async def run_parallel_test(
         if no_think:
             payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False  # type: ignore[index]
         # thinking_budget: CLI arg overrides profile default
-        _profile = _dgx_defaults.get("sglang_model_profiles", {}).get(model_id, {})
+        _profile = _dgx_defaults.get("sglang_model_profiles", {}).get(model_id, {})  # type: ignore[attr-defined]
         _effective_budget = thinking_budget if thinking_budget is not None else _profile.get("thinking_budget")
         if _effective_budget is not None and _thinking_processor:
             # thinking_budget uses SGLang's custom logit processor, NOT chat_template_kwargs.
@@ -958,7 +960,7 @@ async def run_parallel_test(
                 if k in p:
                     payload[k] = p[k]
             extra = p.get("extra_body", {})
-            payload.update(extra)
+            payload.update(extra)  # type: ignore[arg-type]
         payloads.append(payload)
 
     url = f"{sglang_url.rstrip('/')}/v1/chat/completions"
@@ -999,7 +1001,7 @@ async def run_parallel_test(
             # Live display updates while requests stream
             with Live(build_live_display(all_stats, verbose), console=console, refresh_per_second=4) as live:
                 # Start all tasks
-                pending = set()
+                pending: set[asyncio.Task[None]] = set()
                 for t in tasks:
                     pending.add(asyncio.ensure_future(t))
 
@@ -1008,8 +1010,8 @@ async def run_parallel_test(
                     live.update(build_live_display(all_stats, verbose))
 
                     if abort_requested:
-                        for t in pending:
-                            t.cancel()
+                        for t in pending:  # type: ignore[assignment]
+                            t.cancel()  # type: ignore[attr-defined]
                         # Wait for cancellations to propagate
                         if pending:
                             await asyncio.wait(pending, timeout=2)

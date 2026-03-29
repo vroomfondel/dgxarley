@@ -21,7 +21,16 @@ MAX_BYTES = 1024 * 1024 * 1024  # 1 GB
 STEP_FACTOR = 2
 
 
-def main():
+def main() -> None:
+    """Run the NCCL all-reduce benchmark across all distributed ranks.
+
+    Reads RANK, WORLD_SIZE, MASTER_ADDR, and MASTER_PORT from environment
+    variables to initialize the NCCL process group. Iterates over buffer
+    sizes from MIN_BYTES to MAX_BYTES (doubling each step), runs WARMUP_ITERS
+    warmup iterations followed by BENCH_ITERS timed iterations, and prints
+    per-size throughput (algorithm bandwidth and bus bandwidth). Rank 0 also
+    prints a final summary with peak and average bus bandwidth.
+    """
     rank = int(os.environ["RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
 
@@ -44,7 +53,7 @@ def main():
             f"{'size':>12s}  {'count':>12s}  {'type':>6s}  {'redop':>5s}  {'time_us':>10s}  {'algbw_GBs':>10s}  {'busbw_GBs':>10s}"
         )
 
-    results = []
+    results: list[tuple[int, int, float, float, float]] = []
 
     size = MIN_BYTES
     while size <= MAX_BYTES:

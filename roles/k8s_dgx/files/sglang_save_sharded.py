@@ -34,21 +34,27 @@ import sys
 from pathlib import Path
 
 
-def main():
-    model_id = os.environ.get("SGLANG_MODEL", "")
-    quantization = os.environ.get("SGLANG_QUANTIZATION", "") or None
-    attention_backend = os.environ.get("SGLANG_ATTENTION_BACKEND", "") or None
-    moe_runner_backend = os.environ.get("SGLANG_MOE_RUNNER_BACKEND", "") or None
-    tp = int(os.environ.get("TP", "2"))
-    ep = int(os.environ.get("EP", "1"))
-    nnodes = int(os.environ.get("NNODES", "2"))
-    node_rank = int(os.environ.get("NODE_RANK", "0"))
-    nccl_init_addr = f"{os.environ.get('QSFP_IP_SPARK1', '10.10.10.101')}:{os.environ.get('NCCL_PORT', '50000')}"
+def _build_output_dir(
+    model_id: str,
+    tp: int,
+    ep: int,
+    quantization: str | None,
+    moe_runner_backend: str | None,
+) -> str:
+    """Construct the default output directory path for a sharded model.
 
-    if not model_id:
-        print("ERROR: SGLANG_MODEL not set", flush=True)
-        sys.exit(1)
+    Args:
+        model_id: HuggingFace model identifier (e.g. ``org/model-name``).
+        tp: Tensor parallel size.
+        ep: Expert parallel size; included in the suffix only when greater
+            than 1.
+        quantization: Quantization method string, or ``None`` when not set.
+        moe_runner_backend: MoE runner backend name, or ``None`` when not set.
 
+    Returns:
+        Absolute path string under ``/root/.cache/huggingface/sharded/``
+        that encodes the sharding configuration.
+    """
     model_slug = model_id.replace("/", "--")
     shard_suffix = f"sglang-TP{tp}"
     if ep > 1:
@@ -57,23 +63,93 @@ def main():
         shard_suffix += f"-{quantization}"
     if moe_runner_backend:
         shard_suffix += f"-{moe_runner_backend}"
-    default_output = f"/root/.cache/huggingface/sharded/{model_slug}-{shard_suffix}"
+    return f"/root/.cache/huggingface/sharded/{model_slug}-{shard_suffix}"
+
+
+def _copy_metadata(local_path: str, output_dir: str) -> None:
+    """Copy model metadata files (config, tokenizer, etc.) into the shard directory.
+
+    Skips files that already exist at the destination and skips raw weight
+    files (``.bin``, ``.pt``, ``.safetensors``) because those are written by
+    ``save_sharded_model``.
+
+    Args:
+        local_path: Path to the locally cached HuggingFace model directory.
+        output_dir: Destination shard directory.
+    """
+    for file in os.listdir(local_path):
+        src = os.path.join(local_path, file)
+        dst = os.path.join(output_dir, file)
+        if os.path.exists(dst):
+            continue
+        ext = os.path.splitext(file)[1]
+        if ext in (".bin", ".pt", ".safetensors"):
+            continue
+        if os.path.isdir(src):
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy(src, dst)
+
+
+def main() -> None:
+    """Entry point for the sharding job.
+
+    Reads configuration from environment variables, downloads the model via
+    ``huggingface_hub`` if necessary, and launches an SGLang ``Engine`` in
+    multi-node TP mode.
+
+    * **Rank 0 (head):** calls ``save_sharded_model()``, then copies metadata
+      files and exits.
+    * **Rank ≥ 1 (worker):** ``Engine()`` blocks indefinitely running the
+      scheduler event loop; it receives the save RPC from the head and writes
+      its shard files.  The process is terminated by SIGQUIT when the head
+      disconnects NCCL after saving.
+
+    Exits with code 1 when ``SGLANG_MODEL`` is not set.
+    Exits with code 0 when a completed shard already exists and
+    ``FORCE_RESHARD`` is not set.
+    """
+    model_id = os.environ.get("SGLANG_MODEL", "")
+    quantization = os.environ.get("SGLANG_QUANTIZATION", "") or None
+    attention_backend = os.environ.get("SGLANG_ATTENTION_BACKEND", "") or None
+    moe_runner_backend = os.environ.get("SGLANG_MOE_RUNNER_BACKEND", "") or None
+    tp = int(os.environ.get("TP", "2"))
+    ep = int(os.environ.get("EP", "1"))
+    nnodes = int(os.environ.get("NNODES", "2"))
+    node_rank = int(os.environ.get("NODE_RANK", "0"))
+    nccl_init_addr = f"{os.environ.get('QSFP_IP_SPARK1', '10.10.10.101')}" f":{os.environ.get('NCCL_PORT', '50000')}"
+
+    if not model_id:
+        print("ERROR: SGLANG_MODEL not set", flush=True)
+        sys.exit(1)
+
+    default_output = _build_output_dir(model_id, tp, ep, quantization, moe_runner_backend)
     output_dir = os.environ.get("SHARD_OUTPUT_DIR", default_output)
 
     print(f"[rank {node_rank}] Model:        {model_id}", flush=True)
     print(f"[rank {node_rank}] Quantization: {quantization or '(none)'}", flush=True)
-    print(f"[rank {node_rank}] TP size:      {tp}, EP size: {ep}, nnodes: {nnodes}, rank: {node_rank}", flush=True)
+    print(
+        f"[rank {node_rank}] TP size:      {tp}, EP size: {ep}," f" nnodes: {nnodes}, rank: {node_rank}",
+        flush=True,
+    )
     print(f"[rank {node_rank}] NCCL init:    {nccl_init_addr}", flush=True)
     print(f"[rank {node_rank}] Output:       {output_dir}", flush=True)
 
     # Check if already sharded (index.json is written last by ShardedStateLoader)
     force = os.environ.get("FORCE_RESHARD", "").lower() in ("1", "true", "yes")
-    if (Path(output_dir) / "model.safetensors.index.json").exists() and not force:
-        print(f"[rank {node_rank}] Sharded checkpoint already exists (index.json found), skipping.", flush=True)
+    index_json = Path(output_dir) / "model.safetensors.index.json"
+    if index_json.exists() and not force:
+        print(
+            f"[rank {node_rank}] Sharded checkpoint already exists (index.json found), skipping.",
+            flush=True,
+        )
         print(f"[rank {node_rank}] Use -e force_sglang_shard=true to re-shard.", flush=True)
         sys.exit(0)
-    if force and (Path(output_dir) / "model.safetensors.index.json").exists():
-        print(f"[rank {node_rank}] FORCE_RESHARD set — removing existing shards at {output_dir}", flush=True)
+    if force and index_json.exists():
+        print(
+            f"[rank {node_rank}] FORCE_RESHARD set — removing existing shards at {output_dir}",
+            flush=True,
+        )
         shutil.rmtree(output_dir)
         print(f"[rank {node_rank}] Removed {output_dir}", flush=True)
 
@@ -81,23 +157,23 @@ def main():
     from huggingface_hub import snapshot_download
 
     print(f"[rank {node_rank}] Ensuring model is downloaded...", flush=True)
-    local_path = snapshot_download(
+    local_path: str = snapshot_download(
         repo_id=model_id,
         cache_dir="/root/.cache/huggingface/hub",
     )
     print(f"[rank {node_rank}] Model cached at: {local_path}", flush=True)
 
     # Create Engine with multi-node TP params
-    from sglang import Engine
+    from sglang import Engine  # type: ignore[import-untyped]
 
     # mem_fraction_static from env (set by Ansible from model profile), fallback 0.80.
-    # Shard job only loads weights and saves — no inference. Use the same fraction
-    # as the serving profile so the Engine doesn't OOM on heavy models (e.g.
-    # MiniMax-M2.5-NVFP4 at ~70 GB/GPU needs > 0.60). context_length=128 minimizes
+    # The shard job only loads weights and saves — no inference. Use the same fraction
+    # as the serving profile so the Engine does not OOM on heavy models (e.g.
+    # MiniMax-M2.5-NVFP4 at ~70 GB/GPU needs > 0.60). context_length=128 minimises
     # the actual KV cache allocation within that fraction.
     mem_frac = float(os.environ.get("SGLANG_MEM_FRACTION", "0.80"))
 
-    engine_kwargs = {
+    engine_kwargs: dict[str, object] = {
         "model_path": local_path,
         "tp_size": tp,
         "nnodes": nnodes,
@@ -118,7 +194,8 @@ def main():
         # Critical for NVFP4+sharded_state: process_weights_after_loading takes
         # different branches depending on the MoE backend (flashinfer_cutlass →
         # scalar input_scale vs. else → per-expert). Shards must be saved with
-        # the same backend as serving, otherwise tensor shapes won't match at load.
+        # the same backend as serving, otherwise tensor shapes will not match at
+        # load time.
         engine_kwargs["moe_runner_backend"] = moe_runner_backend
     # Speculative decoding params (speculative_algo, etc.) are NOT passed to
     # Engine — they only affect inference, not weight sharding. The shard job
@@ -129,7 +206,7 @@ def main():
     if os.environ.get("SGLANG_ENABLE_JIT_DEEPGEMM", "").lower() == "false":
         print(f"[rank {node_rank}] DeepGemm JIT disabled", flush=True)
 
-    # Ensure output dir exists before Engine (scheduler saves to this path)
+    # Ensure output dir exists before Engine initialises (scheduler saves to this path)
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     print(f"[rank {node_rank}] Initializing Engine...", flush=True)
@@ -141,8 +218,8 @@ def main():
         # rank-1 shard files to output_dir. When the head exits and NCCL
         # disconnects, SGLang sends SIGQUIT killing this process. The launch
         # shell script handles post-save cleanup (metadata copy + marker).
-        llm = Engine(**engine_kwargs)
-        # If Engine() ever returns on worker, just exit cleanly.
+        Engine(**engine_kwargs)
+        # If Engine() ever returns on a worker rank, exit cleanly.
         sys.exit(0)
     else:
         # Head: Engine() returns on rank 0, allowing us to call RPCs.
@@ -160,19 +237,7 @@ def main():
         )
         print(f"[rank {node_rank}] save_sharded_model returned.", flush=True)
 
-    # Copy metadata files (config.json, tokenizer, etc.)
-    for file in os.listdir(local_path):
-        src = os.path.join(local_path, file)
-        dst = os.path.join(output_dir, file)
-        if os.path.exists(dst):
-            continue
-        ext = os.path.splitext(file)[1]
-        if ext in (".bin", ".pt", ".safetensors"):
-            continue
-        if os.path.isdir(src):
-            shutil.copytree(src, dst)
-        else:
-            shutil.copy(src, dst)
+    _copy_metadata(local_path, output_dir)
 
     # model.safetensors.index.json is written by ShardedStateLoader.save_model
     # as the last step — serves as the completion marker.

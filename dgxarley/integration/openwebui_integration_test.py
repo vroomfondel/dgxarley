@@ -103,12 +103,12 @@ def load_sampling_presets(
         completion payload.  Returns an empty dict if the model has no
         sampling configuration.
     """
-    profile = _MODEL_PROFILES.get(model_id, {})
-    raw = profile.get("recommended_sampling", {})
+    profile: dict[str, object] = _MODEL_PROFILES.get(model_id, {})  # type: ignore[assignment]
+    raw: dict[str, object] = profile.get("recommended_sampling", {})  # type: ignore[assignment]
     if not raw:
         return {}
 
-    overrides = profile.get("sampling_overrides", {})
+    overrides: dict[str, object] = profile.get("sampling_overrides", {})  # type: ignore[assignment]
     merged: dict[str, object] = {**raw, **overrides}
 
     # OpenAI-compatible top-level keys
@@ -268,7 +268,7 @@ class LLMClient:
             | list[dict[str, str | list[dict[str, str | dict[str, str]]]]]
             | dict[str, str | int | float | bool],
         ],
-        preset: str | None = ...,  # type: ignore[assignment]
+        preset: "str | None | ellipsis" = ...,
         allow_fallback: bool = True,
     ) -> dict[
         str,
@@ -325,21 +325,21 @@ class LLMClient:
         p = self.presets[preset]
         for k in ("temperature", "top_p", "presence_penalty", "frequency_penalty", "repetition_penalty"):
             if k in p:
-                payload[k] = p[k]
+                payload[k] = p[k]  # type: ignore[assignment]
         if "extra_body" in p:
             payload.setdefault("extra_body", {})
-            payload["extra_body"].update(p["extra_body"])
+            payload["extra_body"].update(p["extra_body"])  # type: ignore[union-attr,arg-type]
 
         # For non_thinking presets: prepend /no_think to the last user message.
         # This works both via OpenWebUI (which ignores chat_template_kwargs) and
         # direct SGLang (which honours both, belt-and-suspenders).
         if preset.startswith("non_thinking"):
             messages = payload.get("messages", [])
-            for msg in reversed(messages):
-                if msg.get("role") == "user":
-                    content = msg.get("content", "")
+            for msg in reversed(messages):  # type: ignore[arg-type]
+                if msg.get("role") == "user":  # type: ignore[attr-defined]
+                    content = msg.get("content", "")  # type: ignore[attr-defined]
                     if isinstance(content, str) and not content.startswith("/no_think"):
-                        msg["content"] = f"/no_think\n{content}"
+                        msg["content"] = f"/no_think\n{content}"  # type: ignore[index]
                     elif isinstance(content, list):
                         # Multimodal message — prepend to first text part
                         for part in content:
@@ -378,20 +378,20 @@ class LLMClient:
             if k == "messages":
                 # Summarize messages — truncate image data
                 msgs: list[dict[str, object]] = []
-                for m in v:
-                    content = m.get("content", "")
+                for m in v:  # type: ignore[union-attr]
+                    content = m.get("content", "")  # type: ignore[union-attr]
                     if isinstance(content, list):
                         parts: list[dict[str, object]] = []
                         for p in content:
                             if p.get("type") == "image_url":
                                 parts.append({"type": "image_url", "image_url": "(base64 omitted)"})
                             else:
-                                parts.append(p)
-                        msgs.append({**m, "content": parts})
+                                parts.append(p)  # type: ignore[arg-type]
+                        msgs.append({**m, "content": parts})  # type: ignore[dict-item]
                     elif isinstance(content, str) and len(content) > 200:
-                        msgs.append({**m, "content": content[:200] + "..."})
+                        msgs.append({**m, "content": content[:200] + "..."})  # type: ignore[dict-item]
                     else:
-                        msgs.append(m)
+                        msgs.append(m)  # type: ignore[arg-type]
                 display[k] = msgs
             else:
                 display[k] = v
@@ -455,7 +455,8 @@ class LLMClient:
             chunk: dict[str, object] = json.loads(data)
             if "usage" in chunk:
                 usage = chunk["usage"]  # type: ignore[assignment]
-            delta: dict[str, str] = chunk.get("choices", [{}])[0].get("delta", {})
+            choices: list[dict[str, object]] = chunk.get("choices", [{}])  # type: ignore[assignment]
+            delta: dict[str, str] = choices[0].get("delta", {})  # type: ignore[assignment]
             reasoning: str = delta.get("reasoning_content", "")
             content: str = delta.get("content", "")
             if reasoning:
@@ -508,7 +509,7 @@ class LLMClient:
             The ``usage`` dict from the final SSE chunk, or an empty dict.
         """
         payload: dict[str, object] = {"model": self.model_id, "messages": messages, "stream": stream, **extra_payload}
-        payload = self.apply_preset(payload, preset)
+        payload = self.apply_preset(payload, preset)  # type: ignore[assignment,arg-type]
         return self.stream_chat(payload, print_thinking=print_thinking)  # type: ignore[arg-type]
 
     def explain_image(
@@ -581,7 +582,7 @@ class LLMClient:
         }
         if self._supports_features():
             payload["features"] = {"web_search": True}
-        payload = self.apply_preset(payload, preset)
+        payload = self.apply_preset(payload, preset)  # type: ignore[assignment,arg-type]
 
         try:
             print("--- Daily Briefing ---")
@@ -701,7 +702,7 @@ class SGLangClient(LLMClient):
         """
         extra = payload.pop("extra_body", None)
         if extra:
-            payload.update(extra)
+            payload.update(extra)  # type: ignore[arg-type]
         # SGLang does not support OpenWebUI features
         payload.pop("features", None)
         return payload
@@ -803,7 +804,7 @@ def test_non_thinking_mode(client: LLMClient) -> None:
         "stream": True,
         "extra_body": {"chat_template_kwargs": {"enable_thinking": False}},
     }
-    payload = client.apply_preset(payload)
+    payload = client.apply_preset(payload)  # type: ignore[assignment,arg-type]
     usage: dict[str, int] = client.stream_chat(payload, print_thinking=False)  # type: ignore[arg-type]
     elapsed: float = time.monotonic() - t0
     print(f"  [{elapsed:.1f}s, {usage}]")

@@ -127,8 +127,8 @@ class RepetitionReport:
         if self.sentence_hits:
             parts.append(f"{len(self.sentence_hits)} similar sentence pairs")
         if self.loop_hits:
-            top = self.loop_hits[0]
-            parts.append(f"Loop ({top.length_chars} chars) ×{top.repetitions}")
+            top_loop = self.loop_hits[0]
+            parts.append(f"Loop ({top_loop.length_chars} chars) ×{top_loop.repetitions}")
         detail = "; ".join(parts) if parts else "no issues"
         return f"[{self.severity.upper()}] score={self.overall_score:.2f} — {detail}"
 
@@ -532,19 +532,19 @@ if __name__ == "__main__":
 
     if report.ngram_hits:
         print("\n  Top N-Gram Hits:")
-        for h in report.ngram_hits[:5]:
-            print(f"    '{h.ngram}' — {h.count}× (n={h.n})")
+        for nh in report.ngram_hits[:5]:
+            print(f"    '{nh.ngram}' — {nh.count}× (n={nh.n})")
 
     if report.sentence_hits:
         print("\n  Top Sentence Similarities:")
-        for h in report.sentence_hits[:5]:
-            print(f'    [{h.similarity:.0%}] "{h.sentence_a[:60]}..."')
-            print(f'         ↔ "{h.sentence_b[:60]}..."')
+        for sh in report.sentence_hits[:5]:
+            print(f'    [{sh.similarity:.0%}] "{sh.sentence_a[:60]}..."')
+            print(f'         ↔ "{sh.sentence_b[:60]}..."')
 
     if report.loop_hits:
         print("\n  Loops:")
-        for h in report.loop_hits[:3]:
-            print(f"    {h.length_chars} chars × {h.repetitions} reps @ pos {h.start_pos}")
-            print(f'    Pattern: "{h.pattern[:80]}..."')
+        for lh in report.loop_hits[:3]:
+            print(f"    {lh.length_chars} chars × {lh.repetitions} reps @ pos {lh.start_pos}")
+            print(f'    Pattern: "{lh.pattern[:80]}..."')
 
     print()

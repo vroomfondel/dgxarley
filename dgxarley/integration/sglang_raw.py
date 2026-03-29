@@ -24,6 +24,7 @@ import os
 import sys
 import time
 from collections import deque
+from typing import cast
 
 import requests
 
@@ -39,10 +40,10 @@ from .openwebui_integration_test import _dgx_defaults, load_sampling_presets, pi
 from .sglang_integration_test import _THINKING_BUDGET_PROCESSORS
 from .streaming_repetition_guard import RepetitionGuard, GuardConfig, FeedResult
 
-_CONFIGURED_MODEL: str = _dgx_defaults.get("sglang_model", "")
+_CONFIGURED_MODEL: str = str(_dgx_defaults.get("sglang_model", ""))
 """Default model ID loaded from Ansible role defaults."""
 
-_MODEL_PROFILES: dict[str, object] = _dgx_defaults.get("sglang_model_profiles", {})
+_MODEL_PROFILES: dict[str, object] = _dgx_defaults.get("sglang_model_profiles", {})  # type: ignore[assignment]
 """Per-model profile configuration (YAML-loaded, heterogeneous values)."""
 
 DEFAULT_PROMPT: str = (
@@ -125,7 +126,7 @@ def build_payload(
             if k in p:
                 payload[k] = p[k]
         extra = p.get("extra_body", {})
-        payload.update(extra)
+        payload.update(extra)  # type: ignore[arg-type]
 
     # CLI overrides (win over profile defaults)
     if temperature is not None:
@@ -144,13 +145,15 @@ def build_payload(
         payload["repetition_penalty"] = repetition_penalty
 
     if no_think:
-        payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False
+        cast("dict[str, object]", payload.setdefault("chat_template_kwargs", {}))["enable_thinking"] = False
 
     # thinking_budget: CLI arg overrides profile default
-    profile: dict[str, object] = _MODEL_PROFILES.get(model_id, {})
-    effective_budget: int | None = thinking_budget if thinking_budget is not None else profile.get("thinking_budget")
+    profile: dict[str, object] = _MODEL_PROFILES.get(model_id, {})  # type: ignore[assignment]
+    effective_budget: int | None = (
+        thinking_budget if thinking_budget is not None else cast("int | None", profile.get("thinking_budget"))
+    )
     if effective_budget is not None:
-        reasoning_parser: str = profile.get("reasoning_parser", "")
+        reasoning_parser: str = cast(str, profile.get("reasoning_parser", ""))
         processor = _THINKING_BUDGET_PROCESSORS.get(reasoning_parser)
         if processor:
             payload["custom_logit_processor"] = processor
@@ -356,10 +359,10 @@ def stream_and_display(
         tbl.add_column("Tokens", justify="right", width=8)
         for row in chunk_rows:
             n = str(row["n"])
-            typ = row["type"]
-            content = row["content"]
-            fin = row.get("finish", "")
-            tokens = row.get("tokens", "")
+            typ = str(row["type"])
+            content = str(row["content"])
+            fin = str(row.get("finish", ""))
+            tokens = str(row.get("tokens", ""))
             if typ == "think":
                 style = "cyan"
             elif typ == "content":
@@ -391,6 +394,7 @@ def stream_and_display(
             sub-layouts ready to pass to :class:`rich.live.Live`.
         """
         layout = Layout()
+        lower: Panel | Table
         if raw_json:
             # Pad with empty lines so the panel is always full height
             padded = list(raw_chunks) + [""] * (lower_max_rows - len(raw_chunks))
@@ -475,7 +479,7 @@ def stream_and_display(
                         if thinking_guard:
                             gr: FeedResult = thinking_guard.feed(reasoning)
                             if gr.should_stop:
-                                guard_status = f"STOPPED ({gr.reason.name})"
+                                guard_status = f"STOPPED ({gr.reason.name if gr.reason is not None else 'UNKNOWN'})"
                                 finish_reason = "repetition_guard"
                                 chunk_rows.append(
                                     {
@@ -513,7 +517,7 @@ def stream_and_display(
                         if content_guard:
                             gr = content_guard.feed(content)
                             if gr.should_stop:
-                                guard_status = f"STOPPED ({gr.reason.name})"
+                                guard_status = f"STOPPED ({gr.reason.name if gr.reason is not None else 'UNKNOWN'})"
                                 finish_reason = "repetition_guard"
                                 chunk_rows.append(
                                     {
@@ -556,7 +560,7 @@ def stream_and_display(
     if guard_status:
         console.print(f"[bold red]Repetition guard:[/] {guard_status}")
         for label, g in [("thinking", thinking_guard), ("content", content_guard)]:
-            if g and g.get_stats()["worst_ngram_count"] > 0:
+            if g and cast(int, g.get_stats()["worst_ngram_count"]) > 0:
                 console.print(f"  [dim]{label}:[/] {g.get_stats()}")
 
 
@@ -637,7 +641,7 @@ def main() -> None:
         blob = payload["custom_logit_processor"]
         # Extract class name from the dill-serialized reference
         try:
-            parts = bytes.fromhex(json.loads(blob)["callable"]).split(b"\x94")
+            parts = bytes.fromhex(json.loads(cast(str, blob))["callable"]).split(b"\x94")
             cls_name = parts[1].lstrip(b"\x8c\x21\x20").decode()
         except Exception:
             cls_name = "(serialized)"

@@ -19,12 +19,28 @@ GOTIFY_URL = os.environ.get("GOTIFY_URL", "https://gotify.example.com")
 GOTIFY_TOKEN = os.environ.get("GOTIFY_TOKEN", "")
 
 
-def pp(msg):
+def pp(msg: object) -> None:
+    """Print a diagnostic message to stderr.
+
+    Args:
+        msg: The message to print. Accepts any object; converted via str().
+    """
     print(msg, file=sys.stderr)
 
 
 class WebhookHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
+    """HTTP request handler for the Alertmanager → Gotify bridge.
+
+    Handles health-check GET requests and Alertmanager webhook POST
+    requests, forwarding each alert as a Gotify push notification.
+    """
+
+    def do_GET(self) -> None:
+        """Handle GET requests for liveness and readiness probes.
+
+        Responds with 200 OK and body ``OK`` for ``/healthz`` and
+        ``/readyz``. All other paths return 404.
+        """
         if self.path in ("/healthz", "/readyz"):
             self.send_response(200)
             self.end_headers()
@@ -33,7 +49,15 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def do_POST(self):
+    def do_POST(self) -> None:
+        """Handle POST requests on ``/webhook``.
+
+        Parses the Alertmanager JSON payload, iterates over the ``alerts``
+        list, and POSTs each alert as a Gotify message. Fires with priority
+        8 for ``firing`` alerts and 5 for resolved alerts. Returns 200 on
+        success, 404 for unknown paths, and 500 if JSON parsing or the
+        Gotify request raises an exception.
+        """
         if self.path == "/webhook":
             content_length = int(self.headers["Content-Length"])
             body = self.rfile.read(content_length)

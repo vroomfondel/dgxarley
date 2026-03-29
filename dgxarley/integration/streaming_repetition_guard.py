@@ -88,7 +88,7 @@ class FeedResult:
     tokens_seen: int = 0
     worst_ngram_count: int = 0
     loop_confidence: float = 0.0
-    diagnostics: dict = field(default_factory=dict)
+    diagnostics: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -652,7 +652,7 @@ def guarded_stream(
 
         def _extract(chunk: _T) -> tuple[str, str]:
             try:
-                delta = chunk.choices[0].delta  # type: ignore[union-attr]
+                delta = chunk.choices[0].delta  # type: ignore[attr-defined]
                 content: str = getattr(delta, "content", None) or ""
                 reasoning: str = getattr(delta, "reasoning_content", None) or ""
                 return content, reasoning
