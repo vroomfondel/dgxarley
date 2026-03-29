@@ -1,4 +1,9 @@
+[![mypy and pytests](https://github.com/vroomfondel/dgxarley/actions/workflows/mypynpytests.yml/badge.svg)](https://github.com/vroomfondel/dgxarley/actions/workflows/mypynpytests.yml)
+[![black-lint](https://github.com/vroomfondel/dgxarley/actions/workflows/checkblack.yml/badge.svg)](https://github.com/vroomfondel/dgxarley/actions/workflows/checkblack.yml)
 ![Cumulative Clones](https://img.shields.io/endpoint?logo=github&url=https://gist.githubusercontent.com/vroomfondel/3e9b5513788bd4a8af48560724376534/raw/dgxarley_clone_count.json)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/dgxarley?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=PyPi+Downloads)](https://pepy.tech/projects/dgxarley)
+[![PyPI](https://img.shields.io/pypi/v/dgxarley?logo=pypi&logoColor=white)](https://pypi.org/project/dgxarley/)
+
 
 # DGX Spark Cluster — Ansible Repository
 
