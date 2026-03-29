@@ -16,10 +16,12 @@ The fused RoPE kernel wrote rotated K to the KV cache but not to the live K tens
 K directly in the same forward pass saw stale data. Caused near-zero GSM8K accuracy on Qwen3-Coder-30B
 with flashinfer backend. Fixed by restoring the K writeback in `fused_rope_store_kernel`.
 
-**`/health` probe hang during startup** (PR #19805, 2026-03-04)
+**`/health` probe hang during startup** (PR #19805, 2026-03-04) ⚠️ **Reverted 2026-03-12** (PR #20468)
 Early socket prebinding called `listen()` during initialization, allowing TCP connections to queue
 before FastAPI was ready. K8s startup/liveness probes would hang instead of getting 503. Fixed:
 `bind()` only during init, `listen()` deferred until just before `uvicorn.run()`.
+*Note: Both the prebinding feature (#17754) and this fix (#19805) were reverted one day after our
+snapshot by PR #20468, restoring uvicorn's native bind. Present in our image, absent on current main.*
 
 **Graceful OOM abort in retract_decode** (PR #19881, 2026-03-11)
 When a single decode request exhausted the KV cache pool, `retract_decode` had no other requests
@@ -123,6 +125,25 @@ queue metrics.
 
 **`return_logprob` support for spec v2** (PR #19801, 2026-03-10)
 Speculative v2 can now return log probabilities without breaking two-stream overlap.
+
+## Distributed / DP Changes
+
+**Ray actor scheduler for DP=1** (PR #17684, 2026-03-05)
+Adds Ray actor support for scheduler process management when `dp_size=1`. Changes scheduler
+startup behavior by allowing Ray-based process orchestration as an alternative.
+
+**Sync point removal + prefill CUDA graph for DP** (PR #19190, 2026-02-28)
+Removes CPU-GPU sync points and enables prefill CUDA graphs for data-parallel configurations.
+Also disables cache reset during memory checks. Low-level timing change that may affect
+probe/startup behavior.
+
+**Distributed backend selection refactor** (PR #19202, 2026-02-25)
+Extracts device-to-backend mapping into `get_default_distributed_backend`. Changes how
+CUDA/NCCL vs other backends are automatically selected.
+
+**gRPC streaming last-chunk fix** (PR #19895, 2026-03-04)
+Fixes gRPC streaming to send the last chunk before signaling completion. Correctness fix for
+streaming responses via gRPC.
 
 ## Other Notable Fixes
 
