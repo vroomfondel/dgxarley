@@ -50,6 +50,7 @@ from rich.text import Text
 import requests as httplib
 
 from .streaming_repetition_guard import RepetitionGuard, GuardConfig, FeedResult, StopReason
+from .thinking_parser import ThinkingParser
 
 from .openwebui_integration_test import (
     SGLangClient,
@@ -522,6 +523,7 @@ async def stream_request(
     _skip_reasoning = no_guard in ("reasoning", "both")
     content_guard = None if _skip_content else RepetitionGuard()
     reasoning_guard = None if _skip_reasoning else RepetitionGuard()
+    tp = ThinkingParser()
 
     stats.status = "streaming"
     stats._start = time.monotonic()
@@ -557,14 +559,18 @@ async def stream_request(
                 if choice and choice.get("finish_reason"):
                     stats.finish_reason = choice["finish_reason"]
                 delta = (choice or {}).get("delta", {})
-                reasoning = delta.get("reasoning_content", "")
-                if reasoning:
+                parsed = tp.feed(
+                    content=delta.get("content", ""),
+                    reasoning_content=delta.get("reasoning_content", ""),
+                )
+                if parsed.thinking or parsed.content:
                     if not stats._first_token:
                         stats._first_token = True
                         stats.ttft = time.monotonic() - stats._start
-                    stats.thinking += reasoning
+                if parsed.thinking:
+                    stats.thinking += parsed.thinking
                     if reasoning_guard:
-                        result = reasoning_guard.feed(reasoning)
+                        result = reasoning_guard.feed(parsed.thinking)
                         if result.should_stop:
                             stats.status = "error"
                             stats.repetition_stopped = True
@@ -578,14 +584,10 @@ async def stream_request(
                             stats.error = f"repetition: {result.reason.name} — {result.detail}"
                             stats.clean_output = reasoning_guard.get_clean_text()
                             return
-                content = delta.get("content", "")
-                if content:
-                    if not stats._first_token:
-                        stats._first_token = True
-                        stats.ttft = time.monotonic() - stats._start
-                    stats.output += content
+                if parsed.content:
+                    stats.output += parsed.content
                     if content_guard:
-                        result = content_guard.feed(content)
+                        result = content_guard.feed(parsed.content)
                         if result.should_stop:
                             stats.status = "error"
                             stats.repetition_stopped = True

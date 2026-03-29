@@ -55,6 +55,7 @@ from ascii_magic import AsciiArt
 from PIL import Image
 
 from dgxarley import configure_logging, glogger, print_banner
+from dgxarley.integration.thinking_parser import ThinkingParser
 
 os.environ.setdefault("LOGURU_LEVEL", "DEBUG")
 configure_logging()
@@ -450,10 +451,9 @@ class LLMClient:
         )
         response.raise_for_status()
 
+        tp = ThinkingParser()
         in_thinking: bool = False
         usage: dict[str, int] = {}
-        think_chars: int = 0
-        content_chars: int = 0
         for raw_line in response.iter_lines():
             if not raw_line:
                 continue
@@ -468,34 +468,32 @@ class LLMClient:
                 usage = chunk["usage"]  # type: ignore[assignment]
             choices: list[dict[str, object]] = chunk.get("choices", [{}])  # type: ignore[assignment]
             delta: dict[str, str] = choices[0].get("delta", {})  # type: ignore[assignment]
-            reasoning: str = delta.get("reasoning_content", "")
-            content: str = delta.get("content", "")
-            if reasoning:
-                think_chars += len(reasoning)
+            result = tp.feed(
+                content=delta.get("content", ""),
+                reasoning_content=delta.get("reasoning_content", ""),
+            )
+            if result.thinking:
                 if print_thinking:
                     if not in_thinking:
                         print("\033[2m<think>", end="", flush=True)
                         in_thinking = True
-                    print(reasoning, end="", flush=True)
-            if content:
-                content_chars += len(content)
+                    print(result.thinking, end="", flush=True)
+            if result.content:
                 if in_thinking:
                     if print_thinking:
                         print("</think>\033[0m\n", end="", flush=True)
                     in_thinking = False
-                print(content, end="", flush=True)
+                print(result.content, end="", flush=True)
         if in_thinking:
             print("</think>\033[0m", end="", flush=True)
         print()
 
         # Token breakdown summary
-        think_est = think_chars // 4
-        content_est = content_chars // 4
-        total_tok = usage.get("completion_tokens", think_est + content_est)
+        total_tok = usage.get("completion_tokens", tp.thinking_tokens_est + tp.content_tokens_est)
         prompt_tok = usage.get("prompt_tokens", 0)
         print(
             f"\033[2m  tokens: {total_tok} total"
-            f" (think ~{think_est} / content ~{content_est})"
+            f" (think ~{tp.thinking_tokens_est} / content ~{tp.content_tokens_est})"
             f" | prompt: {prompt_tok}\033[0m"
         )
         return usage

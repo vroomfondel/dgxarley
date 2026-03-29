@@ -224,3 +224,96 @@ def test_guard_config_defaults() -> None:
     assert cfg.ngram_max_count == 5
     assert cfg.min_tokens_before_check == 40
     assert cfg.check_every_n == 3
+
+
+# ---------------------------------------------------------------------------
+# Thinking Parser
+# ---------------------------------------------------------------------------
+
+from dgxarley.integration.thinking_parser import ThinkingParser
+
+
+def test_thinking_parser_reasoning_content_passthrough() -> None:
+    """Server-separated reasoning_content should pass through directly."""
+    p = ThinkingParser()
+    r = p.feed(reasoning_content="Let me think...")
+    assert r.thinking == "Let me think..."
+    assert r.content == ""
+    assert r.is_thinking is True
+
+    r = p.feed(content="The answer is 42.")
+    assert r.thinking == ""
+    assert r.content == "The answer is 42."
+    assert r.is_thinking is False
+
+
+def test_thinking_parser_inline_tags() -> None:
+    """Inline <think>...</think> in content should be separated."""
+    p = ThinkingParser()
+    r = p.feed(content="<think>Hmm let me consider</think>The answer is 42.")
+    assert r.thinking == "Hmm let me consider"
+    assert r.content == "The answer is 42."
+    assert r.is_thinking is False
+
+
+def test_thinking_parser_split_across_chunks() -> None:
+    """Tags split across chunk boundaries should be handled."""
+    p = ThinkingParser()
+    r1 = p.feed(content="<think>thinking")
+    assert r1.thinking == "thinking"
+    assert r1.is_thinking is True
+
+    r2 = p.feed(content=" more thoughts</think>answer")
+    assert r2.thinking == " more thoughts"
+    assert r2.content == "answer"
+    assert r2.is_thinking is False
+
+
+def test_thinking_parser_partial_tag_boundary() -> None:
+    """Partial tag at chunk boundary should buffer correctly."""
+    p = ThinkingParser()
+    r1 = p.feed(content="<think>thoughts</thi")
+    assert r1.thinking == "thoughts"
+    assert r1.is_thinking is True
+
+    r2 = p.feed(content="nk>content here")
+    assert r2.content == "content here"
+    assert r2.is_thinking is False
+
+
+def test_thinking_parser_no_tags() -> None:
+    """Plain content without tags should pass through as content."""
+    p = ThinkingParser()
+    r = p.feed(content="Just regular content")
+    assert r.thinking == ""
+    assert r.content == "Just regular content"
+    assert r.is_thinking is False
+
+
+def test_thinking_parser_token_estimates() -> None:
+    """Token estimates should accumulate correctly."""
+    p = ThinkingParser()
+    p.feed(content="<think>" + "x" * 40 + "</think>" + "y" * 80)
+    assert p.thinking_chars == 40
+    assert p.content_chars == 80
+    assert p.thinking_tokens_est == 10
+    assert p.content_tokens_est == 20
+    assert p.total_tokens_est == 30
+
+
+def test_thinking_parser_reset() -> None:
+    """Reset should clear all state."""
+    p = ThinkingParser()
+    p.feed(content="<think>stuff</think>more")
+    p.reset()
+    assert p.thinking_chars == 0
+    assert p.content_chars == 0
+    assert p._in_thinking is False
+
+
+def test_thinking_parser_empty_chunks() -> None:
+    """Empty chunks should be no-ops."""
+    p = ThinkingParser()
+    r = p.feed(content="", reasoning_content="")
+    assert r.thinking == ""
+    assert r.content == ""

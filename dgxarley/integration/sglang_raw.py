@@ -40,6 +40,7 @@ from rich.text import Text
 from .openwebui_integration_test import _dgx_defaults, load_sampling_presets, pick_default_preset
 from .sglang_integration_test import _THINKING_BUDGET_PROCESSORS
 from .streaming_repetition_guard import RepetitionGuard, GuardConfig, FeedResult
+from .thinking_parser import ThinkingParser
 
 from dgxarley import configure_logging, glogger, print_banner
 
@@ -203,8 +204,7 @@ def stream_and_display(
     chunk_rows: deque[dict[str, object]] = deque(maxlen=lower_max_rows)
     t_start: float = time.monotonic()
     t_first_token: float | None = None
-    thinking_tokens_est: int = 0
-    content_tokens_est: int = 0
+    tp = ThinkingParser()
     finish_reason: str = ""
     usage_info: dict[str, object] = {}
     chunk_count: int = 0
@@ -226,13 +226,13 @@ def stream_and_display(
         """
         elapsed = time.monotonic() - t_start
         ttft_str = f"{t_first_token - t_start:.2f}s" if t_first_token else "-"
-        total_est = thinking_tokens_est + content_tokens_est
+        total_est = tp.total_tokens_est
         if usage_info:
             prompt_tok = usage_info.get("prompt_tokens", 0)
             completion_tok = usage_info.get("completion_tokens", 0)
             tok_info = f"prompt={prompt_tok} completion={completion_tok}"
         else:
-            tok_info = f"T~{thinking_tokens_est} C~{content_tokens_est} total~{total_est}"
+            tok_info = f"T~{tp.thinking_tokens_est} C~{tp.content_tokens_est} total~{total_est}"
         tps = total_est / elapsed if elapsed > 0 and total_est > 0 else 0
         finish_str = f" | finish={finish_reason}" if finish_reason else ""
         guard_str = f" | guard: {guard_status}" if guard_status else (" | guard: ok" if guard_enabled else "")
@@ -469,24 +469,27 @@ def stream_and_display(
                         finish_reason = fr
 
                     delta = choice.get("delta", {})
-                    reasoning = delta.get("reasoning_content", "")
-                    content = delta.get("content", "")
+                    result = tp.feed(
+                        content=delta.get("content", ""),
+                        reasoning_content=delta.get("reasoning_content", ""),
+                    )
 
-                    if reasoning:
+                    if result.thinking or result.content:
                         if t_first_token is None:
                             t_first_token = time.monotonic()
-                        thinking_text += reasoning
-                        thinking_tokens_est = len(thinking_text) // 4
+
+                    if result.thinking:
+                        thinking_text += result.thinking
                         chunk_rows.append(
                             {
                                 "n": chunk_count,
                                 "type": "think",
-                                "content": repr(reasoning),
+                                "content": repr(result.thinking),
                                 "finish": fr,
                             }
                         )
                         if thinking_guard:
-                            gr: FeedResult = thinking_guard.feed(reasoning)
+                            gr: FeedResult = thinking_guard.feed(result.thinking)
                             if gr.should_stop:
                                 guard_status = f"STOPPED ({gr.reason.name if gr.reason is not None else 'UNKNOWN'})"
                                 finish_reason = "repetition_guard"
@@ -510,21 +513,18 @@ def stream_and_display(
                                 live.update(make_display())
                                 break
 
-                    if content:
-                        if t_first_token is None:
-                            t_first_token = time.monotonic()
-                        content_text += content
-                        content_tokens_est = len(content_text) // 4
+                    if result.content:
+                        content_text += result.content
                         chunk_rows.append(
                             {
                                 "n": chunk_count,
                                 "type": "content",
-                                "content": repr(content),
+                                "content": repr(result.content),
                                 "finish": fr,
                             }
                         )
                         if content_guard:
-                            gr = content_guard.feed(content)
+                            gr = content_guard.feed(result.content)
                             if gr.should_stop:
                                 guard_status = f"STOPPED ({gr.reason.name if gr.reason is not None else 'UNKNOWN'})"
                                 finish_reason = "repetition_guard"
@@ -549,7 +549,7 @@ def stream_and_display(
                                 break
 
                     # Chunk with only finish_reason, no content
-                    if fr and not reasoning and not content and not u:
+                    if fr and not result.thinking and not result.content and not u:
                         chunk_rows.append(
                             {
                                 "n": chunk_count,

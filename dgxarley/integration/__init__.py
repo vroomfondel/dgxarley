@@ -15,4 +15,6 @@ Modules:
         analysis for completed LLM outputs.
     streaming_repetition_guard: Real-time repetition detection for token
         streams with configurable thresholds.
+    thinking_parser: Unified thinking/content token classifier that handles
+        both server-separated reasoning_content and inline <think> tags.
 """
