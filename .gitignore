@@ -8,6 +8,8 @@ __pycache__/
 *.local
 *.local.*
 
+/dist
+
 /CLAUDE.md
 
 ## Re-include host_vars directories named *.local (Ansible inventory hostnames)
