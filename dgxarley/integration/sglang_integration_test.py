@@ -37,6 +37,7 @@ import random
 import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import aiohttp
 from rich.columns import Columns
@@ -64,6 +65,15 @@ from .openwebui_integration_test import (
     test_thinking_coding,
     test_thinking_mode,
 )
+
+from dgxarley import configure_logging, glogger, print_banner
+
+os.environ.setdefault("LOGURU_LEVEL", "DEBUG")
+configure_logging()
+glogger.enable("dgxarley")
+print_banner(module=Path(__file__).stem)
+
+from loguru import logger
 
 # Default model from Ansible defaults (the model currently deployed to SGLang)
 _CONFIGURED_MODEL: str = _dgx_defaults.get("sglang_model", "")  # type: ignore[assignment]

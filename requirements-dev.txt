@@ -9,5 +9,6 @@ pytest
 Pillow
 sglang
 
+types-tabulate
 types-requests
 types-pyyaml

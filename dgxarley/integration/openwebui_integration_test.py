@@ -53,6 +53,15 @@ import yaml
 from ascii_magic import AsciiArt
 from PIL import Image
 
+from dgxarley import configure_logging, glogger, print_banner
+
+os.environ.setdefault("LOGURU_LEVEL", "DEBUG")
+configure_logging()
+glogger.enable("dgxarley")
+print_banner(module=Path(__file__).stem)
+
+from loguru import logger
+
 # Repo root is 2 levels above __file__: integration/ -> dgxarley/ -> repo-root
 _REPO_ROOT: Path = Path(__file__).resolve().parents[2]
 

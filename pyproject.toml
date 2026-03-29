@@ -37,6 +37,7 @@ dependencies = [
     "ascii-magic",
     "Pillow",
     "pydantic",
+    "loguru"
 ]
 
 [project.optional-dependencies]

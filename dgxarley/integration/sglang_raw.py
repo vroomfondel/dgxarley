@@ -24,6 +24,7 @@ import os
 import sys
 import time
 from collections import deque
+from pathlib import Path
 from typing import cast
 
 import requests
@@ -39,6 +40,15 @@ from rich.text import Text
 from .openwebui_integration_test import _dgx_defaults, load_sampling_presets, pick_default_preset
 from .sglang_integration_test import _THINKING_BUDGET_PROCESSORS
 from .streaming_repetition_guard import RepetitionGuard, GuardConfig, FeedResult
+
+from dgxarley import configure_logging, glogger, print_banner
+
+os.environ.setdefault("LOGURU_LEVEL", "DEBUG")
+configure_logging()
+glogger.enable("dgxarley")
+print_banner(module=Path(__file__).stem)
+
+from loguru import logger
 
 _CONFIGURED_MODEL: str = str(_dgx_defaults.get("sglang_model", ""))
 """Default model ID loaded from Ansible role defaults."""
@@ -576,6 +586,7 @@ def main() -> None:
     missing.  Exits with status 0 on a ``KeyboardInterrupt`` at the
     confirmation prompt.
     """
+
     parser = argparse.ArgumentParser(
         description="Raw SGLang SSE stream viewer",
         formatter_class=argparse.RawDescriptionHelpFormatter,

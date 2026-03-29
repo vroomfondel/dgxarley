@@ -5,6 +5,7 @@ kubernetes
 requests
 dnspython
 ascii_magic
+loguru
 
 pygithub
 huggingface-hub
