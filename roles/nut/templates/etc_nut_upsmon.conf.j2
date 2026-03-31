@@ -1,10 +1,16 @@
 # {{ ansible_managed }}
 
-MONITOR {{ nut_ups_name }}@localhost 1 {{ nut_admin_user }} {{ nut_admin_password }} master
-{# Second UPS — uncomment when nut_ups_secondary_name is defined: #}
-{# MONITOR {{ nut_ups_secondary_name | default("greencell2") }}@localhost 1 {{ nut_admin_user }} {{ nut_admin_password }} master #}
+# powervalue=1 for the UPS that powers this host (triggers SHUTDOWNCMD on FSD),
+# powervalue=0 for UPSes that only power remote nodes (NOTIFYCMD handles those).
+MONITOR {{ nut_ups_name }}@localhost {{ (nut_ups_powers_self == nut_ups_name) | int }} {{ nut_admin_user }} {{ nut_admin_password }} master
+{% if nut_ups_secondary_name is defined %}
+MONITOR {{ nut_ups_secondary_name }}@localhost {{ (nut_ups_powers_self == nut_ups_secondary_name) | int }} {{ nut_admin_user }} {{ nut_admin_password }} master
+{% endif %}
+
+MINSUPPLIES 1
 
 SHUTDOWNCMD "/usr/local/bin/nut_shutdown.sh"
+NOTIFYCMD "/usr/local/bin/nut_notify.sh"
 
 POLLFREQ 5
 POLLFREQALERT 2
@@ -12,10 +18,10 @@ HOSTSYNC 15
 DEADTIME 15
 POWERDOWNFLAG /etc/killpower
 
-NOTIFYFLAG ONLINE    SYSLOG+WALL
-NOTIFYFLAG ONBATT    SYSLOG+WALL
-NOTIFYFLAG LOWBATT   SYSLOG+WALL
-NOTIFYFLAG FSD       SYSLOG+WALL
+NOTIFYFLAG ONLINE    SYSLOG+WALL+EXEC
+NOTIFYFLAG ONBATT    SYSLOG+WALL+EXEC
+NOTIFYFLAG LOWBATT   SYSLOG+WALL+EXEC
+NOTIFYFLAG FSD       SYSLOG+WALL+EXEC
 NOTIFYFLAG COMMOK    SYSLOG+WALL
-NOTIFYFLAG COMMBAD   SYSLOG+WALL
+NOTIFYFLAG COMMBAD   SYSLOG+WALL+EXEC
 NOTIFYFLAG SHUTDOWN  SYSLOG+WALL

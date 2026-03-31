@@ -9,6 +9,9 @@
 {% if nut_ups_bus is defined %}
     bus = {{ nut_ups_bus }}
 {% endif %}
+{% if nut_ups_busport is defined %}
+    busport = {{ nut_ups_busport }}
+{% endif %}
 {% if nut_ups_subdriver is defined %}
     subdriver = {{ nut_ups_subdriver }}
 {% endif %}
@@ -16,11 +19,7 @@
     {{ opt }}
 {% endfor %}
 
-{# ─── Second identical UPS ────────────────────────────────────────────── #}
-{# Uncomment when nut_ups_secondary_name is defined in defaults            #}
-{#
 {% if nut_ups_secondary_name is defined %}
-
 [{{ nut_ups_secondary_name }}]
     driver = {{ nut_ups_secondary_driver }}
     port = {{ nut_ups_secondary_port }}
@@ -30,6 +29,9 @@
 {% if nut_ups_secondary_bus is defined %}
     bus = {{ nut_ups_secondary_bus }}
 {% endif %}
+{% if nut_ups_secondary_busport is defined %}
+    busport = {{ nut_ups_secondary_busport }}
+{% endif %}
 {% if nut_ups_secondary_subdriver is defined %}
     subdriver = {{ nut_ups_secondary_subdriver }}
 {% endif %}
@@ -37,4 +39,3 @@
     {{ opt }}
 {% endfor %}
 {% endif %}
-#}

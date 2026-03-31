@@ -1,17 +1,22 @@
 #!/bin/bash
 # {{ ansible_managed }}
-# UPS shutdown script — drain K3s workers and power off cluster nodes before local shutdown.
+# SHUTDOWNCMD — called by upsmon when the UPS powering this host ({{ nut_ups_powers_self }})
+# reaches critical battery. Drains mapped K8s nodes, shuts down mapped hosts,
+# then powers off the local host.
 set -euo pipefail
 
-logger -t nut-shutdown "UPS shutdown initiated — draining K3s workers and powering off cluster"
+logger -t nut-shutdown "SHUTDOWNCMD — {{ nut_ups_powers_self }} critical, initiating shutdown sequence"
 
-{% for node in nut_shutdown_drain_nodes %}
-kubectl --context {{ kubeconfig_context_name }} drain {{ node }} --ignore-daemonsets --delete-emptydir-data --timeout=60s 2>&1 | logger -t nut-shutdown || true
+{% set self_targets = nut_ups_shutdown_map.get(nut_ups_powers_self, {}) %}
+{% for node in self_targets.get('drain_nodes', []) %}
+kubectl drain {{ node }} --ignore-daemonsets --delete-emptydir-data --timeout=60s 2>&1 | logger -t nut-shutdown || true
 {% endfor %}
+{% if self_targets.get('drain_nodes', []) %}
 
 sleep 5
 
-{% for host in nut_shutdown_ssh_hosts %}
+{% endif %}
+{% for host in self_targets.get('ssh_hosts', []) %}
 ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@{{ host }} 'shutdown -h now' 2>&1 | logger -t nut-shutdown || true
 {% endfor %}
 

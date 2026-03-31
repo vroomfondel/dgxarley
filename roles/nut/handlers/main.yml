@@ -6,11 +6,11 @@
     name: nut-driver@{{ nut_ups_name }}
     state: restarted
 
-# Second UPS — uncomment when nut_ups_secondary_name is defined:
-# - name: restart nut-driver-secondary
-#   service:
-#     name: nut-driver@{{ nut_ups_secondary_name | default("greencell2") }}
-#     state: restarted
+- name: restart nut-driver-secondary
+  service:
+    name: nut-driver@{{ nut_ups_secondary_name }}
+    state: restarted
+  when: nut_ups_secondary_name is defined
 
 - name: restart nut-server
   service:

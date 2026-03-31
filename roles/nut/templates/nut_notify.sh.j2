@@ -1,0 +1,52 @@
+#!/bin/bash
+# {{ ansible_managed }}
+# NOTIFYCMD — called by upsmon for each UPS event (with +EXEC flag).
+# On FSD: drain K8s nodes and SSH-shutdown hosts mapped to the affected UPS.
+# Other events are logged only.
+set -euo pipefail
+
+UPSNAME="${UPSNAME:-unknown}"
+NOTIFYTYPE="${NOTIFYTYPE:-unknown}"
+
+logger -t nut-notify "UPS event: type=$NOTIFYTYPE ups=$UPSNAME"
+
+case "$NOTIFYTYPE" in
+  FSD)
+    case "$UPSNAME" in
+{% for ups_name, targets in nut_ups_shutdown_map.items() %}
+{% if targets.get('drain_nodes', []) or targets.get('ssh_hosts', []) %}
+      {{ ups_name }})
+        logger -t nut-notify "FSD on {{ ups_name }} — draining nodes and shutting down hosts"
+{% for node in targets.get('drain_nodes', []) %}
+        kubectl drain {{ node }} --ignore-daemonsets --delete-emptydir-data --timeout=60s 2>&1 | logger -t nut-notify || true
+{% endfor %}
+{% if targets.get('drain_nodes', []) %}
+        sleep 5
+{% endif %}
+{% for host in targets.get('ssh_hosts', []) %}
+        ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@{{ host }} 'shutdown -h now' 2>&1 | logger -t nut-notify || true
+{% endfor %}
+        ;;
+{% endif %}
+{% endfor %}
+      *)
+        logger -t nut-notify "FSD on $UPSNAME — no shutdown targets mapped"
+        ;;
+    esac
+    ;;
+  ONBATT)
+    logger -t nut-notify "$UPSNAME is on battery power"
+    ;;
+  ONLINE)
+    logger -t nut-notify "$UPSNAME is back on mains power"
+    ;;
+  LOWBATT)
+    logger -t nut-notify "$UPSNAME battery is LOW"
+    ;;
+  COMMBAD)
+    logger -t nut-notify "Lost communication with $UPSNAME"
+    ;;
+  *)
+    logger -t nut-notify "Unhandled event $NOTIFYTYPE for $UPSNAME"
+    ;;
+esac

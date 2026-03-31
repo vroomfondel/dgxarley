@@ -1,21 +1,28 @@
 ---
 # file: roles/nut/defaults/main.yml
 
-# UPS device configuration — Green Cell UPS (MEC/MEC0003, USB 0001:0000)
-# Uses Megatec protocol over USB; blazer_usb provides full metrics
-# (battery.charge, input/output voltage, ups.load, frequency)
+# ─── Primary UPS: Green Cell UPS 1000VA 600W (UPS03) ──────────────────
+# Product: https://greencell.global/en/uninterruptible-power-supplies/1087
+# Specs:   1000VA / 600W, Line-Interactive AVR, modified sine
+# Battery: 2×12V/7Ah AGM in series → 24V nominal, 168Wh
+# USB:     MEC/MEC0003, vendor:product 0001:0000 (Megatec/Q1 protocol)
+# Driver:  blazer_usb (ignores "port" — uses libusb with vendorid/productid/busport)
 nut_ups_name: "greencell"
 nut_ups_driver: "blazer_usb"
 nut_ups_port: "auto"
-nut_ups_desc: "Green Cell UPS 600W"
+nut_ups_desc: "Green Cell UPS 1000VA 600W"
 nut_ups_vendorid: "0001"
 nut_ups_productid: "0000"
-# langid_fix required for Green Cell USB communication
-# Battery voltage thresholds doubled: 2 batteries in series (27.7V full → 21.0V empty)
-# runtimecal: estimated runtime from 2×12V/7Ah (168Wh nominal), format: sec,load%,sec,load%
-#   Full load (600W, 100%): ~480s (80% inverter eff + Peukert)
-#   Half load (300W, 50%): ~1200s (85% inverter eff + Peukert)
-#   Tune after a real battery discharge test if needed.
+nut_ups_busport: "004"              # physical USB port (nut-scanner -U → busport), stable across reboots
+# langid_fix: required for Green Cell USB communication
+# norating/novendor: suppress garbage USB queries, use overrides instead
+# Voltage thresholds for 2×12V AGM in series:
+#   high = 2×13.8V = 27.6V (fully charged)
+#   low  = 2×10.5V = 21.0V (empty, cutoff)
+# runtimecal format: sec_full,load%,sec_half,load%
+#   168Wh @ 600W full → ~480s (80% inverter eff, Peukert losses)
+#   168Wh @ 300W half → ~1200s (85% inverter eff, Peukert losses)
+#   Tune after a real battery discharge test.
 nut_ups_extra_options:
   - "langid_fix = 0x409"
   - "norating"
@@ -24,35 +31,39 @@ nut_ups_extra_options:
   - "default.battery.voltage.low = 21.0"
   - "runtimecal = 480,100,1200,50"
   - 'override.device.mfr = "Green Cell"'
-  - 'override.device.model = "UPS 600W"'
+  - 'override.device.model = "UPS 1000VA 600W"'
   - "override.ups.realpower.nominal = 600"
 
-# ─── Second identical UPS (commented out) ──────────────────────────────
-# Two identical UPS units share the same vendor:product ID (0001:0000).
-# Distinguish them via USB bus ("bus") or stable udev symlinks ("port").
-#
-# Determine bus/port:
-#   lsusb                  → Bus 001 Device 003: ID 0001:0000 ...
-#   nut-scanner -U         → shows bus/device per detected UPS
-#
-# Option A — via bus= (simple, but not reboot-stable):
-#   nut_ups_bus: "001"
-#   nut_ups_secondary_bus: "002"
-#
-# Option B — via udev symlink (reboot-stable, preferred):
-#   Uncomment symlinks in etc_udev_rules.d_99-nut-ups.rules.j2,
-#   then use port instead of auto:
-#   nut_ups_port: "/dev/ups-1"        # instead of "auto"
-#   nut_ups_secondary_port: "/dev/ups-2"
-#
-# nut_ups_secondary_name: "greencell2"
-# nut_ups_secondary_driver: "blazer_usb"
-# nut_ups_secondary_port: "auto"         # or "/dev/ups-2" with udev symlink
-# nut_ups_secondary_bus: "002"           # only for Option A (without udev symlink)
-# nut_ups_secondary_desc: "Green Cell UPS 600W (2)"
-# nut_ups_secondary_vendorid: "0001"
-# nut_ups_secondary_productid: "0000"
-# nut_ups_secondary_extra_options: "{{ nut_ups_extra_options }}"
+# ─── Secondary UPS: Green Cell UPS 2000VA 1200W (UPS05) ───────────────
+# Product: https://greencell.global/en/uninterruptible-power-supplies/1089
+# Specs:   2000VA / 1200W, Line-Interactive AVR, modified sine
+# Battery: 2×12V/9Ah AGM in series → 24V nominal, 216Wh
+# USB:     identical to primary (MEC/MEC0003, 0001:0000) — distinguished by busport
+# Determine busport: nut-scanner -U → busport field
+nut_ups_secondary_name: "greencell2"
+nut_ups_secondary_driver: "blazer_usb"
+nut_ups_secondary_port: "auto"
+nut_ups_secondary_bus: "001"
+nut_ups_secondary_busport: "001"     # physical USB port 1 (nut-scanner -U → busport)
+nut_ups_secondary_desc: "Green Cell UPS 2000VA 1200W"
+nut_ups_secondary_vendorid: "0001"
+nut_ups_secondary_productid: "0000"
+# Same 24V AGM chemistry → same voltage thresholds (27.6V/21.0V)
+# runtimecal scaled from primary: factor = (9Ah/7Ah) × (600W/1200W) = 0.643
+#   216Wh @ 1200W full → ~300s (vs 480s @ 600W for 7Ah)
+#   216Wh @  600W half → ~780s (vs 1200s @ 300W for 7Ah)
+#   Tune after a real battery discharge test.
+nut_ups_secondary_extra_options:
+  - "langid_fix = 0x409"
+  - "norating"
+  - "novendor"
+  - "default.battery.voltage.high = 27.6"
+  - "default.battery.voltage.low = 21.0"
+  - "runtimecal = 300,100,780,50"
+  - 'override.device.mfr = "Green Cell"'
+  - 'override.device.model = "UPS 2000VA 1200W"'
+  - "override.ups.realpower.nominal = 1200"
+
 # ────────────────────────────────────────────────────────────────────────
 
 # NUT mode: netserver allows remote clients (nut-exporter) to query upsd
@@ -66,13 +77,25 @@ nut_admin_password: "changeme"
 nut_monitor_user: "monuser"
 nut_monitor_password: "changeme"
 
-# Cluster shutdown on UPS critical battery
-# Nodes to kubectl drain before poweroff
-nut_shutdown_drain_nodes:
-  - spark1
-  - spark2
+# ─── Per-UPS shutdown targets ──────────────────────────────────────────
+# Which UPS powers the NUT server (this host). Its MONITOR line gets
+# powervalue=1; when it goes critical, upsmon calls SHUTDOWNCMD for local
+# shutdown. The other UPS gets powervalue=0 — its FSD only triggers
+# NOTIFYCMD (drain + remote shutdown), the local host stays up.
+nut_ups_powers_self: "greencell"
 
-# Hosts to SSH poweroff after drain (override via vault)
-nut_shutdown_ssh_hosts:
-  - "192.168.124.101"
-  - "192.168.124.102"
+# Map UPS name → K8s nodes to drain + hosts to SSH-shutdown on FSD.
+# Override in vault with actual node/host assignments per UPS.
+nut_ups_shutdown_map:
+  greencell:
+    drain_nodes:
+      - spark1
+      - spark2
+    ssh_hosts:
+      - "192.168.124.101"
+      - "192.168.124.102"
+  greencell2:
+    drain_nodes:
+      - spark3
+    ssh_hosts:
+      - "192.168.124.103"

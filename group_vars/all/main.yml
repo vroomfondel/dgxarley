@@ -128,9 +128,7 @@ wifi_access_points: []
 # NUT UPS
 nut_admin_password: "changeme"
 nut_monitor_password: "changeme"
-nut_shutdown_ssh_hosts:
-  - "192.168.124.101"
-  - "192.168.124.102"
+
 
 # DynDNS hostname for ipset updates
 dyndns_hostname: "dyn.example.com"

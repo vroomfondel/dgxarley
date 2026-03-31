@@ -10,34 +10,23 @@
 #   ansible-playbook common.yml --tags nut
 #   ansible-playbook common.yml --limit k3smaster --tags nut
 #
-# ─── MEMO: Enabling a second identical UPS ─────────────────────────────
+# ─── Dual-UPS support ──────────────────────────────────────────────────
 #
-# When two identical UPS units (same USB vendor:product ID) are connected,
-# they must be distinguished by USB bus/port. Steps:
+# Two identical UPS units (same USB vendor:product ID) are distinguished
+# via stable udev symlinks (/dev/ups-1, /dev/ups-2) keyed by USB KERNELS path.
 #
-#  1. Connect both UPS units, then determine bus/port:
-#       lsusb                      # → Bus 001 Device 003: ID 0001:0000 ...
-#       nut-scanner -U             # shows detected UPS with USB attributes
+# Per-UPS shutdown logic:
+#   nut_ups_powers_self  — which UPS powers this host (powervalue=1 in MONITOR)
+#   nut_ups_shutdown_map — maps UPS name → {drain_nodes, ssh_hosts}
 #
-#  2. defaults/main.yml: uncomment the nut_ups_secondary_* variables,
-#     fill in bus values from step 1 (nut_ups_bus / nut_ups_secondary_bus).
+# On FSD of a non-self UPS: NOTIFYCMD (nut_notify.sh) drains + shuts down
+#   only the mapped nodes. Local host stays up.
+# On FSD of the self UPS: SHUTDOWNCMD (nut_shutdown.sh) drains mapped nodes
+#   + local shutdown. upsmon triggers this via MINSUPPLIES.
 #
-#  3. etc_udev_rules.d_99-nut-ups.rules.j2: uncomment the symlink rule
-#     and adjust the KERNELS path (from: udevadm info -a /dev/bus/usb/001/003).
-#     → Stable /dev/ups-1 and /dev/ups-2 symlinks instead of changing bus IDs.
-#
-#  4. etc_nut_ups.conf.j2: uncomment the second [ups] section.
-#
-#  5. etc_nut_upsmon.conf.j2: uncomment the second MONITOR line.
-#
-#  6. handlers/main.yml: uncomment the second nut-driver handler.
-#
-#  7. Deploy:
-#       ansible-playbook common.yml --tags nut
-#
-#  8. Verify:
-#       upsc greencell@localhost
-#       upsc greencell2@localhost
+# The secondary UPS is automatically configured when nut_ups_secondary_name
+# is defined in defaults (all templates, handlers, and verify tasks are
+# conditional on this variable).
 #
 # ────────────────────────────────────────────────────────────────────────
 
@@ -47,6 +36,7 @@
       - nut
       - nut-client
       - nut-server
+      - libusb-1.0-0-dev
     state: present
     update_cache: true
 
@@ -60,7 +50,7 @@
   register: nut_udev_rule
 
 - name: reload udev rules and re-trigger USB subsystem
-  shell: udevadm control --reload-rules && udevadm trigger --subsystem-match=usb
+  shell: udevadm control --reload-rules && udevadm trigger --subsystem-match=usb --action=add
   when: nut_udev_rule is changed
 
 - name: deploy nut.conf
@@ -81,6 +71,7 @@
     mode: '0640'
   notify:
     - restart nut-driver
+    - restart nut-driver-secondary
     - restart nut-server
 
 - name: deploy upsd.conf
@@ -110,10 +101,18 @@
     mode: '0640'
   notify: restart nut-monitor
 
-- name: deploy UPS cluster shutdown script
+- name: deploy UPS cluster shutdown script (SHUTDOWNCMD)
   template:
     src: nut_shutdown.sh.j2
     dest: /usr/local/bin/nut_shutdown.sh
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: deploy UPS notification script (NOTIFYCMD)
+  template:
+    src: nut_notify.sh.j2
+    dest: /usr/local/bin/nut_notify.sh
     owner: root
     group: root
     mode: '0755'
@@ -148,3 +147,20 @@
   debug:
     msg: "WARNING — upsc could not query UPS '{{ nut_ups_name }}'. Check USB connection and driver."
   when: nut_ups_status.rc != 0
+
+- name: verify secondary UPS is detected by NUT
+  command: upsc {{ nut_ups_secondary_name }}@localhost
+  register: nut_ups_secondary_status
+  changed_when: false
+  failed_when: false
+  when: nut_ups_secondary_name is defined
+
+- name: display secondary UPS status
+  debug:
+    msg: "{{ nut_ups_secondary_status.stdout_lines[:15] }}"
+  when: nut_ups_secondary_name is defined and nut_ups_secondary_status.rc == 0
+
+- name: warn if secondary UPS not detected
+  debug:
+    msg: "WARNING — upsc could not query UPS '{{ nut_ups_secondary_name }}'. Check USB connection and driver."
+  when: nut_ups_secondary_name is defined and nut_ups_secondary_status.rc != 0
