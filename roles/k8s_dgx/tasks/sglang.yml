@@ -180,24 +180,48 @@
         name: pod-reader
         apiGroup: rbac.authorization.k8s.io
 
-# Startup ordering: Worker MUST be deployed before head.
+# Startup ordering: Workers MUST be deployed before head.
 # At the NCCL/PyTorch level, the head (rank 0) hosts the TCP rendezvous server
-# and the worker (rank 1) connects as a client with exponential backoff retries.
+# and workers (rank 1..N) connect as clients with exponential backoff retries.
 # However, the head has a startupProbe on /v1/models which only passes after the
-# model is fully loaded — and model loading requires BOTH nodes to be connected
-# (tensor parallelism). If the worker waited for the head to be Ready, it would
-# deadlock: head can't become Ready without the worker, worker won't start without
-# the head. Instead, the worker starts first (no readinessProbe → immediately Ready),
+# model is fully loaded — and model loading requires ALL nodes to be connected
+# (tensor parallelism). If workers waited for the head to be Ready, it would
+# deadlock: head can't become Ready without workers, workers won't start without
+# the head. Instead, workers start first (no readinessProbe → immediately Ready),
 # and the head's wait-for-worker initContainer gates on that. When the head's sglang
-# process opens the rendezvous port, the worker (already retrying) connects instantly.
-- name: Deploy SGLang worker Deployment
+# process opens the rendezvous port, the workers (already retrying) connect instantly.
+
+# Migration: remove old unnumbered sglang-worker Deployment
+- name: Remove legacy sglang-worker Deployment (pre-multi-worker)
+  kubernetes.core.k8s:
+    state: absent
+    api_version: apps/v1
+    kind: Deployment
+    name: sglang-worker
+    namespace: "{{ sglang_namespace }}"
+
+# Cleanup: remove worker Deployments beyond current nnodes
+- name: Remove excess SGLang worker Deployments
+  kubernetes.core.k8s:
+    state: absent
+    api_version: apps/v1
+    kind: Deployment
+    name: "sglang-worker-{{ item }}"
+    namespace: "{{ sglang_namespace }}"
+  loop: "{{ range(sglang_nnodes | int, 5) | list }}"
+
+- name: Deploy SGLang worker Deployments
+  loop: "{{ range(1, sglang_nnodes | int) | list }}"
+  loop_control:
+    loop_var: worker_rank
+    label: "sglang-worker-{{ worker_rank }} (spark{{ worker_rank + 1 }}, rank {{ worker_rank }})"
   kubernetes.core.k8s:
     state: present
     definition:
       apiVersion: apps/v1
       kind: Deployment
       metadata:
-        name: sglang-worker
+        name: "sglang-worker-{{ worker_rank }}"
         namespace: "{{ sglang_namespace }}"
         labels:
           app: sglang
@@ -210,13 +234,15 @@
           matchLabels:
             app: sglang
             role: worker
+            worker-rank: "{{ worker_rank | string }}"
         template:
           metadata:
             labels:
               app: sglang
               role: worker
+              worker-rank: "{{ worker_rank | string }}"
             annotations:
-              k8s.v1.cni.cncf.io/networks: "{{ '[{\"name\":\"qsfp-vf' ~ qsfp_sriov_assignments.sglang.vf ~ '\",\"ips\":[\"' ~ qsfp_sriov_assignments.sglang.worker_ip1 ~ '/24\"]}]' if qsfp_sriov_enabled | default(false) else 'qsfp-direct-worker' }}"
+              k8s.v1.cni.cncf.io/networks: "{{ '[{\"name\":\"qsfp-vf' ~ qsfp_sriov_assignments.sglang.vf ~ '\",\"ips\":[\"' ~ _sglang_qsfp_ips[worker_rank] ~ '/24\"]}]' if qsfp_sriov_enabled | default(false) else 'qsfp-direct-worker' ~ worker_rank }}"
               kubectl.kubernetes.io/default-container: sglang
               checksum/launch-script: "{{ lookup('file', role_path ~ '/files/sglang_launch.sh') | hash('sha256') }}"
               checksum/config: "{{ (sglang_model ~ sglang_context_length ~ sglang_kv_cache_dtype ~ sglang_mem_fraction_static ~ sglang_quantization ~ sglang_load_format ~ sglang_attention_backend ~ sglang_ep) | hash('sha256') }}"
@@ -224,7 +250,7 @@
             enableServiceLinks: false         # prevent K8s SGLANG_PORT=tcp://... injection
             hostIPC: true                    # shared memory for NCCL
             nodeSelector:
-              spark-id: "2"
+              spark-id: "{{ worker_rank + 1 }}"
             initContainers:
               - name: model-download
                 image: "{{ sglang_image }}"
@@ -253,7 +279,7 @@
                   - name: SGLANG_IMAGE
                     value: "{{ sglang_image }}"
                   - name: NODE_RANK
-                    value: "1"
+                    value: "{{ worker_rank | string }}"
                   - name: SGLANG_HOST
                     valueFrom:
                       fieldRef:
@@ -265,9 +291,9 @@
                   - name: NNODES
                     value: "{{ sglang_nnodes | string }}"
                   - name: QSFP_IP_SPARK1
-                    value: "{{ qsfp_sriov_assignments.sglang.head_ip if qsfp_sriov_enabled | default(false) else qsfp_ip_spark1 }}"
-                  - name: QSFP_IP_SPARK2
-                    value: "{{ qsfp_sriov_assignments.sglang.worker_ip1 if qsfp_sriov_enabled | default(false) else qsfp_ip_spark2 }}"
+                    value: "{{ _sglang_qsfp_ips[0] }}"
+                  - name: QSFP_PEER_IPS
+                    value: "{{ (_sglang_qsfp_ips[:worker_rank] + _sglang_qsfp_ips[worker_rank + 1:]) | join(',') }}"
                   - name: NCCL_PORT
                     value: "{{ nccl_bootstrap_port | string }}"
                   - name: SGLANG_PORT
@@ -372,6 +398,8 @@
                     value: "{{ sglang_namespace }}"
                   - name: WAIT_LABEL
                     value: "app=sglang,role=worker"
+                  - name: WAIT_COUNT
+                    value: "{{ (sglang_nnodes | int) - 1 }}"
                 volumeMounts:
                   - name: wait-script
                     mountPath: /scripts
@@ -400,9 +428,9 @@
                   - name: NNODES
                     value: "{{ sglang_nnodes | string }}"
                   - name: QSFP_IP_SPARK1
-                    value: "{{ qsfp_sriov_assignments.sglang.head_ip if qsfp_sriov_enabled | default(false) else qsfp_ip_spark1 }}"
-                  - name: QSFP_IP_SPARK2
-                    value: "{{ qsfp_sriov_assignments.sglang.worker_ip1 if qsfp_sriov_enabled | default(false) else qsfp_ip_spark2 }}"
+                    value: "{{ _sglang_qsfp_ips[0] }}"
+                  - name: QSFP_PEER_IPS
+                    value: "{{ _sglang_qsfp_ips[1:] | join(',') }}"
                   - name: NCCL_PORT
                     value: "{{ nccl_bootstrap_port | string }}"
                   - name: SGLANG_PORT

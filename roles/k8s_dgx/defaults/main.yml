@@ -7,9 +7,13 @@ traefik_internal_allowlist:
 sglang_namespace: "sglang"
 vllm_namespace: "vllm"
 openwebui_namespace: "openwebui"
+
+# curl -s 'https://hub.docker.com/v2/repositories/scitrera/dgx-spark-sglang/tags/?page_size=20&ordering=last_updated' | jq '.results[] | {name, last_updated}'
 #sglang_image: "scitrera/dgx-spark-sglang:0.5.9-t5"
 sglang_image: "scitrera/dgx-spark-sglang:0.5.9-dev2-acab24a7-t5"
 #sglang_image: "scitrera/dgx-spark-sglang:0.5.10rc0"
+
+sglang_nnodes: 3
 
 # Model profiles: context_length, kv_cache_dtype, mem_fraction_static
 sglang_model_profiles:
@@ -108,7 +112,8 @@ sglang_model_profiles:
     # Re-run sglang_shard/sglang_cpu_shard after enabling (old shards incompatible).
     # SGLang 0.5.9 qzeros EP bug is monkey-patched at runtime in sglang_launch.sh
     # and sglang_shard_launch.sh (w13_qzeros/w2_qzeros expert_id remapping).
-    ep_size: 2
+    num_experts: 128
+    ep_size: "{{ sglang_nnodes if (128 % (sglang_nnodes | int) == 0) else 2 }}"
     # EPLB disabled: EPLBManager crashes after ~1000 forward passes with AttributeError:
     # 'Qwen3MoeForCausalLM' has no 'routed_experts_weights_of_layer' (eplb_manager.py:110).
     # Confirmed broken on both 0.5.9-t5 AND 0.5.9-dev2-acab24a7-t5 (PR #19767 does not
@@ -161,7 +166,8 @@ sglang_model_profiles:
     disable_deep_gemm: true
     tool_call_parser: "qwen3_coder"
     # Expert parallelism: monkey-patched at runtime (see Thinking profile comment).
-    ep_size: 2
+    num_experts: 128
+    ep_size: "{{ sglang_nnodes if (128 % (sglang_nnodes | int) == 0) else 2 }}"
     # EPLB disabled: see Thinking profile comment (Qwen3MoE missing attribute, crashes
     # after ~1000 iter). Still broken on 0.5.9-dev2-acab24a7-t5.
     enable_eplb: false
@@ -275,7 +281,8 @@ sglang_model_profiles:
     #    attention_backend: "triton"
     #    disable_deep_gemm: true
     # Expert parallelism: monkey-patched at runtime (see Thinking profile comment).
-    ep_size: 2
+    num_experts: 256
+    ep_size: "{{ sglang_nnodes if (256 % (sglang_nnodes | int) == 0) else 2 }}"
     # EPLB disabled: Qwen3_5MoeForConditionalGeneration also lacks
     # 'routed_experts_weights_of_layer'. Crashes after ~1000 forward passes.
     # Confirmed broken on 0.5.9-dev2-acab24a7-t5 (2026-03-20, pod sglang-head-5d7585955).
@@ -355,7 +362,8 @@ sglang_model_profiles:
     # handles both modes, but "minimax" gives cleaner native separation.
     reasoning_parser: "minimax"
     tool_call_parser: "minimax-m2"
-    ep_size: 2
+    num_experts: 256
+    ep_size: "{{ sglang_nnodes if (256 % (sglang_nnodes | int) == 0) else 2 }}"
     # Reasoning model: thinking is always on (chat template injects <think>\n).
     # Thinking tokens wrapped in <think>...</think>, exposed via reasoning_content field.
     recommended_sampling:
@@ -386,7 +394,8 @@ sglang_model_profiles:
     moe_runner_backend: "flashinfer_cutlass"
     trust_remote_code: true
     kv_cache_dtype: "fp8_e4m3"
-    ep_size: 2
+    num_experts: 512
+    ep_size: "{{ sglang_nnodes if (512 % (sglang_nnodes | int) == 0) else 2 }}"
     mem_fraction_static: "0.80"
     attention_backend: "triton"
     reasoning_parser: "nemotron_3"
@@ -485,7 +494,8 @@ sglang_served_model_name: "{{ sglang_model }}"
 # sglang default: os.cpu_count()
 sglang_jit_max_jobs: "{{ sglang_model_profiles[sglang_model].jit_max_jobs | default(16) }}"
 
-sglang_tp: 2
+# Tensor parallelism: auto-derived from nnodes (1 GPU per DGX Spark).
+sglang_tp: "{{ sglang_nnodes }}"
 # Expert parallelism: partitions the TP group for MoE layers.
 # EP must divide TP (ep_size <= tp_size). With EP=TP, MoE layers use
 # all-to-all instead of all-reduce — more efficient for MoE over Ethernet.
@@ -498,7 +508,6 @@ sglang_enable_eplb: "{{ sglang_model_profiles[sglang_model].enable_eplb | defaul
 # Expert distribution metrics: logs per-expert load statistics via Prometheus.
 # Useful for monitoring EP balance. Only effective when ep_size > 1.
 sglang_enable_expert_distribution_metrics: "{{ sglang_model_profiles[sglang_model].enable_expert_distribution_metrics | default(false) }}"
-sglang_nnodes: 2
 sglang_port: 8000
 sglang_internal_port: 30080
 sglang_haproxy_timeout: 1800
@@ -573,8 +582,9 @@ vllm_enable_ep: "{{ (sglang_model_profiles[vllm_model].ep_size | default(1) | in
 # Enable eager mode for MoE models on SM121 where CUDA graph capture is slow/fragile.
 vllm_enforce_eager: "{{ sglang_model_profiles[vllm_model].disable_deep_gemm | default(false) }}"
 
-vllm_tp: 2
 vllm_nnodes: 2
+# Tensor parallelism: auto-derived from nnodes (1 GPU per DGX Spark).
+vllm_tp: "{{ vllm_nnodes }}"
 # Port 8001 to avoid clash with SGLang (8000) — both can have Services simultaneously.
 vllm_port: 8001
 vllm_dist_timeout: 1800
@@ -695,24 +705,33 @@ qsfp_ip_spark4: "10.10.10.104"
 # Each deployment gets its own VF index + dedicated IPs per spark node.
 # This allows multiple engines to run on different VFs simultaneously.
 # vf: which VF index (maps to NAD qsfp-vfN and interface <prefix>vN)
-# head_ip / worker_ip: QSFP IPs assigned to pods via Multus annotation
+# head_ip: QSFP IP for the head pod (rank 0, spark1)
+# worker_ip1..N: QSFP IPs for worker pods (rank 1..N, spark2..N+1)
 qsfp_sriov_assignments:
   sglang:
     vf: 0
     head_ip: "10.10.10.201"
-    worker_ip: "10.10.10.202"
+    worker_ip1: "10.10.10.202"
+    worker_ip2: "10.10.10.203"
+    worker_ip3: "10.10.10.204"
   vllm:
     vf: 1
-    head_ip: "10.10.10.203"
-    worker_ip: "10.10.10.204"
+    head_ip: "10.10.10.205"
+    worker_ip1: "10.10.10.206"
+    worker_ip2: "10.10.10.207"
+    worker_ip3: "10.10.10.208"
   sglang_shard:
     vf: 2
-    head_ip: "10.10.10.205"
-    worker_ip: "10.10.10.206"
+    head_ip: "10.10.10.209"
+    worker_ip1: "10.10.10.210"
+    worker_ip2: "10.10.10.211"
+    worker_ip3: "10.10.10.212"
   vllm_shard:
     vf: 3
-    head_ip: "10.10.10.207"
-    worker_ip: "10.10.10.208"
+    head_ip: "10.10.10.213"
+    worker_ip1: "10.10.10.214"
+    worker_ip2: "10.10.10.215"
+    worker_ip3: "10.10.10.216"
   iperf_test:
     vf: 7
     server_ip: "10.10.10.241"
@@ -720,6 +739,45 @@ qsfp_sriov_assignments:
 
 nccl_bootstrap_port: 50000
 nccl_socket_ifname: "net1"
+
+# Ordered QSFP IP lists per engine (index 0 = head/rank 0, index N = worker rank N).
+# PF mode: uses qsfp_ip_sparkN host variables.
+# SR-IOV mode: uses per-engine VF IPs from qsfp_sriov_assignments.
+# Sliced to nnodes so unused spark IPs are excluded.
+_qsfp_ips_pf_all:
+  - "{{ qsfp_ip_spark1 }}"
+  - "{{ qsfp_ip_spark2 }}"
+  - "{{ qsfp_ip_spark3 }}"
+  - "{{ qsfp_ip_spark4 }}"
+
+_sglang_qsfp_ips_sriov:
+  - "{{ qsfp_sriov_assignments.sglang.head_ip }}"
+  - "{{ qsfp_sriov_assignments.sglang.worker_ip1 }}"
+  - "{{ qsfp_sriov_assignments.sglang.worker_ip2 }}"
+  - "{{ qsfp_sriov_assignments.sglang.worker_ip3 }}"
+_sglang_qsfp_ips: "{{ (_sglang_qsfp_ips_sriov if qsfp_sriov_enabled | default(false) else _qsfp_ips_pf_all)[:sglang_nnodes | int] }}"
+
+_vllm_qsfp_ips_sriov:
+  - "{{ qsfp_sriov_assignments.vllm.head_ip }}"
+  - "{{ qsfp_sriov_assignments.vllm.worker_ip1 }}"
+  - "{{ qsfp_sriov_assignments.vllm.worker_ip2 }}"
+  - "{{ qsfp_sriov_assignments.vllm.worker_ip3 }}"
+_vllm_qsfp_ips: "{{ (_vllm_qsfp_ips_sriov if qsfp_sriov_enabled | default(false) else _qsfp_ips_pf_all)[:vllm_nnodes | int] }}"
+
+_sglang_shard_qsfp_ips_sriov:
+  - "{{ qsfp_sriov_assignments.sglang_shard.head_ip }}"
+  - "{{ qsfp_sriov_assignments.sglang_shard.worker_ip1 }}"
+  - "{{ qsfp_sriov_assignments.sglang_shard.worker_ip2 }}"
+  - "{{ qsfp_sriov_assignments.sglang_shard.worker_ip3 }}"
+_sglang_shard_qsfp_ips: "{{ (_sglang_shard_qsfp_ips_sriov if qsfp_sriov_enabled | default(false) else _qsfp_ips_pf_all)[:sglang_nnodes | int] }}"
+
+_vllm_shard_qsfp_ips_sriov:
+  - "{{ qsfp_sriov_assignments.vllm_shard.head_ip }}"
+  - "{{ qsfp_sriov_assignments.vllm_shard.worker_ip1 }}"
+  - "{{ qsfp_sriov_assignments.vllm_shard.worker_ip2 }}"
+  - "{{ qsfp_sriov_assignments.vllm_shard.worker_ip3 }}"
+_vllm_shard_qsfp_ips: "{{ (_vllm_shard_qsfp_ips_sriov if qsfp_sriov_enabled | default(false) else _qsfp_ips_pf_all)[:vllm_nnodes | int] }}"
+
 # HuggingFace cache paths on DGX nodes
 hf_cache_path: "/var/lib/hf-cache"
 hf_token: "hf_CHANGEME"

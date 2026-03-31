@@ -5,17 +5,17 @@ set -e
 # Head (rank 0) needs rsync + ssh for syncing metadata to the worker node.
 apt-get update -qq && apt-get install -y -qq tini iproute2 iputils-ping net-tools rsync openssh-client
 
-# Prime ARP table on the QSFP P2P link before NCCL tries to connect.
-if [ "$NODE_RANK" = "0" ]; then
-  peer="$QSFP_IP_SPARK2"
-else
-  peer="$QSFP_IP_SPARK1"
-fi
-echo "Waiting for QSFP peer ${peer} ..."
-until ping -c10 -W1 "$peer" ; do
-  sleep 1
+# Prime ARP table on the QSFP link before NCCL tries to connect.
+# Full-mesh: every node pings ALL other nodes so NCCL's ring/tree
+# topology can communicate immediately over any path.
+IFS=',' read -ra peers <<< "$QSFP_PEER_IPS"
+for peer in "${peers[@]}"; do
+  echo "Waiting for QSFP peer ${peer} ..."
+  until ping -c10 -W1 "$peer" ; do
+    sleep 1
+  done
+  echo "QSFP peer ${peer} reachable."
 done
-echo "QSFP peer ${peer} reachable."
 
 # Patch moe_wna16 weight loader for EP-aware qzeros handling (vLLM 0.17.0 bug).
 # Two bugs in the w13_qzeros/w2_qzeros branches:
@@ -133,17 +133,21 @@ if [ "$NODE_RANK" != "0" ] && [ $rc -ne 0 ]; then
   fi
 fi
 
-# Head post-save: sync index.json + metadata to the worker node so both
-# nodes have the complete shard directory for --load-format sharded_state.
+# Head post-save: sync index.json + metadata to ALL worker nodes so every
+# node has the complete shard directory for --load-format sharded_state.
 # ShardedStateLoader only writes model.safetensors.index.json on rank 0.
-if [ "$NODE_RANK" = "0" ] && [ -n "$RSYNC_TARGET" ]; then
+# RSYNC_TARGETS is a comma-separated list of worker host IPs.
+if [ "$NODE_RANK" = "0" ] && [ -n "$RSYNC_TARGETS" ]; then
   ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-  dst="root@${RSYNC_TARGET}:${HF_CACHE_HOST_PATH}/sharded/${model_slug}-${shard_suffix}/"
-  echo "[rank $NODE_RANK] Syncing index + metadata to ${RSYNC_TARGET} ..."
-  rsync -ah \
-    -e "ssh $ssh_opts" \
-    --exclude='model-rank-*-part-*.safetensors' \
-    --exclude='.shard_run_start' \
-    "$shard_dir/" "$dst"
-  echo "[rank $NODE_RANK] Sync to ${RSYNC_TARGET} complete."
+  IFS=',' read -ra targets <<< "$RSYNC_TARGETS"
+  for target in "${targets[@]}"; do
+    dst="root@${target}:${HF_CACHE_HOST_PATH}/sharded/${model_slug}-${shard_suffix}/"
+    echo "[rank $NODE_RANK] Syncing index + metadata to ${target} ..."
+    rsync -ah \
+      -e "ssh $ssh_opts" \
+      --exclude='model-rank-*-part-*.safetensors' \
+      --exclude='.shard_run_start' \
+      "$shard_dir/" "$dst"
+    echo "[rank $NODE_RANK] Sync to ${target} complete."
+  done
 fi

@@ -12,7 +12,7 @@ set -e
 #   EP                  — expert parallelism (e.g. 2)
 #   HF_TOKEN            — HuggingFace token
 #   MOE_CONFIG_DIR      — container path for config output (e.g. /root/.cache/huggingface/moe_configs)
-#   RSYNC_TARGET        — IP of spark2 for rsync
+#   RSYNC_TARGETS       — comma-separated IPs of worker nodes for rsync
 #   HF_CACHE_HOST_PATH  — host path for hf-cache (e.g. /var/lib/hf-cache)
 #   FORCE_RETUNE        — set "true" to overwrite existing configs
 #   SGLANG_TUNE_BRANCH  — GitHub branch for tuning scripts (default: main)
@@ -45,12 +45,15 @@ if [ -n "$existing" ] && [ "$FORCE_RETUNE" != "true" ]; then
   echo "Tuned config already exists: ${existing}"
   echo "Set FORCE_RETUNE=true to re-run. Skipping."
   # Still rsync existing configs
-  if [ -n "$RSYNC_TARGET" ]; then
-    echo "Rsyncing existing configs to ${RSYNC_TARGET} ..."
+  if [ -n "$RSYNC_TARGETS" ]; then
     ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-    dst="root@${RSYNC_TARGET}:${HF_CACHE_HOST_PATH}/moe_configs/"
-    rsync -ah -e "ssh $ssh_opts" "${MOE_CONFIG_DIR}/" "$dst"
-    echo "Rsync complete."
+    IFS=',' read -ra targets <<< "$RSYNC_TARGETS"
+    for target in "${targets[@]}"; do
+      echo "Rsyncing existing configs to ${target} ..."
+      dst="root@${target}:${HF_CACHE_HOST_PATH}/moe_configs/"
+      rsync -ah -e "ssh $ssh_opts" "${MOE_CONFIG_DIR}/" "$dst"
+      echo "Rsync to ${target} complete."
+    done
   fi
   exit 0
 fi
@@ -156,13 +159,16 @@ done
 echo "Configs in ${config_dir}:"
 ls -la "${config_dir}/"
 
-# 9. Rsync config dir to spark2 via SSH
-if [ -n "$RSYNC_TARGET" ]; then
-  echo "Rsyncing configs to ${RSYNC_TARGET} ..."
+# 9. Rsync config dir to all worker nodes via SSH
+if [ -n "$RSYNC_TARGETS" ]; then
   ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-  dst="root@${RSYNC_TARGET}:${HF_CACHE_HOST_PATH}/moe_configs/"
-  rsync -ah -e "ssh $ssh_opts" "${MOE_CONFIG_DIR}/" "$dst"
-  echo "Rsync to ${RSYNC_TARGET} complete."
+  IFS=',' read -ra targets <<< "$RSYNC_TARGETS"
+  for target in "${targets[@]}"; do
+    echo "Rsyncing configs to ${target} ..."
+    dst="root@${target}:${HF_CACHE_HOST_PATH}/moe_configs/"
+    rsync -ah -e "ssh $ssh_opts" "${MOE_CONFIG_DIR}/" "$dst"
+    echo "Rsync to ${target} complete."
+  done
 fi
 
 echo "=== MoE Triton Kernel Tuning Job Done ==="

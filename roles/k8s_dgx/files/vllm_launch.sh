@@ -4,19 +4,19 @@ set -e
 # Install tools for ARP priming (not included in vllm image)
 apt-get update -qq && apt-get install -y -qq tini iproute2 iputils-ping net-tools curl ethtool >/dev/null 2>&1
 
-# Prime ARP table on the QSFP P2P link before NCCL tries to connect.
+# Prime ARP table on the QSFP link before NCCL tries to connect.
 # Without this, the first TCP SYNs get dropped until ARP resolves,
 # causing ~230s delay in "Init torch distributed".
-if [ "$NODE_RANK" = "0" ]; then
-  peer="$QSFP_IP_SPARK2"
-else
-  peer="$QSFP_IP_SPARK1"
-fi
-echo "Waiting for QSFP peer ${peer} ..."
-until ping -c10 -W1 "$peer" ; do
-  sleep 1
+# Full-mesh: every node pings ALL other nodes so NCCL's ring/tree
+# topology can communicate immediately over any path.
+IFS=',' read -ra peers <<< "$QSFP_PEER_IPS"
+for peer in "${peers[@]}"; do
+  echo "Waiting for QSFP peer ${peer} ..."
+  until ping -c10 -W1 "$peer" ; do
+    sleep 1
+  done
+  echo "QSFP peer ${peer} reachable."
 done
-echo "QSFP peer ${peer} reachable."
 
 # When load_format is sharded_state, wait for the shard marker then use sharded path
 model_path="$VLLM_MODEL"

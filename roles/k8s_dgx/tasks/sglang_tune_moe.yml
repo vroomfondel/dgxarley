@@ -72,8 +72,8 @@
                     value: "{{ sglang_moe_config_dir }}"
                   - name: HF_CACHE_HOST_PATH
                     value: "{{ hf_cache_path }}"
-                  - name: RSYNC_TARGET
-                    value: "{{ hostvars['spark2']['ansible_host'] }}"
+                  - name: RSYNC_TARGETS
+                    value: "{{ range(2, sglang_nnodes | int + 1) | map('string') | map('regex_replace', '^(.+)$', 'spark\\1') | map('extract', hostvars, 'ansible_host') | join(',') }}"
                   - name: FORCE_RETUNE
                     value: "{{ sglang_force_retune | default('false') }}"
                   - name: PYTHONUNBUFFERED

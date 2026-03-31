@@ -71,15 +71,29 @@
     - "{{ sglang_namespace }}"
     - "{{ vllm_namespace }}"
 
-- name: Create NAD for QSFP direct worker (PF, worker IP)
+# Migration: remove old unnumbered qsfp-direct-worker NAD
+- name: Remove legacy qsfp-direct-worker NAD (pre-multi-worker)
+  kubernetes.core.k8s:
+    state: absent
+    api_version: k8s.cni.cncf.io/v1
+    kind: NetworkAttachmentDefinition
+    name: qsfp-direct-worker
+    namespace: "{{ item }}"
+  loop:
+    - "{{ sglang_namespace }}"
+    - "{{ vllm_namespace }}"
+
+# Dynamic per-worker PF NADs: qsfp-direct-worker1, qsfp-direct-worker2, ...
+# max(sglang_nnodes, vllm_nnodes) determines how many NADs to create.
+- name: Create NADs for QSFP direct workers (PF, per-worker IPs)
   kubernetes.core.k8s:
     state: present
     definition:
       apiVersion: k8s.cni.cncf.io/v1
       kind: NetworkAttachmentDefinition
       metadata:
-        name: qsfp-direct-worker
-        namespace: "{{ item }}"
+        name: "qsfp-direct-worker{{ item.1 }}"
+        namespace: "{{ item.0 }}"
       spec:
         config: |
           {
@@ -90,14 +104,14 @@
               "type": "static",
               "addresses": [
                 {
-                  "address": "{{ qsfp_ip_spark2 }}/24"
+                  "address": "{{ _qsfp_ips_pf_all[item.1] }}/24"
                 }
               ]
             }
           }
-  loop:
-    - "{{ sglang_namespace }}"
-    - "{{ vllm_namespace }}"
+  loop: "{{ [sglang_namespace, vllm_namespace] | product(range(1, [sglang_nnodes | int, vllm_nnodes | int] | max) | list) | list }}"
+  loop_control:
+    label: "{{ item.0 }}/qsfp-direct-worker{{ item.1 }}"
 
 # --- VF NADs (no hardcoded IPs, pods set IP via annotation JSON) ---
 
