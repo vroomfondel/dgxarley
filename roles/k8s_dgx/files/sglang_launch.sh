@@ -265,6 +265,10 @@ args=(
   --nccl-init-addr "${QSFP_IP_SPARK1}:${NCCL_PORT}"
   --port "$SGLANG_PORT"
 )
+# PP async micro-batching: overlap forward passes across pipeline stages.
+if [ -n "$PP_ASYNC_BATCH_DEPTH" ] && [ "$PP_ASYNC_BATCH_DEPTH" != "0" ]; then
+  args+=(--pp-async-batch-depth "$PP_ASYNC_BATCH_DEPTH")
+fi
 # Expert parallelism: partitions the TP group for MoE layers.
 # EP=TP → MoE uses all-to-all, attention stays tensor-parallel.
 if [ -n "$EP" ] && [ "$EP" != "1" ]; then

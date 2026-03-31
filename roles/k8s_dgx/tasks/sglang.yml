@@ -288,6 +288,8 @@
                     value: "{{ sglang_tp | string }}"
                   - name: PP
                     value: "{{ sglang_pp | string }}"
+                  - name: PP_ASYNC_BATCH_DEPTH
+                    value: "{{ sglang_pp_async_batch_depth | string }}"
                   - name: EP
                     value: "{{ sglang_ep | string }}"
                   - name: NNODES
@@ -432,6 +434,8 @@
                     value: "{{ sglang_tp | string }}"
                   - name: PP
                     value: "{{ sglang_pp | string }}"
+                  - name: PP_ASYNC_BATCH_DEPTH
+                    value: "{{ sglang_pp_async_batch_depth | string }}"
                   - name: EP
                     value: "{{ sglang_ep | string }}"
                   - name: NNODES

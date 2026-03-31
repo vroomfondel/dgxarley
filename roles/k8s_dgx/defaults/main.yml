@@ -340,13 +340,19 @@ sglang_model_profiles:
     # request, both with and without CUDA graphs. cutlass avoids the cuDNN JIT path.
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 16
-    # Piecewise CUDA graph capture: previously failed with NCCL error on EP=2 NVFP4.
-    # With PP mode (no EP/TP), this may work — test and re-enable if stable.
+    # Piecewise CUDA graph capture: OOM during capture — 58 chunks × separate graph
+    # buffers exhaust GPU memory (NV_ERR_NO_MEMORY in _memdescAllocInternal).
+    # Regular CUDA graphs (6 fixed batch sizes) work fine, only piecewise is too much.
     disable_piecewise_cuda_graph: true
     # CUDA graph capture: re-enabled after switching fp4_gemm_backend from
     # flashinfer_cudnn (Xid 13 crash) to flashinfer_cutlass. Test with PP mode.
     disable_cuda_graph: false
     cuda_graph_max_bs: 16
+    # PP async micro-batching: overlaps forward passes across pipeline stages.
+    # 0 = synchronous (default, one batch at a time). Higher values push more
+    # micro-batches into the pipeline concurrently, hiding inter-stage latency.
+    # pp_async_batch_depth: 2  # crashed after ~13min on 0.5.9-dev2 — too experimental
+    pp_async_batch_depth: 0
     # DeepGemm is designed for FP8 with ue8m0 scale format. For NVFP4 models
     # (scale_fmt != ue8m0): (1) the JIT-compiled kernels aren't optimized for
     # this format and may degrade accuracy, (2) JIT compilation blocks the
@@ -510,6 +516,9 @@ sglang_tp: "{{ sglang_model_profiles[sglang_model].tp_size | default(sglang_nnod
 # weights via TP. Required when a model's num_key_value_heads isn't divisible
 # by nnodes (e.g. MiniMax M2.5: 8 KV heads, 8 % 3 ≠ 0 → can't use TP=3).
 sglang_pp: "{{ (sglang_nnodes | int) // (sglang_tp | int) }}"
+# PP async micro-batching depth: overlaps forward passes across pipeline stages.
+# 0 = synchronous (default). Only effective when pp > 1.
+sglang_pp_async_batch_depth: "{{ sglang_model_profiles[sglang_model].pp_async_batch_depth | default(0) }}"
 # Expert parallelism: partitions the TP group for MoE layers.
 # EP must divide TP (ep_size <= tp_size). With EP=TP, MoE layers use
 # all-to-all instead of all-reduce — more efficient for MoE over Ethernet.
