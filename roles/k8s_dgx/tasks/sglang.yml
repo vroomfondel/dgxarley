@@ -86,7 +86,16 @@
         SGLANG_MOE_CONFIG_DIR: "{{ sglang_moe_config_dir }}"
         SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK: "0"
         NCCL_SOCKET_IFNAME: "{{ nccl_socket_ifname }}"
-        NCCL_IB_DISABLE: "1"
+        # RoCE v2 over QSFP SR-IOV VFs: restrict NCCL to the correct VF's RoCE
+        # device. Without this, privileged pods see all 10+ RoCE devices (PF + 8 VFs)
+        # and NCCL tries to use the wrong ones → crash.
+        # NCCL_NET="" (empty) overrides any previous "Socket" value in the ConfigMap
+        # via strategic merge, letting NCCL auto-select (IBext from HPC-X on NGC images).
+        # Fallback: set NCCL_NET=Socket to bypass RoCE entirely (TCP over QSFP).
+        NCCL_NET: ""
+        NCCL_IB_DISABLE: ""
+        NCCL_IB_HCA: "roce{{ qsfp_sriov_vf_prefix }}v{{ qsfp_sriov_assignments.sglang.vf }}"
+        NCCL_IB_GID_INDEX: "3"
         NCCL_DEBUG: "INFO"
 
 - name: Create SGLang launch script ConfigMap
