@@ -2,13 +2,14 @@
 
 ## Status
 
-**Open upstream** as of 2026-03-29. Not fixed in v0.5.10rc0.
+**Open upstream** as of 2026-04-01. Not fixed in v0.5.10rc0.
 
 - Issue: [#15660](https://github.com/sgl-project/sglang/issues/15660) (closed 2025-12-29, but bug persists)
-- Fix PR: [#15562](https://github.com/sgl-project/sglang/pull/15562) — 2 approvals, conflicts resolved 2026-03-25, **not merged**
+- Fix PR: [#15562](https://github.com/sgl-project/sglang/pull/15562) — 2 approvals, conflicts resolved 2026-03-25, **still not merged** (months stale)
 - Alternative PR: [#17938](https://github.com/sgl-project/sglang/pull/17938) — extends #15562 for tool-call case, no reviews
 - Alternative PR: [#17764](https://github.com/sgl-project/sglang/pull/17764) — "Support reasoning_tokens with openai style in serving_chat", open, no merge
 - Closed without merge: [#15875](https://github.com/sgl-project/sglang/pull/15875) — "fix(openai): include reasoning_tokens in streaming usage"
+- PR [#17156](https://github.com/sgl-project/sglang/pull/17156) — "Add metrics to reasoning tokens", also open, not merged
 - Our image: `0.5.9-dev2-acab24a7` (2026-03-11) — after v0.5.9, before all fix PRs
 
 ## Affected Configuration
