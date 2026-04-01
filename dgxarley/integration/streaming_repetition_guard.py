@@ -111,13 +111,14 @@ class GuardConfig:
             additional n-gram repeat. Prevents false positives on longer
             outputs where domain-specific phrases naturally recur. Set to
             0 to disable scaling (use fixed ``ngram_max_count``). With the
-            default of 150, effective limit at 450 tokens is 6 + 3 = 9.
+            default of 100, effective limit at 400 tokens is 8 + 4 = 12.
         ngram_min_ratio: Minimum density (fraction of total tokens) the
             worst n-gram must reach before triggering. Acts as a second
             gate alongside the count threshold to prevent false positives
-            on long outputs where a domain phrase recurs naturally.
-            Computed as ``count * ngram_n / total_tokens``. Default 0.12
-            means the n-gram's instances must cover >12% of all tokens.
+            on structured enumerations (REST API endpoints, CLI flags)
+            where a domain-specific prefix recurs naturally.
+            Computed as ``count * ngram_n / total_tokens``. Default 0.14
+            means the n-gram's instances must cover >14% of all tokens.
         suffix_window: Number of trailing characters to consider for
             suffix loop detection. Larger values catch longer loops but
             require more text before detection.
@@ -145,9 +146,9 @@ class GuardConfig:
     """
 
     ngram_n: int = 4
-    ngram_max_count: int = 6
-    ngram_count_scale_tokens: int = 150
-    ngram_min_ratio: float = 0.12
+    ngram_max_count: int = 8
+    ngram_count_scale_tokens: int = 100
+    ngram_min_ratio: float = 0.14
 
     suffix_window: int = 600
     suffix_min_pattern: int = 30
