@@ -178,27 +178,28 @@ spark3 added as third DGX Spark. `sglang_nnodes` changed from 2 to 3.
 
 All tests use: `tp=1, pp=3, ep=1, quantization=modelopt_fp4, kv_cache_dtype=fp8_e4m3, mem_fraction_static=0.80, disable_deep_gemm=true, context_length=196608, max_running_requests=32, schedule_policy=lpm, watchdog_timeout=3600, dist_timeout=1800` unless noted.
 
-| # | moe_runner | attention | fp4_gemm | dis_cuda_graph | dis_piecewise | pp_async | cuda_graph_max_bs | Stability | 1∥ tok/s | 4∥ avg | 4∥ peak | 8∥ avg | 8∥ peak |
-|---|------------|-----------|----------|----------------|---------------|----------|-------------------|-----------|---------|--------|---------|--------|---------|
-| 1 | — | — | — | — | — | — | — | TP=3 AssertionError | — | — | — | — | — |
-| 2 | fi_cutlass | flashinfer | auto→cudnn | false | true | 0 | 16 | OK startup, probe kill | — | — | — | — | — |
-| 3 | fi_cutlass | flashinfer | auto→cudnn | false | true | 0 | 16 | Xid 13 ~4min | — | — | — | — | — |
-| 4 | fi_cutlass | flashinfer | auto→cudnn | true | true | 0 | — | Xid 13 ~2-4min | — | — | — | — | — |
-| 5 | fi_cutlass | flashinfer | fi_cutlass | true | true | 0 | — | **STABLE 12+ min** | — | — | — | — | — |
-| 6 | fi_cutlass | flashinfer | fi_cutlass | false | true | 0 | 16 | **STABLE 9+ min** | — | — | — | — | — |
-| 7 | fi_cutlass | flashinfer | fi_cutlass | false | true | 2 | 16 | NCCL crash ~13min | — | — | — | — | — |
-| 8 | fi_cutlass | flashinfer | fi_cutlass | false | false | 0 | 16 | OOM piecewise | — | — | — | — | — |
-| 9 | fi_cutlass | flashinfer | fi_cutlass | false | true | 0 | 16 | OOM graph capture | — | — | — | — | — |
-| 10 | fi_cutlass | flashinfer | fi_cutlass | true | true | 0 | — | Xid 13 ~10min | — | — | — | — | — |
-| 11 | fi_cutlass | triton | fi_cutlass | true | true | 0 | — | Xid 13 ~8min | — | — | — | — | — |
-| 12 | triton | flashinfer | fi_cutlass | true | true | 0 | — | **STABLE 32+min** | 15.1 | 18.9 | ~40 | — | — |
-| 13 | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | **STABLE, graphs** | 16.1 | 31.5 | 50.6 | — | — |
-| 14 | triton | flashinfer | fi_cutlass | false | true | 2 | 8 | **STABLE** (slower) | 16.0 | 28.7 | 52.5 | 36.4 | 52.4 |
+| # | nccl_transport | moe_runner | attention | fp4_gemm | dis_cuda_graph | dis_piecewise | pp_async | cuda_graph_max_bs | Stability | 1∥ tok/s | 4∥ avg | 4∥ peak | 8∥ avg | 8∥ peak |
+|---|----------------|------------|-----------|----------|----------------|---------------|----------|-------------------|-----------|---------|--------|---------|--------|---------|
+| 1 | socket | — | — | — | — | — | — | — | TP=3 AssertionError | — | — | — | — | — |
+| 2 | socket | fi_cutlass | flashinfer | auto→cudnn | false | true | 0 | 16 | OK startup, probe kill | — | — | — | — | — |
+| 3 | socket | fi_cutlass | flashinfer | auto→cudnn | false | true | 0 | 16 | Xid 13 ~4min | — | — | — | — | — |
+| 4 | socket | fi_cutlass | flashinfer | auto→cudnn | true | true | 0 | — | Xid 13 ~2-4min | — | — | — | — | — |
+| 5 | socket | fi_cutlass | flashinfer | fi_cutlass | true | true | 0 | — | **STABLE 12+ min** | — | — | — | — | — |
+| 6 | socket | fi_cutlass | flashinfer | fi_cutlass | false | true | 0 | 16 | **STABLE 9+ min** | — | — | — | — | — |
+| 7 | socket | fi_cutlass | flashinfer | fi_cutlass | false | true | 2 | 16 | NCCL crash ~13min | — | — | — | — | — |
+| 8 | socket | fi_cutlass | flashinfer | fi_cutlass | false | false | 0 | 16 | OOM piecewise | — | — | — | — | — |
+| 9 | socket | fi_cutlass | flashinfer | fi_cutlass | false | true | 0 | 16 | OOM graph capture | — | — | — | — | — |
+| 10 | socket | fi_cutlass | flashinfer | fi_cutlass | true | true | 0 | — | Xid 13 ~10min | — | — | — | — | — |
+| 11 | socket | fi_cutlass | triton | fi_cutlass | true | true | 0 | — | Xid 13 ~8min | — | — | — | — | — |
+| 12 | socket | triton | flashinfer | fi_cutlass | true | true | 0 | — | **STABLE 32+min** | 15.1 | 18.9 | ~40 | — | — |
+| 13 | socket | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | **STABLE, graphs** | 16.1 | 31.5 | 50.6 | — | — |
+| 14 | socket | triton | flashinfer | fi_cutlass | false | true | 2 | 8 | **STABLE** (slower) | 16.0 | 28.7 | 52.5 | 36.4 | 52.4 |
 
 ### Column Legend
 
 | Column | Description |
 |--------|-------------|
+| nccl_transport | `sglang_nccl_transport` — NCCL inter-node transport (`socket` = TCP/IP, `roce` = RDMA/RoCE via IBext) |
 | moe_runner | `moe_runner_backend` — MoE expert dispatch kernel (`fi_cutlass` = flashinfer_cutlass, `triton` = triton→cutlass_moe_fp4 fallback for NVFP4) |
 | attention | `attention_backend` — attention kernel |
 | fp4_gemm | `fp4_gemm_backend` — FP4 dense GEMM kernel (`auto→cudnn` = auto-selected flashinfer_cudnn on SM121) |
