@@ -101,7 +101,8 @@ All tests use: `tp=1, pp=3, ep=1, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 | 1 | roce (broken) | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | NCCL invalid usage | — | — | — | — | — |
 | 2 | roce | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | **STABLE** | 7.9 | 16.1 | ~41 (srv) | 33.8 | ~51 (srv) |
 | 3 | socket | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | **STABLE** | 16.0 | 33.5 | 41.0 | 50.5 | 72.8 |
-| 4 | socket | fi_cutlass | flashinfer | fi_cutlass | false | true | 0 | 8 | *pending* | — | — | — | — | — |
+| 4 | socket | fi_cutlass | flashinfer | fi_cutlass | false | true | 0 | 8 | OOM graph capture | — | — | — | — | — |
+| 5 | socket | fi_cutlass | flashinfer | fi_cutlass | true | true | 0 | — | *pending* | — | — | — | — | — |
 
 ### Column Legend
 

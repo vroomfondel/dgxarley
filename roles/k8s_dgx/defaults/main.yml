@@ -337,7 +337,7 @@ sglang_model_profiles:
     # Fallback: "triton" (compiles at runtime, proven stable on both images).
     moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
-    mem_fraction_static: "0.80"
+    mem_fraction_static: "0.60"
     attention_backend: "flashinfer"
     # auto selects flashinfer_cudnn on SM121 — its FP4 GEMM kernel also triggers
     # Xid 13 independently. flashinfer_cutlass avoids the cuDNN JIT path.
@@ -347,10 +347,10 @@ sglang_model_profiles:
     # buffers exhaust GPU memory (NV_ERR_NO_MEMORY in _memdescAllocInternal).
     # Regular CUDA graphs (6 fixed batch sizes) work fine, only piecewise is too much.
     disable_piecewise_cuda_graph: true
-    # CUDA graph capture: previously OOM with moe_runner_backend=flashinfer_cutlass
-    # (NV_ERR_NO_MEMORY in _memdescAllocInternal, Tests 8+9). Re-testing with
-    # moe_runner_backend=triton which may produce smaller capture buffers.
-    disable_cuda_graph: false
+    # CUDA graph capture: OOM with moe_runner_backend=flashinfer_cutlass (graph
+    # buffers too large for 256-expert MoE layers). Only works with triton MoE.
+    # Set to false when using moe_runner_backend=triton, true for flashinfer_cutlass.
+    disable_cuda_graph: true
     cuda_graph_max_bs: 16
     # PP async micro-batching: overlaps forward passes across pipeline stages.
     # 0 = synchronous (default, one batch at a time). Higher values push more
