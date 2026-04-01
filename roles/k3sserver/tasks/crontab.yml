@@ -21,10 +21,11 @@
     name: "{{ item.name }}"
     minute: "{{ item.minute }}"
     hour: "{{ item.hour }}"
+    weekday: "{{ item.weekday }}"
     job: "{{ item.cmd }}"
     disabled: "{{ item.disabled }}"
   with_items:
-    - { name: "prune cri images on disk", cmd: "crictl rmi --prune", minute: "0", hour: "17", disabled: "no" }
+    - { name: "prune cri images on disk", cmd: "crictl rmi --prune", minute: "0", hour: "17", weekday: "mon", disabled: "no" }
 
 - name: add crontabs on k3smaster
   cron:
