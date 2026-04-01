@@ -323,7 +323,7 @@ sglang_model_profiles:
     #    by file I/O. Sharded loading skips the slow safetensors redistribute but
     #    the post-processing cost remains the same (~360s either way).
     # load_format: "sharded_state"
-    nccl_transport: "socket"  # temporary: socket test for 0.5.10rc0 comparison (Test 3)
+    nccl_transport: "socket"  # RoCE is 2× slower (IBext overhead, see TESTLOG). Socket until debugged.
     tp_size: 1  # PP=nnodes auto-derived (8 KV-heads not divisible by nnodes)
     context_length: 196608
     quantization: "modelopt_fp4"
@@ -539,7 +539,10 @@ sglang_enable_expert_distribution_metrics: "{{ sglang_model_profiles[sglang_mode
 # NCCL transport: "roce" (RDMA/RoCE via IBext, GPU Direct) or "socket" (TCP/IP).
 # RoCE requires SR-IOV VFs with correct RoCE devices, GID table, and DCBX/PFC.
 # Socket is the safe fallback — works always, ~30% more latency per transfer.
-sglang_nccl_transport: "{{ sglang_model_profiles[sglang_model].nccl_transport | default('roce' if (qsfp_sriov_enabled | default(false)) else 'socket') }}"
+# Default: socket (safe, proven). roce only if explicitly requested in profile AND SR-IOV is enabled.
+# RoCE via IBext is currently 2× slower than socket (see TESTLOG) — do not auto-enable.
+_sglang_nccl_transport_requested: "{{ sglang_model_profiles[sglang_model].nccl_transport | default('socket') }}"
+sglang_nccl_transport: "{{ _sglang_nccl_transport_requested if (_sglang_nccl_transport_requested == 'socket' or (qsfp_sriov_enabled | default(false))) else 'socket' }}"
 # NCCL env vars derived from transport mode. Merged into the SGLang ConfigMap.
 # roce: RDMA/RoCE via HPC-X IBext plugin, GPU Direct DMABUF over SR-IOV VFs.
 # socket: TCP/IP over QSFP. Safe fallback, no RoCE/IB dependencies.

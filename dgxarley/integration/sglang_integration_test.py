@@ -651,7 +651,7 @@ def _tail_lines(text: str, max_lines: int, wrap_width: int) -> tuple[str, bool]:
     """
     if max_lines <= 0 or not text:
         return "", bool(text)
-    source_lines = text.split("\n")
+    source_lines = text.rstrip("\n").split("\n")
     taken: list[str] = []
     used = 0
     for line in reversed(source_lines):
@@ -747,12 +747,18 @@ def build_live_display(all_stats: list[RequestStats], verbose: bool = False) -> 
                 has_content = bool(content_text.strip())
                 if has_content:
                     c_lines = min(_wrapped_line_count(content_text, inner_width), inner_lines // 2)
-                    t_budget = max(1, inner_lines - c_lines - 2)  # -2 for markers
+                    t_budget = max(1, inner_lines - c_lines - 2)  # -2 for [thinking]/[/thinking] markers
                     t_tail, truncated = _tail_lines(s.thinking, t_budget, inner_width)
+                    if truncated:
+                        # recompute with -3 to reserve a line for the "..." prefix
+                        t_budget = max(1, inner_lines - c_lines - 3)
+                        t_tail, truncated = _tail_lines(s.thinking, t_budget, inner_width)
                     prefix = "...\n" if truncated else ""
                     display = f"[thinking]\n{prefix}{t_tail}\n[/thinking]\n{content_text}"
                 else:
                     t_tail, truncated = _tail_lines(s.thinking, inner_lines - 1, inner_width)
+                    if truncated:
+                        t_tail, truncated = _tail_lines(s.thinking, inner_lines - 2, inner_width)
                     prefix = "...\n" if truncated else ""
                     display = f"[thinking]\n{prefix}{t_tail}"
             else:
@@ -771,6 +777,9 @@ def build_live_display(all_stats: list[RequestStats], verbose: bool = False) -> 
                 c_lines = min(_wrapped_line_count(content_text, inner_width), inner_lines // 2)
                 t_budget = max(1, inner_lines - c_lines - 2)
                 t_tail, truncated = _tail_lines(s.thinking, t_budget, inner_width)
+                if truncated:
+                    t_budget = max(1, inner_lines - c_lines - 3)
+                    t_tail, truncated = _tail_lines(s.thinking, t_budget, inner_width)
                 prefix = "...\n" if truncated else ""
                 display = f"[thinking]\n{prefix}{t_tail}\n[/thinking]\n{content_text}"
             else:

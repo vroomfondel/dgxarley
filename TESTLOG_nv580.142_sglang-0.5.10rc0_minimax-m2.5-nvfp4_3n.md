@@ -76,7 +76,19 @@ All fixed by: removing stale keys (delete + recreate ConfigMap), correcting HCA 
 
 - **Config:** Same as Test 2 but `nccl_transport=socket` (NCCL_NET=Socket, NCCL_IB_DISABLE=1).
 - **Purpose:** Isolate whether the throughput regression is from RoCE or from the 0.5.10rc0 image itself.
-- **Result:** *pending*
+- **Result:** **STABLE**
+- **Throughput:**
+
+  | Metric | 1 request | 4 parallel |
+  |--------|-----------|------------|
+  | Successful / failed | 1 / 0 | 4 / 0 |
+  | Aggregate throughput | 16.0 tok/s | 33.5 tok/s |
+  | Avg per-request tok/s | 16.0 | 10.3 |
+  | Peak concurrent tok/s | — | 41.0 |
+
+- **vs. Test 2 (RoCE):** Socket is **2× faster** — 1∥: 16.0 vs 7.9, 4∥ avg: 33.5 vs 16.1.
+- **vs. 0.5.9-dev2 Socket (Test 13):** 1∥ identical (16.0 vs 16.1), 4∥ avg **+6%** (33.5 vs 31.5). **No image regression** — the apparent slowness was entirely caused by RoCE overhead.
+- **Conclusion:** RoCE via IBext on `0.5.10rc0` has a severe performance penalty (~50%) compared to Socket. The IBext plugin loads and connects, GPU Direct RDMA reports "enabled", but actual data transfer is slower than TCP. Likely cause: GDR DMABUF fallback path, IBext VF handling, or PFC/ECN misconfiguration causing retransmits. Socket is the correct transport for now until RoCE is properly debugged.
 
 ---
 
@@ -88,7 +100,7 @@ All tests use: `tp=1, pp=3, ep=1, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 |---|----------------|------------|-----------|----------|----------------|---------------|----------|-------------------|-----------|---------|--------|---------|--------|---------|
 | 1 | roce (broken) | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | NCCL invalid usage | — | — | — | — | — |
 | 2 | roce | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | **STABLE** | 7.9 | 16.1 | ~41 (srv) | 33.8 | ~51 (srv) |
-| 3 | socket | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | *pending* | — | — | — | — | — |
+| 3 | socket | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | **STABLE** | 16.0 | 33.5 | 41.0 | — | — |
 
 ### Column Legend
 
