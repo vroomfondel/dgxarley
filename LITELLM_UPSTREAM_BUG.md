@@ -75,6 +75,16 @@ HAProxy TLS sidecar in each Ollama pod:
 See: `roles/k8s_dgx/tasks/ollama.yml` — ConfigMap `ollama-tls-haproxy-config`,
 `tls-proxy` sidecar container in both `ollama` and `ollama-embed` Deployments.
 
+## Upstream Status
+
+**Still open** as of 2026-04-01. No fix merged.
+
+- Related issue: [#6499](https://github.com/BerriAI/litellm/issues/6499) ("How to disable ssl verification for ollama?", closed). Maintainer acknowledged the embedding path was not migrated, but the issue was closed after only the chat path was fixed.
+- The TODO comment `[TODO]: migrate embeddings to a base handler as well.` is still present at the top of `handler.py`.
+- PR [#24704](https://github.com/BerriAI/litellm/pull/24704) (2026-03-28, open) fixes an adjacent embedding bug (model name prefix stripping) but does not address SSL/TLS.
+
+**Partial mitigation**: Setting `litellm.ssl_verify = False` **globally before the first embedding call** may work, because the singleton `HTTPHandler` picks up `litellm.ssl_verify` at creation time via `get_ssl_configuration()`. However, this is fragile — it depends on initialization order, and per-request `ssl_verify=false` (as used in our model config) is still silently dropped for the ollama embedding path.
+
 ## Upstream Fix
 
 The embedding path in `litellm/llms/ollama/completion/handler.py` should stop using
