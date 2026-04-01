@@ -92,8 +92,8 @@
         # NCCL_NET="" (empty) overrides any previous "Socket" value in the ConfigMap
         # via strategic merge, letting NCCL auto-select (IBext from HPC-X on NGC images).
         # Fallback: set NCCL_NET=Socket to bypass RoCE entirely (TCP over QSFP).
-        NCCL_NET: ""
-        NCCL_IB_DISABLE: ""
+        NCCL_NET: "Socket"
+        NCCL_IB_DISABLE: "1"
         # RoCE device name = "roce" + PCI-derived name (without "en" prefix from netdev).
         # netdev: enp1s0f0v0 → RoCE device: rocep1s0f0v0
         NCCL_IB_HCA: "roce{{ qsfp_sriov_vf_prefix | regex_replace('^en', '') }}v{{ qsfp_sriov_assignments.sglang.vf }}"
