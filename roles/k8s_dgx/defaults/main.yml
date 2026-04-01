@@ -334,7 +334,10 @@ sglang_model_profiles:
     moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
     mem_fraction_static: "0.80"
-    attention_backend: "flashinfer"
+    # flashinfer triggers Xid 13 (Illegal Instruction at 0x1c81fb60:0x1174) on
+    # SM121 after ~10min, regardless of fp4_gemm_backend or cuda_graph settings.
+    # The offending kernel is baked into the container image (0.5.9-dev2).
+    attention_backend: "triton"
     # auto selects flashinfer_cudnn on SM121 — its JIT kernel triggers Xid 13
     # (Illegal Instruction, addr 0x1c81fb60 offset 0x1174) ~2-4 min after first
     # request, both with and without CUDA graphs. cutlass avoids the cuDNN JIT path.
@@ -344,9 +347,11 @@ sglang_model_profiles:
     # buffers exhaust GPU memory (NV_ERR_NO_MEMORY in _memdescAllocInternal).
     # Regular CUDA graphs (6 fixed batch sizes) work fine, only piecewise is too much.
     disable_piecewise_cuda_graph: true
-    # CUDA graph capture: re-enabled after switching fp4_gemm_backend from
-    # flashinfer_cudnn (Xid 13 crash) to flashinfer_cutlass. Test with PP mode.
-    disable_cuda_graph: false
+    # CUDA graph capture: OOM during capture even with only 6 batch sizes
+    # (NV_ERR_NO_MEMORY in _memdescAllocInternal). With PP, each stage has all
+    # 256 experts for ~21 layers — graph capture buffers exhaust remaining memory
+    # after model weights + KV cache reservation (mem_fraction_static=0.80).
+    disable_cuda_graph: true
     cuda_graph_max_bs: 16
     # PP async micro-batching: overlaps forward passes across pipeline stages.
     # 0 = synchronous (default, one batch at a time). Higher values push more
