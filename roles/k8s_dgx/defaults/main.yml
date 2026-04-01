@@ -332,12 +332,12 @@ sglang_model_profiles:
     # Without it, transformers refuses to load the model class. Safe here because
     # the code comes from NVIDIA's official nvidia/MiniMax-M2.5-NVFP4 repo.
     trust_remote_code: true
-    # Xid 13 on 0.5.9-dev2 was caused by flashinfer_cutlass MoE dispatch kernel.
-    # Re-testing on 0.5.10rc0 which may have fixed the kernel for SM121.
-    # Fallback: "triton" (compiles at runtime, proven stable on both images).
-    moe_runner_backend: "flashinfer_cutlass"
+    # flashinfer_cutlass MoE: OOM on first request (0.5.10rc0) and Xid 13 (0.5.9-dev2).
+    # Too memory-hungry for 256-expert MoE with PP (all experts per stage).
+    # triton MoE compiles at runtime for SM121, stable on both images.
+    moe_runner_backend: "triton"
     kv_cache_dtype: "fp8_e4m3"
-    mem_fraction_static: "0.60"
+    mem_fraction_static: "0.80"
     attention_backend: "flashinfer"
     # auto selects flashinfer_cudnn on SM121 — its FP4 GEMM kernel also triggers
     # Xid 13 independently. flashinfer_cutlass avoids the cuDNN JIT path.
@@ -350,13 +350,13 @@ sglang_model_profiles:
     # CUDA graph capture: OOM with moe_runner_backend=flashinfer_cutlass (graph
     # buffers too large for 256-expert MoE layers). Only works with triton MoE.
     # Set to false when using moe_runner_backend=triton, true for flashinfer_cutlass.
-    disable_cuda_graph: true
+    disable_cuda_graph: false
     cuda_graph_max_bs: 16
     # PP async micro-batching: overlaps forward passes across pipeline stages.
     # 0 = synchronous (default, one batch at a time). Higher values push more
     # micro-batches into the pipeline concurrently, hiding inter-stage latency.
-    # pp_async_batch_depth: 2  # stable but -9% throughput vs sync (Test 14)
-    pp_async_batch_depth: 0
+    # pp_async_batch_depth: 0  # sync baseline (Test 3 winner on 0.5.10rc0)
+    pp_async_batch_depth: 2  # re-test on 0.5.10rc0 (was -9% on 0.5.9-dev2 Test 14)
     # DeepGemm is designed for FP8 with ue8m0 scale format. For NVFP4 models
     # (scale_fmt != ue8m0): (1) the JIT-compiled kernels aren't optimized for
     # this format and may degrade accuracy, (2) JIT compilation blocks the
