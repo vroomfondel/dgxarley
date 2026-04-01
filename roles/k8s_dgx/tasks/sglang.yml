@@ -98,7 +98,7 @@
         # netdev: enp1s0f0v0 → RoCE device: rocep1s0f0v0
         NCCL_IB_HCA: "roce{{ qsfp_sriov_vf_prefix | regex_replace('^en', '') }}v{{ qsfp_sriov_assignments.sglang.vf }}"
         NCCL_IB_GID_INDEX: "3"
-        NCCL_DEBUG: "INFO"
+        NCCL_DEBUG: "WARN"
 
 - name: Create SGLang launch script ConfigMap
   kubernetes.core.k8s:
