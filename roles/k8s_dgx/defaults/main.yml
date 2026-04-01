@@ -323,6 +323,7 @@ sglang_model_profiles:
     #    by file I/O. Sharded loading skips the slow safetensors redistribute but
     #    the post-processing cost remains the same (~360s either way).
     # load_format: "sharded_state"
+    nccl_transport: "socket"  # temporary: socket test for 0.5.10rc0 comparison (Test 3)
     tp_size: 1  # PP=nnodes auto-derived (8 KV-heads not divisible by nnodes)
     context_length: 196608
     quantization: "modelopt_fp4"

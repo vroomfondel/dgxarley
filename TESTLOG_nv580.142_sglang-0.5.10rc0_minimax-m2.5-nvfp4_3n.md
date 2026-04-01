@@ -84,11 +84,11 @@ All fixed by: removing stale keys (delete + recreate ConfigMap), correcting HCA 
 
 All tests use: `tp=1, pp=3, ep=1, quantization=modelopt_fp4, kv_cache_dtype=fp8_e4m3, mem_fraction_static=0.80, disable_deep_gemm=true, context_length=196608, max_running_requests=32, schedule_policy=lpm, watchdog_timeout=3600, dist_timeout=1800` unless noted.
 
-| # | nccl_transport | moe_runner | attention | fp4_gemm | dis_cuda_graph | dis_piecewise | pp_async | cuda_graph_max_bs | Stability | 1∥ tok/s | 4∥ avg | 4∥ peak |
-|---|----------------|------------|-----------|----------|----------------|---------------|----------|-------------------|-----------|---------|--------|---------|
-| 1 | roce (broken) | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | NCCL invalid usage | — | — | — |
-| 2 | roce | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | **STABLE** | 7.9 | 16.1 | ~41 (srv) |
-| 3 | socket | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | *pending* | — | — | — |
+| # | nccl_transport | moe_runner | attention | fp4_gemm | dis_cuda_graph | dis_piecewise | pp_async | cuda_graph_max_bs | Stability | 1∥ tok/s | 4∥ avg | 4∥ peak | 8∥ avg | 8∥ peak |
+|---|----------------|------------|-----------|----------|----------------|---------------|----------|-------------------|-----------|---------|--------|---------|--------|---------|
+| 1 | roce (broken) | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | NCCL invalid usage | — | — | — | — | — |
+| 2 | roce | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | **STABLE** | 7.9 | 16.1 | ~41 (srv) | 33.8 | ~51 (srv) |
+| 3 | socket | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | *pending* | — | — | — | — | — |
 
 ### Column Legend
 
