@@ -331,16 +331,16 @@ sglang_model_profiles:
     # Without it, transformers refuses to load the model class. Safe here because
     # the code comes from NVIDIA's official nvidia/MiniMax-M2.5-NVFP4 repo.
     trust_remote_code: true
-    moe_runner_backend: "flashinfer_cutlass"
+    # Xid 13 (Illegal Instruction at 0x1c81fb60:0x1174) on SM121 is caused by the
+    # FlashInfer CUTLASS MoE dispatch kernel — it fires regardless of attention_backend
+    # or fp4_gemm_backend. triton MoE compiles kernels at runtime for the exact SM.
+    # flashinfer_cutlass attention is fine (different code path from MoE dispatch).
+    moe_runner_backend: "triton"
     kv_cache_dtype: "fp8_e4m3"
     mem_fraction_static: "0.80"
-    # flashinfer triggers Xid 13 (Illegal Instruction at 0x1c81fb60:0x1174) on
-    # SM121 after ~10min, regardless of fp4_gemm_backend or cuda_graph settings.
-    # The offending kernel is baked into the container image (0.5.9-dev2).
-    attention_backend: "triton"
-    # auto selects flashinfer_cudnn on SM121 — its JIT kernel triggers Xid 13
-    # (Illegal Instruction, addr 0x1c81fb60 offset 0x1174) ~2-4 min after first
-    # request, both with and without CUDA graphs. cutlass avoids the cuDNN JIT path.
+    attention_backend: "flashinfer"
+    # auto selects flashinfer_cudnn on SM121 — its FP4 GEMM kernel also triggers
+    # Xid 13 independently. flashinfer_cutlass avoids the cuDNN JIT path.
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 16
     # Piecewise CUDA graph capture: OOM during capture — 58 chunks × separate graph
