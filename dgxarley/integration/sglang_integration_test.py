@@ -642,6 +642,35 @@ def _tok_detail(s: RequestStats) -> str:
     return f" ({'/'.join(parts)})"
 
 
+def _tail_lines(text: str, max_lines: int, wrap_width: int) -> tuple[str, bool]:
+    """Return the tail of *text* that fits within *max_lines* rendered lines.
+
+    Accounts for terminal line-wrapping at *wrap_width*.  Returns
+    ``(truncated_text, was_truncated)`` so callers can prepend an ellipsis
+    indicator when needed.
+    """
+    if max_lines <= 0 or not text:
+        return "", bool(text)
+    source_lines = text.split("\n")
+    taken: list[str] = []
+    used = 0
+    for line in reversed(source_lines):
+        wrapped = max(1, -(-len(line) // wrap_width)) if wrap_width > 0 else 1
+        if used + wrapped > max_lines:
+            break
+        taken.append(line)
+        used += wrapped
+    taken.reverse()
+    return "\n".join(taken), len(taken) < len(source_lines)
+
+
+def _wrapped_line_count(text: str, wrap_width: int) -> int:
+    """Estimate rendered line count after terminal word-wrap."""
+    if not text:
+        return 0
+    return sum(max(1, -(-len(l) // wrap_width)) for l in text.split("\n"))
+
+
 def build_live_display(all_stats: list[RequestStats], verbose: bool = False) -> Table:
     """Build a Rich Table showing the live state of all parallel requests.
 
@@ -714,7 +743,18 @@ def build_live_display(all_stats: list[RequestStats], verbose: bool = False) -> 
             tok_detail = _tok_detail(s)
             header = f"[yellow]#{s.request_id} streaming {elapsed:.1f}s{tps}{tok_detail}[/]"
             if verbose and s.thinking:
-                display = f"[thinking]\n{s.thinking[-max_chars // 2:]}\n[/thinking]\n{s.output_tail(max_chars // 2)}"
+                content_text = s.output_tail(max_chars)
+                has_content = bool(content_text.strip())
+                if has_content:
+                    c_lines = min(_wrapped_line_count(content_text, inner_width), inner_lines // 2)
+                    t_budget = max(1, inner_lines - c_lines - 2)  # -2 for markers
+                    t_tail, truncated = _tail_lines(s.thinking, t_budget, inner_width)
+                    prefix = "...\n" if truncated else ""
+                    display = f"[thinking]\n{prefix}{t_tail}\n[/thinking]\n{content_text}"
+                else:
+                    t_tail, truncated = _tail_lines(s.thinking, inner_lines - 1, inner_width)
+                    prefix = "...\n" if truncated else ""
+                    display = f"[thinking]\n{prefix}{t_tail}"
             else:
                 display = s.output_tail(max_chars)
             body = Text(display, style="white")
@@ -727,7 +767,12 @@ def build_live_display(all_stats: list[RequestStats], verbose: bool = False) -> 
                 f"{s.output_tokens} tok{tok_detail} | {s.tokens_per_sec:.1f} t/s"
             )
             if verbose and s.thinking:
-                display = f"[thinking]\n{s.thinking[-max_chars // 2:]}\n[/thinking]\n{s.output_tail(max_chars // 2)}"
+                content_text = s.output_tail(max_chars)
+                c_lines = min(_wrapped_line_count(content_text, inner_width), inner_lines // 2)
+                t_budget = max(1, inner_lines - c_lines - 2)
+                t_tail, truncated = _tail_lines(s.thinking, t_budget, inner_width)
+                prefix = "...\n" if truncated else ""
+                display = f"[thinking]\n{prefix}{t_tail}\n[/thinking]\n{content_text}"
             else:
                 display = s.output_tail(max_chars)
             body = Text(display, style="white")
