@@ -2,9 +2,10 @@
 
 ## Status
 
-**Open upstream (vLLM only)** as of 2026-03-31. Bug exists in both SGLang and vLLM (code originated in vLLM PR #14447).
+**Open upstream (vLLM only)** as of 2026-04-01. Bug exists in both SGLang and vLLM (code originated in vLLM PR #14447).
 
-- vLLM: [PR #35598](https://github.com/vllm-project/vllm/pull/35598) — open since 2026-02-28, stale ~4 weeks, not merged
+- vLLM: [PR #35598](https://github.com/vllm-project/vllm/pull/35598) — open since 2026-02-28, stale ~8 weeks, not merged
+- vLLM: [PR #36026](https://github.com/vllm-project/vllm/pull/36026) — fix wrong num_experts in moe_wna16 kernel dispatch, open since 2026-03-29, not merged
 - SGLang: no upstream issue or PR filed
 
 Files:
@@ -114,9 +115,10 @@ be solving a problem that doesn't need to exist.
 
 ## Additional Bug: EPLB crashes with Qwen3MoE and Qwen3.5MoE
 
-**Upstream status** as of 2026-03-31:
+**Upstream status** as of 2026-04-01:
 - Qwen3.5: fixed via [PR #19767](https://github.com/sgl-project/sglang/pull/19767) (merged 2026-03-09)
-- Qwen3: [PR #21461](https://github.com/sgl-project/sglang/pull/21461) — closed without merge 2026-03-30 (CI failure). No replacement PR filed yet
+- Qwen3: [PR #21461](https://github.com/sgl-project/sglang/pull/21461) — closed without merge 2026-03-30 (CI failure)
+- Qwen3: [PR #21822](https://github.com/sgl-project/sglang/pull/21822) — new fix opened 2026-04-01, addresses `AttributeError: 'LazyValue' object has no attribute 'keys'` in `eplb_manager.py` for Qwen3 MoE. Open, not yet merged. (Duplicate [PR #21820](https://github.com/sgl-project/sglang/pull/21820) was closed same day in favour of #21822.)
 
 When `--enable-eplb` is active with EP, the `EPLBManager` crashes after its first rebalance
 interval (default: 1000 forward passes):
@@ -159,7 +161,7 @@ which is acceptable.
 
 **Reported** as of 2026-03-28: [sgl-project/sglang#21602](https://github.com/sgl-project/sglang/issues/21602). Bug exists in SGLang `sglang/srt/layers/quantization/modelopt_quant.py`, class `ModelOptNvFp4FusedMoEMethod`.
 
-Two competing fix PRs have been filed (neither merged as of 2026-03-31):
+Two competing fix PRs have been filed (neither merged as of 2026-04-01):
 - [PR #20869](https://github.com/sgl-project/sglang/pull/20869) (2026-03-18) — broader fix: EP-slices input_scale, passes `num_local_experts` to `CutlassMoEParams`, extends SM120 support. No human review, stale ~2 weeks
 - [PR #21630](https://github.com/sgl-project/sglang/pull/21630) (2026-03-29) — narrower fix: only the `else` branch (non-FlashInfer backends). No review yet
 
@@ -229,7 +231,7 @@ Monkey-patched in `sglang_launch.sh` and `sglang_shard_launch.sh` (same string-r
 
 ### Status
 
-**Reported** as of 2026-03-28: [sgl-project/sglang#21603](https://github.com/sgl-project/sglang/issues/21603). Bug exists in SGLang `sglang/srt/model_loader/loader.py`, class `ModelOptModelLoader`. No fix PR filed as of 2026-03-29.
+**Reported** as of 2026-03-28: [sgl-project/sglang#21603](https://github.com/sgl-project/sglang/issues/21603). Bug exists in SGLang `sglang/srt/model_loader/loader.py`, class `ModelOptModelLoader`. No fix PR filed, no comments, as of 2026-04-01.
 
 ### Affected Configuration
 
@@ -279,7 +281,7 @@ if model_config._is_already_quantized():
 
 ### Status
 
-**Unreported** as of 2026-03-30. Bug exists in SGLang v0.5.10rc0
+**Unreported** as of 2026-04-01. Bug exists in SGLang v0.5.10rc0
 `sglang/srt/layers/quantization/modelopt_quant.py`, method
 `_maybe_init_cutlass_moe_params()`, and
 `sglang/srt/layers/moe/cutlass_moe.py`, function `cutlass_moe_fp4()`.
@@ -396,3 +398,4 @@ However, the CUDA kernel-level issue cannot be patched. For NVFP4 + EP > 1, use
 - SGLang #14158 — update_weights_from_tensor for WNA16MoE (unrelated)
 - SGLang [PR #13715](https://github.com/sgl-project/sglang/pull/13715) — fix EPLB + FP4 weight tensor filtering (merged, different issue)
 - SGLang [PR #20963](https://github.com/sgl-project/sglang/pull/20963) — Nvidia modelopt refactoring (migrates Bug 3 as-is)
+- SGLang [PR #21822](https://github.com/sgl-project/sglang/pull/21822) — new EPLB/Qwen3 fix (2026-04-01, open, addresses `LazyValue.keys()` AttributeError)
