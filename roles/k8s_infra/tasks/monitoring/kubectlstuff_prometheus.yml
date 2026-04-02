@@ -292,6 +292,29 @@
                 - action: labelmap
                   regex: __meta_kubernetes_pod_label_(.+)
 
+            # NUT exporter — multi-target scrape (one target per UPS)
+            # druggeri/nut_exporter doesn't emit a ups label natively,
+            # so we pass ?ups=<name> per target and inject the label via static_configs.
+            - job_name: 'nut-exporter-{{ nut_ups_name }}'
+              metrics_path: /ups_metrics
+              params:
+                ups: ['{{ nut_ups_name }}']
+              static_configs:
+                - targets: ['nut-exporter.monitoring.svc.cluster.local:9199']
+                  labels:
+                    ups: '{{ nut_ups_name }}'
+            {% if nut_ups_secondary_name is defined %}
+
+            - job_name: 'nut-exporter-{{ nut_ups_secondary_name }}'
+              metrics_path: /ups_metrics
+              params:
+                ups: ['{{ nut_ups_secondary_name }}']
+              static_configs:
+                - targets: ['nut-exporter.monitoring.svc.cluster.local:9199']
+                  labels:
+                    ups: '{{ nut_ups_secondary_name }}'
+            {% endif %}
+
         alert_rules.yml: |
           groups:
           - name: cronjob-alerts
@@ -328,13 +351,14 @@
                 description: "UPS {{ '{{' }} $labels.ups {{ '}}' }} battery charge is {{ '{{' }} $value {{ '}}' }}%. Cluster shutdown imminent."
 
             - alert: UpsUnavailable
-              expr: up{job="kubernetes-pods", app_kubernetes_io_name="nut-exporter"} == 0
+              expr: up{job=~"nut-exporter-.*"} == 0
               for: 5m
               labels:
                 severity: warning
               annotations:
                 summary: "NUT exporter is unreachable"
                 description: "Cannot scrape UPS metrics — NUT exporter or NUT server may be down."
+  register: prometheus_config
 
 - name: Create prometheus Deployment
   kubernetes.core.k8s:
@@ -357,6 +381,7 @@
             labels:
               app: prometheus
             annotations:
+              checksum/config: "{{ prometheus_config.result.data | to_json | hash('sha256') }}"
               keel.sh/policy: patch
               keel.sh/match-tag: "true"
               keel.sh/pollSchedule: "@every 24h"

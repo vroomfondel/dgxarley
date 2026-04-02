@@ -126,6 +126,8 @@ clevis_tang_servers:
 wifi_access_points: []
 
 # NUT UPS
+nut_ups_name: "greencell"
+nut_ups_secondary_name: "greencell2"
 nut_admin_password: "changeme"
 nut_monitor_password: "changeme"
 

@@ -3,6 +3,22 @@
   ansible.builtin.hostname:
     name: "{{ inventory_hostname }}"
 
+- name: Read current /etc/hosts
+  ansible.builtin.slurp:
+    src: /etc/hosts
+  register: _etc_hosts_raw
+
+- name: Remove stale 127.0.0.1 lines with old hostnames (keep localhost)
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    line: "{{ item }}"
+    state: absent
+  loop: >-
+    {{ (_etc_hosts_raw.content | b64decode).splitlines()
+       | select('match', '^127\.0\.0\.1\s')
+       | reject('search', '\blocalhost\b')
+       | list }}
+
 - name: Ensure hostname in /etc/hosts (127.0.1.1 line)
   ansible.builtin.lineinfile:
     path: /etc/hosts

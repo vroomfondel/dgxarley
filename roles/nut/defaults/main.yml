@@ -7,7 +7,7 @@
 # Battery: 2×12V/7Ah AGM in series → 24V nominal, 168Wh
 # USB:     MEC/MEC0003, vendor:product 0001:0000 (Megatec/Q1 protocol)
 # Driver:  blazer_usb (ignores "port" — uses libusb with vendorid/productid/busport)
-nut_ups_name: "greencell"
+# nut_ups_name — defined in group_vars/all/main.yml (shared with k8s_infra)
 nut_ups_driver: "blazer_usb"
 nut_ups_port: "auto"
 nut_ups_desc: "Green Cell UPS 1000VA 600W"
@@ -40,7 +40,7 @@ nut_ups_extra_options:
 # Battery: 2×12V/9Ah AGM in series → 24V nominal, 216Wh
 # USB:     identical to primary (MEC/MEC0003, 0001:0000) — distinguished by busport
 # Determine busport: nut-scanner -U → busport field
-nut_ups_secondary_name: "greencell2"
+# nut_ups_secondary_name — defined in group_vars/all/main.yml (shared with k8s_infra)
 nut_ups_secondary_driver: "blazer_usb"
 nut_ups_secondary_port: "auto"
 nut_ups_secondary_bus: "001"

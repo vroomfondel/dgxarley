@@ -19,6 +19,7 @@
         NUT_EXPORTER_PASSWORD: "{{ nut_exporter_password }}"
         # Default vars + battery.runtime (runtimecal), ups.beeper.status, ups.realpower.nominal
         NUT_EXPORTER_VARIABLES: "battery.charge,battery.runtime,battery.voltage,battery.voltage.nominal,input.voltage,input.voltage.nominal,ups.beeper.status,ups.load,ups.realpower.nominal,ups.status"
+  register: nut_exporter_secrets
 
 - name: Create nut-exporter Deployment
   kubernetes.core.k8s:
@@ -41,9 +42,10 @@
             labels:
               app.kubernetes.io/name: nut-exporter
             annotations:
-              prometheus.io/scrape: "true"
-              prometheus.io/port: "9199"
-              prometheus.io/path: "/ups_metrics"
+              checksum/config: "{{ nut_exporter_secrets.result.data | to_json | hash('sha256') }}"
+              prometheus.io/scrape: null
+              prometheus.io/port: null
+              prometheus.io/path: null
           spec:
             nodeSelector:
               kubernetes.io/arch: amd64
@@ -73,3 +75,20 @@
                 limits:
                   cpu: 100m
                   memory: 64Mi
+
+- name: Create nut-exporter Service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: nut-exporter
+        namespace: monitoring
+      spec:
+        selector:
+          app.kubernetes.io/name: nut-exporter
+        ports:
+        - name: metrics
+          port: 9199
+          targetPort: metrics

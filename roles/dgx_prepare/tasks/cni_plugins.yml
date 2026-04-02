@@ -40,6 +40,15 @@
   changed_when: true
   when: _cni_plugins_missing | length > 0
 
+- name: Ensure CNI plugin directory exists
+  ansible.builtin.file:
+    path: /var/lib/rancher/k3s/data/cni
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+  when: _cni_plugins_missing | length > 0
+
 - name: Copy CNI plugins to target node
   ansible.builtin.copy:
     src: "/tmp/{{ item }}"

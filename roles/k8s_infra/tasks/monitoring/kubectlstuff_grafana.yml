@@ -20,6 +20,7 @@
         GF_SECURITY_COOKIE_SAMESITE: 'disabled'
         GF_AUTH_ANONYMOUS_ENABLED: 'false'
         GF_SERVER_ROOT_URL: "{{ grafana_root_url }}"
+  register: grafana_secrets
 
 # =============================================================================
 # GRAFANA RESOURCES (ConfigMaps, Deployment, Service, Ingress)
@@ -63,6 +64,7 @@
             editable: true
             options:
               path: /var/lib/grafana/dashboards
+  register: grafana_provisioning
 
 - name: Create grafana-download-dashboards-script ConfigMap
   kubernetes.core.k8s:
@@ -140,14 +142,16 @@
 
           # NUT UPS dashboard for DRuggeri nut_exporter (19308)
           # Patches:
-          # - Remove ups="$ups" filter and ups variable (single UPS, no ups label)
           # - Manufacturer/Model: use "labelsToFields" transformation so the stat panel
           #   can display the mfr/model Prometheus label as a field value. Values come
           #   from NUT overrides (override.device.mfr/model in ups.conf).
           # - Beeper: remove misleading noValue="0" default
           # - Power/Runtime/realpower.nominal all work natively via NUT config.
+          # - ups template variable: enable includeAll + multi for "All" dropdown option
+          # - Query selectors: ups="$ups" → ups=~"$ups" for multi-value/All regex matching
+          #   The ups label is injected by Prometheus via per-UPS scrape jobs.
           curl -s https://grafana.com/api/dashboards/19308/revisions/latest/download \
-            | sed 's/{ups=\\"$ups\\"}//g; s/{ups=\\"${ups}\\"}//g' \
+            | sed 's/ups=\\"$ups\\"/ups=~\\"$ups\\"/g; s/ups=\\"${ups}\\"/ups=~\\"${ups}\\"/g' \
             | jq '
               .panels |= map(
                 if .title == "Manufacturer" then
@@ -158,14 +162,60 @@
                   .transformations = [{"id":"labelsToFields","options":{}}]
                   | .options.reduceOptions = {"calcs":["lastNotNull"],"fields":"/^model$/","values":false}
                   | .options.textMode = "value"
+                elif .title == "Status" then
+                  .targets[0].legendFormat = "{{ '{{' }}ups{{ '}}' }}: {{ '{{' }}flag{{ '}}' }}"
                 elif .title == "Beeper Status" then
                   .fieldConfig.defaults |= del(.noValue)
                 else . end
               )
-              | .templating.list |= map(select(.name != "ups"))
+              | .templating.list |= map(
+                  if .name == "ups" then .includeAll = true | .multi = true
+                  else . end
+                )
+              | .panels += [
+                  {
+                    "id": 100, "type": "row", "title": "Combined UPS Summary",
+                    "collapsed": false,
+                    "gridPos": {"h": 1, "w": 24, "x": 0, "y": 31},
+                    "panels": []
+                  },
+                  {
+                    "id": 101, "type": "stat", "title": "Total Power",
+                    "gridPos": {"h": 4, "w": 6, "x": 0, "y": 32},
+                    "datasource": {"type": "prometheus", "uid": "prometheus"},
+                    "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(network_ups_tools_ups_realpower_nominal * network_ups_tools_ups_load / 100)", "instant": true, "refId": "A"}],
+                    "fieldConfig": {"defaults": {"unit": "watt", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 1350}, {"color": "red", "value": 1620}]}, "min": 0, "max": 1800}, "overrides": []},
+                    "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "textMode": "auto", "orientation": "auto", "justifyMode": "auto"}
+                  },
+                  {
+                    "id": 102, "type": "stat", "title": "Total Capacity",
+                    "gridPos": {"h": 4, "w": 6, "x": 6, "y": 32},
+                    "datasource": {"type": "prometheus", "uid": "prometheus"},
+                    "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(network_ups_tools_ups_realpower_nominal)", "instant": true, "refId": "A"}],
+                    "fieldConfig": {"defaults": {"unit": "watt", "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]}}, "overrides": []},
+                    "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "none", "textMode": "auto", "orientation": "auto", "justifyMode": "auto"}
+                  },
+                  {
+                    "id": 103, "type": "stat", "title": "Min Runtime",
+                    "gridPos": {"h": 4, "w": 6, "x": 12, "y": 32},
+                    "datasource": {"type": "prometheus", "uid": "prometheus"},
+                    "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "min(network_ups_tools_battery_runtime)", "instant": true, "refId": "A"}],
+                    "fieldConfig": {"defaults": {"unit": "s", "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 300}, {"color": "green", "value": 600}]}}, "overrides": []},
+                    "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "textMode": "auto", "orientation": "auto", "justifyMode": "auto"}
+                  },
+                  {
+                    "id": 104, "type": "stat", "title": "Min Charge",
+                    "gridPos": {"h": 4, "w": 6, "x": 18, "y": 32},
+                    "datasource": {"type": "prometheus", "uid": "prometheus"},
+                    "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "min(network_ups_tools_battery_charge)", "instant": true, "refId": "A"}],
+                    "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "orange", "value": 15}, {"color": "green", "value": 30}]}}, "overrides": []},
+                    "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "textMode": "auto", "orientation": "auto", "justifyMode": "auto"}
+                  }
+                ]
             ' > /var/lib/grafana/dashboards/nut-ups-19308.json
 
           echo "Dashboards downloaded successfully."
+  register: grafana_dashboards_script
 
 - name: Create grafana Deployment
   kubernetes.core.k8s:
@@ -186,6 +236,7 @@
             labels:
               app: grafana
             annotations:
+              checksum/config: "{{ (grafana_secrets.result.data | to_json + grafana_provisioning.result.data | to_json + grafana_dashboards_script.result.data | to_json) | hash('sha256') }}"
               kubectl.kubernetes.io/default-container: "grafana"
               keel.sh/policy: force
               keel.sh/match-tag: "true"

@@ -1,4 +1,19 @@
 ---
+# Desktop metapackages (ubuntu-desktop, ubuntu-desktop-minimal) pull in hundreds
+# of GUI dependencies.  When some of those deps have already been removed (e.g.
+# by a partial disable_gui run or manual cleanup), apt's autoremover cannot
+# resolve the dependency tree and dist-upgrade fails with "AutoRemover broke
+# stuff".  Removing the metapackages first unblocks autoremove.
+# This only runs on DGX Sparks where disable_gui will later finish the job.
+- name: remove desktop metapackages before upgrade (prevents autoremove breakage)
+  ansible.builtin.apt:
+    name:
+      - ubuntu-desktop
+      - ubuntu-desktop-minimal
+    state: absent
+    purge: true
+  when: "'dgxsparks' in group_names"
+
 - name: upgrade pkgs and autoremove
   apt:
     update_cache: true
