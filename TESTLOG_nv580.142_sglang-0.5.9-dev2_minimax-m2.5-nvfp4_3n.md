@@ -201,8 +201,8 @@ All tests use: `tp=1, pp=3, ep=1, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 |--------|-------------|
 | nccl_transport | `sglang_nccl_transport` — NCCL inter-node transport (`socket` = TCP/IP, `roce` = RDMA/RoCE via IBext) |
 | moe_runner | `moe_runner_backend` — MoE expert dispatch kernel (`fi_cutlass` = flashinfer_cutlass, `triton` = triton→cutlass_moe_fp4 fallback for NVFP4) |
-| attention | `attention_backend` — attention kernel |
-| fp4_gemm | `fp4_gemm_backend` — FP4 dense GEMM kernel (`auto→cudnn` = auto-selected flashinfer_cudnn on SM121) |
+| attention | `attention_backend` — attention kernel (`flashinfer` = FlashInfer, `triton` = Triton) |
+| fp4_gemm | `fp4_gemm_backend` — FP4 dense GEMM kernel (`fi_cutlass` = flashinfer_cutlass, `auto→cudnn` = auto-selected flashinfer_cudnn on SM121; valid choices: auto, flashinfer_cudnn, flashinfer_cutlass, flashinfer_trtllm) |
 | dis_cuda_graph | `disable_cuda_graph` — true = eager mode, false = capture CUDA graphs for batch sizes in `cuda_graph_bs` |
 | dis_piecewise | `disable_piecewise_cuda_graph` — true = only fixed-BS graphs, false = piecewise variable-length graphs (58 chunks) |
 | pp_async | `pp_async_batch_depth` — async micro-batches in PP pipeline (0 = synchronous) |

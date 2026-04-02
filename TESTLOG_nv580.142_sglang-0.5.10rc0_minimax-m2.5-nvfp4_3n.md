@@ -111,20 +111,21 @@ All tests use: `tp=1, pp=3, ep=1, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 | 11 | socket | triton | triton | fi_cutlass | false | false | 0 | 16 | **STABLE** | 15.9 | 39.3 | 73.2 |
 | 12 | socket | triton | triton | fi_cutlass | false | true | 2 | 16 | **STABLE** | 16.1 | 46.9 | 52.8 |
 | 13 | socket | triton | flashinfer | fi_cudnn | false | true | 0 | 16 | **STABLE** | 15.6 | 27.5 | 54.6 |
-| 14 | socket | triton | triton | fi_cudnn | false | true | 0 | 16 | *pending* | — | — | — |
+| 14 | socket | triton | triton | fi_cudnn | false | true | 0 | 16 | **STABLE** | 15.8 | 40.5 | 62.1 |
 | 15 | socket | fi_cutlass | flashinfer | fi_cudnn | false | true | 0 | 16 | *pending* | — | — | — |
 
 ### Column Legend
 
 | Column | Description |
 |--------|-------------|
+| nccl_transport | `sglang_nccl_transport` — NCCL inter-node transport (`socket` = TCP/IP, `roce` = RDMA/RoCE via IBext) |
 | moe_runner | `moe_runner_backend` — MoE expert dispatch kernel (`fi_cutlass` = flashinfer_cutlass, `triton` = triton→cutlass_moe_fp4 fallback for NVFP4) |
-| attention | `attention_backend` — attention kernel |
+| attention | `attention_backend` — attention kernel (`flashinfer` = FlashInfer, `triton` = Triton) |
 | fp4_gemm | `fp4_gemm_backend` — FP4 dense GEMM kernel (`fi_cutlass` = flashinfer_cutlass, `fi_cudnn` = flashinfer_cudnn; valid choices: auto, flashinfer_cudnn, flashinfer_cutlass, flashinfer_trtllm) |
 | dis_cuda_graph | `disable_cuda_graph` — true = eager mode, false = capture CUDA graphs |
-| dis_piecewise | `disable_piecewise_cuda_graph` — true = only fixed-BS graphs |
+| dis_piecewise | `disable_piecewise_cuda_graph` — true = only fixed-BS graphs, false = piecewise variable-length graphs |
 | pp_async | `pp_async_batch_depth` — async micro-batches in PP pipeline (0 = synchronous) |
-| cuda_graph_max_bs | `cuda_graph_max_bs` — largest batch size to capture |
+| cuda_graph_max_bs | `cuda_graph_max_bs` — largest batch size to capture (— = N/A when graphs disabled) |
 | 1∥ tok/s | Throughput with 1 sequential request (= per-request tok/s) |
 | 4∥ tok/s | Peak concurrent throughput at 4∥ (sum of per-request tok/s) |
 | 8∥ tok/s | Peak concurrent throughput at 8∥ (sum of per-request tok/s) |
