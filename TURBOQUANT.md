@@ -48,7 +48,7 @@ or allow running larger models at current context lengths.
 
 ## Framework Integration Status
 
-As of 2026-03-29 — none merged yet, all PRs are days old.
+As of 2026-04-02 — none merged yet. Both main PRs are in active review.
 
 ### SGLang
 
@@ -56,7 +56,7 @@ As of 2026-03-29 — none merged yet, all PRs are days old.
 |----|-------|--------|
 | [#21419](https://github.com/sgl-project/sglang/pull/21419) | Add TurboQuant KV cache compression (3-4 bit, ICLR 2026) | Open, full implementation, 17 passing tests |
 | [#21617](https://github.com/sgl-project/sglang/pull/21617) | feat(kv-cache): Add TurboQuant KV cache quantization | Open, WIP draft |
-| [#21628](https://github.com/sgl-project/sglang/pull/21628) | [AMD] Add TurboQuant KV cache compression for ROCm | Open, tested on MI355X with DeepSeek-R1-0528 (671B) |
+| [#21628](https://github.com/sgl-project/sglang/pull/21628) | [AMD] Add TurboQuant KV cache compression for ROCm | Closed (not merged, 2026-03-29) — awaiting main PR #21419 first |
 | [#21618](https://github.com/sgl-project/sglang/issues/21618) | Feature request: Add TurboQuant KV Cache Quantization | Open issue |
 
 Usage (once merged): `--kv-cache-dtype turboquant`
