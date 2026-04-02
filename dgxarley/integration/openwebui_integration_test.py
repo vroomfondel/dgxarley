@@ -72,10 +72,15 @@ _VISION_AVAILABLE: bool = AsciiArt is not None and Image is not None
 
 from loguru import logger
 
-# Repo root is 2 levels above __file__: integration/ -> dgxarley/ -> repo-root
-_REPO_ROOT: Path = Path(__file__).resolve().parents[2]
+# Repo root: override via DGXARLEY_ROOT env var, otherwise 2 levels above __file__
+_REPO_ROOT: Path = Path(os.environ.get("DGXARLEY_ROOT") or Path(__file__).resolve().parents[2]).resolve()
 
-# Load .env from repo root (does not override existing env vars)
+# Ansible defaults: override via DGXARLEY_DEFAULTS env var
+_defaults_path: Path = Path(
+    os.environ.get("DGXARLEY_DEFAULTS") or (_REPO_ROOT / "roles" / "k8s_dgx" / "defaults" / "main.yml")
+).resolve()
+
+# Load .env / .env.local from repo root (does not override existing env vars)
 _env_files: list[Path] = [_REPO_ROOT / ".env", _REPO_ROOT / ".env.local"]
 for _env_file in _env_files:
     if _env_file.is_file():
@@ -93,10 +98,14 @@ for _env_file in _env_files:
 # Model profiles & sampling presets (from Ansible defaults)
 # ---------------------------------------------------------------------------
 
-_defaults_path: Path = _REPO_ROOT / "roles" / "k8s_dgx" / "defaults" / "main.yml"
-with open(_defaults_path) as _f:
-    # YAML-loaded data has heterogeneous structure; annotated as dict[str, object]
-    _dgx_defaults: dict[str, object] = yaml.safe_load(_f)
+if not _defaults_path.is_file():
+    logger.warning(
+        f"Ansible defaults not found: {_defaults_path} " "(set DGXARLEY_ROOT or DGXARLEY_DEFAULTS to override)"
+    )
+    _dgx_defaults: dict[str, object] = {}
+else:
+    with open(_defaults_path) as _f:
+        _dgx_defaults = yaml.safe_load(_f)
 # YAML-loaded data has heterogeneous structure; annotated as dict[str, object]
 _MODEL_PROFILES: dict[str, object] = _dgx_defaults.get("sglang_model_profiles", {})  # type: ignore[assignment]
 
