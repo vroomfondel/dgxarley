@@ -13,7 +13,7 @@ openwebui_namespace: "openwebui"
 #sglang_image: "scitrera/dgx-spark-sglang:0.5.9-dev2-acab24a7-t5"
 sglang_image: "scitrera/dgx-spark-sglang:0.5.10rc0"
 
-sglang_nnodes: 3
+sglang_nnodes: 4
 
 # Model profiles: context_length, kv_cache_dtype, mem_fraction_static
 sglang_model_profiles:
@@ -324,7 +324,7 @@ sglang_model_profiles:
     #    the post-processing cost remains the same (~360s either way).
     # load_format: "sharded_state"
     nccl_transport: "socket"  # RoCE is 2× slower (IBext overhead, see TESTLOG). Socket until debugged.
-    tp_size: 1  # PP=nnodes auto-derived (8 KV-heads not divisible by nnodes)
+    tp_size: 4  # PP=nnodes auto-derived (8 KV-heads not divisible by nnodes)
     context_length: 196608
     quantization: "modelopt_fp4"
     # trust_remote_code: required because MiniMax-M2.5 ships custom model code
@@ -337,7 +337,7 @@ sglang_model_profiles:
     # triton MoE compiles at runtime for SM121, stable on both images.
     moe_runner_backend: "triton"
     kv_cache_dtype: "fp8_e4m3"
-    mem_fraction_static: "0.80"
+    mem_fraction_static: "0.70"
     attention_backend: "flashinfer"
     # flashinfer_cutlass avoids the cuDNN JIT path which triggers Xid 13 on SM121
     # and is consistently slower than cutlass across all concurrency levels.
@@ -380,7 +380,7 @@ sglang_model_profiles:
     tool_call_parser: "minimax-m2"
     num_experts: 256
     # ep_size: EP requires ep_size <= tp_size, and tp_size=1 here (PP mode).
-    # ep_size: "{{ sglang_nnodes if (256 % (sglang_nnodes | int) == 0) else 1 }}"
+    ep_size: "{{ sglang_nnodes if (256 % (sglang_nnodes | int) == 0) else 1 }}"
     # Reasoning model: thinking is always on (chat template injects <think>\n).
     # Thinking tokens wrapped in <think>...</think>, exposed via reasoning_content field.
     recommended_sampling:
