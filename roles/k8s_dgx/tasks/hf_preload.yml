@@ -14,7 +14,7 @@
         run.sh: "{{ lookup('file', role_path ~ '/files/hf_preload_run.sh') }}"
   loop:
     - "{{ sglang_namespace }}"
-    - "{{ vllm_namespace }}"
+#    - "{{ vllm_namespace }}"
 
 - name: Delete existing HF preload Job
   kubernetes.core.k8s:
@@ -26,7 +26,7 @@
     namespace: "{{ item }}"
   loop:
     - "{{ sglang_namespace }}"
-    - "{{ vllm_namespace }}"
+#    - "{{ vllm_namespace }}"
   when: hf_preload_models | length > 0
 
 - name: Deploy HF preload Job
@@ -96,5 +96,5 @@
                   type: Directory
   loop:
     - "{{ sglang_namespace }}"
-    - "{{ vllm_namespace }}"
+    # - "{{ vllm_namespace }}"
   when: hf_preload_models | length > 0
