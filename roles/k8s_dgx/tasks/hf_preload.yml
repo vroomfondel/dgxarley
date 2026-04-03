@@ -48,6 +48,7 @@
               kubernetes.io/arch: arm64
               # kubernetes.io/arch: amd64
               spark-id: "2"
+            hostNetwork: true
             restartPolicy: Never
             containers:
               - name: download
@@ -61,7 +62,8 @@
                   - name: HF_PRELOAD_MODELS
                     value: "{{ hf_preload_models | join(',') }}"
                   - name: RSYNC_TARGETS
-                    value: "{{ range(1, sglang_nnodes | int + 1) | reject('equalto', 2) | map('string') | map('regex_replace', '^(.+)$', 'spark\\1') | map('extract', hostvars, 'ansible_host') | join(' ') }}"
+                    # Use QSFP IPs (10.10.10.0/24, 200GbE) instead of management IPs for faster rsync
+                    value: "{{ range(1, sglang_nnodes | int + 1) | reject('equalto', 2) | map('string') | map('regex_replace', '^(.+)$', 'qsfp_ip_spark\\1') | map('extract', vars) | join(' ') }}"
                   - name: HF_CACHE_HOST_PATH
                     value: "{{ hf_cache_path }}"
                 resources:
