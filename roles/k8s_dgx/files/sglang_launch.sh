@@ -54,6 +54,8 @@ else:
     print("_cuda_mem_fallback: patch target not found, skipping")
 PATCH_MEM_FALLBACK_EOF
   fi
+else
+  echo "SKIPPING GLM-5 specific patches..."
 fi
 
 # Prime ARP table on the QSFP link before NCCL tries to connect.
