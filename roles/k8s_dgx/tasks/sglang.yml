@@ -333,6 +333,8 @@
                     mountPath: /root/.cache/huggingface
                   - name: flashinfer-cache
                     mountPath: /root/.cache/flashinfer_persistent
+                  - name: triton-cache
+                    mountPath: /root/.triton/cache
                   - name: launch-script
                     mountPath: /scripts
                     readOnly: true
@@ -344,6 +346,10 @@
               - name: flashinfer-cache
                 hostPath:
                   path: "{{ hf_cache_path }}/flashinfer_cache"
+                  type: DirectoryOrCreate
+              - name: triton-cache
+                hostPath:
+                  path: "{{ hf_cache_path }}/triton_cache"
                   type: DirectoryOrCreate
               - name: model-download-script
                 configMap:
@@ -482,6 +488,8 @@
                     mountPath: /root/.cache/huggingface
                   - name: flashinfer-cache
                     mountPath: /root/.cache/flashinfer_persistent
+                  - name: triton-cache
+                    mountPath: /root/.triton/cache
                   - name: launch-script
                     mountPath: /scripts
                     readOnly: true
@@ -503,6 +511,10 @@
               - name: flashinfer-cache
                 hostPath:
                   path: "{{ hf_cache_path }}/flashinfer_cache"
+                  type: DirectoryOrCreate
+              - name: triton-cache
+                hostPath:
+                  path: "{{ hf_cache_path }}/triton_cache"
                   type: DirectoryOrCreate
               - name: model-download-script
                 configMap:
