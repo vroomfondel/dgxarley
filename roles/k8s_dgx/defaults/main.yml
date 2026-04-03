@@ -335,13 +335,13 @@ sglang_model_profiles:
     # flashinfer_cutlass MoE: OOM on first request (0.5.10rc0) and Xid 13 (0.5.9-dev2).
     # Too memory-hungry for 256-expert MoE with PP (all experts per stage).
     # triton MoE compiles at runtime for SM121, stable on both images.
-    moe_runner_backend: "triton"
+    moe_runner_backend: "cutlass"
     kv_cache_dtype: "fp8_e4m3"
     mem_fraction_static: "0.70"
     attention_backend: "flashinfer"
     # flashinfer_cutlass avoids the cuDNN JIT path which triggers Xid 13 on SM121
     # and is consistently slower than cutlass across all concurrency levels.
-    fp4_gemm_backend: "flashinfer_cudnn"
+    fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 16
     # Piecewise CUDA graph capture: OOM during capture — 58 chunks × separate graph
     # buffers exhaust GPU memory (NV_ERR_NO_MEMORY in _memdescAllocInternal).
@@ -349,7 +349,7 @@ sglang_model_profiles:
     disable_piecewise_cuda_graph: true
     # CUDA graph capture: works with triton MoE. OOM with flashinfer_cutlass MoE
     # (graph buffers too large for 256-expert MoE layers).
-    disable_cuda_graph: true
+    disable_cuda_graph: false
     cuda_graph_max_bs: 16
     # PP async micro-batching: overlaps forward passes across pipeline stages.
     # 0 = synchronous (default, one batch at a time). Higher values push more
@@ -380,14 +380,13 @@ sglang_model_profiles:
     tool_call_parser: "minimax-m2"
     num_experts: 256
     # ep_size: EP requires ep_size <= tp_size, and tp_size=1 here (PP mode).
-    ep_size: "{{ sglang_nnodes if (256 % (sglang_nnodes | int) == 0) else 1 }}"
+    ep_size: 4
     # Reasoning model: thinking is always on (chat template injects <think>\n).
     # Thinking tokens wrapped in <think>...</think>, exposed via reasoning_content field.
     recommended_sampling:
       temperature: 1.0
       top_p: 0.95
       top_k: 40
-    moe_runner: fi_cutlass
   "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4":
     info_url: "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
     # 120B/12B LatentMoE (Mamba2-Transformer hybrid), NVFP4 quantized (~67 GB weights).
@@ -424,7 +423,60 @@ sglang_model_profiles:
     recommended_sampling:
       temperature: 1.0
       top_p: 0.95
-
+  "nvidia/GLM-5-NVFP4":
+    info_url: "https://huggingface.co/nvidia/GLM-5-NVFP4"
+    # 744B/40B-active MoE (256 experts, top-8, sigmoid routing), NVFP4 quantized.
+    # Architecture: GlmMoeDsa — MLA (Multi-head Latent Attention) with DSA
+    # (Document-level Sparse Attention). 78 layers (first 3 dense, rest MoE),
+    # 1 shared expert + 256 routed experts per MoE layer. Has MTP head (1 layer)
+    # for speculative decoding (NEXTN).
+    # num_attention_heads=64, num_key_value_heads=64 (full MHA via MLA)
+    # → TP=4 works natively (16 heads/GPU), no PP workaround needed.
+    # NVFP4 quantization: only MoE FFN weights are FP4; attention projections
+    # (q/k/v/o), DSA indexer, lm_head, and MTP layer remain in BF16.
+    # Recommended launch (NVIDIA model card, for 8-GPU B300):
+    #   python3 -m sglang.launch_server --model nvidia/GLM-5-NVFP4 --tensor-parallel-size 8 \
+    #     --quantization modelopt_fp4 --trust-remote-code --reasoning-parser glm45 \
+    #     --tool-call-parser glm47 --chunked-prefill-size 131072 --mem-fraction-static 0.80
+    # Note: model card does NOT specify --moe-runner-backend or --attention-backend.
+    nccl_transport: "socket"  # RoCE is 2× slower (IBext overhead, see TESTLOG). Socket until debugged.
+    tp_size: 4  # num_kv_heads=64 → TP=4 works (16 heads/GPU). PP=1 with 4 nodes.
+    context_length: 196608  # model max 202752; leave headroom
+    quantization: "modelopt_fp4"
+    # trust_remote_code: required because GLM-5 ships custom model code
+    # (GlmMoeDsaForCausalLM, custom tokenizer) in the HF repo that SGLang must
+    # execute. Without it, transformers refuses to load the model class. Safe here
+    # because the code comes from NVIDIA's official nvidia/GLM-5-NVFP4 repo.
+    trust_remote_code: true
+    # Untested on DGX Spark — values below are initial defaults, pending test matrix.
+    moe_runner_backend: "flashinfer_cutlass"
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.80"  # model card recommendation
+    attention_backend: "triton"
+    fp4_gemm_backend: "flashinfer_cudnn"
+    jit_max_jobs: 16
+    disable_piecewise_cuda_graph: false
+    disable_cuda_graph: false
+    cuda_graph_max_bs: 16
+    pp_async_batch_depth: 0
+    # DeepGemm is designed for FP8 with ue8m0 scale format. For NVFP4 models
+    # (scale_fmt != ue8m0): (1) the JIT-compiled kernels aren't optimized for
+    # this format and may degrade accuracy, (2) JIT compilation blocks the
+    # scheduler forward loop synchronously, triggering the 300s watchdog kill,
+    # (3) parallel nvcc/cicc processes exhaust system RAM. With DeepGemm
+    # disabled, FP4 GEMM selection falls to fp4_gemm_backend.
+    disable_deep_gemm: true
+    # GLM-5 reasoning/tool parsers (from model card):
+    # "glm45" — GLM-4.5 detector, separates <think>...</think> into reasoning_content.
+    # "glm47" — GLM-4.7 tool call format.
+    reasoning_parser: "glm45"
+    tool_call_parser: "glm47"
+    num_experts: 256
+    # ep_size: EP=nnodes → each GPU handles 256/nnodes experts.
+    ep_size: "{{ sglang_nnodes if (256 % (sglang_nnodes | int) == 0) else 1 }}"
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95
 
 
 # Speculative decoding — predicts multiple tokens per forward pass, then
@@ -460,6 +512,7 @@ sglang_speculative_num_draft_tokens: 4
 #sglang_model: "Qwen/Qwen3.5-35B-A3B-FP8"
 #sglang_model: "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
 
+#sglang_model: "nvidia/GLM-5-NVFP4"
 sglang_model: "nvidia/MiniMax-M2.5-NVFP4"
 #sglang_model: "Qwen/Qwen3.5-122B-A10B-FP8"
 #sglang_model: "QuantTrio/Qwen3-235B-A22B-Thinking-2507-AWQ"
@@ -832,6 +885,7 @@ hf_cache_path: "/var/lib/hf-cache"
 hf_token: "hf_CHANGEME"
 # HuggingFace model pre-download Job
 hf_preload_models:
+  - "nvidia/GLM-5-NVFP4"
   - "nvidia/MiniMax-M2.5-NVFP4"
   - "Qwen/Qwen3.5-122B-A10B-FP8"
 #  - "QuantTrio/Qwen3-235B-A22B-Thinking-2507-AWQ"

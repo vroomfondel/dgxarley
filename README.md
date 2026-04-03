@@ -8,15 +8,17 @@
 # DGX Spark Cluster — Ansible Repository
 
 Ansible-Repository for deploying a heterogeneous K3s cluster for distributed LLM inference,
-built around two NVIDIA DGX Spark (ARM64) GPU nodes managed by an x86 control-plane node.
+built around four NVIDIA DGX Spark (ARM64) GPU nodes managed by an x86 control-plane node.
 
 ## Cluster Nodes
 
 | Node | Hardware | Arch | Role |
 |------|----------|------|------|
-| **k3smaster** | HP EliteDesk 800 G4 | x86_64 | K3s Master, Control-Plane, Frontend Services |
+| **k3smaster** | HP EliteDesk 800 G4 | x86_64 | K3s Master, Control-Plane, Frontend Services, NUT UPS monitoring |
 | **spark1** | DGX Spark / ASUS Ascent GX10 | ARM64 | SGLang Head, Ollama Embedding |
 | **spark2** | DGX Spark / ASUS Ascent GX10 | ARM64 | SGLang Worker, docling-serve |
+| **spark3** | DGX Spark / ASUS Ascent GX10 | ARM64 | SGLang Worker |
+| **spark4** | DGX Spark / ASUS Ascent GX10 | ARM64 | SGLang Worker |
 
 ### Cluster Overview (K9s — all namespaces)
 
@@ -50,10 +52,14 @@ built around two NVIDIA DGX Spark (ARM64) GPU nodes managed by an x86 control-pl
                                   | ether3 -------> k3smaster
                                   |   (OVS trunk)   enx6c1ff7c1da8d (USB 2.5G NIC)
                                   | ether5 -------> spark1 (eth0, VLAN 20 access)
+                                  | ether6 -------> spark3 (eth0, VLAN 20 access)
                                   | ether7 -------> spark2 (eth0, VLAN 20 access)
+                                  | ether8 -------> spark4 (eth0, VLAN 20 access)
                                   +-------------+
 
-               spark1 <=== QSFP P2P (ConnectX-7, MTU 9000, 10.10.10.0/24) ===> spark2
+               spark1 <==+                                              +==> spark3
+                         +=== QSFP (ConnectX-7, MTU 9000, 10.10.10.0/24) ===+
+               spark2 <==+        via MikroTik CRS812 QSFP switch      +==> spark4
 ```
 
 ### VLANs and Subnets
@@ -61,13 +67,13 @@ built around two NVIDIA DGX Spark (ARM64) GPU nodes managed by an x86 control-pl
 | VLAN | Subnet | Purpose | Nodes |
 |------|--------|---------|-------|
 | 10 | 192.168.10.0/24 | Primary LAN, Management, DNS, GW | k3smaster |
-| 20 | 192.168.20.0/24 | K3s cluster network (API, Flannel, inter-node) | all three nodes |
+| 20 | 192.168.20.0/24 | K3s cluster network (API, Flannel, inter-node) | all five nodes |
 | 30 | 192.168.30.0/24 | Home network (Fritz!Box), see VLAN translation below | k3smaster |
 | 40 | 192.168.40.0/24 | Passthrough | k3smaster |
 | 50 | 192.168.50.0/24 | Passthrough | k3smaster |
 | 60 | 192.168.60.0/24 | Passthrough | k3smaster |
 | 70 | 192.168.70.0/24 | Passthrough | k3smaster |
-| -- | 10.10.10.0/24 | QSFP point-to-point (NCCL, MTU 9000) | spark1, spark2 |
+| -- | 10.10.10.0/24 | QSFP mesh (NCCL, MTU 9000) via MikroTik CRS812 | spark1, spark2, spark3, spark4 |
 | -- | 10.68.0.0/16 | K3s Pod CIDR | internal |
 | -- | 10.69.0.0/16 | K3s Service CIDR | internal |
 
@@ -84,7 +90,7 @@ All nodes use an Open vSwitch bridge (name configured in vault).
 - Each VLAN gets a netplan sub-interface (`<bridge>.<vlan>`)
 - Deterministic MACs generated per VLAN: `02:00:00:<vlan_hex>:00:<host_octet_hex>`
 
-**spark1 / spark2** (single VLAN):
+**spark1 / spark2 / spark3 / spark4** (single VLAN):
 - Uplink: `eth0`
 - K3s cluster VLAN only, untagged
 - Default route via k3smaster
@@ -154,6 +160,7 @@ via the primary gateway.
 | `k8s_dgx` | k3smaster | K8s workloads: Multus, NVIDIA device plugin, SGLang (distributed), Ollama, Open WebUI, SearXNG, docling-serve |
 | `k8s_infra` | k3smaster | K8s infrastructure: cert-manager, ESO/Kyverno, Keel, Tang, NFD, Sealed Secrets, PostgreSQL, Redis, Prometheus/Grafana/Alertmanager, Loki, Uptime Kuma |
 | `clevis` | k3smaster | LUKS auto-unlock via Tang/NBDE |
+| `nut` | k3smaster | NUT UPS monitoring (dual Green Cell UPS, `blazer_usb` driver, netserver mode) |
 
 ## K8s Infrastructure (`k8s_infra` role)
 
@@ -175,6 +182,7 @@ All persistent data uses hostPath volumes under `/var/lib/k8s-data/` on k3smaste
 | Grafana | monitoring | Dashboards (local auth, auto-provisioned Kubernetes dashboards from dotdc) |
 | Alertmanager | monitoring | Alert routing (email + Gotify bridge via external cluster) |
 | Loki + Promtail | loki | Log aggregation (filesystem backend, DaemonSet log collector) |
+| NUT Exporter | monitoring | Prometheus exporter for NUT UPS metrics (`druggeri/nut_exporter:3.2.5`, per-UPS scrape jobs) |
 | Uptime Kuma | uptimekuma | Uptime monitoring |
 
 FQDNs follow the pattern `<service>.<domain-suffix>` (configured via `dns_external_domain_suffix` in vault).
@@ -185,23 +193,23 @@ FQDNs follow the pattern `<service>.<domain-suffix>` (configured via `dns_extern
 
 ### SGLang — Distributed LLM Inference
 
-Two-node tensor-parallel setup across both DGX Sparks:
+Multi-node pipeline-parallel setup across up to 4 DGX Sparks:
 
-| | spark1 (head) | spark2 (worker) |
-|--|---------------|-----------------|
-| Pod | `sglang-head` | `sglang-worker` |
-| node-rank | 0 | 1 |
-| NCCL interface | `net1` (Multus, QSFP P2P) | `net1` (Multus, QSFP P2P) |
-| GPU | 1x (CDI) | 1x (CDI) |
+| | spark1 (head) | spark2 (worker) | spark3 (worker) | spark4 (worker) |
+|--|---------------|-----------------|-----------------|-----------------|
+| Pod | `sglang-head` | `sglang-worker-1` | `sglang-worker-2` | `sglang-worker-3` |
+| node-rank | 0 | 1 | 2 | 3 |
+| NCCL interface | `net1` (Multus, QSFP) | `net1` (Multus, QSFP) | `net1` (Multus, QSFP) | `net1` (Multus, QSFP) |
+| GPU | 1x (CDI) | 1x (CDI) | 1x (CDI) | 1x (CDI) |
 
-- **Model**: configurable via `sglang_model` (default: `Qwen/Qwen3-Coder-30B-A3B-Instruct`), with per-model profiles in `sglang_model_profiles`
-- **Image**: `scitrera/dgx-spark-sglang:0.5.9-t5`
-- **Config**: `--tp 2 --nnodes 2`, context-length/kv-cache-dtype/mem-fraction-static pulled from model profile
+- **Model**: configurable via `sglang_model` (default: `nvidia/MiniMax-M2.5-NVFP4`), with per-model profiles in `sglang_model_profiles`
+- **Image**: `scitrera/dgx-spark-sglang:0.5.10rc0`
+- **Config**: `--tp 1 --nnodes 4` (PP=4 auto-derived), context-length/kv-cache-dtype/mem-fraction-static pulled from model profile
 - **Reasoning parser**: `--reasoning-parser` (e.g. `qwen3`) extracts `<think>...</think>` blocks into a separate `reasoning_content` field in the OpenAI-compatible API response. Set per model via `reasoning_parser` in `sglang_model_profiles` (empty = disabled)
 - **Tool-call parser**: `--tool-call-parser` (e.g. `qwen3_coder`) parses structured tool/function calls from model output into the `tool_calls` API field. Required for OpenWebUI tool use, LangChain agents, etc. Set per model via `tool_call_parser` in `sglang_model_profiles` (empty = disabled). Note: [known issue](https://github.com/sgl-project/sglang/issues/8331) where the qwen3 parser may eagerly misparse normal output as tool calls
 - **Speculative decoding**: multi-token prediction via `--speculative-algo NEXTN`, disabled by default (`sglang_speculative_enabled: false`). Increases output throughput up to ~60% with no quality loss, but uses more VRAM and gains diminish at high concurrency. Only works with models that have trained MTP modules (e.g. Qwen3.5, DeepSeek-V3). Enable via `sglang_speculative_enabled: true`; tuning params: `sglang_speculative_num_steps`, `sglang_speculative_eagle_topk`, `sglang_speculative_num_draft_tokens`
 - **Service**: `sglang:8000` (ClusterIP), OpenAI-compatible API
-- NCCL communicates over QSFP P2P (10.10.10.0/24, MTU 9000) via Multus `host-device` CNI
+- NCCL communicates over QSFP mesh (10.10.10.0/24, MTU 9000, via MikroTik CRS812 QSFP switch) via Multus `host-device` CNI
 - **GPU time-slicing**: NVIDIA device plugin advertises each physical GPU as N logical replicas (default: 4) via ConfigMap-based time-slicing config
 - **CDI volume**: device plugin writes generated CDI specs to `/var/run/cdi` (writable hostPath, `DirectoryOrCreate`) — not `/etc/cdi` (which is for static specs from `nvidia-ctk`)
 - **HF cache**: models cached at hostPath `{{ hf_cache_path }}` (`/var/lib/hf-cache`), mounted as `/root/.cache/huggingface` in pods. The `huggingface_hub` library stores models under `hub/` subdirectory — download scripts must use `cache_dir="/root/.cache/huggingface/hub"` to match SGLang's runtime expectations
@@ -407,12 +415,14 @@ add name=bridge vlan-filtering=yes
 add interface=ether1 bridge=bridge pvid=30 comment="Uplink (Netgear)"
 add interface=ether3 bridge=bridge pvid=10 comment="k3smaster OVS trunk"
 add interface=ether5 bridge=bridge pvid=20 comment="spark1 access"
+add interface=ether6 bridge=bridge pvid=20 comment="spark3 access"
 add interface=ether7 bridge=bridge pvid=20 comment="spark2 access"
+add interface=ether8 bridge=bridge pvid=20 comment="spark4 access"
 
 /interface/bridge/vlan
 add bridge=bridge vlan-ids=10 tagged=bridge,ether1 untagged=ether3 \
     comment="LAN / Management"
-add bridge=bridge vlan-ids=20 tagged=bridge,ether1,ether3 untagged=ether5,ether7 \
+add bridge=bridge vlan-ids=20 tagged=bridge,ether1,ether3 untagged=ether5,ether6,ether7,ether8 \
     comment="K3s Cluster"
 add bridge=bridge vlan-ids=30 tagged=ether3 untagged=ether1 \
     comment="Home network (Netgear VLAN1 untagged <-> k3smaster tagged)"
@@ -436,7 +446,7 @@ add dst-address=0.0.0.0/0 gateway=192.168.10.x
 | VLAN | Comment | Tagged | Untagged |
 |------|---------|--------|----------|
 | 10 | LAN / Management | bridge, ether1 | ether3 |
-| 20 | K3s Cluster | bridge, ether1, ether3 | ether5, ether7 |
+| 20 | K3s Cluster | bridge, ether1, ether3 | ether5, ether6, ether7, ether8 |
 | 30 | Home network ↔ k3smaster tagged | ether3 | ether1 |
 | 40 | passthrough | ether1, ether3 | — |
 | 50 | passthrough | ether1, ether3 | — |
@@ -453,7 +463,9 @@ add dst-address=0.0.0.0/0 gateway=192.168.10.x
 | ether1 | 10, 20, 40, 50, 60, 70, 1 | 30 (pvid) | Netgear S3300 uplink |
 | ether3 | 20, 30, 40, 50, 60, 70, 1 | 10 (pvid) | k3smaster OVS trunk |
 | ether5 | — | 20 (pvid) | spark1 (eth0) |
+| ether6 | — | 20 (pvid) | spark3 (eth0) |
 | ether7 | — | 20 (pvid) | spark2 (eth0) |
+| ether8 | — | 20 (pvid) | spark4 (eth0) |
 
 ### Why `bridge` Appears as Tagged
 

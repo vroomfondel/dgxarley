@@ -11,12 +11,33 @@
     owner: root
     group: root
     mode: 0777
+  when:
+    - nfsmasterip is defined
+    - nfs_share_path is defined
+    - wantsnfsmount | default(false)
+  tags:
+    - nfsmount
+    - k3sinstall
 
+- name: ensure nfs-HF-CACHE mountdir is there
+  file:
+    path: /mnt/nfs-HF-CACHE
+    state: directory
+    owner: root
+    group: root
+    mode: 0777
+  when:
+    - nfsmasterip is defined
+    - nfs_hf_cache_share_path is defined
+    - wantsnfsmount | default(false)
+  tags:
+    - nfsmount
+    - k3sinstall
 
 - name: ensure nfs is mounted in /etc/fstab
   ansible.posix.mount:
     path: /mnt/nfs
-    src: "{{ nfsmasterip }}:/k3shared"
+    src: "{{ nfsmasterip }}:/{{ nfs_share_path }}"
     fstype: nfs4
     opts: "defaults,noatime,nodiratime,_netdev"
     dump: 0
@@ -24,7 +45,28 @@
     state: mounted
   when:
     - nfsmasterip is defined
+    - wantsnfsmount | default(false)
+    - nfs_share_path is defined
+  tags:
+    - nfsmount
+    - k3sinstall
 
+- name: ensure nfs-HF-CACHE is mounted in /etc/fstab
+  ansible.posix.mount:
+    path: /mnt/nfs-HF-CACHE
+    src: "{{ nfsmasterip }}:/{{ nfs_hf_cache_share_path }}"
+    fstype: nfs4
+    opts: "defaults,noatime,nodiratime,_netdev"
+    dump: 0
+    passno: 0
+    state: mounted
+  when:
+    - nfsmasterip is defined
+    - wantsnfsmount | default(false)
+    - nfs_hf_cache_share_path is defined
+  tags:
+    - nfsmount
+    - k3sinstall
 
 #- name: ensure nfs is actually mounted to /mnt/nfs
 #  ansible.posix.mount:

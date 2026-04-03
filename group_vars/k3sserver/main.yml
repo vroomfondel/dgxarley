@@ -9,8 +9,9 @@ kubeconfig_api_server: "https://192.168.124.100:6443"
 
 # NFS — falls gewuenscht, NFS-Server und -Pfad setzen
 wantsnfsmount: false
-# nfsmasterip: "192.168.123.xxx"
-# nfs_share_path: "/k3shared"
+nfsmasterip: "192.168.123.67"
+nfs_share_path: "/k3shared"
+nfs_hf_cache_share_path: "/HF-CACHE"
 
 # Cluster CIDRs
 cluster_cidr: "10.68.0.0/16"
