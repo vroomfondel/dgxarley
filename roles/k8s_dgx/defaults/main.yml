@@ -10,8 +10,8 @@ openwebui_namespace: "openwebui"
 
 # curl -s 'https://hub.docker.com/v2/repositories/scitrera/dgx-spark-sglang/tags/?page_size=20&ordering=last_updated' | jq '.results[] | {name, last_updated}'
 #sglang_image: "scitrera/dgx-spark-sglang:0.5.9-t5"
-#sglang_image: "scitrera/dgx-spark-sglang:0.5.9-dev2-acab24a7-t5"
-sglang_image: "scitrera/dgx-spark-sglang:0.5.10rc0"
+sglang_image: "scitrera/dgx-spark-sglang:0.5.9-dev2-acab24a7-t5"
+#sglang_image: "scitrera/dgx-spark-sglang:0.5.10rc0"
 
 sglang_nnodes: 4
 
@@ -335,22 +335,22 @@ sglang_model_profiles:
     # flashinfer_cutlass MoE: OOM on first request (0.5.10rc0) and Xid 13 (0.5.9-dev2).
     # Too memory-hungry for 256-expert MoE with PP (all experts per stage).
     # triton MoE compiles at runtime for SM121, stable on both images.
-    moe_runner_backend: "cutlass"
+    moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
-    mem_fraction_static: "0.70"
-    attention_backend: "flashinfer"
+    mem_fraction_static: "0.60"
+    attention_backend: "triton"
     # flashinfer_cutlass avoids the cuDNN JIT path which triggers Xid 13 on SM121
     # and is consistently slower than cutlass across all concurrency levels.
-    fp4_gemm_backend: "flashinfer_cutlass"
+    fp4_gemm_backend: "flashinfer_cudnn"
     jit_max_jobs: 16
     # Piecewise CUDA graph capture: OOM during capture — 58 chunks × separate graph
     # buffers exhaust GPU memory (NV_ERR_NO_MEMORY in _memdescAllocInternal).
     # Regular CUDA graphs (6 fixed batch sizes) work fine, only piecewise is too much.
-    disable_piecewise_cuda_graph: true
+    disable_piecewise_cuda_graph: false
     # CUDA graph capture: works with triton MoE. OOM with flashinfer_cutlass MoE
     # (graph buffers too large for 256-expert MoE layers).
     disable_cuda_graph: false
-    cuda_graph_max_bs: 16
+    cuda_graph_max_bs: 8
     # PP async micro-batching: overlaps forward passes across pipeline stages.
     # 0 = synchronous (default, one batch at a time). Higher values push more
     # micro-batches into the pipeline concurrently, hiding inter-stage latency.
@@ -380,6 +380,7 @@ sglang_model_profiles:
     tool_call_parser: "minimax-m2"
     num_experts: 256
     # ep_size: EP requires ep_size <= tp_size, and tp_size=1 here (PP mode).
+    # ep_size: "{{ sglang_nnodes if (128 % (sglang_nnodes | int) == 0) else 1 }}"
     ep_size: 4
     # Reasoning model: thinking is always on (chat template injects <think>\n).
     # Thinking tokens wrapped in <think>...</think>, exposed via reasoning_content field.

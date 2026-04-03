@@ -443,6 +443,7 @@ class RequestStats:
     clean_output: str = ""
     _start: float = field(default=0.0, repr=False)
     _first_token: bool = field(default=False, repr=False)
+    _last_token_time: float = field(default=0.0, repr=False)
 
     @property
     def tokens_per_sec(self) -> float:
@@ -515,6 +516,7 @@ async def stream_request(
 
     stats.status = "streaming"
     stats._start = time.monotonic()
+    stats._last_token_time = stats._start
     try:
         async with session.post(
             url,
@@ -552,6 +554,7 @@ async def stream_request(
                     reasoning_content=delta.get("reasoning_content", ""),
                 )
                 if parsed.thinking or parsed.content:
+                    stats._last_token_time = time.monotonic()
                     if not stats._first_token:
                         stats._first_token = True
                         stats.ttft = time.monotonic() - stats._start
@@ -966,6 +969,7 @@ async def run_parallel_test(
     no_guard: str | None = None,
     result_file: str | None = None,
     extra_info: dict[str, object] | None = None,
+    stall_timeout: float = 120.0,
 ) -> None:
     """Run ``n`` parallel streaming requests with a live Rich display.
 
@@ -1102,6 +1106,23 @@ async def run_parallel_test(
                                 s.total_time = time.monotonic() - s._start
                         console.print("\n[bold yellow]Aborted by user (q pressed)[/]")
                         break
+
+                    # Stall detection: if ALL streaming requests have
+                    # received no token for stall_timeout seconds, abort.
+                    if stall_timeout > 0:
+                        now_mono = time.monotonic()
+                        streaming = [s for s in all_stats if s.status == "streaming"]
+                        if streaming and all((now_mono - s._last_token_time) > stall_timeout for s in streaming):
+                            for t in pending:  # type: ignore[assignment]
+                                t.cancel()  # type: ignore[attr-defined]
+                            if pending:
+                                await asyncio.wait(pending, timeout=2)
+                            for s in streaming:
+                                s.status = "error"
+                                s.error = f"stall: no tokens for {stall_timeout:.0f}s"
+                                s.total_time = now_mono - s._start
+                            console.print(f"\n[bold red]All streams stalled for {stall_timeout:.0f}s — aborting[/]")
+                            break
 
                 # Final update
                 live.update(build_live_display(all_stats, verbose))
