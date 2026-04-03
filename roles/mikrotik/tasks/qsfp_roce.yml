@@ -4,11 +4,12 @@
 # Gated by qsfp_switch | default(false) on each task (static import gotcha).
 
 # 1. Jumbo frames on QSFP ports
-- name: Set l2mtu on QSFP port
+- name: Set mtu and l2mtu on QSFP port
   community.routeros.command:
     commands:
       - >-
         /interface/ethernet/set [find default-name={{ item.name }}]
+        mtu={{ mikrotik_qsfp_mtu }}
         l2mtu={{ mikrotik_qsfp_l2mtu }}
   loop: "{{ mikrotik_qsfp_roce_ports }}"
   loop_control:

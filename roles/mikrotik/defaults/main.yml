@@ -9,6 +9,7 @@ mikrotik_srcnat_rules: []
 
 # RoCE/RDMA lossless Ethernet — only active when qsfp_switch: true
 mikrotik_qsfp_roce_ports: []
+mikrotik_qsfp_mtu: 9000
 mikrotik_qsfp_l2mtu: 9500
 mikrotik_roce_dscp_data: 26
 mikrotik_roce_dscp_cnp: 48

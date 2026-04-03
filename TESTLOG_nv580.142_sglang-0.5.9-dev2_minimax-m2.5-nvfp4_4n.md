@@ -24,26 +24,26 @@ All tests use: `tp=4, pp=1, ep=4, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 
 | # | nccl_transport | moe_runner | attention | fp4_gemm | dis_cuda_graph | dis_piecewise | pp_async | cuda_graph_max_bs | Stability | 1∥ tok/s | 4∥ tok/s | 8∥ tok/s |
 |---|----------------|------------|-----------|----------|----------------|---------------|----------|-------------------|-----------|---------|---------|---------|
-| 1 | socket | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | pending | — | — | — |
+| 1 | socket | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | startup crash (workers restarted) | — | — | — |
 | 2 | socket | triton | flashinfer | fi_cutlass | true | true | 0 | — | EP inference bug → worker crash | — | — | — |
 | 3 | socket | triton | flashinfer | fi_cutlass | false | false | 0 | 8 | startup crash (piecewise graph capture) | — | — | — |
 | 4 | socket | triton | triton | fi_cutlass | false | true | 0 | 8 | startup crash (graph capture) | — | — | — |
-| 5 | socket | triton | triton | fi_cutlass | true | true | 0 | — | pending | — | — | — |
-| 6 | socket | triton | triton | fi_cutlass | false | false | 0 | 8 | pending | — | — | — |
-| 7 | socket | triton | flashinfer | fi_cudnn | false | true | 0 | 8 | pending | — | — | — |
-| 8 | socket | triton | flashinfer | fi_cudnn | true | true | 0 | — | pending | — | — | — |
-| 9 | socket | triton | flashinfer | fi_cudnn | false | false | 0 | 8 | pending | — | — | — |
-| 10 | socket | triton | triton | fi_cudnn | false | true | 0 | 8 | pending | — | — | — |
-| 11 | socket | triton | triton | fi_cudnn | true | true | 0 | — | pending | — | — | — |
-| 12 | socket | triton | triton | fi_cudnn | false | false | 0 | 8 | pending | — | — | — |
-| 13 | socket | fi_cutlass | flashinfer | fi_cutlass | false | true | 0 | 8 | pending | — | — | — |
-| 14 | socket | fi_cutlass | flashinfer | fi_cutlass | true | true | 0 | — | pending | — | — | — |
-| 15 | socket | fi_cutlass | flashinfer | fi_cutlass | false | false | 0 | 8 | pending | — | — | — |
-| 16 | socket | fi_cutlass | triton | fi_cutlass | false | true | 0 | 8 | pending | — | — | — |
-| 17 | socket | fi_cutlass | triton | fi_cutlass | true | true | 0 | — | pending | — | — | — |
-| 18 | socket | fi_cutlass | triton | fi_cutlass | false | false | 0 | 8 | pending | — | — | — |
-| 19 | socket | fi_cutlass | flashinfer | fi_cudnn | false | true | 0 | 8 | pending | — | — | — |
-| 20 | socket | fi_cutlass | flashinfer | fi_cudnn | true | true | 0 | — | pending | — | — | — |
+| 5 | socket | triton | triton | fi_cutlass | true | true | 0 | — | EP inference bug → worker crash | — | — | — |
+| 6 | socket | triton | triton | fi_cutlass | false | false | 0 | 8 | startup crash (piecewise graph capture) | — | — | — |
+| 7 | socket | triton | flashinfer | fi_cudnn | false | true | 0 | 8 | startup crash (graph capture) | — | — | — |
+| 8 | socket | triton | flashinfer | fi_cudnn | true | true | 0 | — | EP inference bug → worker crash | — | — | — |
+| 9 | socket | triton | flashinfer | fi_cudnn | false | false | 0 | 8 | startup crash (piecewise graph capture) | — | — | — |
+| 10 | socket | triton | triton | fi_cudnn | false | true | 0 | 8 | startup crash (graph capture) | — | — | — |
+| 11 | socket | triton | triton | fi_cudnn | true | true | 0 | — | EP inference bug → worker crash | — | — | — |
+| 12 | socket | triton | triton | fi_cudnn | false | false | 0 | 8 | startup crash (piecewise graph capture) | — | — | — |
+| 13 | socket | fi_cutlass | flashinfer | fi_cutlass | false | true | 0 | 8 | **STABLE** | 15.3 | 46.3 | 65.9 |
+| 14 | socket | fi_cutlass | flashinfer | fi_cutlass | true | true | 0 | — | **STABLE** | 14.4 (TTFT 14.7s) | 49.4 | 65.0 |
+| 15 | socket | fi_cutlass | flashinfer | fi_cutlass | false | false | 0 | 8 | **STABLE** | 14.9 | 45.7 | 65.4 |
+| 16 | socket | fi_cutlass | triton | fi_cutlass | false | true | 0 | 8 | EP crash at concurrency | 15.5 | — | — |
+| 17 | socket | fi_cutlass | triton | fi_cutlass | true | true | 0 | — | **STABLE** | 14.9 (TTFT 9.8s) | 48.2 | 70.7 |
+| 18 | socket | fi_cutlass | triton | fi_cutlass | false | false | 0 | 8 | EP crash at concurrency | 15.4 | — | — |
+| 19 | socket | fi_cutlass | flashinfer | fi_cudnn | false | true | 0 | 8 | **STABLE** (5/8 at 8∥) | 15.6 | 48.2 | 44.4 |
+| 20 | socket | fi_cutlass | flashinfer | fi_cudnn | true | true | 0 | — | *running* | 15.1 | — | — |
 | 21 | socket | fi_cutlass | flashinfer | fi_cudnn | false | false | 0 | 8 | pending | — | — | — |
 | 22 | socket | fi_cutlass | triton | fi_cudnn | false | true | 0 | 8 | pending | — | — | — |
 | 23 | socket | fi_cutlass | triton | fi_cudnn | true | true | 0 | — | pending | — | — | — |

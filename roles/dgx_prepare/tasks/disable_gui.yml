@@ -46,6 +46,16 @@
     - cups.socket
     - cups.path
 
+# nvidia-dgx-sol is NVIDIA's "Sign of Life" telemetry service that phones home
+# every 5 minutes. Since we block events.telemetry.data.nvidia.com via DNS, this
+# just spams "Event callback returned failure." into the journal.
+- name: Disable and stop NVIDIA DGX telemetry service
+  ansible.builtin.systemd:
+    name: nvidia-dgx-sol
+    state: stopped
+    enabled: false
+  failed_when: false
+
 - name: Mask PipeWire user services globally
   ansible.builtin.systemd:
     name: "{{ item }}"
