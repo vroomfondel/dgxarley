@@ -8,6 +8,7 @@ to the real hardware over RS232 using :mod:`dgxarley.tools.kceve_kvm`.
 Endpoints::
 
     GET  /                HTML UI (stylized KVM replica)
+    GET  /api/health      JSON: {"status": "ok"}
     GET  /api/status      JSON: {"port": N}
     POST /api/switch/{N}  JSON: {"port": N, "previous": M}
 
@@ -72,6 +73,12 @@ async def _lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
 
 app = FastAPI(title="KCEVE KVM Web UI", lifespan=_lifespan)
+
+
+@app.get("/api/health")
+def api_health() -> JSONResponse:
+    """Lightweight liveness check — does not touch the serial port."""
+    return JSONResponse({"status": "ok"})
 
 
 @app.get("/api/status")
