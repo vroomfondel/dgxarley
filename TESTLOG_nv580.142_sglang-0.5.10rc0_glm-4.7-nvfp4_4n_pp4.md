@@ -22,11 +22,11 @@ All tests use: `tp=1, pp=4, ep=1, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 
 | # | nccl_transport | moe_runner | attention | fp4_gemm | dis_cuda_graph | dis_piecewise | pp_async | cuda_graph_max_bs | Stability | 1∥ tok/s | 4∥ tok/s | 8∥ tok/s |
 |---|----------------|------------|-----------|----------|----------------|---------------|----------|-------------------|-----------|---------|---------|---------|
-| 1 | socket | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | pending   | — | — | — |
-| 2 | socket | triton | flashinfer | fi_cutlass | true | true | 0 | — | pending   | — | — | — |
-| 3 | socket | triton | flashinfer | fi_cutlass | false | false | 0 | 8 | pending   | — | — | — |
-| 4 | socket | triton | triton | fi_cutlass | false | true | 0 | 8 | pending   | — | — | — |
-| 5 | socket | triton | triton | fi_cutlass | true | true | 0 | — | pending   | — | — | — |
+| 1 | socket | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | **n=1 only** | 5.64 | — | — |
+| 2 | socket | triton | flashinfer | fi_cutlass | true | true | 0 | — | **n=1 only** | 3.67 | — | — |
+| 3 | socket | triton | flashinfer | fi_cutlass | false | false | 0 | 8 | **n=1 only** | 5.61 | — | — |
+| 4 | socket | triton | triton | fi_cutlass | false | true | 0 | 8 | **startup_crash** | — | — | — |
+| 5 | socket | triton | triton | fi_cutlass | true | true | 0 | — | **startup_crash** | — | — | — |
 | 6 | socket | triton | triton | fi_cutlass | false | false | 0 | 8 | pending   | — | — | — |
 | 7 | socket | triton | flashinfer | fi_cudnn | false | true | 0 | 8 | pending   | — | — | — |
 | 8 | socket | triton | flashinfer | fi_cudnn | true | true | 0 | — | pending   | — | — | — |
@@ -76,3 +76,37 @@ All tests use: `tp=1, pp=4, ep=1, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 | 8∥ tok/s | Peak concurrent throughput at 8∥ (sum of per-request tok/s) |
 
 ---
+
+## Test Details
+
+### #1 — triton moe / flashinfer attn / fi_cutlass fp4 / cuda_graph
+
+- **Outcome:** n=1 success, n=4+ crash (FlashInfer `merge_state` invalid argument)
+- **n=1:** 5.64 tok/s, 2891 tokens (1644 think + 1472 content), TTFT 1.4s, finish=stop
+- **n=4:** 0/4 errors (FlashInfer cascade merge crash)
+- **n=8:** 0/8 errors (same)
+
+### #2 — triton moe / flashinfer attn / fi_cutlass fp4 / no-cuda-graph
+
+- **Outcome:** n=1 success (slow), n=4+ crash
+- **n=1:** 3.67 tok/s, 2990 tokens, **TTFT 250.6s** (extreme first-token latency — no cuda graph means no cached computation paths)
+- **n=4:** 0/4 errors (0 tokens, instant)
+
+### #3 — triton moe / flashinfer attn / fi_cutlass fp4 / piecewise
+
+- **Outcome:** n=1 success, n=4+ crash
+- **n=1:** 5.61 tok/s, 3916 tokens (1333 think + 2328 content), TTFT 1.3s, finish=stop
+- **n=4:** 0/4 errors (0 tokens, instant — FlashInfer merge_state crash)
+
+### #4 — triton moe / triton attn / fi_cutlass fp4 / cuda_graph
+
+- **Outcome:** startup_crash
+- **Error:** Workers 2, 3 restarted
+- **Time:** 2026-04-04 17:30–17:35 UTC
+
+### #5 — triton moe / triton attn / fi_cutlass fp4 / no-cuda-graph
+
+- **Outcome:** startup_crash
+- **Error:** Head + all 3 workers restarted
+- **Time:** 2026-04-04 17:36–17:42 UTC
+- **Note:** `triton` attention crashes on PP=4 even without cuda graphs — only `flashinfer` attention works for PP mode
