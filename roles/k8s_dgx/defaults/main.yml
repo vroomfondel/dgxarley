@@ -349,7 +349,7 @@ sglang_model_profiles:
     # flashinfer_cutlass: stable across all tests. fi_cudnn: less stable at 8∥
     # (Test 19: 5/8 failures) and crashes in eager mode (Test 20).
     fp4_gemm_backend: "flashinfer_cutlass"
-    jit_max_jobs: 16
+    jit_max_jobs: 4
     # Piecewise CUDA graphs: stable with flashinfer attention (Test 15: 14.9/45.7/65.4).
     # Disabled here for simplicity — regular graphs (Test 13) perform equally.
     disable_piecewise_cuda_graph: true
@@ -440,7 +440,7 @@ sglang_model_profiles:
     mem_fraction_static: "0.20"  # PP=4 should leave enough room (~20 layers/GPU)
     attention_backend: "flashinfer"
     fp4_gemm_backend: "flashinfer_cutlass"
-    jit_max_jobs: 16
+    jit_max_jobs: 4
     disable_piecewise_cuda_graph: true
     disable_cuda_graph: false
     cuda_graph_max_bs: 8
@@ -480,19 +480,19 @@ sglang_model_profiles:
     # Note: model card does NOT specify --moe-runner-backend or --attention-backend.
     # model_type=glm4_moe is in transformers 4.57.6 — no upgrade needed (unlike GLM-5).
     nccl_transport: "socket"
-    tp_size: 1  # num_kv_heads=8 → TP=4 works (2 KV heads/GPU). EP auto from nnodes.
+    tp_size: 4  # num_kv_heads=8 → TP=4 works (2 KV heads/GPU). EP auto from nnodes.
     context_length: 196608  # model max 202752; leave headroom
     #chunked_prefill_size: 131072  # NVIDIA model card recommendation
     quantization: "modelopt_fp4"
     trust_remote_code: true
     # Untested on DGX Spark — values below are initial defaults, pending test matrix.
-    moe_runner_backend: "triton"
+    moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
     mem_fraction_static: "0.60"
     # mem_fraction_static: "0.80"  # model card recommendation
     attention_backend: "flashinfer"
-    fp4_gemm_backend: "flashinfer_cutlass"
-    jit_max_jobs: 16
+    fp4_gemm_backend: "flashinfer_cudnn"
+    jit_max_jobs: 4
     disable_piecewise_cuda_graph: true
     disable_cuda_graph: false
     cuda_graph_max_bs: 8
@@ -501,7 +501,7 @@ sglang_model_profiles:
     reasoning_parser: "glm45"
     tool_call_parser: "glm47"
     num_experts: 160
-    ep_size: 1
+    ep_size: 4
     #ep_size: "{{ sglang_nnodes if (160 % (sglang_nnodes | int) == 0) else 1 }}"
     recommended_sampling:
       temperature: 1.0
@@ -534,7 +534,7 @@ sglang_model_profiles:
     mem_fraction_static: "0.80"
     attention_backend: "flashinfer"
     fp4_gemm_backend: "flashinfer_cutlass"
-    jit_max_jobs: 16
+    jit_max_jobs: 4
     disable_piecewise_cuda_graph: true
     disable_cuda_graph: false
     cuda_graph_max_bs: 8
@@ -549,6 +549,47 @@ sglang_model_profiles:
       temperature: 0.6
       top_p: 0.95
       top_k: 20
+  "zai-org/GLM-4.7-FP8":
+    info_url: "https://huggingface.co/zai-org/GLM-4.7-FP8"
+    # 358B/~58B-active MoE (160 experts, top-8, sigmoid routing), FP8 quantized (~358 GB).
+    # Same architecture as nvidia/GLM-4.7-NVFP4 but with FP8 weights (~1 byte/param)
+    # instead of FP4 (~0.5 byte/param). Significantly larger but uses standard FP8 GEMM
+    # kernels which work on SM121, bypassing the broken cutlass_moe_fp4 path.
+    # Architecture: GLM-4 MoE — GQA (num_kv_heads=8, 12:1 ratio), 92 layers
+    # (first 3 dense, rest MoE), 1 shared expert + 160 routed experts per MoE layer.
+    # Has MTP head (1 layer) for speculative decoding.
+    # num_attention_heads=96, num_key_value_heads=8 → TP=4 works (2 KV heads/GPU).
+    # ~358 GB / 4 GPUs (TP=4) ≈ ~89.5 GB/GPU — tight on 128 GB DGX Spark,
+    # leaves ~21 GB after weights+CUDA overhead for KV cache.
+    # Community quantization (zai-org), NOT NVIDIA official.
+    # Recommended launch (model card):
+    #   python3 -m sglang.launch_server --model-path zai-org/GLM-4.7-FP8 \
+    #     --tp-size 8 --tool-call-parser glm47 --reasoning-parser glm45 \
+    #     --mem-fraction-static 0.8
+    # Note: model card targets 8 GPUs. On 4× DGX Spark, memory is very tight.
+    nccl_transport: "socket"
+    tp_size: 4  # num_kv_heads=8 → TP=4 works (2 KV heads/GPU)
+    context_length: 131072  # conservative — less KV cache headroom than NVFP4
+    # quantization: auto-detected from checkpoint (no explicit flag needed)
+    trust_remote_code: true
+    moe_runner_backend: "triton"
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.60"
+    attention_backend: "triton"
+    fp8_gemm_runner_backend: "cutlass"  # SM121: auto selects flashinfer→trtllm which is unsupported
+    jit_max_jobs: 4
+    disable_piecewise_cuda_graph: true
+    disable_cuda_graph: true  # start conservative — enable after confirming stability
+    cuda_graph_max_bs: 8
+    pp_async_batch_depth: 0
+    disable_deep_gemm: true  # SM121: DeepGemm JIT has "Unknown recipe" errors
+    reasoning_parser: "glm45"
+    tool_call_parser: "glm47"
+    num_experts: 160
+    ep_size: 4
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95
 
 
 # Speculative decoding — predicts multiple tokens per forward pass, then
@@ -638,7 +679,7 @@ sglang_disable_piecewise_cuda_graph: "{{ sglang_model_profiles[sglang_model].dis
 sglang_served_model_name: "{{ sglang_model }}"
 
 # sglang default: os.cpu_count()
-sglang_jit_max_jobs: "{{ sglang_model_profiles[sglang_model].jit_max_jobs | default(16) }}"
+sglang_jit_max_jobs: "{{ sglang_model_profiles[sglang_model].jit_max_jobs | default(4) }}"
 
 # Tensor parallelism: from model profile or nnodes (default).
 # With PP > 1 (pipeline parallelism), tp * pp = nnodes.
@@ -965,6 +1006,7 @@ hf_cache_path: "/var/lib/hf-cache"
 hf_token: "hf_CHANGEME"
 # HuggingFace model pre-download Job
 hf_preload_models:
+  - "zai-org/GLM-4.7-FP8"
   - "nvidia/GLM-4.7-NVFP4"
   - "nvidia/MiniMax-M2.5-NVFP4"
 #  - "nvidia/Qwen3.5-397B-A17B-NVFP4"
