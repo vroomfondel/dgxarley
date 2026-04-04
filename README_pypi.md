@@ -35,6 +35,7 @@ Token-level stream inspection with per-chunk breakdown in a structured table. Co
 | `sglang-test` | Direct SGLang client with sequential and parallel load testing (live Rich TUI) |
 | `openwebui-test` | OpenWebUI / LLM client with preset management and streaming |
 | `ollama-test` | Ollama API health, model, embedding, and chat completions tests |
+| `kceve-kvm` | RS232 serial control for KCEVE KVM1001A 10-port KVM switches (switch ports, query state, sniff) |
 
 ### Libraries
 
