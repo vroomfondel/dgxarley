@@ -40,8 +40,8 @@ All tests use: `tp=4, pp=1, ep=4, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 | 16 | socket | fi_cutlass | triton | fi_cutlass | false | true | 0 | 8 | **startup_crash** | — | — | — |
 | 17 | socket | fi_cutlass | triton | fi_cutlass | true | true | 0 | — | **bench_crash** | — | — | — |
 | 18 | socket | fi_cutlass | triton | fi_cutlass | false | false | 0 | 8 | **startup_crash** | — | — | — |
-| 19 | socket | fi_cutlass | flashinfer | fi_cudnn | false | true | 0 | 8 | pending | — | — | — |
-| 20 | socket | fi_cutlass | flashinfer | fi_cudnn | true | true | 0 | — | pending | — | — | — |
+| 19 | socket | fi_cutlass | flashinfer | fi_cudnn | false | true | 0 | 8 | **bench_crash** | — | — | — |
+| 20 | socket | fi_cutlass | flashinfer | fi_cudnn | true | true | 0 | — | **STABLE** | 7.95 | pending | pending |
 | 21 | socket | fi_cutlass | flashinfer | fi_cudnn | false | false | 0 | 8 | pending | — | — | — |
 | 22 | socket | fi_cutlass | triton | fi_cudnn | false | true | 0 | 8 | pending | — | — | — |
 | 23 | socket | fi_cutlass | triton | fi_cudnn | true | true | 0 | — | pending | — | — | — |
@@ -187,3 +187,18 @@ All tests use: `tp=4, pp=1, ep=4, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 
 - **Outcome:** startup_crash — **OOMKilled** (workers 1, 2, 3)
 - **Time:** 2026-04-04 17:53–17:59 UTC
+
+### #19 — fi_cutlass moe / flashinfer attn / fi_cudnn fp4 / cuda_graph
+
+- **Outcome:** bench_crash — n=1 produced 6 think tokens then errored after 641s. Worker-2 restarted 5 times.
+- **Time:** 2026-04-04 18:00 UTC
+- n=1: error (TTFT 39.9s, 0.01 tok/s, 6 think tokens estimated — CUDA graph capture likely corrupted inference)
+- **Note:** CUDA graph + fi_cudnn fp4 partially works (server starts, some tokens produced) but is unstable
+
+### #20 — fi_cutlass moe / flashinfer attn / fi_cudnn fp4 / no-cuda-graph
+
+- **Outcome:** **STABLE** — first working TP=4/EP=4 configuration!
+- **n=1:** **7.95 tok/s**, 3072 tokens (1572 think + 1550 content), TTFT 10.7s, finish=length (hit max_tokens)
+- **n=4:** pending (test running — live screenshot shows 4 concurrent requests at 5.1–5.8 tok/s each)
+- **n=8:** pending
+- **Key:** `flashinfer_cutlass` MoE + `flashinfer_cudnn` FP4 GEMM + no cuda graph. This combination avoids `cutlass_moe_fp4` entirely and uses FlashInfer's cuDNN-accelerated FP4 GEMM path which works on SM121 for GLM-4.7.

@@ -38,16 +38,36 @@ GPU utilization across all four DGX Sparks (top four panels) alongside real-time
 
 Single-request works perfectly. Concurrent requests crash in FlashInfer's `merge_state` cascade kernel — a PP-specific bug where merging attention states from multiple prefill chunks fails on SM121.
 
+## Update: TP=4 Breakthrough
+
+Later in the evening, a working TP=4/EP=4 configuration was found: `flashinfer_cutlass` MoE + `flashinfer_cudnn` FP4 GEMM + no CUDA graph.
+
+### GPU and QSFP network during TP=4 inference
+
+![GLM-4.7 TP=4 GPU usage and QSFP throughput](../media/Bildschirmfoto_2026-04-04_20-40-58.png)
+
+All four DGX Sparks running GLM-4.7-NVFP4 with TP=4/EP=4 — tensor-parallel inference with expert parallelism. Each GPU shows 95% utilization, GPU memory at 62763 MiB. The MikroTik CRS812 QSFP switch (bottom) shows symmetric ~1027 Mbps on all four ports — significantly higher than PP=4's ~350 Mbps, because TP requires AllReduce communication every layer rather than sequential pipeline forwarding. The Ollama sidecar is also visible on spark2 (embedding model).
+
+### 4 parallel requests streaming at 5+ tok/s each
+
+![GLM-4.7 TP=4 parallel inference](../media/Bildschirmfoto_2026-04-04_20-42-41.png)
+
+Four concurrent requests streaming live — all producing coherent thinking and content tokens at 5.1–5.8 tok/s each. Topics: JVM garbage collection (G1/ZGC), DNS resolution hierarchy, French Revolution economic crisis, and a DevOps disk monitoring script. This is the first time GLM-4.7-NVFP4 has successfully served concurrent requests on DGX Spark.
+
+The key insight: `flashinfer_cudnn` FP4 GEMM backend works on SM121 for this model (despite causing Xid 13 on MiniMax M2.5), and `flashinfer_cutlass` MoE avoids the broken `cutlass_moe_fp4` kernel path entirely.
+
+---
+
 ## What We Learned
 
-1. **EP is broken for GLM-4.7 on SM121.** The `cutlass_moe_fp4` kernel at `nvfp4_blockwise_moe.cuh:78` fails on SM121 in both graph capture and eager mode. This affects all MoE runner backends (`triton`, `cutlass`, `flashinfer_cutlass`) since they all route through `cutlass_moe_fp4` for NVFP4 quantized models.
+1. **`cutlass_moe_fp4` is broken on SM121.** The kernel at `nvfp4_blockwise_moe.cuh:78` fails in both graph capture and eager mode. The `triton` and `cutlass` MoE backends both route through this kernel for NVFP4 — only `flashinfer_cutlass` MoE uses a different code path.
 
-2. **PP=4 bypasses the EP bug entirely.** With TP=1/EP=1, each GPU runs all 160 experts locally — the broken EP code path is never invoked.
+2. **`flashinfer_cutlass` MoE + `flashinfer_cudnn` FP4 GEMM is the winning combination for TP=4.** This avoids `cutlass_moe_fp4` entirely and enables full tensor-parallel inference with EP=4. Concurrent requests work stably at 5+ tok/s each.
 
-3. **v0.5.10rc0 fixed the device-side assert** that killed v0.5.9-dev2, but introduced a silent inference failure (0 tokens) on TP=4/EP=4 configs.
+3. **PP=4 works as a fallback** but is limited to single requests (FlashInfer `merge_state` crash at n≥2) and has lower throughput due to pipeline bubble overhead.
 
-4. **FlashInfer cascade merge is broken under PP concurrency on SM121.** Single requests work, parallel requests crash at `merge_state`. Next test: `attention_backend: triton` to bypass FlashInfer cascade entirely.
+4. **v0.5.10rc0 is required.** v0.5.9-dev2 has a hard device-side assert in `cutlass_moe_fp4` that crashes even in eager mode. v0.5.10rc0 avoids this for the `flashinfer_cutlass` MoE path.
 
 5. **The scitrera Docker images are essential.** The NVIDIA-recommended `lmsysorg/sglang` image is x86_64/SM100 only — incompatible with DGX Spark's ARM64/SM121 architecture.
 
-6. **5.64 tok/s on a 358B model across 4 consumer GPUs** — not fast, but it works. PP has inherent pipeline bubble overhead; concurrent requests (once the FlashInfer bug is resolved) should improve aggregate throughput significantly.
+6. **~5.5 tok/s per request, 4 concurrent requests stable, on a 358B model across 4 consumer GPUs.** TP=4 with ~1 Gbps symmetric QSFP traffic per node. Not datacenter speed, but fully functional distributed MoE inference on hardware that NVIDIA never intended for this model.
