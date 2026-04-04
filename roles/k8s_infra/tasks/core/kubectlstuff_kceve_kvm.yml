@@ -1,0 +1,229 @@
+---
+# =============================================================================
+# KCEVE KVM1001A — Web UI for RS232 KVM switch control
+#
+# Deploys a lightweight Python web server that controls the KCEVE KVM1001A
+# 10-port KVM switch via RS232 serial (USB adapter on k3smaster).
+# The host device /dev/ttyACM0 is passed into the pod.
+#
+# Requires: USB-to-RS232 adapter (UT-E102 or similar) connected to k3smaster.
+# See KCEVE_KVM.md for wiring and protocol details.
+# =============================================================================
+
+- name: Create kceve-kvm namespace
+  kubernetes.core.k8s:
+    name: kceve-kvm
+    api_version: v1
+    kind: Namespace
+    state: present
+
+
+- name: Create kceve-kvm service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      kind: Service
+      apiVersion: v1
+      metadata:
+        name: kceve-kvm
+        namespace: kceve-kvm
+        labels:
+          app: kceve-kvm
+      spec:
+        selector:
+          app: kceve-kvm
+        ports:
+          - port: 8080
+            targetPort: http
+            name: http
+
+
+- name: Create kceve-kvm deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: kceve-kvm
+        namespace: kceve-kvm
+        labels:
+          app: kceve-kvm
+      spec:
+        replicas: 1
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: kceve-kvm
+        template:
+          metadata:
+            labels:
+              app: kceve-kvm
+          spec:
+            restartPolicy: Always
+            nodeSelector:
+              kubernetes.io/arch: amd64
+            dnsConfig:
+              options:
+                - name: ndots
+                  value: "1"
+            containers:
+              - name: kceve-kvm
+                image: "python:3.14-slim"
+                imagePullPolicy: IfNotPresent
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    pip install --quiet --no-cache-dir dgxarley && \
+                    exec kceve-kvm-web -d "{{ kceve_kvm_serial_device }}" -p 8080 -t 5
+                resources:
+                  requests:
+                    cpu: 50m
+                    memory: 128Mi
+                  limits:
+                    cpu: 200m
+                    memory: 256Mi
+                ports:
+                  - containerPort: 8080
+                    name: http
+                livenessProbe:
+                  httpGet:
+                    path: /api/health
+                    port: http
+                  initialDelaySeconds: 30
+                  periodSeconds: 30
+                readinessProbe:
+                  httpGet:
+                    path: /api/health
+                    port: http
+                  initialDelaySeconds: 15
+                  periodSeconds: 10
+                securityContext:
+                  privileged: true
+                volumeMounts:
+                  - name: serial-device
+                    mountPath: "{{ kceve_kvm_serial_device }}"
+            volumes:
+              - name: serial-device
+                hostPath:
+                  path: "{{ kceve_kvm_serial_device }}"
+                  type: CharDevice
+
+
+- name: Create IP allowlist middleware for kceve-kvm
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: ip-source-limiter
+        namespace: kceve-kvm
+      spec:
+        ipAllowList:
+          sourceRange: "{{ traefik_internal_allowlist }}"
+
+- name: Create HTTPS redirect middleware for kceve-kvm
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: redirect-myhttps
+        namespace: kceve-kvm
+      spec:
+        redirectScheme:
+          scheme: https
+
+
+- name: Create kceve-kvm TLS certificate
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: "kceve.{{ dns_external_domain_suffix }}"
+        namespace: kceve-kvm
+      spec:
+        dnsNames:
+          - "kceve.{{ dns_external_domain_suffix }}"
+        secretName: "kceve.{{ dns_external_domain_suffix }}"
+        issuerRef:
+          name: letsencrypt-production
+          kind: ClusterIssuer
+
+
+- name: Create kceve-kvm ingressroute HTTP
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: kceve-kvm-http
+        namespace: kceve-kvm
+      spec:
+        entryPoints:
+          - web
+        routes:
+          - kind: Rule
+            match: "Host(`kceve.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            services:
+              - kind: Service
+                name: kceve-kvm
+                namespace: kceve-kvm
+                passHostHeader: true
+                port: 8080
+            middlewares:
+              - name: ip-source-limiter
+                namespace: kceve-kvm
+              - name: redirect-myhttps
+                namespace: kceve-kvm
+
+
+- name: Create kceve-kvm ingressroute HTTPS
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: kceve-kvm-https
+        namespace: kceve-kvm
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - kind: Rule
+            match: "Host(`kceve.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            services:
+              - kind: Service
+                name: kceve-kvm
+                namespace: kceve-kvm
+                passHostHeader: true
+                port: 8080
+            middlewares:
+              - name: ip-source-limiter
+                namespace: kceve-kvm
+        tls:
+          secretName: "kceve.{{ dns_external_domain_suffix }}"
+
+
+- name: Register DNS A record for kceve
+  community.general.nsupdate:
+    server: "{{ nsupdate_server }}"
+    zone: "{{ nsupdate_zone }}"
+    key_name: "{{ nsupdate_tsig_key_name }}"
+    key_secret: "{{ nsupdate_tsig_key_secret }}"
+    key_algorithm: "{{ nsupdate_tsig_algorithm }}"
+    record: "kceve.{{ dns_external_domain_suffix }}."
+    type: A
+    ttl: "{{ nsupdate_ttl }}"
+    value: "{{ nsupdate_ingress_ip }}"
+    state: present

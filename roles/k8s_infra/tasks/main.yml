@@ -161,6 +161,14 @@
     - isk3smaster is defined
     - isk3smaster
 
+- name: Deploy KCEVE KVM web control
+  import_tasks: core/kubectlstuff_kceve_kvm.yml
+  tags:
+    - kceve_kvm
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
 - name: Deploy NUT exporter for UPS monitoring
   import_tasks: monitoring/kubectlstuff_nut_exporter.yml
   tags: [nut_exporter, promstack]
