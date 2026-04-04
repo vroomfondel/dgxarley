@@ -34,10 +34,10 @@ All tests use: `tp=4, pp=1, ep=4, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 | 10 | socket | triton | triton | fi_cudnn | false | true | 0 | 8 | **startup_crash** | — | — | — |
 | 11 | socket | triton | triton | fi_cudnn | true | true | 0 | — | **infer_error** | — | — | — |
 | 12 | socket | triton | triton | fi_cudnn | false | false | 0 | 8 | **startup_crash** | — | — | — |
-| 13 | socket | fi_cutlass | flashinfer | fi_cutlass | false | true | 0 | 8 | pending | — | — | — |
-| 14 | socket | fi_cutlass | flashinfer | fi_cutlass | true | true | 0 | — | pending | — | — | — |
-| 15 | socket | fi_cutlass | flashinfer | fi_cutlass | false | false | 0 | 8 | pending | — | — | — |
-| 16 | socket | fi_cutlass | triton | fi_cutlass | false | true | 0 | 8 | pending | — | — | — |
+| 13 | socket | fi_cutlass | flashinfer | fi_cutlass | false | true | 0 | 8 | **startup_crash** | — | — | — |
+| 14 | socket | fi_cutlass | flashinfer | fi_cutlass | true | true | 0 | — | **infer_error** | — | — | — |
+| 15 | socket | fi_cutlass | flashinfer | fi_cutlass | false | false | 0 | 8 | **startup_crash** | — | — | — |
+| 16 | socket | fi_cutlass | triton | fi_cutlass | false | true | 0 | 8 | **startup_crash** | — | — | — |
 | 17 | socket | fi_cutlass | triton | fi_cutlass | true | true | 0 | — | pending | — | — | — |
 | 18 | socket | fi_cutlass | triton | fi_cutlass | false | false | 0 | 8 | pending | — | — | — |
 | 19 | socket | fi_cutlass | flashinfer | fi_cudnn | false | true | 0 | 8 | pending | — | — | — |
@@ -153,3 +153,24 @@ All tests use: `tp=4, pp=1, ep=4, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 - **Outcome:** startup_crash
 - **Error:** Head + all 3 workers restarted (total=1 each)
 - **Time:** 2026-04-04 11:20–11:28 UTC
+
+### #13 — fi_cutlass moe / flashinfer attn / fi_cutlass fp4 / cuda_graph
+
+- **Outcome:** startup_crash — **OOMKilled** (workers 1, 2, 3)
+- **Time:** 2026-04-04 11:28–11:34 UTC
+
+### #14 — fi_cutlass moe / flashinfer attn / fi_cutlass fp4 / no-cuda-graph
+
+- **Outcome:** infer_error — server stable, all requests returned errors (0 tokens)
+- **Time:** 2026-04-04 ~13:41 CEST
+- n=1: 0/1, n=4: 0/4, n=8: 0/8 successful
+
+### #15 — fi_cutlass moe / flashinfer attn / fi_cutlass fp4 / piecewise
+
+- **Outcome:** startup_crash — **OOMKilled** (workers 1, 2, 3)
+- **Time:** 2026-04-04 11:41–11:48 UTC
+
+### #16 — fi_cutlass moe / triton attn / fi_cutlass fp4 / cuda_graph
+
+- **Outcome:** startup_crash — **OOMKilled** (workers 1, 2)
+- **Time:** 2026-04-04 11:48–11:54 UTC

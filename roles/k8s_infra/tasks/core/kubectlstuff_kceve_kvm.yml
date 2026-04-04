@@ -76,8 +76,9 @@
                   - /bin/sh
                   - -c
                   - |
-                    pip install --quiet --no-cache-dir dgxarley && \
-                    exec kceve-kvm-web -d "{{ kceve_kvm_serial_device }}" -p 8080 -t 5
+                    apt update && apt -y install tini && \
+                    pip install --quiet --no-cache-dir 'dgxarley[web]>=19' && \
+                    exec tini -s -- kceve-kvm-web -d "{{ kceve_kvm_serial_device }}" -p 8080 -t 5
                 resources:
                   requests:
                     cpu: 50m

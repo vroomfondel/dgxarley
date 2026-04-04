@@ -56,6 +56,10 @@ dev = [
     # torch is installed via requirements-dev.txt with --extra-index-url
     # (PyTorch cu129 wheel index) — cannot be specified here in pyproject.toml
 ]
+web = [
+    "fastapi",
+    "uvicorn[standard]",
+]
 ansible = [
     "jinja2",
     "kubernetes",
@@ -121,7 +125,7 @@ exclude = '''(?x)(
 [[tool.mypy.overrides]]
 module = [
     "cv2", "numpy", "pytesseract", "kubernetes.*",
-    "aiohttp", "ascii_magic",
+    "aiohttp", "ascii_magic", "uvicorn",
 ]
 ignore_missing_imports = true
 
@@ -133,3 +137,4 @@ openwebui-test = "dgxarley.integration.openwebui_integration_test:main"
 ollama-test = "dgxarley.integration.ollama_integration_test:main"
 kceve-kvm = "dgxarley.tools.kceve_kvm:main"
 kceve-kvm-web = "dgxarley.tools.kceve_kvm_web:main"
+kceve-kvm-web-plain = "dgxarley.tools.kceve_kvm_web_plain:main"
