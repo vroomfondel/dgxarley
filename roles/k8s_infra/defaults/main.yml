@@ -25,3 +25,6 @@ nut_exporter_username: "monuser"
 nut_exporter_password: "changeme"
 # nut_ups_name, nut_ups_secondary_name — defined in group_vars/all/main.yml
 traefik_dashboard_password: "changeme"
+
+# KCEVE KVM RS232 serial device on k3smaster (USB-to-RS232 adapter)
+kceve_kvm_serial_device: "/dev/ttyACM0"
