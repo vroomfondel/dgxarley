@@ -486,11 +486,11 @@ sglang_model_profiles:
     quantization: "modelopt_fp4"
     trust_remote_code: true
     # Untested on DGX Spark — values below are initial defaults, pending test matrix.
-    moe_runner_backend: "triton"
+    moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
     mem_fraction_static: "0.60"
     # mem_fraction_static: "0.80"  # model card recommendation
-    attention_backend: "triton"
+    attention_backend: "flashinfer"
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 16
     disable_piecewise_cuda_graph: true

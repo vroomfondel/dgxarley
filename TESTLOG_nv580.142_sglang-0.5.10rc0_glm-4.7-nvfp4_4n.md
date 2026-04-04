@@ -23,17 +23,17 @@ All tests use: `tp=4, pp=1, ep=4, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 | # | nccl_transport | moe_runner | attention | fp4_gemm | dis_cuda_graph | dis_piecewise | pp_async | cuda_graph_max_bs | Stability | 1∥ tok/s | 4∥ tok/s | 8∥ tok/s |
 |---|----------------|------------|-----------|----------|----------------|---------------|----------|-------------------|-----------|---------|---------|---------|
 | 1 | socket | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | **startup_crash** | — | — | — |
-| 2 | socket | triton | flashinfer | fi_cutlass | true | true | 0 | — | pending | — | — | — |
-| 3 | socket | triton | flashinfer | fi_cutlass | false | false | 0 | 8 | pending | — | — | — |
-| 4 | socket | triton | triton | fi_cutlass | false | true | 0 | 8 | pending | — | — | — |
-| 5 | socket | triton | triton | fi_cutlass | true | true | 0 | — | pending | — | — | — |
-| 6 | socket | triton | triton | fi_cutlass | false | false | 0 | 8 | pending | — | — | — |
-| 7 | socket | triton | flashinfer | fi_cudnn | false | true | 0 | 8 | pending | — | — | — |
-| 8 | socket | triton | flashinfer | fi_cudnn | true | true | 0 | — | pending | — | — | — |
-| 9 | socket | triton | flashinfer | fi_cudnn | false | false | 0 | 8 | pending | — | — | — |
-| 10 | socket | triton | triton | fi_cudnn | false | true | 0 | 8 | pending | — | — | — |
-| 11 | socket | triton | triton | fi_cudnn | true | true | 0 | — | pending | — | — | — |
-| 12 | socket | triton | triton | fi_cudnn | false | false | 0 | 8 | pending | — | — | — |
+| 2 | socket | triton | flashinfer | fi_cutlass | true | true | 0 | — | **infer_error** | — | — | — |
+| 3 | socket | triton | flashinfer | fi_cutlass | false | false | 0 | 8 | **startup_crash** | — | — | — |
+| 4 | socket | triton | triton | fi_cutlass | false | true | 0 | 8 | **startup_crash** | — | — | — |
+| 5 | socket | triton | triton | fi_cutlass | true | true | 0 | — | **bench_crash** | — | — | — |
+| 6 | socket | triton | triton | fi_cutlass | false | false | 0 | 8 | **startup_crash** | — | — | — |
+| 7 | socket | triton | flashinfer | fi_cudnn | false | true | 0 | 8 | **startup_crash** | — | — | — |
+| 8 | socket | triton | flashinfer | fi_cudnn | true | true | 0 | — | **infer_error** | — | — | — |
+| 9 | socket | triton | flashinfer | fi_cudnn | false | false | 0 | 8 | **startup_crash** | — | — | — |
+| 10 | socket | triton | triton | fi_cudnn | false | true | 0 | 8 | **startup_crash** | — | — | — |
+| 11 | socket | triton | triton | fi_cudnn | true | true | 0 | — | **infer_error** | — | — | — |
+| 12 | socket | triton | triton | fi_cudnn | false | false | 0 | 8 | **startup_crash** | — | — | — |
 | 13 | socket | fi_cutlass | flashinfer | fi_cutlass | false | true | 0 | 8 | pending | — | — | — |
 | 14 | socket | fi_cutlass | flashinfer | fi_cutlass | true | true | 0 | — | pending | — | — | — |
 | 15 | socket | fi_cutlass | flashinfer | fi_cutlass | false | false | 0 | 8 | pending | — | — | — |
@@ -88,6 +88,68 @@ All tests use: `tp=4, pp=1, ep=4, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 - **2nd run:** mem_frac=0.60, 2026-04-04 10:02–10:09 UTC — head + all 3 workers restarted
 - **Note:** Different failure mode than v0.5.9dev2 — no cutlass_moe_fp4 device-side assert. 1st run was OOM, 2nd run at lower mem_frac still crashed (likely CUDA graph capture failure)
 
-### #2 — triton moe / flashinfer attn / fi_cutlass fp4 / no-cuda-graph (earlier run, invalidated)
+### #2 — triton moe / flashinfer attn / fi_cutlass fp4 / no-cuda-graph
 
-- **1st run (invalidated):** mem_frac=0.70, 2026-04-04 09:50–09:58 UTC — bench_crash, smoke test (n=8) triggered OOMKilled (worker-1 OOM, worker-2 ×2, worker-3 ×1). Server had started successfully and passed health check — `cutlass_moe_fp4` kernel crash from v0.5.9dev2 appears fixed. Result file removed, awaiting re-run.
+- **Outcome:** infer_error — server stable, all requests returned errors (0 tokens)
+- **1st run:** mem_frac=0.70, 2026-04-04 09:50–09:58 UTC — bench_crash, smoke test (n=8) OOMKilled
+- **2nd run:** mem_frac=0.60, 2026-04-04 ~12:16 CEST — server started, 0/1 + 0/4 + 0/8 successful
+
+### #3 — triton moe / flashinfer attn / fi_cutlass fp4 / piecewise
+
+- **Outcome:** startup_crash
+- **Error:** Worker-1 restarted (total=1)
+- **Time:** 2026-04-04 10:16–10:23 UTC
+
+### #4 — triton moe / triton attn / fi_cutlass fp4 / cuda_graph
+
+- **Outcome:** startup_crash
+- **Error:** Head + all 3 workers restarted (total=1 each)
+- **Time:** 2026-04-04 10:24–10:30 UTC
+
+### #5 — triton moe / triton attn / fi_cutlass fp4 / no-cuda-graph
+
+- **Outcome:** bench_crash — head + worker-2 crashed during benchmark
+- **Time:** 2026-04-04 10:31 UTC
+- n=1: 0/1 successful (1 error, 0 tokens)
+
+### #6 — triton moe / triton attn / fi_cutlass fp4 / piecewise
+
+- **Outcome:** startup_crash
+- **Error:** Worker-2 + worker-3 restarted (total=1 each)
+- **Time:** 2026-04-04 10:38–10:44 UTC
+
+### #7 — triton moe / flashinfer attn / fi_cudnn fp4 / cuda_graph
+
+- **Outcome:** startup_crash
+- **Error:** Head + all 3 workers restarted (total=1 each)
+- **Time:** 2026-04-04 10:45–10:52 UTC
+
+### #8 — triton moe / flashinfer attn / fi_cudnn fp4 / no-cuda-graph
+
+- **Outcome:** infer_error — server stable, all requests returned errors (0 tokens)
+- **Time:** 2026-04-04 ~12:59 CEST
+- n=1: 0/1, n=4: 0/4, n=8: 0/8 successful
+
+### #9 — triton moe / flashinfer attn / fi_cudnn fp4 / piecewise
+
+- **Outcome:** startup_crash
+- **Error:** Head + all 3 workers restarted (total=1 each)
+- **Time:** 2026-04-04 10:59–11:06 UTC
+
+### #10 — triton moe / triton attn / fi_cudnn fp4 / cuda_graph
+
+- **Outcome:** startup_crash
+- **Error:** Head + all 3 workers restarted (total=1 each)
+- **Time:** 2026-04-04 11:06–11:13 UTC
+
+### #11 — triton moe / triton attn / fi_cudnn fp4 / no-cuda-graph
+
+- **Outcome:** infer_error — server stable, all requests returned errors (0 tokens)
+- **Time:** 2026-04-04 ~13:20 CEST
+- n=1: 0/1, n=4: 0/4, n=8: 0/8 successful
+
+### #12 — triton moe / triton attn / fi_cudnn fp4 / piecewise
+
+- **Outcome:** startup_crash
+- **Error:** Head + all 3 workers restarted (total=1 each)
+- **Time:** 2026-04-04 11:20–11:28 UTC
