@@ -8,7 +8,9 @@ mypy
 pytest
 Pillow
 sglang
+pyserial
 
+types-pyserial
 types-tabulate
 types-requests
 types-pyyaml

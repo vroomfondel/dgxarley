@@ -51,6 +51,8 @@ dev = [
     "types-requests",
     "types-PyYAML",
     "sglang",
+    "pyserial",
+    "types-pyserial"
     # torch is installed via requirements-dev.txt with --extra-index-url
     # (PyTorch cu129 wheel index) — cannot be specified here in pyproject.toml
 ]
@@ -129,3 +131,4 @@ sglang-raw = "dgxarley.integration.sglang_raw:main"
 sglang-test = "dgxarley.integration.sglang_integration_test:main"
 openwebui-test = "dgxarley.integration.openwebui_integration_test:main"
 ollama-test = "dgxarley.integration.ollama_integration_test:main"
+kceve-kvm = "dgxarley.tools.kceve_kvm:main"
