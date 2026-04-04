@@ -56,15 +56,18 @@ def port_to_channel(port: int) -> str:
     return f"{port:X}"
 
 
-def send_and_read(ser: serial.Serial, cmd: bytes) -> str:
-    """Send a command to the KVM and return the decoded response.
+def send_and_read(ser: serial.Serial, cmd: bytes, stop_pattern: str = "") -> str:
+    """Send a command to the KVM and accumulate the response.
 
-    Clears the input buffer before sending, then waits 500 ms for
-    the KVM to respond.
+    Clears the input buffer before sending, then reads data in a loop
+    until the serial timeout expires with no new bytes. If *stop_pattern*
+    is given, returns early once that substring appears in the accumulated
+    response (avoids waiting for trailing IR noise).
 
     Args:
         ser: Open serial port connected to the KVM.
         cmd: Raw bytes to send (ASCII command, no line ending).
+        stop_pattern: Optional substring that signals a complete response.
 
     Returns:
         Decoded ASCII response string, or empty string if no data
@@ -73,9 +76,17 @@ def send_and_read(ser: serial.Serial, cmd: bytes) -> str:
     ser.reset_input_buffer()
     ser.write(cmd)
     ser.flush()
-    time.sleep(0.5)
-    resp = ser.read(ser.in_waiting or 256)
-    return resp.decode("ascii", errors="replace") if resp else ""
+    time.sleep(0.3)
+    buf = b""
+    while True:
+        chunk = ser.read(ser.in_waiting or 1)
+        if not chunk:
+            break
+        buf += chunk
+        if stop_pattern and stop_pattern in buf.decode("ascii", errors="replace"):
+            break
+        time.sleep(0.1)
+    return buf.decode("ascii", errors="replace") if buf else ""
 
 
 def parse_routing(text: str) -> tuple[int | None, int | None]:
@@ -110,7 +121,7 @@ def cmd_switch(ser: serial.Serial, port: int) -> None:
     """
     channel = port_to_channel(port)
     cmd = f"X{channel},1$".encode("ascii")
-    resp = send_and_read(ser, cmd)
+    resp = send_and_read(ser, cmd, stop_pattern="routing ch =")
     prev, new = parse_routing(resp) if resp else (None, None)
     if new is not None:
         print(f"Switched to port {new} (was {prev})")
@@ -150,7 +161,7 @@ def cmd_query(ser: serial.Serial) -> None:
     Args:
         ser: Open serial port connected to the KVM.
     """
-    resp = send_and_read(ser, b"X0,0$")
+    resp = send_and_read(ser, b"X0,0$", stop_pattern="R0:")
     if resp:
         port = parse_query_port(resp)
         if port is not None:

@@ -39,6 +39,7 @@ dependencies = [
     "pydantic",
     "loguru",
     "tabulate",
+    "pyserial",
 ]
 
 [project.optional-dependencies]
@@ -51,7 +52,6 @@ dev = [
     "types-requests",
     "types-PyYAML",
     "sglang",
-    "pyserial",
     "types-pyserial"
     # torch is installed via requirements-dev.txt with --extra-index-url
     # (PyTorch cu129 wheel index) — cannot be specified here in pyproject.toml
