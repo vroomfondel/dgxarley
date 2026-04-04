@@ -125,7 +125,7 @@ exclude = '''(?x)(
 [[tool.mypy.overrides]]
 module = [
     "cv2", "numpy", "pytesseract", "kubernetes.*",
-    "aiohttp", "ascii_magic", "uvicorn",
+    "aiohttp", "ascii_magic", "uvicorn", "fastapi", "fastapi.*",
 ]
 ignore_missing_imports = true
 

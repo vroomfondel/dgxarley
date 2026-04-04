@@ -9,6 +9,8 @@ pytest
 Pillow
 sglang
 pyserial
+fastapi
+uvicorn
 
 types-pyserial
 types-tabulate

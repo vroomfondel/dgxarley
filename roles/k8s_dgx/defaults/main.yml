@@ -494,7 +494,7 @@ sglang_model_profiles:
     fp4_gemm_backend: "flashinfer_cudnn"
     jit_max_jobs: 4
     disable_piecewise_cuda_graph: true
-    disable_cuda_graph: false
+    disable_cuda_graph: true
     cuda_graph_max_bs: 8
     pp_async_batch_depth: 0
     disable_deep_gemm: true
@@ -561,7 +561,7 @@ sglang_model_profiles:
     # num_attention_heads=96, num_key_value_heads=8 → TP=4 works (2 KV heads/GPU).
     # ~358 GB / 4 GPUs (TP=4) ≈ ~89.5 GB/GPU — tight on 128 GB DGX Spark,
     # leaves ~21 GB after weights+CUDA overhead for KV cache.
-    # Community quantization (zai-org), NOT NVIDIA official.
+    # Official FP8 quantization by Zhipu AI (zai-org), the GLM model authors.
     # Recommended launch (model card):
     #   python3 -m sglang.launch_server --model-path zai-org/GLM-4.7-FP8 \
     #     --tp-size 8 --tool-call-parser glm47 --reasoning-parser glm45 \
