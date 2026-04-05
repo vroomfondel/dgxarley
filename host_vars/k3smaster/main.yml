@@ -8,6 +8,8 @@ ovs_bridge_name: "br0"
 default_route_iface: "br0.124"
 clevis_luks_passphrase: "changeme"
 k3s_node_ip: "192.168.124.100"
+# Flannel VTEP must use the K3s cluster VLAN interface, not the default route interface
+k3s_flannel_iface: "br0.124"
 ovs_vlan_extra:
   124:
     extra_routes:

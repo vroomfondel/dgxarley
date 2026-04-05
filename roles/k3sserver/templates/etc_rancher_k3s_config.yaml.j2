@@ -14,6 +14,9 @@ node-external-ip: "{{ k3s_node_ip }}"
 # node-name: "{{ inventory_hostname }}"
 service-node-port-range: "22-32767"
 flannel-ipv6-masq: false
+{% if k3s_flannel_iface is defined %}
+flannel-iface: "{{ k3s_flannel_iface }}"
+{% endif %}
 kubelet-arg:
   - "allowed-unsafe-sysctls=net.ipv4.*,net.ipv6.*"
 kube-proxy-arg:
