@@ -9,27 +9,34 @@ through from the host.
 Endpoints::
 
     GET  /               HTML UI with current port display + switch buttons
-    GET  /api/query      JSON: {"active_port": N} or {"active_port": null, "raw": "..."}
+    GET  /api/query      JSON: {"active_port": N}
     POST /api/switch/N   JSON: {"switched_to": N, "was": M}
     GET  /api/health     JSON: {"status": "ok"}
 
 Usage::
 
-    kceve-kvm-web                          # default: 0.0.0.0:8080, /dev/ttyACM0
-    kceve-kvm-web -d /dev/ttyUSB0 -p 9090  # custom device and port
+    kceve-kvm-web-plain                          # default: 0.0.0.0:8080, /dev/ttyACM0
+    kceve-kvm-web-plain -d /dev/ttyUSB0 -p 9090  # custom device and port
 """
 
 import argparse
 import json
+import logging
 import re
+import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import serial
 
-from dgxarley.tools.kceve_kvm import parse_query_port, parse_routing, port_to_channel, send_and_read
+from dgxarley.tools.kceve_kvm import detect_port, parse_ir_port, parse_routing, port_to_channel, send_and_read
+
+log = logging.getLogger("kceve-kvm-plain")
 
 _ser: serial.Serial | None = None
+_lock = threading.Lock()
+_active_port: int | None = None
+_monitor_stop = threading.Event()
 
 HTML_TEMPLATE = """\
 <!DOCTYPE html>
@@ -89,7 +96,7 @@ async function sw(port) {{
   }}
 }}
 query();
-setInterval(query, 10000);
+setInterval(query, 5000);
 </script>
 </body>
 </html>
@@ -97,13 +104,7 @@ setInterval(query, 10000);
 
 
 def _json_response(handler: BaseHTTPRequestHandler, data: dict[str, object], status: int = 200) -> None:
-    """Write a JSON response to the HTTP handler.
-
-    Args:
-        handler: The active HTTP request handler.
-        data: Dictionary to serialize as JSON.
-        status: HTTP status code.
-    """
+    """Write a JSON response to the HTTP handler."""
     body = json.dumps(data).encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
@@ -113,19 +114,35 @@ def _json_response(handler: BaseHTTPRequestHandler, data: dict[str, object], sta
 
 
 def _html_response(handler: BaseHTTPRequestHandler, html: str, status: int = 200) -> None:
-    """Write an HTML response to the HTTP handler.
-
-    Args:
-        handler: The active HTTP request handler.
-        html: HTML string to send.
-        status: HTTP status code.
-    """
+    """Write an HTML response to the HTTP handler."""
     body = html.encode("utf-8")
     handler.send_response(status)
     handler.send_header("Content-Type", "text/html; charset=utf-8")
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
+
+
+def _heartbeat_monitor() -> None:
+    """Background thread: continuously read the serial port for heartbeat IR codes."""
+    global _active_port
+    buf = b""
+    while not _monitor_stop.is_set():
+        with _lock:
+            if _ser is None or not _ser.is_open:
+                break
+            chunk = _ser.read(_ser.in_waiting or 1)
+        if chunk:
+            buf += chunk
+            text = buf.decode("ascii", errors="replace")
+            port = parse_ir_port(text)
+            if port is not None:
+                if port != _active_port:
+                    log.info("monitor: port changed %s -> %s", _active_port, port)
+                _active_port = port
+                buf = b""
+            elif len(buf) > 4096:
+                buf = buf[-1024:]
 
 
 class KVMHandler(BaseHTTPRequestHandler):
@@ -140,13 +157,7 @@ class KVMHandler(BaseHTTPRequestHandler):
             buttons = "\n".join(f'  <button data-port="{i}" onclick="sw({i})">{i}</button>' for i in range(1, 11))
             _html_response(self, HTML_TEMPLATE.format(buttons=buttons))
         elif self.path == "/api/query":
-            assert _ser is not None
-            resp = send_and_read(_ser, b"X0,0$", stop_pattern=":[0]:")
-            port = parse_query_port(resp) if resp else None
-            if port is not None:
-                _json_response(self, {"active_port": port})
-            else:
-                _json_response(self, {"active_port": None, "raw": resp.strip() if resp else ""})
+            _json_response(self, {"active_port": _active_port})
         elif self.path == "/api/health":
             _json_response(self, {"status": "ok"})
         else:
@@ -154,6 +165,7 @@ class KVMHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         """Handle POST requests: switch port."""
+        global _active_port
         m = re.match(r"^/api/switch/(\d+)$", self.path)
         if not m:
             _json_response(self, {"error": "not found"}, 404)
@@ -165,9 +177,12 @@ class KVMHandler(BaseHTTPRequestHandler):
         assert _ser is not None
         channel = port_to_channel(port)
         cmd = f"X{channel},1$".encode("ascii")
-        resp = send_and_read(_ser, cmd, stop_pattern="routing ch =")
+        with _lock:
+            resp = send_and_read(_ser, cmd, stop_pattern="routing ch =")
         prev, new = parse_routing(resp) if resp else (None, None)
-        _json_response(self, {"switched_to": new or port, "was": prev})
+        _active_port = new or port
+        log.info("switch: port=%s prev=%s", _active_port, prev)
+        _json_response(self, {"switched_to": _active_port, "was": prev})
 
 
 def main() -> None:
@@ -181,6 +196,8 @@ def main() -> None:
     parser.add_argument("-t", "--timeout", type=float, default=5.0, help="Serial read timeout in seconds")
     args = parser.parse_args()
 
+    logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
+
     _ser = serial.Serial(
         port=args.device,
         baudrate=115200,
@@ -193,13 +210,24 @@ def main() -> None:
         dsrdtr=False,
     )
 
+    log.info("serial=%s timeout=%.1fs  |  http://%s:%d/", args.device, args.timeout, args.bind, args.port)
+    log.info("detecting active port...")
+    port = detect_port(_ser, passive_timeout=5)
+    if port is None:
+        log.error("KVM not responding — aborting startup")
+        raise SystemExit(1)
+    log.info("active port = %d", port)
+
+    t = threading.Thread(target=_heartbeat_monitor, daemon=True, name="heartbeat-monitor")
+    t.start()
+
     server = HTTPServer((args.bind, args.port), KVMHandler)
-    print(f"KCEVE KVM web server on http://{args.bind}:{args.port}  (serial: {args.device})")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down.")
     finally:
+        _monitor_stop.set()
         server.server_close()
         _ser.close()
 

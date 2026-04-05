@@ -30,7 +30,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from dgxarley.tools.kceve_kvm import detect_port, parse_routing, port_to_channel, send_and_read
+from dgxarley.tools.kceve_kvm import detect_port, parse_ir_port, parse_routing, port_to_channel, send_and_read
 
 log = logging.getLogger("kceve-kvm")
 
@@ -41,6 +41,7 @@ log = logging.getLogger("kceve-kvm")
 _ser: serial.Serial | None = None
 _lock = threading.Lock()
 _active_port: int | None = None
+_monitor_stop = threading.Event()
 
 
 def _open_serial(device: str, timeout: float) -> None:
@@ -63,6 +64,32 @@ def _close_serial() -> None:
     if _ser and _ser.is_open:
         _ser.close()
     _ser = None
+
+
+def _heartbeat_monitor() -> None:
+    """Background thread: continuously read the serial port for heartbeat IR codes.
+
+    Updates ``_active_port`` whenever the port code changes.  Yields the
+    serial lock briefly so ``api_switch`` can send commands.
+    """
+    global _active_port
+    buf = b""
+    while not _monitor_stop.is_set():
+        with _lock:
+            if _ser is None or not _ser.is_open:
+                break
+            chunk = _ser.read(_ser.in_waiting or 1)
+        if chunk:
+            buf += chunk
+            text = buf.decode("ascii", errors="replace")
+            port = parse_ir_port(text)
+            if port is not None:
+                if port != _active_port:
+                    log.info("monitor: port changed %s -> %s", _active_port, port)
+                _active_port = port
+                buf = b""  # reset buffer after successful parse
+            elif len(buf) > 4096:
+                buf = buf[-1024:]  # prevent unbounded growth
 
 
 def _detect_initial_port() -> int | None:
@@ -91,7 +118,12 @@ def _detect_initial_port() -> int | None:
 
 @contextlib.asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncGenerator[None]:
+    t = threading.Thread(target=_heartbeat_monitor, daemon=True, name="heartbeat-monitor")
+    t.start()
+    log.info("heartbeat monitor started")
     yield
+    _monitor_stop.set()
+    t.join(timeout=5)
     _close_serial()
 
 
