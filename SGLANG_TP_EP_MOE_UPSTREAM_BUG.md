@@ -4,7 +4,7 @@
 
 **Open upstream (vLLM only)** as of 2026-04-02. Bug exists in both SGLang and vLLM (code originated in vLLM PR #14447).
 
-- vLLM: [PR #35598](https://github.com/vllm-project/vllm/pull/35598) — open since 2026-02-28, stale ~4 weeks (last activity 2026-03-05), not merged
+- vLLM: [PR #35598](https://github.com/vllm-project/vllm/pull/35598) — open since 2026-02-28, stale ~1 month (last activity 2026-03-05), not merged
 - vLLM: [PR #36026](https://github.com/vllm-project/vllm/pull/36026) — fix wrong num_experts in moe_wna16 kernel dispatch, open since 2026-03-29, author pinged for review 2026-03-29, still unreviewed
 - SGLang: no upstream issue or PR filed
 
@@ -400,5 +400,5 @@ However, the CUDA kernel-level issue cannot be patched. For NVFP4 + EP > 1, use
 - SGLang PR #17137 — non-Marlin WNA16MoE port (does not fix EP bug)
 - SGLang #14158 — update_weights_from_tensor for WNA16MoE (unrelated)
 - SGLang [PR #13715](https://github.com/sgl-project/sglang/pull/13715) — fix EPLB + FP4 weight tensor filtering (merged, different issue)
-- SGLang [PR #20963](https://github.com/sgl-project/sglang/pull/20963) — Nvidia modelopt refactoring (1/N). Actively reviewed as of 2026-04-01 (reviewer `Edwardf0t1` asked for end-to-end verification 2026-03-31, author responded 2026-04-01). Migrates the NVFP4 code as-is — likely the vehicle through which EP-awareness fixes (#20869, #21630) will land. Watch this PR for resolution of the NVFP4 input_scale and CutlassMoEParams bugs
+- SGLang [PR #20963](https://github.com/sgl-project/sglang/pull/20963) — Nvidia modelopt refactoring (1/N). Appears stalled as of 2026-04-05 (reviewer `Edwardf0t1` asked for end-to-end verification 2026-03-31, author responded 2026-04-01, no activity since). Migrates the NVFP4 code as-is — was expected to be the vehicle through which EP-awareness fixes (#20869, #21630) would land, but progress is uncertain. Watch this PR for resolution of the NVFP4 input_scale and CutlassMoEParams bugs
 - SGLang [PR #21822](https://github.com/sgl-project/sglang/pull/21822) — new EPLB/Qwen3 fix (opened 2026-03-26, active discussion 2026-04-01/02). Addresses `LazyValue.keys()` AttributeError. Alternative `LazyValue.__getattr__` approach proposed in comments — open, not yet merged
