@@ -575,11 +575,11 @@ sglang_model_profiles:
     moe_runner_backend: "cutlass"
     kv_cache_dtype: "fp8_e4m3"
     mem_fraction_static: "0.60"
-    attention_backend: "triton"
-    fp8_gemm_runner_backend: "cutlass"            # SM121: auto selects flashinfer→trtllm which is unsupported
+    attention_backend: "flashinfer"
+    fp8_gemm_runner_backend: "flashinfer_cutlass" # SM121: auto selects flashinfer→trtllm which is unsupported
     jit_max_jobs: 4
     disable_piecewise_cuda_graph: true
-    disable_cuda_graph: true  # start conservative — enable after confirming stability
+    disable_cuda_graph: false # start conservative — enable after confirming stability
     cuda_graph_max_bs: 8
     pp_async_batch_depth: 0
     disable_deep_gemm: true  # SM121: DeepGemm JIT has "Unknown recipe" errors
@@ -1004,10 +1004,10 @@ hf_cache_path: "/var/lib/hf-cache"
 hf_token: "hf_CHANGEME"
 # HuggingFace model pre-download Job
 hf_preload_models:
-  - "novita/Eagle3-Spec-Minimax-M2.5-Exp14"
   - "zai-org/GLM-4.7-FP8"
   - "nvidia/GLM-4.7-NVFP4"
   - "nvidia/MiniMax-M2.5-NVFP4"
+#  - "novita/Eagle3-Spec-Minimax-M2.5-Exp14"  # gone ?!
 #  - "togethercomputer/Aurora-Spec-Minimax-M2.5"  # request-gated
 #  - "nvidia/Qwen3.5-397B-A17B-NVFP4"
 #  - "Qwen/Qwen3.5-122B-A10B-FP8"
