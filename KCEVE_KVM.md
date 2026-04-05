@@ -41,7 +41,7 @@ DIP switches must be set to **RS232** mode (not RS485).
 
 ## Protocol
 
-ASCII commands, no line ending (no CR/LF). Fire-and-forget — the KVM does not always respond, but when it does, it sends debug output with routing state.
+ASCII commands terminated with ``\r`` (carriage return). Fire-and-forget — the KVM does not always respond, but when it does, it sends debug output with routing state.
 
 ### Switch Command
 

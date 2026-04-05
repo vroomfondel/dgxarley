@@ -75,6 +75,7 @@ def send_and_read(ser: serial.Serial, cmd: bytes, stop_pattern: str = "", timeou
         was received within the timeout.
     """
     ser.reset_input_buffer()
+    ser.reset_output_buffer()
     ser.write(cmd)
     ser.flush()
     time.sleep(0.3)
@@ -124,7 +125,7 @@ def cmd_switch(ser: serial.Serial, port: int) -> None:
         port: Target port number (1-10).
     """
     channel = port_to_channel(port)
-    cmd = f"X{channel},1$".encode("ascii")
+    cmd = f"X{channel},1$\r".encode("ascii")
     resp = send_and_read(ser, cmd, stop_pattern="routing ch =")
     prev, new = parse_routing(resp) if resp else (None, None)
     if new is not None:
@@ -237,12 +238,12 @@ def probe_switch_port(ser: serial.Serial) -> int | None:
     Returns:
         Active port number, or ``None`` on failure.
     """
-    resp = send_and_read(ser, b"X1,1$", stop_pattern="routing ch =")
+    resp = send_and_read(ser, b"X1,1$\r", stop_pattern="routing ch =")
     prev, _new = parse_routing(resp) if resp else (None, None)
     if prev is not None and prev != 0 and prev != 1:
         # Was on a different port — switch back.
         channel = port_to_channel(prev)
-        send_and_read(ser, f"X{channel},1$".encode("ascii"), stop_pattern="routing ch =")
+        send_and_read(ser, f"X{channel},1$\r".encode("ascii"), stop_pattern="routing ch =")
         return prev
     if prev == 1 or prev == 0:
         # Already on port 1 (or unknown) — port 1 is now active.

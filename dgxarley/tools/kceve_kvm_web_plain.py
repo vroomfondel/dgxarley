@@ -37,6 +37,7 @@ _ser: serial.Serial | None = None
 _lock = threading.Lock()
 _active_port: int | None = None
 _monitor_stop = threading.Event()
+_monitor_reset = threading.Event()
 
 HTML_TEMPLATE = """\
 <!DOCTYPE html>
@@ -128,10 +129,17 @@ def _heartbeat_monitor() -> None:
     global _active_port
     buf = b""
     while not _monitor_stop.is_set():
+        if _monitor_reset.is_set():
+            _monitor_reset.clear()
+            buf = b""
         with _lock:
             if _ser is None or not _ser.is_open:
                 break
-            chunk = _ser.read(_ser.in_waiting or 1)
+            n = _ser.in_waiting
+            chunk = _ser.read(n) if n else b""
+        if not chunk:
+            _monitor_stop.wait(0.2)
+            continue
         if chunk:
             buf += chunk
             text = buf.decode("ascii", errors="replace")
@@ -176,9 +184,11 @@ class KVMHandler(BaseHTTPRequestHandler):
             return
         assert _ser is not None
         channel = port_to_channel(port)
-        cmd = f"X{channel},1$".encode("ascii")
+        cmd = f"X{channel},1$\r".encode("ascii")
         with _lock:
             resp = send_and_read(_ser, cmd, stop_pattern="routing ch =")
+            _ser.reset_input_buffer()
+        _monitor_reset.set()
         prev, new = parse_routing(resp) if resp else (None, None)
         _active_port = new or port
         log.info("switch: port=%s prev=%s", _active_port, prev)

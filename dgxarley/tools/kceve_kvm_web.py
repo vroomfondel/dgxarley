@@ -42,6 +42,7 @@ _ser: serial.Serial | None = None
 _lock = threading.Lock()
 _active_port: int | None = None
 _monitor_stop = threading.Event()
+_monitor_reset = threading.Event()
 
 
 def _open_serial(device: str, timeout: float) -> None:
@@ -75,10 +76,17 @@ def _heartbeat_monitor() -> None:
     global _active_port
     buf = b""
     while not _monitor_stop.is_set():
+        if _monitor_reset.is_set():
+            _monitor_reset.clear()
+            buf = b""
         with _lock:
             if _ser is None or not _ser.is_open:
                 break
-            chunk = _ser.read(_ser.in_waiting or 1)
+            n = _ser.in_waiting
+            chunk = _ser.read(n) if n else b""
+        if not chunk:
+            _monitor_stop.wait(0.2)  # no data — sleep briefly without holding the lock
+            continue
         if chunk:
             buf += chunk
             text = buf.decode("ascii", errors="replace")
@@ -87,9 +95,9 @@ def _heartbeat_monitor() -> None:
                 if port != _active_port:
                     log.info("monitor: port changed %s -> %s", _active_port, port)
                 _active_port = port
-                buf = b""  # reset buffer after successful parse
+                buf = b""
             elif len(buf) > 4096:
-                buf = buf[-1024:]  # prevent unbounded growth
+                buf = buf[-1024:]
 
 
 def _detect_initial_port() -> int | None:
@@ -149,14 +157,16 @@ def api_switch(port: int) -> JSONResponse:
     if not 1 <= port <= 10:
         raise HTTPException(422, "Port must be 1-10")
     channel = port_to_channel(port)
-    cmd = f"X{channel},1$".encode("ascii")
+    cmd = f"X{channel},1$\r".encode("ascii")
     with _lock:
         if _ser is None or not _ser.is_open:
             raise HTTPException(503, "Serial port not open")
         resp = send_and_read(_ser, cmd, stop_pattern="routing ch =")
+        _ser.reset_input_buffer()  # flush stale heartbeat data
+    _monitor_reset.set()  # tell monitor to discard its buffer
     prev, new = parse_routing(resp) if resp else (None, None)
     _active_port = new or port
-    log.info("switch: port=%s prev=%s resp=%r", _active_port, prev, (resp or "").strip()[:120])
+    log.info("switch: port=%s prev=%s", _active_port, prev)
     return JSONResponse({"port": _active_port, "previous": prev})
 
 
