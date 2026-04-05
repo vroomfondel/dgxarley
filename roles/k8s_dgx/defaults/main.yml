@@ -575,7 +575,7 @@ sglang_model_profiles:
     moe_runner_backend: "cutlass"
     kv_cache_dtype: "fp8_e4m3"
     mem_fraction_static: "0.60"
-    attention_backend: "flashinfer"
+    attention_backend: "triton"
     fp8_gemm_runner_backend: "flashinfer_cutlass" # SM121: auto selects flashinfer→trtllm which is unsupported
     jit_max_jobs: 4
     disable_piecewise_cuda_graph: true
