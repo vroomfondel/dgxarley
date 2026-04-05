@@ -1,0 +1,25 @@
+---
+- name: Ensure fasttrack filter rules
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/ip/firewall/filter/find comment="{{ item.comment }}"]] = 0)
+        do={ /ip/firewall/filter/add chain={{ item.chain }} action={{ item.action }}
+        connection-state={{ item.connection_state }}
+        comment="{{ item.comment }}" }
+        else={ /ip/firewall/filter/set [find comment="{{ item.comment }}"]
+        chain={{ item.chain }} action={{ item.action }}
+        connection-state={{ item.connection_state }} }
+  loop:
+    - comment: "fasttrack established/related"
+      chain: forward
+      action: fasttrack-connection
+      connection_state: established,related
+    - comment: "accept established/related"
+      chain: forward
+      action: accept
+      connection_state: established,related
+  loop_control:
+    label: "{{ item.comment }}"
+  changed_when: false
+  when: mikrotik_fasttrack_enabled | default(false)

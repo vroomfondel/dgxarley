@@ -6,6 +6,7 @@ mikrotik_mgmt_interfaces: []
 mikrotik_dns_servers: []
 mikrotik_dhcp_servers: []
 mikrotik_srcnat_rules: []
+mikrotik_fasttrack_enabled: false
 
 # RoCE/RDMA lossless Ethernet — only active when qsfp_switch: true
 mikrotik_qsfp_roce_ports: []
