@@ -56,7 +56,7 @@ def port_to_channel(port: int) -> str:
     return f"{port:X}"
 
 
-def send_and_read(ser: serial.Serial, cmd: bytes, stop_pattern: str = "") -> str:
+def send_and_read(ser: serial.Serial, cmd: bytes, stop_pattern: str = "", timeout: float = 0) -> str:
     """Send a command to the KVM and accumulate the response.
 
     Clears the input buffer before sending, then reads data in a loop
@@ -68,6 +68,7 @@ def send_and_read(ser: serial.Serial, cmd: bytes, stop_pattern: str = "") -> str
         ser: Open serial port connected to the KVM.
         cmd: Raw bytes to send (ASCII command, no line ending).
         stop_pattern: Optional substring that signals a complete response.
+        timeout: Read deadline in seconds (0 = use ``ser.timeout``).
 
     Returns:
         Decoded ASCII response string, or empty string if no data
@@ -77,7 +78,7 @@ def send_and_read(ser: serial.Serial, cmd: bytes, stop_pattern: str = "") -> str
     ser.write(cmd)
     ser.flush()
     time.sleep(0.3)
-    deadline = time.monotonic() + (ser.timeout or 2.0)
+    deadline = time.monotonic() + (timeout or ser.timeout or 2.0)
     buf = b""
     while time.monotonic() < deadline:
         chunk = ser.read(ser.in_waiting or 1)
@@ -134,23 +135,61 @@ def cmd_switch(ser: serial.Serial, port: int) -> None:
             print(f"  routing ch = {final.group(1)}")
 
 
+# Heartbeat IR code → port mapping (empirically determined).
+# The firmware emits a triplet every ~3s: [port_code, 0x51, 0x53].
+# The first value encodes the active port; 0x51/0x53 are constant.
+_IR_TO_PORT: dict[int, int] = {
+    0x1A: 1,
+    0x1B: 2,
+    0x18: 3,
+    0x1E: 4,
+    0x1F: 5,
+    0x1C: 6,
+    0x03: 7,
+    0x02: 8,
+    0x00: 9,
+    0x07: 10,
+}
+
+_IR_CONSTANT = {0x51, 0x53}
+
+
+def parse_ir_port(text: str) -> int | None:
+    """Extract the active port from heartbeat IR values in the response.
+
+    The firmware periodically emits ``IR value : 0xNN`` lines.  The first
+    value that is not ``0x51`` or ``0x53`` (constant heartbeat codes) maps
+    to the active port via :data:`_IR_TO_PORT`.
+
+    Args:
+        text: Decoded ASCII response containing IR value lines.
+
+    Returns:
+        Active port number, or ``None`` if no matching IR code found.
+    """
+    for m in re.finditer(r"IR value : 0x([0-9A-Fa-f]{2})", text):
+        code = int(m.group(1), 16)
+        if code not in _IR_CONSTANT:
+            return _IR_TO_PORT.get(code)
+    return None
+
+
 def parse_query_port(text: str) -> int | None:
     """Extract the active port from a query response.
 
-    The KVM responds to ``X0,0$`` with lines like::
-
-        R0:[0]:2,[3]:0,[5]:0
-
-    where ``R0:[0]:<N>`` indicates the active input port.
+    Tries ``cur routing ch`` first (available after a serial switch),
+    then falls back to parsing the heartbeat IR code.
 
     Args:
         text: Decoded ASCII response from the KVM.
 
     Returns:
-        Active port number, or ``None`` if not found.
+        Active port number, or ``None`` if not determinable.
     """
-    m = re.search(r"R0:\[0\]:(\d+)", text)
-    return int(m.group(1)) if m else None
+    cur, _swap = parse_routing(text)
+    if cur is not None and cur != 0:
+        return cur
+    return parse_ir_port(text)
 
 
 def cmd_query(ser: serial.Serial) -> None:
@@ -162,13 +201,13 @@ def cmd_query(ser: serial.Serial) -> None:
     Args:
         ser: Open serial port connected to the KVM.
     """
-    resp = send_and_read(ser, b"X0,0$", stop_pattern="R0:")
+    resp = send_and_read(ser, b"X0,0$", stop_pattern="routing ch =", timeout=3)
     if resp:
         port = parse_query_port(resp)
         if port is not None:
             print(f"Active port: {port}")
         else:
-            print(f"RX: {resp.strip()!r}")
+            print(f"Active port: unknown\nRX: {resp.strip()!r}")
     else:
         print("No response")
 

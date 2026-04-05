@@ -141,7 +141,7 @@ class KVMHandler(BaseHTTPRequestHandler):
             _html_response(self, HTML_TEMPLATE.format(buttons=buttons))
         elif self.path == "/api/query":
             assert _ser is not None
-            resp = send_and_read(_ser, b"X0,0$", stop_pattern="R0:")
+            resp = send_and_read(_ser, b"X0,0$", stop_pattern=":[0]:")
             port = parse_query_port(resp) if resp else None
             if port is not None:
                 _json_response(self, {"active_port": port})

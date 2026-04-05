@@ -37,6 +37,7 @@ from dgxarley.tools.kceve_kvm import parse_query_port, parse_routing, port_to_ch
 
 _ser: serial.Serial | None = None
 _lock = threading.Lock()
+_active_port: int | None = None
 
 
 def _open_serial(device: str, timeout: float) -> None:
@@ -87,18 +88,17 @@ def api_status() -> JSONResponse:
     with _lock:
         if _ser is None or not _ser.is_open:
             raise HTTPException(503, "Serial port not open")
-        resp = send_and_read(_ser, b"X0,0$", stop_pattern="R0:")
+        resp = send_and_read(_ser, b"X0,0$", stop_pattern="routing ch =", timeout=3)
     if not resp:
         raise HTTPException(504, "No response from KVM")
     port = parse_query_port(resp)
-    if port is None:
-        raise HTTPException(502, f"Unparseable response: {resp!r}")
-    return JSONResponse({"port": port})
+    return JSONResponse({"port": port or _active_port})
 
 
 @app.post("/api/switch/{port}")
 def api_switch(port: int) -> JSONResponse:
     """Switch the KVM to *port* (1-10) and return the new state."""
+    global _active_port
     if not 1 <= port <= 10:
         raise HTTPException(422, "Port must be 1-10")
     channel = port_to_channel(port)
@@ -108,7 +108,8 @@ def api_switch(port: int) -> JSONResponse:
             raise HTTPException(503, "Serial port not open")
         resp = send_and_read(_ser, cmd, stop_pattern="routing ch =")
     prev, new = parse_routing(resp) if resp else (None, None)
-    return JSONResponse({"port": new or port, "previous": prev})
+    _active_port = new or port
+    return JSONResponse({"port": _active_port, "previous": prev})
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -335,7 +336,7 @@ for (let i = 1; i <= N; i++) {
 
 function show(port) {
   cur = port;
-  document.getElementById('seg').textContent = port <= 9 ? port : 'A';
+  document.getElementById('seg').textContent = port == null ? '-' : port <= 9 ? port : 'A';
   for (let i = 1; i <= N; i++) {
     document.getElementById('l'+i).classList.toggle('on', i === port);
     document.getElementById('b'+i).classList.toggle('active', i === port);
@@ -351,13 +352,14 @@ async function poll() {
   try {
     const r = await fetch('/api/status');
     if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
-    show((await r.json()).port);
-    foot('Connected', 'ok');
+    const d = await r.json();
+    show(d.port);
+    foot(d.port != null ? 'Connected' : 'Connected (port unknown until first switch)', 'ok');
   } catch(e) { foot(e.message, 'err'); }
 }
 
 async function sw(p) {
-  if (p === cur) return;
+  if (cur != null && p === cur) return;
   document.getElementById('b'+p).classList.add('busy');
   foot('Switching to port ' + p + ' \u2026');
   try {
