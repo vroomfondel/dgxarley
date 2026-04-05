@@ -52,6 +52,7 @@
         SGLANG_SPECULATIVE_NUM_STEPS: "{{ sglang_speculative_num_steps | string }}"
         SGLANG_SPECULATIVE_EAGLE_TOPK: "{{ sglang_speculative_eagle_topk | string }}"
         SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS: "{{ sglang_speculative_num_draft_tokens | string }}"
+        SGLANG_SPECULATIVE_DRAFT_MODEL_PATH: "{{ sglang_speculative_draft_model_path }}"
         SGLANG_DIST_TIMEOUT: "{{ sglang_dist_timeout | string }}"
         SGLANG_WATCHDOG_TIMEOUT: "{{ sglang_watchdog_timeout | string }}"
         SGLANG_ATTENTION_BACKEND: "{{ sglang_attention_backend }}"
@@ -267,7 +268,7 @@
                 command: ["python3", "/scripts/download_models.py"]
                 env:
                   - name: HF_PRELOAD_MODELS
-                    value: "{{ sglang_model }}"
+                    value: "{{ sglang_model }}{{ ',' + sglang_speculative_draft_model_path if (sglang_speculative_enabled | bool) and sglang_speculative_draft_model_path else '' }}"
                   - name: HF_TOKEN
                     value: "{{ hf_token }}"
                   - name: HF_HUB_DISABLE_PROGRESS_BARS
@@ -402,7 +403,7 @@
                 command: ["python3", "/scripts/download_models.py"]
                 env:
                   - name: HF_PRELOAD_MODELS
-                    value: "{{ sglang_model }}"
+                    value: "{{ sglang_model }}{{ ',' + sglang_speculative_draft_model_path if (sglang_speculative_enabled | bool) and sglang_speculative_draft_model_path else '' }}"
                   - name: HF_TOKEN
                     value: "{{ hf_token }}"
                   - name: HF_HUB_DISABLE_PROGRESS_BARS

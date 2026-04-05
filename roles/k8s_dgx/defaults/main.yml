@@ -572,14 +572,14 @@ sglang_model_profiles:
     context_length: 131072  # conservative — less KV cache headroom than NVFP4
     # quantization: auto-detected from checkpoint (no explicit flag needed)
     trust_remote_code: true
-    moe_runner_backend: "triton"
+    moe_runner_backend: "cutlass"
     kv_cache_dtype: "fp8_e4m3"
     mem_fraction_static: "0.60"
-    attention_backend: "flashinfer"
-    fp8_gemm_runner_backend: "cutlass"  # SM121: auto selects flashinfer→trtllm which is unsupported
+    attention_backend: "triton"
+    fp8_gemm_runner_backend: "cutlass"            # SM121: auto selects flashinfer→trtllm which is unsupported
     jit_max_jobs: 4
-    disable_piecewise_cuda_graph: false
-    disable_cuda_graph: false # start conservative — enable after confirming stability
+    disable_piecewise_cuda_graph: true
+    disable_cuda_graph: true  # start conservative — enable after confirming stability
     cuda_graph_max_bs: 8
     pp_async_batch_depth: 0
     disable_deep_gemm: true  # SM121: DeepGemm JIT has "Unknown recipe" errors
@@ -613,6 +613,9 @@ sglang_speculative_algo: "{{ sglang_model_profiles[sglang_model].speculative_alg
 sglang_speculative_num_steps: "{{ sglang_model_profiles[sglang_model].speculative_num_steps | default(3) }}"
 sglang_speculative_eagle_topk: "{{ sglang_model_profiles[sglang_model].speculative_eagle_topk | default(1) }}"
 sglang_speculative_num_draft_tokens: "{{ sglang_model_profiles[sglang_model].speculative_num_draft_tokens | default(4) }}"
+# Draft model path for EAGLE/EAGLE3. Empty = use model's own MTP heads (NEXTN).
+# For external draft models: set to the HF model ID (e.g. "togethercomputer/Aurora-Spec-Minimax-M2.5").
+sglang_speculative_draft_model_path: "{{ sglang_model_profiles[sglang_model].speculative_draft_model_path | default('') }}"
 
 # Select the active model — parameters are pulled from sglang_model_profiles
 #sglang_model: "Qwen/Qwen3-Next-80B-A3B-Instruct-FP8"
@@ -1001,9 +1004,11 @@ hf_cache_path: "/var/lib/hf-cache"
 hf_token: "hf_CHANGEME"
 # HuggingFace model pre-download Job
 hf_preload_models:
+  - "novita/Eagle3-Spec-Minimax-M2.5-Exp14"
   - "zai-org/GLM-4.7-FP8"
   - "nvidia/GLM-4.7-NVFP4"
   - "nvidia/MiniMax-M2.5-NVFP4"
+#  - "togethercomputer/Aurora-Spec-Minimax-M2.5"  # request-gated
 #  - "nvidia/Qwen3.5-397B-A17B-NVFP4"
 #  - "Qwen/Qwen3.5-122B-A10B-FP8"
 #  - "nvidia/GLM-5-NVFP4"

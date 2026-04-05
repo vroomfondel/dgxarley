@@ -231,7 +231,9 @@ Monkey-patched in `sglang_launch.sh` and `sglang_shard_launch.sh` (same string-r
 
 ### Status
 
-**Reported** as of 2026-03-28: [sgl-project/sglang#21603](https://github.com/sgl-project/sglang/issues/21603). Bug exists in SGLang `sglang/srt/model_loader/loader.py`, class `ModelOptModelLoader`. No fix PR filed, no comments, as of 2026-04-02.
+**Reported** as of 2026-03-28: [sgl-project/sglang#21603](https://github.com/sgl-project/sglang/issues/21603). Bug exists in SGLang `sglang/srt/model_loader/loader.py`, class `ModelOptModelLoader`.
+
+- Fix PR: [#21612](https://github.com/sgl-project/sglang/pull/21612) — "fix: fix sharded state for ModelOptModelLoader", opened 2026-03-28 with unit tests. Delegates to `ShardedStateLoader` when `load_format=sharded_state` and model is already quantized. Awaiting review as of 2026-04-05.
 
 ### Affected Configuration
 
@@ -387,7 +389,8 @@ However, the CUDA kernel-level issue cannot be patched. For NVFP4 + EP > 1, use
 - SGLang [#21602](https://github.com/sgl-project/sglang/issues/21602) — our report: NVFP4 input_scale not EP-aware
   - Fix PR: [#20869](https://github.com/sgl-project/sglang/pull/20869) — broader fix incl. CutlassMoEParams + SM120 (open)
   - Fix PR: [#21630](https://github.com/sgl-project/sglang/pull/21630) — narrower fix, else-branch only (open, 2026-03-29)
-- SGLang [#21603](https://github.com/sgl-project/sglang/issues/21603) — our report: ModelOptModelLoader doesn't support sharded_state (no fix PR)
+- SGLang [#21603](https://github.com/sgl-project/sglang/issues/21603) — our report: ModelOptModelLoader doesn't support sharded_state
+  - Fix PR: [#21612](https://github.com/sgl-project/sglang/pull/21612) — fix sharded state for ModelOptModelLoader (open, awaiting review)
 
 ### Related but not fixing our bugs
 - vLLM #12647 — moe_wna16 AssertionError (KV cache conflict, unrelated)

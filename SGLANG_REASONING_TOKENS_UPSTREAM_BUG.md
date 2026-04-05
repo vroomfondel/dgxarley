@@ -2,10 +2,10 @@
 
 ## Status
 
-**Fixed upstream** as of 2026-04-04. Merged by maintainer `hnyls2002`.
+**Fixed upstream** as of 2026-04-05. Merged by maintainer `hnyls2002`.
 
 - Issue: [#15660](https://github.com/sgl-project/sglang/issues/15660) (closed 2025-12-29, but bug persisted until fix)
-- Fix PR: [#15562](https://github.com/sgl-project/sglang/pull/15562) — **merged 2026-04-04** (09:18 UTC). Re-tokenizes reasoning content at the API layer to compute `reasoning_tokens` and populates it into `UsageInfo`
+- Fix PR: [#15562](https://github.com/sgl-project/sglang/pull/15562) — **merged 2026-04-05**. Re-tokenizes reasoning content at the API layer to compute `reasoning_tokens` and populates it into `UsageInfo`
 - Closed as duplicate of #15562: [#17938](https://github.com/sgl-project/sglang/pull/17938), [#17764](https://github.com/sgl-project/sglang/pull/17764), [#17156](https://github.com/sgl-project/sglang/pull/17156) — all closed 2026-04-04
 - Closed without merge: [#15875](https://github.com/sgl-project/sglang/pull/15875) — "fix(openai): include reasoning_tokens in streaming usage"
 - Not in v0.5.10rc0 (2026-03-28). Will be included in the next release after v0.5.10rc0
