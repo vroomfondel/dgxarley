@@ -485,16 +485,16 @@ sglang_model_profiles:
     #chunked_prefill_size: 131072  # NVIDIA model card recommendation
     quantization: "modelopt_fp4"
     trust_remote_code: true
-    # Untested on DGX Spark — values below are initial defaults, pending test matrix.
-    moe_runner_backend: "cutlass"
+    # Winner config (#23 in test matrix): fi_cutlass MoE + triton attn + fi_cudnn fp4 + no cuda graph
+    # n=1: 8.06 tok/s, n=4: 21.23 tok/s, n=8: 29.67 tok/s (all stable)
+    moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
     mem_fraction_static: "0.60"
-    # mem_fraction_static: "0.80"  # model card recommendation
     attention_backend: "triton"
     fp4_gemm_backend: "flashinfer_cudnn"
     jit_max_jobs: 4
-    disable_piecewise_cuda_graph: false
-    disable_cuda_graph: false
+    disable_piecewise_cuda_graph: true
+    disable_cuda_graph: true
     cuda_graph_max_bs: 8
     pp_async_batch_depth: 0
     disable_deep_gemm: true
