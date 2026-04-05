@@ -21,6 +21,7 @@ Usage::
 
 import argparse
 import contextlib
+import logging
 import threading
 from collections.abc import AsyncGenerator
 
@@ -29,7 +30,9 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from dgxarley.tools.kceve_kvm import parse_query_port, parse_routing, port_to_channel, send_and_read
+from dgxarley.tools.kceve_kvm import detect_port, parse_routing, port_to_channel, send_and_read
+
+log = logging.getLogger("kceve-kvm")
 
 # ---------------------------------------------------------------------------
 # Serial singleton — one connection, mutex-protected
@@ -62,6 +65,25 @@ def _close_serial() -> None:
     _ser = None
 
 
+def _detect_initial_port() -> int | None:
+    """Listen passively for the heartbeat IR code to determine the active port on startup.
+
+    Returns:
+        Detected port number, or ``None`` if detection failed.
+    """
+    global _active_port
+    if _ser is None or not _ser.is_open:
+        return None
+    log.info("startup: detecting active port...")
+    port = detect_port(_ser, passive_timeout=5)
+    if port is not None:
+        _active_port = port
+        log.info("startup: active port = %d", port)
+    else:
+        log.error("startup: FAILED to detect port")
+    return port
+
+
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
@@ -85,14 +107,7 @@ def api_health() -> JSONResponse:
 @app.get("/api/status")
 def api_status() -> JSONResponse:
     """Return ``{"port": N}`` with the currently active input port."""
-    with _lock:
-        if _ser is None or not _ser.is_open:
-            raise HTTPException(503, "Serial port not open")
-        resp = send_and_read(_ser, b"X0,0$", stop_pattern="routing ch =", timeout=3)
-    if not resp:
-        raise HTTPException(504, "No response from KVM")
-    port = parse_query_port(resp)
-    return JSONResponse({"port": port or _active_port})
+    return JSONResponse({"port": _active_port})
 
 
 @app.post("/api/switch/{port}")
@@ -109,6 +124,7 @@ def api_switch(port: int) -> JSONResponse:
         resp = send_and_read(_ser, cmd, stop_pattern="routing ch =")
     prev, new = parse_routing(resp) if resp else (None, None)
     _active_port = new or port
+    log.info("switch: port=%s prev=%s resp=%r", _active_port, prev, (resp or "").strip()[:120])
     return JSONResponse({"port": _active_port, "previous": prev})
 
 
@@ -388,13 +404,18 @@ def main() -> None:
     """Parse CLI arguments, open serial, and start the FastAPI server."""
     parser = argparse.ArgumentParser(description="KCEVE KVM Web UI")
     parser.add_argument("-d", "--device", default="/dev/ttyACM0", help="Serial device (default: /dev/ttyACM0)")
-    parser.add_argument("-t", "--timeout", type=float, default=2.0, help="Serial read timeout in seconds")
+    parser.add_argument("-t", "--timeout", type=float, default=5.0, help="Serial read timeout in seconds")
     parser.add_argument("-p", "--port", type=int, default=8800, help="HTTP listen port (default: 8800)")
     parser.add_argument("--host", default="0.0.0.0", help="HTTP listen address (default: 0.0.0.0)")
     args = parser.parse_args()
 
+    logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
     _open_serial(args.device, args.timeout)
-    print(f"Serial: {args.device}  |  Web UI: http://{args.host}:{args.port}/")
+    log.info("serial=%s timeout=%.1fs  |  http://%s:%d/", args.device, args.timeout, args.host, args.port)
+    port = _detect_initial_port()
+    if port is None:
+        log.error("KVM not responding — aborting startup")
+        raise SystemExit(1)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 
 

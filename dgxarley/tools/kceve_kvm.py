@@ -83,6 +83,8 @@ def send_and_read(ser: serial.Serial, cmd: bytes, stop_pattern: str = "", timeou
     while time.monotonic() < deadline:
         chunk = ser.read(ser.in_waiting or 1)
         if not chunk:
+            if time.monotonic() < deadline:
+                continue
             break
         buf += chunk
         if stop_pattern and stop_pattern in buf.decode("ascii", errors="replace"):
@@ -192,24 +194,95 @@ def parse_query_port(text: str) -> int | None:
     return parse_ir_port(text)
 
 
-def cmd_query(ser: serial.Serial) -> None:
-    """Query the KVM's current routing state without switching.
+def listen_heartbeat_port(ser: serial.Serial, timeout: float = 7) -> int | None:
+    """Listen passively for the heartbeat IR code (no command sent).
 
-    Sends ``X0,0$`` which returns routing information for a
-    non-existent channel, leaving the active input unchanged.
+    The firmware emits a triplet every ~3s: [port_code, 0x51, 0x53].
+    Sending ``X0,0$`` suppresses the port code, so this function must
+    be called on a quiet serial line (no prior command in this read window).
+
+    Args:
+        ser: Open serial port connected to the KVM.
+        timeout: Maximum seconds to listen.
+
+    Returns:
+        Active port number, or ``None`` if no heartbeat detected.
+    """
+    ser.reset_input_buffer()
+    deadline = time.monotonic() + timeout
+    buf = b""
+    while time.monotonic() < deadline:
+        chunk = ser.read(ser.in_waiting or 1)
+        if chunk:
+            buf += chunk
+            port = parse_ir_port(buf.decode("ascii", errors="replace"))
+            if port is not None:
+                return port
+    return None
+
+
+def probe_switch_port(ser: serial.Serial) -> int | None:
+    """Determine the active port by briefly switching away and back.
+
+    Sends ``X1,1$`` (switch to port 1), reads ``cur routing ch`` from the
+    response to learn the *previous* port, then switches back.  This has a
+    brief visible side-effect (monitor signal interrupts for ~1s).
+
+    Used as a fallback when the heartbeat port code has been suppressed
+    by a prior ``X0,0$`` query.
+
+    Args:
+        ser: Open serial port connected to the KVM.
+
+    Returns:
+        Active port number, or ``None`` on failure.
+    """
+    resp = send_and_read(ser, b"X1,1$", stop_pattern="routing ch =")
+    prev, _new = parse_routing(resp) if resp else (None, None)
+    if prev is not None and prev != 0 and prev != 1:
+        # Was on a different port — switch back.
+        channel = port_to_channel(prev)
+        send_and_read(ser, f"X{channel},1$".encode("ascii"), stop_pattern="routing ch =")
+        return prev
+    if prev == 1 or prev == 0:
+        # Already on port 1 (or unknown) — port 1 is now active.
+        return 1
+    return None
+
+
+def detect_port(ser: serial.Serial, passive_timeout: float = 5) -> int | None:
+    """Detect the active port: passive heartbeat first, probe-switch fallback.
+
+    Args:
+        ser: Open serial port connected to the KVM.
+        passive_timeout: Seconds to listen for the heartbeat before probing.
+
+    Returns:
+        Active port number, or ``None`` on failure.
+    """
+    port = listen_heartbeat_port(ser, timeout=passive_timeout)
+    if port is not None:
+        return port
+    # Heartbeat suppressed (prior X0,0$) — recover via probe switch.
+    return probe_switch_port(ser)
+
+
+def cmd_query(ser: serial.Serial) -> None:
+    """Query the KVM's current active port.
+
+    Listens passively for the heartbeat IR code first.  If the heartbeat
+    has been suppressed by a prior ``X0,0$`` query, falls back to a brief
+    probe-switch (switch to port 1 and back) to recover.
 
     Args:
         ser: Open serial port connected to the KVM.
     """
-    resp = send_and_read(ser, b"X0,0$", stop_pattern="routing ch =", timeout=3)
-    if resp:
-        port = parse_query_port(resp)
-        if port is not None:
-            print(f"Active port: {port}")
-        else:
-            print(f"Active port: unknown\nRX: {resp.strip()!r}")
+    print("Listening for heartbeat...")
+    port = detect_port(ser, passive_timeout=max(ser.timeout or 5, 5))
+    if port is not None:
+        print(f"Active port: {port}")
     else:
-        print("No response")
+        print("Active port: unknown")
 
 
 def cmd_sniff(ser: serial.Serial) -> None:
