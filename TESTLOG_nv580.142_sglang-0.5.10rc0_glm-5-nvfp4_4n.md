@@ -1,4 +1,4 @@
-# SGLang Test Log — GLM-5 NVFP4, 4 Nodes, v0.5.9-dev2
+# SGLang Test Log — GLM-5 NVFP4, 4 Nodes, v0.5.10rc0
 
 ## Environment
 
@@ -47,42 +47,42 @@ All tests use: `tp=4, pp=1, ep=4, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 
 | # | nccl_transport | moe_runner | attention | fp4_gemm | dis_cuda_graph | dis_piecewise | pp_async | cuda_graph_max_bs | Stability | 1∥ tok/s | 4∥ tok/s | 8∥ tok/s |
 |---|----------------|------------|-----------|----------|----------------|---------------|----------|-------------------|-----------|---------|---------|---------|
-| 1 | socket | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | pending | — | — | — |
-| 2 | socket | triton | flashinfer | fi_cutlass | true | true | 0 | — | pending | — | — | — |
-| 3 | socket | triton | flashinfer | fi_cutlass | false | false | 0 | 8 | pending | — | — | — |
-| 4 | socket | triton | triton | fi_cutlass | false | true | 0 | 8 | pending | — | — | — |
-| 5 | socket | triton | triton | fi_cutlass | true | true | 0 | — | pending | — | — | — |
-| 6 | socket | triton | triton | fi_cutlass | false | false | 0 | 8 | pending | — | — | — |
-| 7 | socket | triton | flashinfer | fi_cudnn | false | true | 0 | 8 | pending | — | — | — |
-| 8 | socket | triton | flashinfer | fi_cudnn | true | true | 0 | — | pending | — | — | — |
-| 9 | socket | triton | flashinfer | fi_cudnn | false | false | 0 | 8 | pending | — | — | — |
-| 10 | socket | triton | triton | fi_cudnn | false | true | 0 | 8 | pending | — | — | — |
-| 11 | socket | triton | triton | fi_cudnn | true | true | 0 | — | pending | — | — | — |
-| 12 | socket | triton | triton | fi_cudnn | false | false | 0 | 8 | pending | — | — | — |
-| 13 | socket | fi_cutlass | flashinfer | fi_cutlass | false | true | 0 | 8 | pending | — | — | — |
-| 14 | socket | fi_cutlass | flashinfer | fi_cutlass | true | true | 0 | — | pending | — | — | — |
-| 15 | socket | fi_cutlass | flashinfer | fi_cutlass | false | false | 0 | 8 | pending | — | — | — |
-| 16 | socket | fi_cutlass | triton | fi_cutlass | false | true | 0 | 8 | pending | — | — | — |
-| 17 | socket | fi_cutlass | triton | fi_cutlass | true | true | 0 | — | pending | — | — | — |
-| 18 | socket | fi_cutlass | triton | fi_cutlass | false | false | 0 | 8 | pending | — | — | — |
-| 19 | socket | fi_cutlass | flashinfer | fi_cudnn | false | true | 0 | 8 | pending | — | — | — |
-| 20 | socket | fi_cutlass | flashinfer | fi_cudnn | true | true | 0 | — | pending | — | — | — |
-| 21 | socket | fi_cutlass | flashinfer | fi_cudnn | false | false | 0 | 8 | pending | — | — | — |
-| 22 | socket | fi_cutlass | triton | fi_cudnn | false | true | 0 | 8 | pending | — | — | — |
-| 23 | socket | fi_cutlass | triton | fi_cudnn | true | true | 0 | — | pending | — | — | — |
-| 24 | socket | fi_cutlass | triton | fi_cudnn | false | false | 0 | 8 | pending | — | — | — |
-| 25 | socket | cutlass | flashinfer | fi_cutlass | false | true | 0 | 8 | pending | — | — | — |
-| 26 | socket | cutlass | flashinfer | fi_cutlass | true | true | 0 | — | pending | — | — | — |
-| 27 | socket | cutlass | flashinfer | fi_cutlass | false | false | 0 | 8 | pending | — | — | — |
-| 28 | socket | cutlass | triton | fi_cutlass | false | true | 0 | 8 | pending | — | — | — |
-| 29 | socket | cutlass | triton | fi_cutlass | true | true | 0 | — | pending | — | — | — |
-| 30 | socket | cutlass | triton | fi_cutlass | false | false | 0 | 8 | pending | — | — | — |
-| 31 | socket | cutlass | flashinfer | fi_cudnn | false | true | 0 | 8 | pending | — | — | — |
-| 32 | socket | cutlass | flashinfer | fi_cudnn | true | true | 0 | — | pending | — | — | — |
-| 33 | socket | cutlass | flashinfer | fi_cudnn | false | false | 0 | 8 | pending | — | — | — |
-| 34 | socket | cutlass | triton | fi_cudnn | false | true | 0 | 8 | pending | — | — | — |
-| 35 | socket | cutlass | triton | fi_cudnn | true | true | 0 | — | pending | — | — | — |
-| 36 | socket | cutlass | triton | fi_cudnn | false | false | 0 | 8 | pending | — | — | — |
+| 1 | socket | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | OOM (not run) | — | — | — |
+| 2 | socket | triton | flashinfer | fi_cutlass | true | true | 0 | — | OOM (not run) | — | — | — |
+| 3 | socket | triton | flashinfer | fi_cutlass | false | false | 0 | 8 | OOM (not run) | — | — | — |
+| 4 | socket | triton | triton | fi_cutlass | false | true | 0 | 8 | OOM (not run) | — | — | — |
+| 5 | socket | triton | triton | fi_cutlass | true | true | 0 | — | OOM (not run) | — | — | — |
+| 6 | socket | triton | triton | fi_cutlass | false | false | 0 | 8 | OOM (not run) | — | — | — |
+| 7 | socket | triton | flashinfer | fi_cudnn | false | true | 0 | 8 | OOM (not run) | — | — | — |
+| 8 | socket | triton | flashinfer | fi_cudnn | true | true | 0 | — | OOM (not run) | — | — | — |
+| 9 | socket | triton | flashinfer | fi_cudnn | false | false | 0 | 8 | OOM (not run) | — | — | — |
+| 10 | socket | triton | triton | fi_cudnn | false | true | 0 | 8 | OOM (not run) | — | — | — |
+| 11 | socket | triton | triton | fi_cudnn | true | true | 0 | — | OOM (not run) | — | — | — |
+| 12 | socket | triton | triton | fi_cudnn | false | false | 0 | 8 | OOM (not run) | — | — | — |
+| 13 | socket | fi_cutlass | flashinfer | fi_cutlass | false | true | 0 | 8 | OOM (not run) | — | — | — |
+| 14 | socket | fi_cutlass | flashinfer | fi_cutlass | true | true | 0 | — | OOM (not run) | — | — | — |
+| 15 | socket | fi_cutlass | flashinfer | fi_cutlass | false | false | 0 | 8 | OOM (not run) | — | — | — |
+| 16 | socket | fi_cutlass | triton | fi_cutlass | false | true | 0 | 8 | OOM (not run) | — | — | — |
+| 17 | socket | fi_cutlass | triton | fi_cutlass | true | true | 0 | — | OOM (not run) | — | — | — |
+| 18 | socket | fi_cutlass | triton | fi_cutlass | false | false | 0 | 8 | OOM (not run) | — | — | — |
+| 19 | socket | fi_cutlass | flashinfer | fi_cudnn | false | true | 0 | 8 | OOM (not run) | — | — | — |
+| 20 | socket | fi_cutlass | flashinfer | fi_cudnn | true | true | 0 | — | OOM (not run) | — | — | — |
+| 21 | socket | fi_cutlass | flashinfer | fi_cudnn | false | false | 0 | 8 | OOM (not run) | — | — | — |
+| 22 | socket | fi_cutlass | triton | fi_cudnn | false | true | 0 | 8 | OOM (not run) | — | — | — |
+| 23 | socket | fi_cutlass | triton | fi_cudnn | true | true | 0 | — | OOM (not run) | — | — | — |
+| 24 | socket | fi_cutlass | triton | fi_cudnn | false | false | 0 | 8 | OOM (not run) | — | — | — |
+| 25 | socket | cutlass | flashinfer | fi_cutlass | false | true | 0 | 8 | OOM (not run) | — | — | — |
+| 26 | socket | cutlass | flashinfer | fi_cutlass | true | true | 0 | — | OOM (not run) | — | — | — |
+| 27 | socket | cutlass | flashinfer | fi_cutlass | false | false | 0 | 8 | OOM (not run) | — | — | — |
+| 28 | socket | cutlass | triton | fi_cutlass | false | true | 0 | 8 | OOM (not run) | — | — | — |
+| 29 | socket | cutlass | triton | fi_cutlass | true | true | 0 | — | OOM (not run) | — | — | — |
+| 30 | socket | cutlass | triton | fi_cutlass | false | false | 0 | 8 | OOM (not run) | — | — | — |
+| 31 | socket | cutlass | flashinfer | fi_cudnn | false | true | 0 | 8 | OOM (not run) | — | — | — |
+| 32 | socket | cutlass | flashinfer | fi_cudnn | true | true | 0 | — | OOM (not run) | — | — | — |
+| 33 | socket | cutlass | flashinfer | fi_cudnn | false | false | 0 | 8 | OOM (not run) | — | — | — |
+| 34 | socket | cutlass | triton | fi_cudnn | false | true | 0 | 8 | OOM (not run) | — | — | — |
+| 35 | socket | cutlass | triton | fi_cudnn | true | true | 0 | — | OOM (not run) | — | — | — |
+| 36 | socket | cutlass | triton | fi_cudnn | false | false | 0 | 8 | OOM (not run) | — | — | — |
 
 ### Column Legend
 
