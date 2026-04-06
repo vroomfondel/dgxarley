@@ -29,14 +29,27 @@ Only 3 configurations were attempted before the test run was canceled:
 ### #13 — fi_cutlass moe / flashinfer attn / fi_cutlass fp4 / cuda_graph
 
 - **Outcome:** startup_crash — head + all 3 workers restarted (total=1 each)
-- **Time:** 2026-04-03 16:40–16:42 UTC
+- **Time:** 2026-04-03 16:40:49–16:42:13 UTC
+- **Patches:** moe=flashinfer_cutlass, attn=flashinfer, fp4=flashinfer_cutlass, disable_cuda_graph=false, disable_piecewise=true, ep=4, tp=4
+- **Pod events:**
+  - sglang-head-654cd86f59-6cnr4: +1 restart (total=1)
+  - sglang-worker-1-c8fd8566d-5d8st: +1 restart (total=1)
+  - sglang-worker-2-54749d87f-lrdkm: +1 restart (total=1)
+  - sglang-worker-3-778b45d699-xkptx: +1 restart (total=1)
 
 ### #14 — fi_cutlass moe / flashinfer attn / fi_cutlass fp4 / no-cuda-graph
 
 - **Outcome:** startup_crash — head + all 3 workers restarted (total=1 each)
-- **Time:** 2026-04-03 16:42–16:44 UTC
+- **Time:** 2026-04-03 16:42:48–16:44:12 UTC
+- **Patches:** moe=flashinfer_cutlass, attn=flashinfer, fp4=flashinfer_cutlass, disable_cuda_graph=true, disable_piecewise=true, ep=4, tp=4
+- **Pod events:**
+  - sglang-head-654cd86f59-4jcjv: +1 restart (total=1)
+  - sglang-worker-1-c8fd8566d-8kpqp: +1 restart (total=1)
+  - sglang-worker-2-54749d87f-9n7v4: +1 restart (total=1)
+  - sglang-worker-3-778b45d699-jfvt2: +1 restart (total=1)
 
 ### #15 — fi_cutlass moe / flashinfer attn / fi_cutlass fp4 / piecewise
 
 - **Outcome:** deploy_failed — Ansible canceled
-- **Time:** 2026-04-03 16:44–16:45 UTC
+- **Time:** 2026-04-03 16:44:49–16:45:02 UTC
+- **Patches:** moe=flashinfer_cutlass, attn=flashinfer, fp4=flashinfer_cutlass, disable_cuda_graph=false, disable_piecewise=false, ep=4, tp=4
