@@ -34,21 +34,21 @@ All tests use: `tp=4, pp=1, ep=4, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 
 | # | nccl_transport | moe_runner | attention | fp4_gemm | dis_cuda_graph | dis_piecewise | pp_async | cuda_graph_max_bs | Stability | 1∥ tok/s | 4∥ tok/s | 8∥ tok/s |
 |---|----------------|------------|-----------|----------|----------------|---------------|----------|-------------------|-----------|---------|---------|---------|
-| 1 | socket | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | pending | — | — | — |
-| 2 | socket | triton | flashinfer | fi_cutlass | true | true | 0 | — | pending | — | — | — |
-| 3 | socket | triton | flashinfer | fi_cutlass | false | false | 0 | 8 | pending | — | — | — |
-| 4 | socket | triton | triton | fi_cutlass | false | true | 0 | 8 | pending | — | — | — |
-| 5 | socket | triton | triton | fi_cutlass | true | true | 0 | — | pending | — | — | — |
-| 6 | socket | triton | triton | fi_cutlass | false | false | 0 | 8 | pending | — | — | — |
-| 7 | socket | triton | flashinfer | fi_cudnn | false | true | 0 | 8 | pending | — | — | — |
-| 8 | socket | triton | flashinfer | fi_cudnn | true | true | 0 | — | pending | — | — | — |
-| 9 | socket | triton | flashinfer | fi_cudnn | false | false | 0 | 8 | pending | — | — | — |
-| 10 | socket | triton | triton | fi_cudnn | false | true | 0 | 8 | pending | — | — | — |
-| 11 | socket | triton | triton | fi_cudnn | true | true | 0 | — | pending | — | — | — |
-| 12 | socket | triton | triton | fi_cudnn | false | false | 0 | 8 | pending | — | — | — |
-| 13 | socket | fi_cutlass | flashinfer | fi_cutlass | false | true | 0 | 8 | pending | — | — | — |
-| 14 | socket | fi_cutlass | flashinfer | fi_cutlass | true | true | 0 | — | pending | — | — | — |
-| 15 | socket | fi_cutlass | flashinfer | fi_cutlass | false | false | 0 | 8 | pending | — | — | — |
+| 1 | socket | triton | flashinfer | fi_cutlass | false | true | 0 | 8 | CRASH | — | — | — |
+| 2 | socket | triton | flashinfer | fi_cutlass | true | true | 0 | — | CRASH† | — | — | — |
+| 3 | socket | triton | flashinfer | fi_cutlass | false | false | 0 | 8 | CRASH | — | — | — |
+| 4 | socket | triton | triton | fi_cutlass | false | true | 0 | 8 | CRASH | — | — | — |
+| 5 | socket | triton | triton | fi_cutlass | true | true | 0 | — | error | — | — | — |
+| 6 | socket | triton | triton | fi_cutlass | false | false | 0 | 8 | CRASH | — | — | — |
+| 7 | socket | triton | flashinfer | fi_cudnn | false | true | 0 | 8 | CRASH | — | — | — |
+| 8 | socket | triton | flashinfer | fi_cudnn | true | true | 0 | — | error | — | — | — |
+| 9 | socket | triton | flashinfer | fi_cudnn | false | false | 0 | 8 | CRASH | — | — | — |
+| 10 | socket | triton | triton | fi_cudnn | false | true | 0 | 8 | CRASH | — | — | — |
+| 11 | socket | triton | triton | fi_cudnn | true | true | 0 | — | error | — | — | — |
+| 12 | socket | triton | triton | fi_cudnn | false | false | 0 | 8 | CRASH | — | — | — |
+| 13 | socket | fi_cutlass | flashinfer | fi_cutlass | false | true | 0 | 8 | CRASH† | 12.75 | 32.61† | — |
+| 14 | socket | fi_cutlass | flashinfer | fi_cutlass | true | true | 0 | — | CRASH† | 9.64† | — | — |
+| 15 | socket | fi_cutlass | flashinfer | fi_cutlass | false | false | 0 | 8 | CRASH† | 12.22† | — | — |
 | 16 | socket | fi_cutlass | triton | fi_cutlass | false | true | 0 | 8 | pending | — | — | — |
 | 17 | socket | fi_cutlass | triton | fi_cutlass | true | true | 0 | — | pending | — | — | — |
 | 18 | socket | fi_cutlass | triton | fi_cutlass | false | false | 0 | 8 | pending | — | — | — |
@@ -86,6 +86,32 @@ All tests use: `tp=4, pp=1, ep=4, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 | 1∥ tok/s | Throughput with 1 sequential request (= per-request tok/s) |
 | 4∥ tok/s | Peak concurrent throughput at 4∥ (sum of per-request tok/s) |
 | 8∥ tok/s | Peak concurrent throughput at 8∥ (sum of per-request tok/s) |
+
+---
+
+## Results (Tests 1–15)
+
+**Legend:** `CRASH` = startup crash (pods restarted before healthy). `CRASH†` = bench crash (started OK, worker crashed during inference). `error` = server healthy but all inference requests return error. `†` on throughput = requests were aborted (partial streaming, worker crash mid-generation).
+
+### triton MoE (tests 1–12): all failed
+
+- **CUDA graphs enabled (tests 1, 3, 4, 6, 7, 9, 10, 12):** All startup_crash — all 4 pods restart. CUDA graph capture with `triton` MoE on Qwen3.5 (512 experts) is not viable.
+- **CUDA graphs disabled (tests 2, 5, 8, 11):** Server starts and passes health checks, but inference fails:
+  - Test 2: bench_crash — 2 workers restarted, n1 request returned error (no tokens).
+  - Tests 5, 8, 11: Server stays up through all 3 bench rounds (n1/n4/n8), but every single request returns `status=error` with `tokens_per_sec=null`. The `triton` MoE runner cannot dispatch 512 experts correctly on this model.
+
+### flashinfer_cutlass MoE (tests 13–15): partially working
+
+- **Test 13** (CUDA graph on, no piecewise): **Best config.** n1 completed successfully: **12.75 tok/s**. n4 ran but all 4 requests aborted when worker-2 crashed — peak throughput before crash: **32.61 tok/s** (7.97 + 7.84 + 8.52 + 8.28). No n8 (test aborted after worker crash).
+- **Test 14** (CUDA graph off): n1 aborted at **9.64 tok/s** (worker crash after ~465 think tokens). 25% slower than test 13 — confirms CUDA graphs help.
+- **Test 15** (CUDA graph on + piecewise): n1 aborted at **12.22 tok/s** (worker crash after ~963 think tokens). Close to test 13, but piecewise mode didn't prevent the crash.
+
+### Summary
+
+- Only `flashinfer_cutlass` MoE works for Qwen3.5-397B. `triton` MoE is broken (512 experts).
+- Best throughput: **12.75 tok/s** (n1) / **~32.61 tok/s** (n4, aborted) — test 13.
+- All fi_cutlass configs crash during bench (worker OOM or NCCL timeout) — not yet stable enough for production.
+- Tests 16–36 (remaining fi_cutlass/cutlass MoE + triton attn + fi_cudnn fp4 combos) pending.
 
 ---
 
