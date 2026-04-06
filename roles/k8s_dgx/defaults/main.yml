@@ -342,6 +342,7 @@ sglang_model_profiles:
     moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
     mem_fraction_static: "0.60"
+    # mem_fraction_static: "0.40"  # for speculative_enabled=true
     # flashinfer attention: stable with fi_cutlass MoE across all CUDA graph modes.
     # triton attention: crashes at concurrency with CUDA graphs (cuGraphLaunch segfault),
     # but works in eager mode (Test 17: best 8∥ at 70.7, TTFT 9.8s penalty).
@@ -366,11 +367,17 @@ sglang_model_profiles:
     reasoning_parser: "minimax"
     tool_call_parser: "minimax-m2"
     num_experts: 256
+    # ep_size: 4
     ep_size: "{{ sglang_nnodes if (256 % (sglang_nnodes | int) == 0) else 1 }}"
     recommended_sampling:
       temperature: 1.0
       top_p: 0.95
       top_k: 40
+    speculative_enabled: false
+    speculative_algo: NEXTN
+    speculative_num_steps: 3
+    speculative_num_draft_tokens: 4
+    speculative_draft_model_path: ""
   "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4":
     info_url: "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
     # 120B/12B LatentMoE (Mamba2-Transformer hybrid), NVFP4 quantized (~67 GB weights).
@@ -480,32 +487,32 @@ sglang_model_profiles:
     # Note: model card does NOT specify --moe-runner-backend or --attention-backend.
     # model_type=glm4_moe is in transformers 4.57.6 — no upgrade needed (unlike GLM-5).
     nccl_transport: "socket"
-    tp_size: 4  # num_kv_heads=8 → TP=4 works (2 KV heads/GPU). EP auto from nnodes.
+    tp_size: 1  # num_kv_heads=8 → TP=4 works (2 KV heads/GPU). EP auto from nnodes.
     context_length: 196608  # model max 202752; leave headroom
     #chunked_prefill_size: 131072  # NVIDIA model card recommendation
     quantization: "modelopt_fp4"
     trust_remote_code: true
     # Winner config (#23 in test matrix): fi_cutlass MoE + triton attn + fi_cudnn fp4 + no cuda graph
     # n=1: 8.06 tok/s, n=4: 21.23 tok/s, n=8: 29.67 tok/s (all stable)
-    moe_runner_backend: "flashinfer_cutlass"
+    moe_runner_backend: "triton"
     kv_cache_dtype: "fp8_e4m3"
     mem_fraction_static: "0.60"
-    attention_backend: "triton"
-    fp4_gemm_backend: "flashinfer_cudnn"
+    attention_backend: "flashinfer"
+    fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 4
     disable_piecewise_cuda_graph: true
-    disable_cuda_graph: true
+    disable_cuda_graph: false
     cuda_graph_max_bs: 8
     pp_async_batch_depth: 0
     disable_deep_gemm: true
     reasoning_parser: "glm45"
     tool_call_parser: "glm47"
     num_experts: 160
-    ep_size: 4
+    ep_size: 1
     #ep_size: "{{ sglang_nnodes if (160 % (sglang_nnodes | int) == 0) else 1 }}"
     recommended_sampling:
       temperature: 1.0
-    speculative_enabled: false
+    speculative_enabled: true
     speculative_algo: NEXTN
     speculative_num_steps: 3
     speculative_num_draft_tokens: 4
@@ -539,7 +546,7 @@ sglang_model_profiles:
     attention_backend: "flashinfer"
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 4
-    disable_piecewise_cuda_graph: true
+    disable_piecewise_cuda_graph: false
     disable_cuda_graph: false
     cuda_graph_max_bs: 8
     pp_async_batch_depth: 0
@@ -548,7 +555,7 @@ sglang_model_profiles:
     # vLLM uses "qwen3". For SGLang, try "deepseek-r1" or "qwen3" if available.
     reasoning_parser: "qwen3"
     num_experts: 512
-    ep_size: "{{ sglang_nnodes if (512 % (sglang_nnodes | int) == 0) else 1 }}"
+    ep_size: 4
     recommended_sampling:
       temperature: 0.6
       top_p: 0.95
@@ -627,8 +634,8 @@ sglang_speculative_draft_model_path: "{{ sglang_model_profiles[sglang_model].spe
 #sglang_model: "Qwen/Qwen3.5-35B-A3B-FP8"
 #sglang_model: "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
 
-sglang_model: "nvidia/GLM-4.7-NVFP4"
-
+# sglang_model: "nvidia/MiniMax-M2.5-NVFP4"
+sglang_model: "nvidia/Qwen3.5-397B-A17B-NVFP4"
 # sglang_model: "nvidia/GLM-4.7-NVFP4"
 # sglang_model: "nvidia/GLM-5-NVFP4"
 #sglang_model: "nvidia/MiniMax-M2.5-NVFP4"
@@ -1008,9 +1015,11 @@ hf_cache_path: "/var/lib/hf-cache"
 hf_token: "hf_CHANGEME"
 # HuggingFace model pre-download Job
 hf_preload_models:
-  - "zai-org/GLM-4.7-FP8"
-  - "nvidia/GLM-4.7-NVFP4"
-  - "nvidia/MiniMax-M2.5-NVFP4"
+  - "nvidia/Qwen3.5-397B-A17B-NVFP4"
+  - "Qwen/Qwen3-235B-A22B-FP8"
+#  - "zai-org/GLM-4.7-FP8"
+#  - "nvidia/GLM-4.7-NVFP4"
+#  - "nvidia/MiniMax-M2.5-NVFP4"
 #  - "novita/Eagle3-Spec-Minimax-M2.5-Exp14"  # gone ?!
 #  - "togethercomputer/Aurora-Spec-Minimax-M2.5"  # request-gated
 #  - "nvidia/Qwen3.5-397B-A17B-NVFP4"
