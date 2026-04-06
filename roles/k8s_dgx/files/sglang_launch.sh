@@ -305,6 +305,36 @@ print("Patched ModelOptModelLoader: sharded_state support for pre-quantized mode
 PATCH_MODELOPT_SHARDED_EOF
 fi
 
+# Patch MiniMaxM2ForCausalLM: add set_embed_and_head for NEXTN speculative decoding.
+# The model has get_embed_and_head but is missing the setter, which eagle_worker.py
+# calls to share the target model's embed/head weights with the draft model.
+# Every other NEXTN-capable model (DeepSeek, GLM, Llama) has this method.
+MINIMAX_M2="/usr/local/lib/python3.12/dist-packages/sglang/srt/models/minimax_m2.py"
+if [ -f "$MINIMAX_M2" ] && grep -q 'def get_embed_and_head' "$MINIMAX_M2" && ! grep -q 'def set_embed_and_head' "$MINIMAX_M2"; then
+  python3 << 'PATCH_MINIMAX_NEXTN_EOF'
+f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/models/minimax_m2.py"
+with open(f) as fh:
+    code = fh.read()
+old = "    def get_embed_and_head(self):"
+new = """    def set_embed_and_head(self, embed, head):
+        del self.model.embed_tokens.weight
+        del self.lm_head.weight
+        self.model.embed_tokens.weight = embed
+        self.lm_head.weight = head
+        import torch
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
+    def get_embed_and_head(self):"""
+code = code.replace(old, new, 1)
+with open(f, 'w') as fh:
+    fh.write(code)
+print("Patched MiniMaxM2ForCausalLM: added set_embed_and_head for NEXTN speculative decoding")
+PATCH_MINIMAX_NEXTN_EOF
+else
+  echo "MiniMax NEXTN patch: not needed or already applied, skipping"
+fi
+
 args=(
   tini -s --
   python3 -m sglang.launch_server
