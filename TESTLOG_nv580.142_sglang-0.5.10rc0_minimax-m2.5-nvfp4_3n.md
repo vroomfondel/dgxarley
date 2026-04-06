@@ -114,6 +114,15 @@ All tests use: `tp=1, pp=3, ep=1, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 | 14 | socket | triton | triton | fi_cudnn | false | true | 0 | 16 | **STABLE** | 15.8 | 40.5 | 62.1 |
 | 15 | socket | fi_cutlass | flashinfer | fi_cudnn | false | true | 0 | 16 | OOMKilled (graph capture) | — | — | — |
 
+### Test 15: fi_cutlass MoE runner — OOMKilled on worker during graph capture
+
+- **Date:** 2026-04-02
+- **Config:** `moe_runner=flashinfer_cutlass, attention=flashinfer, fp4_gemm=flashinfer_cudnn, disable_cuda_graph=false, dis_piecewise=true, cuda_graph_max_bs=16`
+- **Outcome:** startup_crash — `sglang-worker-2` OOMKilled (1 restart) during CUDA graph capture.
+- **Error:** `Pod sglang-worker-2-77479bd565-jphhz: +1 restart(s) (total=1); Pod sglang-worker-2-77479bd565-jphhz: OOMKilled detected`
+- **Duration:** ~6 min (18:17:55Z → 18:24:11Z)
+- **Note:** Consistent with Test 4 (same moe_runner, fi_cutlass) and Test 15 from the 0.5.9-dev2 series (same failure mode). The `flashinfer_cutlass` MoE runner has a higher GPU memory footprint during CUDA graph capture for this model+config combination, causing OOM on worker nodes.
+
 ### Column Legend
 
 | Column | Description |
