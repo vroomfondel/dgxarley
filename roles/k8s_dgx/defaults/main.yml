@@ -335,28 +335,27 @@ sglang_model_profiles:
     # Without it, transformers refuses to load the model class. Safe here because
     # the code comes from NVIDIA's official nvidia/MiniMax-M2.5-NVFP4 repo.
     trust_remote_code: true
-    # PP mode: triton MoE is mandatory — fi_cutlass MoE causes Xid 13 (Illegal
-    # Instruction at 0x1c81fb60:0x1174) on SM121 after ~4-10 min.
-    # cutlass MoE: startup crash. Only triton (→cutlass_moe_fp4 fallback) works.
-    # PP=3 winner: triton MoE + triton attn → 77.4 tok/s at 8∥.
+    # PP mode: triton MoE is mandatory — fi_cutlass MoE causes worker crashes
+    # and Xid 13 on SM121. All 16 fi_cutlass tests (17–32) failed on PP=4.
+    # PP=4 winner: Test 2 (triton moe, flashinfer attn, fi_cutlass fp4, eager) → 63.9 tok/s at 8∥.
     moe_runner_backend: "triton"
     kv_cache_dtype: "fp8_e4m3"
-    mem_fraction_static: "0.70"
+    mem_fraction_static: "0.80"
     # mem_fraction_static: "0.40"  # for speculative_enabled=true
-    # triton attention: best 8∥ throughput on PP=3 (Test 9: 77.4 tok/s).
-    # flashinfer attention also stable (Test 3: 72.8 at 8∥, 16.0 at 1∥).
-    attention_backend: "triton"
-    # flashinfer_cutlass: mandatory on SM121 — fi_cudnn produces separate Xid 13
-    # from cuDNN JIT path.
+    # PP=4 winner uses flashinfer attention (Test 2: 63.9 at 8∥).
+    # triton attention also stable (Test 5: 52.2 at 8∥, Test 13: 62.0 at 8∥).
+    attention_backend: "flashinfer"
+    # flashinfer_cutlass fp4: stable on PP=4. fi_cudnn also works but slightly
+    # lower throughput (Test 9: 48.9 vs Test 1: 61.2 at 8∥).
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 4
     # Piecewise CUDA graphs: always OOM on PP (58 chunks × 256 experts per stage).
     disable_piecewise_cuda_graph: true
-    # CUDA graphs: work fine with triton MoE on PP (~1.64 GB capture).
-    # Essential for low TTFT — without them, TTFT jumps to 10-15s.
-    disable_cuda_graph: false
-    cuda_graph_max_bs: 16  # PP=3 winner used 16 (more headroom per GPU with PP)
-    pp_async_batch_depth: 0  # pp_async hurts throughput on PP=3 (-9%), keep synchronous
+    # Eager mode: PP=4 winner. 1∥ is slower (5.5 vs 16.2 tok/s) but 8∥ is best
+    # (63.9 tok/s). CUDA graphs (Test 1: 61.2) are close — switch back if TTFT matters.
+    disable_cuda_graph: true
+    cuda_graph_max_bs: 16
+    pp_async_batch_depth: 0  # pp_async hurts throughput on PP=4 (Test 4: 50.0 vs Test 2: 63.9)
     # DeepGemm is designed for FP8 with ue8m0 scale format. For NVFP4 models
     # (scale_fmt != ue8m0): JIT kernels not optimized, blocks scheduler watchdog,
     # exhausts system RAM. Disabled — FP4 GEMM falls to fp4_gemm_backend above.
