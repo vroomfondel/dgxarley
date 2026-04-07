@@ -44,18 +44,18 @@ All tests use: `tp=1, pp=4, ep=1, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 | 18 | socket | fi_cutlass | flashinfer | fi_cutlass | true | true | 0 | — | CRASH | — | — | — |
 | 19 | socket | fi_cutlass | flashinfer | fi_cutlass | false | false | 0 | 16 | CRASH | — | — | — |
 | 20 | socket | fi_cutlass | flashinfer | fi_cutlass | false | true | 2 | 16 | CRASH | — | — | — |
-| 21 | socket | fi_cutlass | triton | fi_cutlass | false | true | 0 | 16 | *pending* | — | — | — |
-| 22 | socket | fi_cutlass | triton | fi_cutlass | true | true | 0 | — | *pending* | — | — | — |
-| 23 | socket | fi_cutlass | triton | fi_cutlass | false | false | 0 | 16 | *pending* | — | — | — |
-| 24 | socket | fi_cutlass | triton | fi_cutlass | false | true | 2 | 16 | *pending* | — | — | — |
-| 25 | socket | fi_cutlass | flashinfer | fi_cudnn | false | true | 0 | 16 | *pending* | — | — | — |
-| 26 | socket | fi_cutlass | flashinfer | fi_cudnn | true | true | 0 | — | *pending* | — | — | — |
-| 27 | socket | fi_cutlass | flashinfer | fi_cudnn | false | false | 0 | 16 | *pending* | — | — | — |
-| 28 | socket | fi_cutlass | flashinfer | fi_cudnn | false | true | 2 | 16 | *pending* | — | — | — |
-| 29 | socket | fi_cutlass | triton | fi_cudnn | false | true | 0 | 16 | *pending* | — | — | — |
-| 30 | socket | fi_cutlass | triton | fi_cudnn | true | true | 0 | — | *pending* | — | — | — |
-| 31 | socket | fi_cutlass | triton | fi_cudnn | false | false | 0 | 16 | *pending* | — | — | — |
-| 32 | socket | fi_cutlass | triton | fi_cudnn | false | true | 2 | 16 | *pending* | — | — | — |
+| 21 | socket | fi_cutlass | triton | fi_cutlass | false | true | 0 | 16 | CRASH | — | — | — |
+| 22 | socket | fi_cutlass | triton | fi_cutlass | true | true | 0 | — | CRASH | 12.6 | — | — |
+| 23 | socket | fi_cutlass | triton | fi_cutlass | false | false | 0 | 16 | CRASH | — | — | — |
+| 24 | socket | fi_cutlass | triton | fi_cutlass | false | true | 2 | 16 | CRASH | — | — | — |
+| 25 | socket | fi_cutlass | flashinfer | fi_cudnn | false | true | 0 | 16 | FAIL | 15.8 | — | — |
+| 26 | socket | fi_cutlass | flashinfer | fi_cudnn | true | true | 0 | — | FAIL | — | — | — |
+| 27 | socket | fi_cutlass | flashinfer | fi_cudnn | false | false | 0 | 16 | CRASH | — | — | — |
+| 28 | socket | fi_cutlass | flashinfer | fi_cudnn | false | true | 2 | 16 | CRASH | 15.8 | — | — |
+| 29 | socket | fi_cutlass | triton | fi_cudnn | false | true | 0 | 16 | CRASH | 15.2 | — | — |
+| 30 | socket | fi_cutlass | triton | fi_cudnn | true | true | 0 | — | CRASH | — | — | — |
+| 31 | socket | fi_cutlass | triton | fi_cudnn | false | false | 0 | 16 | CRASH | — | — | — |
+| 32 | socket | fi_cutlass | triton | fi_cudnn | false | true | 2 | 16 | FAIL | — | — | — |
 
 ### Column Legend
 
@@ -104,18 +104,30 @@ Peak 8∥: 50.8 tok/s. Avg per-request: 6.3 tok/s. Wall time: 307.5s.
 
 ## Notes
 
-### fi_cutlass MoE crashes (tests 17–20)
+### fi_cutlass MoE is broken (tests 17–32)
 
-All four `moe_runner_backend=flashinfer_cutlass` tests crashed with worker restarts. The n1 request was aborted in each case (0 successful requests), and subsequent concurrency levels were not attempted. Crash pattern: worker pods restarted during or shortly after the first request.
+All 16 `moe_runner_backend=flashinfer_cutlass` tests failed. Most crashed with worker/head restarts; the rest (25, 26, 32) ran without pod crashes but all requests failed or were aborted. Only tests 22, 25, 28, 29 completed a single n1 request before failing at higher concurrency.
 
-| Test | Error |
-|------|-------|
-| 17 | Worker-1 restart (1×) |
-| 18 | Worker-1 + Worker-2 restart (1× each) |
-| 19 | Worker-1 restart (1×) |
-| 20 | Worker-1 + Worker-2 + Worker-3 restart (1× each) |
+| Test | Outcome | Detail |
+|------|---------|--------|
+| 17   | CRASH   | Worker-1 restart |
+| 18   | CRASH   | Worker-1 + Worker-2 restart |
+| 19   | CRASH   | Worker-1 restart |
+| 20   | CRASH   | Worker-1 + Worker-2 + Worker-3 restart |
+| 21   | CRASH   | Head + all 3 workers restart |
+| 22   | CRASH   | n1 OK (12.6 tok/s), n4 all aborted, then 3 workers restart |
+| 23   | CRASH   | Head + all 3 workers restart |
+| 24   | CRASH   | Head + all 3 workers restart |
+| 25   | FAIL    | n1 OK (15.8 tok/s), n4+n8 all requests failed (no pod crash) |
+| 26   | FAIL    | All requests failed at every concurrency (no pod crash) |
+| 27   | CRASH   | Worker-1 restart |
+| 28   | CRASH   | n1 OK (15.8 tok/s), n4 all aborted, Worker-3 restart |
+| 29   | CRASH   | n1 OK (15.2 tok/s), n4 all aborted, Worker-3 restart |
+| 30   | CRASH   | Worker-2 + Worker-3 restart |
+| 31   | CRASH   | Worker-2 + Worker-3 restart |
+| 32   | FAIL    | All requests failed at every concurrency (no pod crash) |
 
-The `triton` MoE runner (tests 1–16) is stable across all configurations. `flashinfer_cutlass` MoE is broken on this model/version combo.
+The `triton` MoE runner (tests 1–16) is stable across all configurations. `flashinfer_cutlass` MoE is completely broken on this model/version combo — no concurrency level beyond n1 succeeded, and even n1 only worked in 4 of 16 cases.
 
 ### Eager mode (disable_cuda_graph=true) single-request penalty
 
