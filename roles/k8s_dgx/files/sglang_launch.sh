@@ -169,7 +169,9 @@ old_buffered = '''        with tqdm(
                     pending.append(executor.submit(_load_file, next_file))
 
                 for name in sorted(state_dict.keys()):
-                    yield name, state_dict[name]'''
+                    yield name, state_dict[name]
+                del state_dict
+                pbar.update(1)'''
 new_buffered = '''        _shard_done = 0
         _shard_total = len(hf_weights_files)
         while pending:
@@ -187,7 +189,8 @@ new_buffered = '''        _shard_done = 0
                 pending.append(executor.submit(_load_file, next_file))
 
             for name in sorted(state_dict.keys()):
-                yield name, state_dict[name]'''
+                yield name, state_dict[name]
+            del state_dict'''
 if old_buffered in code:
     code = code.replace(old_buffered, new_buffered, 1)
     patched = True
