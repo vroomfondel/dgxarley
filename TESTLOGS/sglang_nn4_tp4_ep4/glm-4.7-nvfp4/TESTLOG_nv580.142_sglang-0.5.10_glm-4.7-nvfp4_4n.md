@@ -45,13 +45,13 @@ All tests use: `tp=4, pp=1, ep=4, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 | 14 | socket | fi_cutlass | flashinfer | fi_cutlass | true | true | 0 | — | **bench_crash** | — | — | — |
 | 15 | socket | fi_cutlass | flashinfer | fi_cutlass | false | false | 0 | 8 | *skip* | — | — | — |
 | 16 | socket | fi_cutlass | triton | fi_cutlass | false | true | 0 | 8 | *skip* | — | — | — |
-| 17 | socket | fi_cutlass | triton | fi_cutlass | true | true | 0 | — | **bench_crash** | — | — | — |
+| 17 | socket | fi_cutlass | triton | fi_cutlass | true | true | 0 | — | **partial** | 8.4 | 20.8 | — |
 | 18 | socket | fi_cutlass | triton | fi_cutlass | false | false | 0 | 8 | *skip* | — | — | — |
 | 19 | socket | fi_cutlass | flashinfer | fi_cudnn | false | true | 0 | 8 | *skip* | — | — | — |
-| 20 | socket | fi_cutlass | flashinfer | fi_cudnn | true | true | 0 | — | *pending* | — | — | — |
+| 20 | socket | fi_cutlass | flashinfer | fi_cudnn | true | true | 0 | — | **infer_error** | — | — | — |
 | 21 | socket | fi_cutlass | flashinfer | fi_cudnn | false | false | 0 | 8 | *skip* | — | — | — |
 | 22 | socket | fi_cutlass | triton | fi_cudnn | false | true | 0 | 8 | *skip* | — | — | — |
-| 23 | socket | fi_cutlass | triton | fi_cudnn | true | true | 0 | — | *pending* | — | — | — |
+| 23 | socket | fi_cutlass | triton | fi_cudnn | true | true | 0 | — | **infer_error** | — | — | — |
 | 24 | socket | fi_cutlass | triton | fi_cudnn | false | false | 0 | 8 | *skip* | — | — | — |
 | 25 | socket | cutlass | flashinfer | fi_cutlass | false | true | 0 | 8 | *skip* | — | — | — |
 | 26 | socket | cutlass | flashinfer | fi_cutlass | true | true | 0 | — | *skip* | — | — | — |
@@ -65,7 +65,7 @@ All tests use: `tp=4, pp=1, ep=4, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 | 34 | socket | cutlass | triton | fi_cudnn | false | true | 0 | 8 | *skip* | — | — | — |
 | 35 | socket | cutlass | triton | fi_cudnn | true | true | 0 | — | *skip* | — | — | — |
 | 36 | socket | cutlass | triton | fi_cudnn | false | false | 0 | 8 | *skip* | — | — | — |
-| 37 | socket | fi_cutlass | triton | fi_cudnn | true | true | 0 | — | *pending* | — | — | — |
+| 37 | socket | fi_cutlass | triton | fi_cudnn | true | true | 0 | — | **startup_crash** | — | — | — |
 
 > **#37** = #23 winner config + MTP speculative decoding (NEXTN, 3 steps, 4 draft tokens)
 
@@ -89,53 +89,65 @@ All tests use: `tp=4, pp=1, ep=4, quantization=modelopt_fp4, kv_cache_dtype=fp8_
 
 ## Test Details
 
+### First run (speculative_enabled=true by mistake)
+
+Tests 14, 17, 20 ran with `speculative_enabled: true` inherited from the GLM-4.7 model profile — matrix patches didn't override it. Results were invalid:
+- Test 14: TMA descriptor crash (Xid 13) after 442 tokens — possibly speculative codepath
+- Test 17: Xid 13 on Worker-1 after ~700 tokens — possibly speculative codepath
+- Test 20: `cuDNN is not available` crash — speculative/EAGLE codepath doesn't load cuDNN
+
+All tests below are from the **re-run with `speculative_enabled: false`**.
+
+---
+
 ### #14 — fi_cutlass MoE / flashinfer attn / fi_cutlass fp4 / no-cuda-graph
 
-- **Outcome:** bench_crash — `cudaErrorIllegalInstruction` (Xid 13) in TMA descriptor initialization
-- **Time:** 2026-04-08 09:49 CEST
-- **n=1:** error after 442 tokens (10.53 tok/s, TTFT 1.21s) — generated tokens then TMA crash killed head
-- **n=4:** 0/4 — instant errors (server dead after n=1 crash)
-- **n=8:** 0/8 — instant errors
+- **Outcome:** bench_crash — Worker-3 restart
+- **Time:** 2026-04-08 10:17 CEST
+- **n=1:** aborted (7.72 tok/s, TTFT 16.0s, 0 output tokens)
+- **n=4/n=8:** not reached
 
-**Loki crash trace (07:49:26 UTC):**
-```
-HEAD:    Error: Failed to initialize the TMA descriptor 715 (6×)
-HEAD:    CUDA error: an illegal instruction was encountered
-HEAD:    → flashinfer/fused_moe/core.py:490 cutlass_fused_moe
-HEAD:    Fatal Python error: Aborted (exit code -6)
-WORKER1: NCCL error: remote process exited (SeqNum=39117, ALLREDUCE)
-WORKER2: TCPStore: Failed to recv, got 0 bytes (head gone)
-WORKER3: TCPStore: Broken pipe
-HEAD:    Subprocess scheduler_0 crashed → SIGQUIT cleanup
-```
-
-**vs rc0:** On rc0, test 14 returned 0 tokens (infer_error). On v0.5.10, it generates 442 tokens before hitting the TMA illegal instruction. Something changed in the FlashInfer CUTLASS MoE codepath that makes it partially work — the TMA descriptor failure occurs mid-inference, not at startup.
+**vs rc0:** infer_error (0 tokens). v0.5.10 gets further (starts generating) but still crashes. `fi_cutlass` fp4 + `flashinfer` attn is unstable on SM121.
 
 ### #17 — fi_cutlass MoE / triton attn / fi_cutlass fp4 / no-cuda-graph
 
-- **Outcome:** bench_crash — `cudaErrorIllegalInstruction` (Xid 13) on Worker-1 (spark2)
-- **Time:** 2026-04-08 09:56 CEST
-- **n=1:** aborted after 84s (8.29 tok/s, TTFT 12.5s) — generated tokens then Xid 13 killed Worker-1
-- **n=4/n=8:** not reached (Worker-1 restart detected by matrix runner)
+- **Outcome:** **partial** — n=1 and n=4 stable, n=8 crashed. Best result in this matrix.
+- **Time:** 2026-04-08 10:28 CEST
+- **n=1:** **8.4 tok/s**, 3072 tokens, TTFT 6.4s, finish=length
+- **n=4:** **4/4 success**, 5.2 tok/s per-req, **20.8 tok/s peak**, TTFT 2.4–3.0s
+- **n=8:** 0/8 — all aborted (2.1–2.8 tok/s before abort)
 
-**Loki crash trace (07:56:07 UTC):**
-```
-W1 (spark2): cudaErrorIllegalInstruction — NCCL watchdog terminated, Fatal Python error: Aborted
-W2 (spark3): NCCL error: remote process exited (SeqNum=55587, ALLREDUCE)
-W3 (spark4): NCCL dump signal from rank 2
-HD (spark1): NCCL error: remote process exited
-```
-
-**vs rc0:** OOMKilled on rc0 (jit_max_jobs=16 exhausted memory). On v0.5.10 with jit_max_jobs=4, memory survives but the FlashInfer CUTLASS MoE kernel hits Xid 13 after ~700 tokens. Same root cause as #14 — `fi_cutlass` MoE + `fi_cutlass` fp4 is unstable on SM121.
+**vs rc0:** OOMKilled on rc0. On v0.5.10, n=1 and n=4 fully work. n=8 overloads and crashes. `fi_cutlass` MoE + `triton` attn + `fi_cutlass` fp4 is the new best combo (replacing `fi_cudnn` fp4 which regressed).
 
 ### #20 — fi_cutlass MoE / flashinfer attn / fi_cudnn fp4 / no-cuda-graph
 
-*pending*
+- **Outcome:** infer_error — server stable, all requests returned errors (0 tokens)
+- **Time:** 2026-04-08 10:44 CEST
+- **n=1:** 0/1 error, **n=4:** 0/4, **n=8:** 0/8
 
-### #23 — fi_cutlass MoE / triton attn / fi_cudnn fp4 / no-cuda-graph
+**vs rc0:** On rc0, n=1 worked (7.95 tok/s). **Regression in v0.5.10** — `fi_cudnn` fp4_gemm backend produces 0 tokens.
 
-*pending* — **rc0 WINNER** (8.06 / 21.94 / 30.01 tok/s). Expecting stable on v0.5.10.
+### #23 — fi_cutlass MoE / triton attn / fi_cudnn fp4 / no-cuda-graph (rc0 WINNER)
+
+- **Outcome:** infer_error — server stable, all requests returned errors (0 tokens)
+- **Time:** 2026-04-08 10:49 CEST
+- **n=1:** 0/1 error, **n=4:** 0/4, **n=8:** 0/8
+
+**vs rc0:** **MAJOR REGRESSION.** rc0 WINNER (8.06 / 21.94 / 30.01 tok/s) now produces 0 tokens. `flashinfer_cudnn` fp4_gemm is completely broken in v0.5.10 for GLM-4.7 on SM121. Both test 20 and 23 use `fi_cudnn` — confirms this is an fp4_gemm backend issue, not attention-related.
 
 ### #37 — #23 winner + MTP speculative decoding (NEXTN)
 
-*pending*
+- **Outcome:** startup_crash — massive crash loop (52 restarts on all pods)
+- **Time:** 2026-04-08 17:46 CEST
+- **Note:** Even without the `fi_cudnn` regression, MTP speculative on this model is unstable.
+
+---
+
+## Summary — v0.5.10 vs v0.5.10rc0
+
+| Change | Detail |
+|--------|--------|
+| **`fi_cudnn` fp4_gemm REGRESSION** | Tests 20, 23: 0 tokens on v0.5.10 (rc0: 8.06/30.01 tok/s). The `flashinfer_cudnn` FP4 GEMM backend is broken. |
+| **`fi_cutlass` fp4_gemm IMPROVED** | Test 17: n=1+n=4 now work (rc0: OOMKilled). `flashinfer_cutlass` FP4 GEMM survives with `jit_max_jobs=4`. |
+| **New best config** | Test 17: fi_cutlass MoE + triton attn + fi_cutlass fp4 + eager → 8.4 / 20.8 tok/s (n=1/n=4). n=8 unstable. |
+| **Speculative (NEXTN)** | Test 37: startup crash loop. Not viable on this model/version. |
