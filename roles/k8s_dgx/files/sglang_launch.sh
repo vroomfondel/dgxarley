@@ -107,46 +107,129 @@ if [ "$SGLANG_LOAD_FORMAT" = "sharded_state" ]; then
   echo "Using pre-sharded model at ${model_path}"
 fi
 
-# Patch safetensors_weights_iterator to log progress per shard file.
+# Patch weight loading iterators to log progress per shard file.
 # tqdm writes directly to sys.stderr in TP worker subprocesses — this output is
 # NOT forwarded by SGLang's logger infrastructure, so it never appears in kubectl logs.
-# Additionally, BAR_FORMAT in v0.5.10rc0 lacks a trailing \n, so tqdm uses \r
-# (carriage return) which is invisible in non-TTY kubectl logs.
-# Fix: replace tqdm loop with logger.info() calls that go through the logging pipeline.
+# Additionally, BAR_FORMAT lacks a trailing \n, so tqdm uses \r (carriage return)
+# which is invisible in non-TTY kubectl logs.
+# Fix: replace tqdm loops with logger.info() calls that go through the logging pipeline.
+#
+# v0.5.10: enable_multithread_load defaults to True, so the default code path is
+# buffered_multi_thread_safetensors_weights_iterator (not the old single-thread one).
+# We patch both to cover all cases.
 WEIGHT_UTILS="/usr/local/lib/python3.12/dist-packages/sglang/srt/model_loader/weight_utils.py"
-if grep -q 'for st_file in tqdm(' "$WEIGHT_UTILS" 2>/dev/null; then
+if [ -f "$WEIGHT_UTILS" ]; then
   python3 << 'PATCH_SAFETENSORS_TQDM_EOF'
+import os
 f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/model_loader/weight_utils.py"
 with open(f) as fh:
     code = fh.read()
+patched = False
 # Add logger import if missing
 if "\nlogger = " not in code and "\nlogger=" not in code:
     code = code.replace(
         "from tqdm.auto import tqdm",
         "import logging\nfrom tqdm.auto import tqdm\nlogger = logging.getLogger(__name__)",
         1)
-# v0.5.10rc0 signature: no is_all_weights_sharded, no decryption_key,
-# uses BAR_FORMAT (no underscore), has position=tqdm._get_free_pos().
-old = '''    for st_file in tqdm(
+
+# --- Patch 1: single-thread safetensors_weights_iterator (v0.5.10rc0 path) ---
+old_single = '''    for st_file in tqdm(
         hf_weights_files,
         desc="Loading safetensors checkpoint shards",
         disable=not enable_tqdm,
         bar_format=BAR_FORMAT,
         position=tqdm._get_free_pos(),
     ):'''
-new = '''    _total = len(hf_weights_files)
+new_single = '''    _total = len(hf_weights_files)
     for _i, st_file in enumerate(hf_weights_files, 1):
         if enable_tqdm:
             logger.info(f"Loading safetensors shard {_i}/{_total}: {os.path.basename(st_file)}")'''
-if old in code:
-    code = code.replace(old, new, 1)
+if old_single in code:
+    code = code.replace(old_single, new_single, 1)
+    patched = True
+    print("Patched safetensors_weights_iterator: tqdm → logger.info")
+
+# --- Patch 2: buffered_multi_thread_safetensors_weights_iterator (v0.5.10 default) ---
+# Replace tqdm progress bar in the sliding-window loop with logger.info per shard.
+old_buffered = '''        with tqdm(
+            total=len(hf_weights_files),
+            desc="Multi-thread loading shards",
+            disable=not enable_tqdm,
+            bar_format=BAR_FORMAT,
+            position=tqdm._get_free_pos(),
+        ) as pbar:
+            while pending:
+                future = pending.popleft()
+                state_dict = future.result()
+                del future  # let GC reclaim the Future's internal result
+
+                # Replenish: submit the next file to keep the buffer full.
+                next_file = next(file_iter, None)
+                if next_file is not None:
+                    pending.append(executor.submit(_load_file, next_file))
+
+                for name in sorted(state_dict.keys()):
+                    yield name, state_dict[name]'''
+new_buffered = '''        _shard_done = 0
+        _shard_total = len(hf_weights_files)
+        while pending:
+            future = pending.popleft()
+            state_dict = future.result()
+            del future  # let GC reclaim the Future's internal result
+            _shard_done += 1
+
+            if enable_tqdm:
+                logger.info(f"Loading shard {_shard_done}/{_shard_total} ({len(state_dict)} tensors)")
+
+            # Replenish: submit the next file to keep the buffer full.
+            next_file = next(file_iter, None)
+            if next_file is not None:
+                pending.append(executor.submit(_load_file, next_file))
+
+            for name in sorted(state_dict.keys()):
+                yield name, state_dict[name]'''
+if old_buffered in code:
+    code = code.replace(old_buffered, new_buffered, 1)
+    patched = True
+    print("Patched buffered_multi_thread_safetensors_weights_iterator: tqdm → logger.info")
+
+# --- Patch 3: multi_thread_safetensors_weights_iterator (non-buffered variant) ---
+old_mt = '''        if enable_tqdm:
+            futures_iter = tqdm(
+                concurrent.futures.as_completed(futures),
+                total=len(hf_weights_files),
+                desc="Multi-thread loading shards",
+                disable=not enable_tqdm,
+                bar_format=BAR_FORMAT,
+            )
+        else:
+            futures_iter = concurrent.futures.as_completed(futures)
+
+        for future in futures_iter:
+            state_dict = future.result()
+            for name, param in state_dict.items():
+                yield name, param'''
+new_mt = '''        _mt_done = 0
+        _mt_total = len(hf_weights_files)
+        for future in concurrent.futures.as_completed(futures):
+            state_dict = future.result()
+            _mt_done += 1
+            if enable_tqdm:
+                logger.info(f"Loading shard {_mt_done}/{_mt_total} ({len(state_dict)} tensors)")
+            for name, param in state_dict.items():
+                yield name, param'''
+if old_mt in code:
+    code = code.replace(old_mt, new_mt, 1)
+    patched = True
+    print("Patched multi_thread_safetensors_weights_iterator: tqdm → logger.info")
+
+if patched:
     if "import os" not in code:
         code = "import os\n" + code
     with open(f, 'w') as fh:
         fh.write(code)
-    print("Patched safetensors_weights_iterator: tqdm replaced with logger.info per-file progress")
 else:
-    print("safetensors_weights_iterator: tqdm patch target not found, skipping")
+    print("weight_utils: no tqdm patch targets found (already patched or code changed)")
 PATCH_SAFETENSORS_TQDM_EOF
 fi
 
