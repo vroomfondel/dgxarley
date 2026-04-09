@@ -58,6 +58,44 @@ else
   echo "SKIPPING GLM-5 specific patches..."
 fi
 
+# Patch Qwen3_5MoeConfig to convert dict sub_configs (transformers 5.5.0 bug).
+# Transformers 5.x auto-generates __init__ for PretrainedConfig subclasses with
+# sub_configs, bypassing the manual dict→config conversion in Qwen3_5Config.__init__.
+# Both vision_config and text_config arrive as raw dicts → AttributeError when accessing
+# attributes like .hidden_size or .layers_block_type. Fix: inject __post_init__ that
+# converts dict sub-configs to their proper config classes using Qwen3_5MoeConfig.sub_configs.
+QWEN35_CONFIG="/usr/local/lib/python3.12/dist-packages/sglang/srt/configs/qwen3_5.py"
+if grep -q 'class Qwen3_5MoeConfig' "$QWEN35_CONFIG" 2>/dev/null && ! grep -q '__post_init__' "$QWEN35_CONFIG" 2>/dev/null; then
+  python3 << 'PATCH_QWEN35_CONFIG_EOF'
+f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/configs/qwen3_5.py"
+with open(f) as fh:
+    code = fh.read()
+# Append __post_init__ to Qwen3_5Config (inherited by Qwen3_5MoeConfig).
+# The auto-generated __init__ calls __post_init__ after setting all fields,
+# so we can convert dict sub-configs there.
+old = '''class Qwen3_5MoeVisionConfig(Qwen3_5VisionConfig):'''
+new = '''    # [patch] transformers 5.x sub_configs auto-init bypasses dict→config conversion.
+    # The auto-generated __init__ calls __post_init__ after setting fields via setattr,
+    # so dict sub-configs (vision_config, text_config) can be converted here.
+    def __post_init__(self, **kwargs):
+        for key, config_cls in self.sub_configs.items():
+            val = getattr(self, key, None)
+            if isinstance(val, dict):
+                setattr(self, key, config_cls(**val))
+        super().__post_init__(**kwargs)
+
+
+class Qwen3_5MoeVisionConfig(Qwen3_5VisionConfig):'''
+if old in code:
+    code = code.replace(old, new, 1)
+    with open(f, 'w') as fh:
+        fh.write(code)
+    print("Patched Qwen3_5Config: added __post_init__ for dict sub_configs conversion")
+else:
+    print("Qwen3_5Config: patch target not found or already patched")
+PATCH_QWEN35_CONFIG_EOF
+fi
+
 # Prime ARP table on the QSFP link before NCCL tries to connect.
 # Without this, the first TCP SYNs get dropped until ARP resolves,
 # causing ~230s delay in "Init torch distributed".
