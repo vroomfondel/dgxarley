@@ -98,6 +98,12 @@ new = '''    if is_gguf:
                 except Exception:
                     pass  # non-critical: some sub-configs may not accept all dict keys
 
+    # [patch] Qwen3.5 MoE: text_config lacks norm_topk_prob (Qwen2MoeSparseMoeBlock expects it).
+    # Qwen3.5 uses softmax routing — renormalize=True is correct default.
+    _tc = getattr(config, "text_config", None)
+    if _tc is not None and not isinstance(_tc, dict) and not hasattr(_tc, "norm_topk_prob"):
+        _tc.norm_topk_prob = True
+
     return config'''
 if old in code:
     code = code.replace(old, new, 1)
@@ -115,13 +121,21 @@ fi
 # Full-mesh: every node pings ALL other nodes so NCCL's ring/tree
 # topology can communicate immediately over any path.
 IFS=',' read -ra peers <<< "$QSFP_PEER_IPS"
+pids=()
 for peer in "${peers[@]}"; do
-  echo "Waiting for QSFP peer ${peer} ..."
-  until ping -c5 -W1 "$peer" ; do
-    sleep 1
-  done
-  echo "QSFP peer ${peer} reachable."
+  (
+    echo "Waiting for QSFP peer ${peer} ..."
+    while true; do
+      ping -c3 -W1 "$peer" 2>&1 | sed "s/^/[${peer}] /"
+      [[ ${PIPESTATUS[0]} -eq 0 ]] && break
+      sleep 1
+    done
+    echo "QSFP peer ${peer} reachable."
+  ) &
+  pids+=($!)
 done
+for pid in "${pids[@]}"; do wait "$pid"; done
+echo "All ${#peers[@]} QSFP peers reachable."
 
 # Version gate: warn if the container image changed — patches below may need review.
 # Dev builds report __version__=0.0.0 (no setuptools-scm), so we check the image
