@@ -117,7 +117,7 @@ fi
 IFS=',' read -ra peers <<< "$QSFP_PEER_IPS"
 for peer in "${peers[@]}"; do
   echo "Waiting for QSFP peer ${peer} ..."
-  until ping -c10 -W1 "$peer" ; do
+  until ping -c5 -W1 "$peer" ; do
     sleep 1
   done
   echo "QSFP peer ${peer} reachable."
