@@ -12,7 +12,7 @@
 
 Related issues: [#19500](https://github.com/sgl-project/sglang/issues/19500) (initial report), [#21184](https://github.com/sgl-project/sglang/issues/21184), [#21185](https://github.com/sgl-project/sglang/issues/21185). Superseded alternative: [PR #21217](https://github.com/sgl-project/sglang/pull/21217) (open, not needed).
 
-**Our image `scitrera/dgx-spark-sglang:0.5.10rc0` does NOT include PR #21448 (merged 2026-03-30).** Update to v0.5.10 final to get PP support.
+**Our image `scitrera/dgx-spark-sglang:0.5.10` includes all three fixes.** PP support is available.
 
 Files: `sglang/srt/models/qwen3_5.py`, `sglang/srt/models/qwen3_vl.py`, `sglang/srt/model_executor/model_runner_kv_cache_mixin.py`
 
@@ -27,7 +27,7 @@ PP=1 (TP-only or TP+EP) is **not affected**.
 
 ## Observed Crash
 
-Tested: `nvidia/Qwen3.5-397B-A17B-NVFP4`, PP=4, TP=1, EP=4, 4× DGX Spark (128 GB/GPU), `scitrera/dgx-spark-sglang:0.5.10rc0`.
+Tested: `nvidia/Qwen3.5-397B-A17B-NVFP4`, PP=4, TP=1, EP=4, 4× DGX Spark (128 GB/GPU), `scitrera/dgx-spark-sglang:0.5.10rc0` (crash observed on this image; fixed in 0.5.10).
 
 PP3 (pipeline stage 3, layers 45–59) attempts to load weights for layer 37 (which belongs to PP2, layers 30–44):
 
@@ -126,10 +126,9 @@ Qwen3.5 uses a repeating pattern: 3× GatedDeltaNet (linear attention/SSM) + 1×
 
 ## Our Situation
 
-- **Current image:** `scitrera/dgx-spark-sglang:0.5.10rc0` — built before PR #21448 (2026-03-30). PP is broken.
-- **Fix:** Update to v0.5.10 final (all three PRs included).
-- **No monkey-patch possible:** The bugs span `make_layers()` call sites, four `load_weights` methods, and the Mamba cache initialization — too many locations for a clean runtime patch.
-- **Current workaround:** Use TP=4 EP=4 PP=1 (no pipeline parallelism). This works but limits the parallelism strategy to tensor/expert parallelism only.
+- **Current image:** `scitrera/dgx-spark-sglang:0.5.10` — all three PP fixes included. PP is available.
+- **No monkey-patch was needed:** Updated to v0.5.10 final which includes all fixes.
+- **Previous workaround (no longer needed):** TP=4 EP=4 PP=1 (no pipeline parallelism).
 
 ## Why PP=4 Was Attempted
 
