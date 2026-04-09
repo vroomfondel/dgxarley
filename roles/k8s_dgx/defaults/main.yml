@@ -534,7 +534,7 @@ sglang_model_profiles:
     # Note: model card does NOT specify parsers, moe_runner_backend, or attention_backend.
     # WARNING: model_type=qwen3_5_moe may require transformers upgrade.
     nccl_transport: "socket"
-    tp_size: 1  # model card says TP=4; num_kv_heads=2 may limit to TP=2 — needs testing
+    tp_size: 4  # model card says TP=4; num_kv_heads=2 may limit to TP=2 — needs testing
     context_length: 196608  # model max 262144; conservative start
     quantization: "modelopt_fp4"
     trust_remote_code: true
@@ -578,25 +578,25 @@ sglang_model_profiles:
     #     --mem-fraction-static 0.8
     # Note: model card targets 8 GPUs. On 4× DGX Spark, memory is very tight.
     nccl_transport: "socket"
-    tp_size: 4  # num_kv_heads=8 → TP=4 works (2 KV heads/GPU)
+    tp_size: 1  # num_kv_heads=8 → TP=4 works (2 KV heads/GPU)
     context_length: 131072  # conservative — less KV cache headroom than NVFP4
     # quantization: auto-detected from checkpoint (no explicit flag needed)
     trust_remote_code: true
-    moe_runner_backend: "cutlass"
+    moe_runner_backend: "triton"
     kv_cache_dtype: "fp8_e4m3"
     mem_fraction_static: "0.60"
-    attention_backend: "triton"
+    attention_backend: "flashinfer"
     fp8_gemm_runner_backend: "triton"             # SM121: auto selects flashinfer→trtllm which is unsupported
     jit_max_jobs: 4
-    disable_piecewise_cuda_graph: false
-    disable_cuda_graph: false # start conservative — enable after confirming stability
+    disable_piecewise_cuda_graph: true
+    disable_cuda_graph: true  # start conservative — enable after confirming stability
     cuda_graph_max_bs: 8
     pp_async_batch_depth: 0
     disable_deep_gemm: true  # SM121: DeepGemm JIT has "Unknown recipe" errors
     reasoning_parser: "glm45"
     tool_call_parser: "glm47"
     num_experts: 160
-    ep_size: 4
+    ep_size: 1
     recommended_sampling:
       temperature: 1.0
       top_p: 0.95
@@ -618,6 +618,8 @@ sglang_model_profiles:
 #   "EAGLE" — External draft model. Uses a separate lightweight model to draft
 #             tokens, then the main model verifies. Requires a compatible EAGLE
 #             checkpoint (--speculative-draft-model-path).
+    fp4_gemm_backend: flashinfer_cutlass
+    speculative_enabled: false
 sglang_speculative_enabled: "{{ sglang_model_profiles[sglang_model].speculative_enabled | default(false) }}"
 sglang_speculative_algo: "{{ sglang_model_profiles[sglang_model].speculative_algo | default('NEXTN') }}"
 sglang_speculative_num_steps: "{{ sglang_model_profiles[sglang_model].speculative_num_steps | default(3) }}"
@@ -633,7 +635,7 @@ sglang_speculative_draft_model_path: "{{ sglang_model_profiles[sglang_model].spe
 #sglang_model: "Qwen/Qwen3.5-35B-A3B-FP8"
 #sglang_model: "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
 
-sglang_model: "nvidia/GLM-4.7-NVFP4"
+sglang_model: "zai-org/GLM-4.7-FP8"
 # sglang_model: "nvidia/Qwen3.5-397B-A17B-NVFP4"
 # sglang_model: "nvidia/GLM-4.7-NVFP4"
 # sglang_model: "nvidia/GLM-5-NVFP4"
