@@ -141,7 +141,7 @@ echo "All ${#peers[@]} QSFP peers reachable."
 # Dev builds report __version__=0.0.0 (no setuptools-scm), so we check the image
 # tag (injected as SGLANG_IMAGE env var by Ansible) instead of the Python version.
 # The grep guards still prevent patching if the target code has changed.
-SGLANG_EXPECTED_IMAGE="scitrera/dgx-spark-sglang:0.5.10rc0"
+SGLANG_EXPECTED_IMAGE="scitrera/dgx-spark-sglang:0.5.10"
 if [ -n "$SGLANG_IMAGE" ] && [ "$SGLANG_IMAGE" != "$SGLANG_EXPECTED_IMAGE" ]; then
   echo "WARNING: SGLang image changed (expected ${SGLANG_EXPECTED_IMAGE}, got ${SGLANG_IMAGE})."
   echo "         Monkey-patches may no longer apply or may need updating."

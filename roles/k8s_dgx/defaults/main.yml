@@ -270,12 +270,12 @@ sglang_model_profiles:
     # Fits comfortably on 2× DGX Spark with full 262K context.
     # Community-confirmed: ~31 tok/s single-request on dual Spark.
     # Quality on par or better than Qwen3-235B-A22B despite fewer total params.
-    load_format: "sharded_state"  # default: auto
+    load_format: "auto"  # "sharded_state"  # default: auto
     context_length: 262144
     kv_cache_dtype: "fp8_e4m3"
     # quantization: "auto"
     mem_fraction_static: "0.60"
-    attention_backend: "triton"
+    attention_backend: "flashinfer"
     disable_deep_gemm: true
     fp8_gemm_runner_backend: "cutlass"
     reasoning_parser: "qwen3"
@@ -285,7 +285,9 @@ sglang_model_profiles:
     #    disable_deep_gemm: true
     # Expert parallelism: monkey-patched at runtime (see Thinking profile comment).
     num_experts: 256
-    ep_size: "{{ sglang_nnodes if (256 % (sglang_nnodes | int) == 0) else 1 }}"
+    # ep_size: "{{ sglang_nnodes if (256 % (sglang_nnodes | int) == 0) else 1 }}"
+    ep_size: 4
+    tp_size: 4
     # EPLB disabled: Qwen3_5MoeForConditionalGeneration also lacks
     # 'routed_experts_weights_of_layer'. Crashes after ~1000 forward passes.
     # Confirmed broken on 0.5.9-dev2-acab24a7-t5 (2026-03-20, pod sglang-head-5d7585955).
@@ -304,6 +306,13 @@ sglang_model_profiles:
       top_p: 0.95
       top_k: 20
       presence_penalty: 1.5
+    nccl_transport: socket
+    moe_runner_backend: triton
+    disable_cuda_graph: false
+    disable_piecewise_cuda_graph: true
+    pp_async_batch_depth: 0
+    cuda_graph_max_bs: 8
+    speculative_enabled: false
   "nvidia/MiniMax-M2.5-NVFP4":
     info_url: "https://huggingface.co/nvidia/MiniMax-M2.5-NVFP4"
     # 229B/8-active MoE (256 experts, sigmoid routing), NVFP4 quantized (~139 GB weights).
@@ -564,6 +573,50 @@ sglang_model_profiles:
       top_p: 0.95
       top_k: 20
     speculative_enabled: false
+  "nvidia/Qwen3-235B-A22B-NVFP4":
+    info_url: "https://huggingface.co/nvidia/Qwen3-235B-A22B-NVFP4"
+    # 235B/22B-active MoE (128 experts, top-8, softmax routing), NVFP4 quantized.
+    # Architecture: standard Qwen3 MoE — 94 layers, GQA (num_kv_heads=4, 16:1 ratio),
+    # 1 shared expert + 128 routed experts per MoE layer. Text-only (no vision encoder).
+    # No MTP heads → no NEXTN speculative decoding.
+    # num_attention_heads=64, num_key_value_heads=4 → TP=4 works (1 KV head/GPU).
+    # NVFP4: only MoE expert FFN weights are FP4; attention, shared experts, lm_head
+    # remain in BF16. ~3.3× smaller than BF16 → ~70 GB total / 4 GPUs ≈ ~18 GB/GPU.
+    # Much lighter than Qwen3.5-397B (~59 GB/GPU) — leaves ample room for KV cache.
+    # Recommended: TP=4 (model card), context up to 131K with YaRN.
+    nccl_transport: "socket"
+    tp_size: 4  # num_kv_heads=4 → TP=4 works (1 KV head/GPU)
+    context_length: 131072  # YaRN-extended from 32K native
+    quantization: "modelopt_fp4"
+    trust_remote_code: true
+    # Same MoE kernel issues as other NVFP4 models on SM121:
+    # triton MoE → cutlass_moe_fp4 crashes (nvfp4_blockwise_moe.cuh device-side assert).
+    # flashinfer_cutlass MoE is the working backend.
+    moe_runner_backend: "flashinfer_cutlass"
+    kv_cache_dtype: "fp8_e4m3"
+    # ~18 GB/GPU weights → ~100 GB free → 0.80 leaves plenty for KV + JIT.
+    # 128 experts (vs 512 for Qwen3.5) → much less JIT memory needed.
+    mem_fraction_static: "0.80"
+    attention_backend: "flashinfer"
+    fp4_gemm_backend: "flashinfer_cutlass"
+    jit_max_jobs: 4
+    disable_piecewise_cuda_graph: true
+    # Start with eager mode (safe). Enable CUDA graphs after confirming stability.
+    disable_cuda_graph: true
+    cuda_graph_max_bs: 8
+    pp_async_batch_depth: 0
+    disable_deep_gemm: true
+    reasoning_parser: "qwen3"
+    num_experts: 128
+    ep_size: 4
+    # EPLB disabled: same Qwen3MoE routed_experts_weights_of_layer crash as AWQ variant.
+    enable_eplb: false
+    enable_expert_distribution_metrics: false
+    recommended_sampling:
+      temperature: 0.6
+      top_p: 0.95
+      top_k: 20
+    speculative_enabled: false
   "zai-org/GLM-4.7-FP8":
     info_url: "https://huggingface.co/zai-org/GLM-4.7-FP8"
     # 358B/~58B-active MoE (160 experts, top-8, sigmoid routing), FP8 quantized (~358 GB).
@@ -583,7 +636,7 @@ sglang_model_profiles:
     #     --mem-fraction-static 0.8
     # Note: model card targets 8 GPUs. On 4× DGX Spark, memory is very tight.
     nccl_transport: "socket"
-    tp_size: 1  # num_kv_heads=8 → TP=4 works (2 KV heads/GPU)
+    tp_size: 4  # num_kv_heads=8 → TP=4 works (2 KV heads/GPU)
     context_length: 131072  # conservative — less KV cache headroom than NVFP4
     # quantization: auto-detected from checkpoint (no explicit flag needed)
     trust_remote_code: true
@@ -591,17 +644,17 @@ sglang_model_profiles:
     kv_cache_dtype: "fp8_e4m3"
     mem_fraction_static: "0.60"
     attention_backend: "flashinfer"
-    fp8_gemm_runner_backend: "triton"             # SM121: auto selects flashinfer→trtllm which is unsupported
+    fp8_gemm_runner_backend: "cutlass"            # SM121: auto selects flashinfer→trtllm which is unsupported
     jit_max_jobs: 4
     disable_piecewise_cuda_graph: true
-    disable_cuda_graph: true  # start conservative — enable after confirming stability
+    disable_cuda_graph: false # start conservative — enable after confirming stability
     cuda_graph_max_bs: 8
     pp_async_batch_depth: 0
     disable_deep_gemm: true  # SM121: DeepGemm JIT has "Unknown recipe" errors
     reasoning_parser: "glm45"
     tool_call_parser: "glm47"
     num_experts: 160
-    ep_size: 1
+    ep_size: 4
     recommended_sampling:
       temperature: 1.0
       top_p: 0.95
@@ -640,7 +693,9 @@ sglang_speculative_draft_model_path: "{{ sglang_model_profiles[sglang_model].spe
 #sglang_model: "Qwen/Qwen3.5-35B-A3B-FP8"
 #sglang_model: "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
 
-sglang_model: "nvidia/Qwen3.5-397B-A17B-NVFP4"
+sglang_model: "zai-org/GLM-4.7-FP8"
+
+# sglang_model: "nvidia/Qwen3.5-397B-A17B-NVFP4"
 # sglang_model: "nvidia/Qwen3.5-397B-A17B-NVFP4"
 # sglang_model: "nvidia/GLM-4.7-NVFP4"
 # sglang_model: "nvidia/GLM-5-NVFP4"
@@ -648,10 +703,6 @@ sglang_model: "nvidia/Qwen3.5-397B-A17B-NVFP4"
 #sglang_model: "Qwen/Qwen3.5-122B-A10B-FP8"
 #sglang_model: "QuantTrio/Qwen3-235B-A22B-Thinking-2507-AWQ"
 #sglang_model: "QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ"
-
-# works
-# sglang_model: "QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ"  #load_format: "sharded_state" UND "auto"
-# sglang_model: "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
 
 sglang_context_length: "{{ sglang_model_profiles[sglang_model].context_length }}"
 sglang_kv_cache_dtype: "{{ sglang_model_profiles[sglang_model].kv_cache_dtype }}"
@@ -1021,10 +1072,13 @@ hf_cache_path: "/var/lib/hf-cache"
 hf_token: "hf_CHANGEME"
 # HuggingFace model pre-download Job
 hf_preload_models:
-  - "nvidia/Qwen3.5-397B-A17B-NVFP4"
-  - "Qwen/Qwen3-235B-A22B-FP8"
-  # https://huggingface.co/nvidia/Qwen3-235B-A22B-NVFP4
-  # https://huggingface.co/nvidia/Qwen3-235B-A22B-Instruct-2507-NVFP4
+  - "togethercomputer/Aurora-Spec-Minimax-M2.5"
+  - "nvidia/Qwen3-235B-A22B-NVFP4"
+  - "Qwen/Qwen3.5-122B-A10B-FP8"
+#  - "nvidia/Qwen3-235B-A22B-NVFP4"
+#  - "Qwen/Qwen3-235B-A22B-FP8"
+#  - "nvidia/Qwen3.5-397B-A17B-NVFP4"
+#  - "nvidia/Qwen3-235B-A22B-Instruct-2507-NVFP4"
 #  - "zai-org/GLM-4.7-FP8"
 #  - "nvidia/GLM-4.7-NVFP4"
 #  - "nvidia/MiniMax-M2.5-NVFP4"
