@@ -43,15 +43,15 @@ cutlass::gemm::collective::StageCountAutoCarveout<
 cutlass::gemm::KernelPtrArrayTmaWarpSpecializedPingpong>::CollectiveOp;
 ```
 
-`StageCountAutoCarveout` + `Pingpong` schedule double-buffers the tiles. It computes the stage count against the compile-time CUTLASS SM-family maximum (228 KB for SM12x), producing ~147 KB of requested shared memory. See [CUTLASS#3144](https://github.com/NVIDIA/cutlass/issues/3144) for the full root cause.
+`StageCountAutoCarveout` + `Pingpong` schedule double-buffers the tiles and requests exactly **102400 bytes (100 KiB)** of shared memory at kernel launch, **1 KiB over** the 101376-byte (99 KiB) device budget on any SM12x Blackwell. See [CUTLASS#3144](https://github.com/NVIDIA/cutlass/issues/3144) for the full root cause — including the verbatim failure (`102400 bytes required but device supports 101376`) and NVIDIA maintainer @depaulmillz's correction on which SM versions actually have 228 KiB.
 
 | GPU | SM Version | Shared Memory per Block |
 |-----|-----------|------------------------|
-| B200/B100 (datacenter) | SM100 | 228 KB |
-| RTX 5090 (consumer) | SM120 | 228 KB |
-| **DGX Spark GB10** | **SM121** | **101 KB** |
+| B200/B100 (datacenter) | SM100 | **228 KiB** |
+| RTX 5090, RTX PRO 6000 Blackwell (consumer/workstation) | SM120 | **99 KiB** |
+| **DGX Spark GB10** | **SM121** | **99 KiB** |
 
-SM121 dispatches to the SM120 kernel (`sm_version >= 120`, the dispatch was relaxed from `== 120` to `>= 120` in the JIT reland) but has 46 KB less shared memory than CUTLASS's SM-family-max assumption. Kernel launch triggers a device-side assert. All subsequent CUDA calls (including the `cudaMallocAsync` near line 78) return `cudaErrorAssert` (sticky error).
+**Key correction:** both SM120 and SM121 share the same 99 KiB budget — only SM100 (B200) has 228 KiB. The "228 KiB on Blackwell" figure that circulates in some documentation refers to SM100 specifically, not SM12x. This means the bug is **not SM121-specific**; it affects every SM120/SM121 device that tries to run the current SGLang NVFP4 MoE path. Upstream SGLang presumably tested on SM100 (B200) where the extra 129 KiB absorbs the 1 KiB overshoot; on any SM12x hardware the kernel launch triggers a device-side assert. All subsequent CUDA calls (including the `cudaMallocAsync` near line 78) return `cudaErrorAssert` (sticky error).
 
 ### Crash B: FlashInfer Xid 13 — likely resolved by FlashInfer 0.6.7.post3
 
@@ -125,13 +125,13 @@ The [BTankut/dgx-spark-sglang-moe-configs](https://github.com/BTankut/dgx-spark-
 - **No SM121 code path at all** — SM121 falls into `TORCH_CHECK_NOT_IMPLEMENTED(false, "Unsupported SM version: " + std::to_string(sm_version))`
 - Dispatch: `} else if (sm_version == 120) {` (strict `==`, not `>= 120`)
 
-This means `lmsysorg/sglang:spark` would **crash on SM121** if you tried to run NVFP4 MoE on it. BTankut never ran NVFP4 MoE — his 20–27 tok/s result is for GLM-4.7-**FP8** with Triton MoE (tuned via the MoE kernel config JSONs for the 101 KB shared memory budget).
+This means `lmsysorg/sglang:spark` would **crash on SM121** if you tried to run NVFP4 MoE on it. BTankut never ran NVFP4 MoE — his 20–27 tok/s result is for GLM-4.7-**FP8** with Triton MoE (tuned via the MoE kernel config JSONs for the 99 KiB shared memory budget; see [CUTLASS#3144](https://github.com/NVIDIA/cutlass/issues/3144)).
 
 **The 356 TFLOPS NVFP4 result from the forum post** is a dense GEMM micro-benchmark, not a running MoE inference. It demonstrates that SM121 FP4 Tensor Cores work in principle, but does not show a working sgl-kernel + NVFP4 MoE pipeline.
 
 **Conclusion: no known working NVFP4 MoE configuration exists on SM121 in any public sglang build.**
 
-The v0.5.10 code change from `sm_version == 120` to `sm_version >= 120` was the SGLang team's attempt to enable SM121 — it "activates" the code path but fails at runtime because of the 46 KB shared memory shortfall. Copying the v0.5.4 `.cu` would regress us to `Unsupported SM version` crashes — worse than what we have now.
+The v0.5.10 code change from `sm_version == 120` to `sm_version >= 120` was the SGLang team's attempt to enable SM121 — it "activates" the code path but fails at runtime because of the 1 KiB shared memory shortfall (102400 bytes requested vs 101376 available, per [CUTLASS#3144](https://github.com/NVIDIA/cutlass/issues/3144)). Copying the v0.5.4 `.cu` would regress us to `Unsupported SM version` crashes — worse than what we have now.
 
 ## Known-good baselines
 
@@ -192,11 +192,15 @@ Function to patch: `run_fp4_blockwise_scaled_group_mm_sm120()`. This is the disp
 In `scitrera/cuda-containers/container-build/Dockerfile.sglang-nightly`, insert a `COPY` + `RUN patch` step **after** the SGLang main-repo clone and **before** any pip/uv install that processes the Python package:
 
 ```dockerfile
-# Patch nvfp4_blockwise_moe.cuh for SM121 (GB10, 101 KB shared memory).
+# Patch nvfp4_blockwise_moe.cuh for SM120/SM121 (99 KiB SMEM/block).
 # The default SM120 kernel path uses Pingpong schedule + StageCountAutoCarveout,
-# which sizes against the SM12x-family max (228 KB) — SM121 only has 101 KB.
-# Fix: StageCount<1> + non-pingpong schedule, cuts SMEM from ~147 KB to ~74 KB.
-# Equivalent to TensorRT-LLM PR #12141's approach.
+# which requests 102400 bytes (100 KiB) — exactly 1 KiB over the 101376-byte
+# device limit on *all* SM12x Blackwell (not just SM121). Only SM100 B200
+# (228 KiB) has enough SMEM; upstream SGLang presumably tested there.
+# Verbatim numbers + NVIDIA maintainer confirmation:
+#   https://github.com/NVIDIA/cutlass/issues/3144
+# Fix: StageCount<1> + non-pingpong schedule cuts mainloop SMEM well below
+# the 99 KiB budget. Equivalent to TensorRT-LLM PR #12141's approach.
 COPY patches/sgl-kernel-sm121.patch /tmp/sgl-kernel-sm121.patch
 RUN set -e; cd /data/sglang && \
     patch --dry-run -p1 < /tmp/sgl-kernel-sm121.patch && \
@@ -228,11 +232,11 @@ StageCountType,
 cutlass::gemm::KernelPtrArrayTmaWarpSpecialized>::CollectiveOp;
 ```
 
-- `StageCount<1>` — single-stage pipeline, no double buffering → cuts mainloop SMEM in half.
-- `KernelPtrArrayTmaWarpSpecialized` — non-pingpong grouped-GEMM schedule, smaller SMEM footprint than Pingpong.
+- `StageCount<1>` — single-stage pipeline, no double buffering → removes the mainloop double-buffer.
+- `KernelPtrArrayTmaWarpSpecialized` — non-pingpong grouped-GEMM schedule → removes the second warp-group SMEM duplication that Pingpong imposes.
 - `Shape<_128, _128, _128>` — **unchanged**. TMA descriptor validation rejects M/N reduction but tolerates stage + schedule changes.
 
-Expected total SMEM: ~74 KB (from ~147 KB). Fits in the 101 KB SM121 budget with ~27 KB headroom.
+**Expected SMEM after fix:** well below the 99 KiB device budget. [CUTLASS#3144](https://github.com/NVIDIA/cutlass/issues/3144) documents the pre-fix request as 102400 bytes (100 KiB) and the device limit as 101376 bytes (99 KiB) — a 1 KiB overshoot. The StageCount<1> + non-pingpong combination cuts mainloop SMEM by far more than 1 KiB (each change alone would suffice in theory; combining them provides comfortable headroom). Exact post-fix SMEM is not documented in the issue and will only be measurable from a successful compile; the goal is simply "fits", not "maximally compact".
 
 **Risk:** Lower throughput vs pingpong (no pipeline overlap on the mainloop). Any working kernel is better than 0 tokens.
 
@@ -245,7 +249,7 @@ using StageCountType = cutlass::gemm::collective::StageCount<2>;
 // Keep KernelPtrArrayTmaWarpSpecializedPingpong
 ```
 
-SMEM ~98 KB — cuts it very close to 101 KB, but may fit.
+Expected SMEM: very close to the 99 KiB limit. The pre-fix overshoot is only 1 KiB (per [CUTLASS#3144](https://github.com/NVIDIA/cutlass/issues/3144)), so halving stages alone might free just enough — but with Pingpong's dual warp-group duplication still in place, the margin is thin and this fallback may fail to compile with a "SMEM over budget" error.
 
 #### Approach 2c (FALLBACK if 2a and 2b fail): Port TRT-LLM #12141 tile shape
 
@@ -307,7 +311,7 @@ FlashInfer 0.6.7.post3 (in the current `scitrera/dgx-spark-sglang:0.5.10`) alrea
 
 ### Primary (our fix path)
 - [NVIDIA/TensorRT-LLM#12141](https://github.com/NVIDIA/TensorRT-LLM/pull/12141) — merged 2026-03-18. **Our reference approach.** Makes `CtaShape128x128x128B` the default tile in `fp4_gemm_template.h` for SM120+ and lets the autotuner profile all candidates. Solves the identical SM121 shared memory overflow in TRT-LLM. Proves the problem has a tractable CUTLASS-level solution.
-- [NVIDIA/cutlass#3144](https://github.com/NVIDIA/cutlass/issues/3144) — open since 2026-04-02. Root cause documented precisely: `StageCountAutoCarveout` computes against the compile-time SM-family maximum (228 KB) rather than the actual device SMEM (101 KB on SM121). Exact failure: "102400 bytes required but device supports 101376" — 1 KB over.
+- [NVIDIA/cutlass#3144](https://github.com/NVIDIA/cutlass/issues/3144) — open since 2026-04-02. **Authoritative root cause + SMEM numbers for this PRD.** NVIDIA maintainer @depaulmillz correction: SM100 (B200) has 228 KiB SMEM/block, but SM120 (RTX 5090, RTX PRO 6000 Blackwell) AND SM121 (DGX Spark GB10) both only have **99 KiB**. Exact failure quoted in the issue: "102400 bytes required but device supports 101376" — the kernel requests 100 KiB and the device allows 99 KiB, exactly 1 KiB over. The bug therefore affects every SM12x Blackwell device, not just DGX Spark; upstream SGLang's NVFP4 MoE path works on B200 (SM100) only.
 - [sgl-project/sglang#20012](https://github.com/sgl-project/sglang/pull/20012) — merged 2026-03-07. Reland of NVFP4 kernel JIT migration. Moved `nvfp4_blockwise_moe.cu` from `sgl-kernel/csrc/moe/` to `python/sglang/jit_kernel/csrc/moe/nvfp4_blockwise_moe.cuh`. This is why the v0.5.10 patch target path differs from the original PRD.
 
 ### Crash B related (already fixed upstream)
