@@ -86,6 +86,18 @@ PODMAN_CONNECTION="${BUILD_SM121_PODMAN_CONNECTION:-${REMOTE_HOST##*@}}"
 PODMAN_CONNECTION="${PODMAN_CONNECTION%%.*}"   # "spark1.local" -> "spark1"
 PODMAN_SSH_IDENTITY="${BUILD_SM121_SSH_IDENTITY:-${HOME}/.ssh/id_podman}"
 
+# Build-time parallelism. scitrera's Dockerfile.sglang-nightly defaults to
+# ARG BUILD_JOBS=2 which uses only 2 of the DGX Spark GB10's 20 ARM cores
+# (10%). MAX_JOBS is set from this ARG and propagates to sgl-kernel,
+# flashinfer, and any Python extension build that honors it.
+#
+# GB10 topology: 10 Cortex-X925 + 10 Cortex-A725, 128 GB unified memory.
+# CUTLASS template compiles can peak at ~5 GB per TU, so 16 parallel jobs
+# leave ~33 GB headroom over the 80 GB worst-case footprint — comfortable.
+# Push to 20 only if you've verified no other workload is running on the
+# build host (else OOM-kill risk on the heavy CUTLASS translation units).
+BUILD_JOBS="${BUILD_SM121_BUILD_JOBS:-16}"
+
 PUSH_IMAGE=1
 
 # ============================================================================
