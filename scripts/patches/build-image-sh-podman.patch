@@ -1,0 +1,33 @@
+Rewrite `docker buildx build` → `docker build` in container-build/build-image.sh
+so the script runs under podman (via alias docker=podman) without needing the
+Docker buildx plugin.
+
+Context:
+  scitrera's build-image.sh invokes `docker buildx build ...`. podman does not
+  have a `buildx` subcommand — BuildKit features are built into `podman build`
+  natively (including `RUN --mount=type=cache,...` which Dockerfile.sglang-nightly
+  relies on heavily). All the flags build-image.sh actually passes
+  (-f, -t, --build-arg, --label, --target, --no-cache, context path) are valid
+  for plain `docker build` as well, so dropping `buildx` is a pure no-op on
+  Docker and a compatibility fix on podman.
+
+  The `RUN --mount=type=cache` instructions in Dockerfile.sglang-nightly were
+  verified to work on podman 5.4.2 / buildah 1.39.3 locally — the uv-cache and
+  ccache mounts will persist across rebuilds in podman's cache store the same
+  way BuildKit handles them in Docker.
+
+Apply to: container-build/build-image.sh in the local clone of
+scitrera/cuda-containers. Applied by scripts/build_sm121_image.sh alongside
+the Dockerfile patch and the sgl-kernel source patch.
+
+--- a/container-build/build-image.sh
++++ b/container-build/build-image.sh
+@@ -259,7 +259,7 @@
+ fi
+
+ # Build the docker command
+-BUILD_CMD=(docker buildx build)
++BUILD_CMD=(docker build)
+
+ # Add --no-cache if requested
+ $NO_CACHE && BUILD_CMD+=(--no-cache)
