@@ -612,20 +612,39 @@ sglang_model_profiles:
     json_model_override_args: '{"rope_scaling":{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768,"rope_theta":1000000.0}}'
     quantization: "modelopt_fp4"
     trust_remote_code: true
-    # Same MoE kernel issues as other NVFP4 models on SM121:
-    # triton MoE → cutlass_moe_fp4 crashes (nvfp4_blockwise_moe.cuh device-side assert).
-    # flashinfer_cutlass MoE is the working backend.
-    moe_runner_backend: "triton"
+    # Backend selection = v0.5.10 TP=4 EP=4 matrix winner (Test 17).
+    # See TESTLOGS/sglang_nn4_tp4_ep4/qwen-3-235b-a22b-nvfp4/
+    #     TESTLOG_nv580.142_sglang-0.5.10_qwen3-235b-a22b-nvfp4_4n.md
+    # Result: 11.28 / 34.60 / 42.70 tok/s (n=1 / n=4 peak / n=8 peak), fully
+    # stable at all three concurrency levels. Only 4 of 36 matrix configs
+    # pass — all share this MoE+FP4 combo; attention backend is orthogonal.
+    # Why these exact values (NOT to be "optimized" without a new matrix run):
+    #   moe_runner_backend=flashinfer_cutlass — triton and cutlass MoE runners
+    #     both fall through to nvfp4_blockwise_moe.cuh on NVFP4, which hits
+    #     a device-side assert under CUDA graphs and returns 0 tokens under
+    #     eager on SM121 (Tests 1–6, 25–30 all fail).
+    #   fp4_gemm_backend=flashinfer_cutlass — flashinfer_cudnn FP4 GEMM is
+    #     completely broken in v0.5.10 on SM121 (100% startup_crash across
+    #     all 18 fi_cudnn tests in this matrix; same regression as GLM-4.7
+    #     and Qwen3.5-397B).
+    #   disable_cuda_graph=true (eager) — Test 17 peaks ~3% higher at n=4/n=8
+    #     than the fixed-BS CUDA graph variant (Test 16), at the cost of
+    #     worse n=1 TTFT (~11s vs ~1s). Switch to false if first-request
+    #     latency matters more than peak concurrent throughput.
+    #   disable_piecewise_cuda_graph=true — piecewise graphs crash at startup
+    #     in this kernel family on SM121 (Tests 15, 18).
+    #   attention_backend=triton — flashinfer attn also works (Tests 13/14),
+    #     but triton attn gave ~3% better peak at n=4/n=8 in the winner row.
+    moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
     # ~18 GB/GPU weights → ~100 GB free → 0.80 leaves plenty for KV + JIT.
     # 128 experts (vs 512 for Qwen3.5) → much less JIT memory needed.
     mem_fraction_static: "0.80"
-    attention_backend: "flashinfer"
+    attention_backend: "triton"
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 4
-    disable_piecewise_cuda_graph: false
-    # Start with eager mode (safe). Enable CUDA graphs after confirming stability.
-    disable_cuda_graph: false
+    disable_piecewise_cuda_graph: true
+    disable_cuda_graph: true
     cuda_graph_max_bs: 8
     pp_async_batch_depth: 0
     disable_deep_gemm: true
