@@ -17,41 +17,41 @@
 # Workflow (all steps run on the x86 control host)
 # -------------------------------------------------
 # 1. Preflight: verify patch files + podman + git + patch are available.
-# 2. Ensure a registered podman connection to the arm64 build host (spark1)
+# 2. Ensure a registered podman connection to the arm64 build host (spark4)
 #    that uses a dedicated unencrypted SSH key (Podman's Go SSH client cannot
 #    use ssh-agent or encrypted keys). Create it on demand if missing.
 # 3. Clone or update scitrera/cuda-containers locally on x86. Switch to a
 #    local 'sm121' branch, hard-reset to origin/main (idempotent), drop in
 #    the sgl-kernel patch + Dockerfile patch + recipe file.
 # 4. Invoke `podman --connection <name> build` — the build context is
-#    streamed from x86 to spark1 over the podman socket, the actual build
+#    streamed from x86 to spark4 over the podman socket, the actual build
 #    runs natively on arm64 (no QEMU), and the resulting image is stored
-#    in spark1's local podman image store. The x86 host never writes
-#    credentials to spark1.
-# 5. `podman image scp` to pull the built image from spark1 back to x86.
+#    in spark4's local podman image store. The x86 host never writes
+#    credentials to spark4.
+# 5. `podman image scp` to pull the built image from spark4 back to x86.
 # 6. `podman push` from x86 using the x86 host's pre-existing registry
-#    credentials. spark1 never has Docker Hub credentials.
+#    credentials. spark4 never has Docker Hub credentials.
 #
 # Prerequisites on the x86 control host
 # --------------------------------------
 # - podman (`apt install podman`)
 # - An unencrypted SSH key for podman: generate with
 #     ssh-keygen -t ed25519 -f ~/.ssh/id_podman -N ""
-#     ssh-copy-id -i ~/.ssh/id_podman root@spark1
+#     ssh-copy-id -i ~/.ssh/id_podman root@spark4
 #   The key MUST be unencrypted — podman's Go SSH client does not support
 #   ssh-agent or encrypted keys. Override via BUILD_SM121_SSH_IDENTITY.
 # - `podman login docker.io -u xomoxcc` already done on the x86 host.
 # - ~10 GB free disk for the image after scp.
 # - git, patch (cuda-containers clone + patch apply happens on x86).
 #
-# Prerequisites on spark1 (the build host)
+# Prerequisites on spark4 (the build host)
 # ----------------------------------------
 # - podman (`apt install podman`)
 # - podman.socket enabled as root:
 #     systemctl enable --now podman.socket
 #   This exposes /run/podman/podman.sock which the x86 client connects to.
 # - ~50 GB free disk (sgl-kernel layers + final image in local image store).
-# - NO credentials, NO clone, NO patches, NO local scripts. spark1 is a
+# - NO credentials, NO clone, NO patches, NO local scripts. spark4 is a
 #   dumb remote build runner.
 #
 
@@ -80,10 +80,10 @@ IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.10-sm121"
 # Remote build host (spark4, arm64). Uses a registered podman connection
 # with a dedicated unencrypted SSH key. The connection name is derived from
 # this value by stripping the user@ prefix so that `podman system connection
-# list` shows a clean "spark1" entry.
+# list` shows a clean "spark4" entry.
 REMOTE_HOST="${BUILD_SM121_REMOTE_HOST:-root@spark4.local}"
 PODMAN_CONNECTION="${BUILD_SM121_PODMAN_CONNECTION:-${REMOTE_HOST##*@}}"
-PODMAN_CONNECTION="${PODMAN_CONNECTION%%.*}"   # "spark1.local" -> "spark1"
+PODMAN_CONNECTION="${PODMAN_CONNECTION%%.*}"   # "spark4.local" -> "spark4"
 PODMAN_SSH_IDENTITY="${BUILD_SM121_SSH_IDENTITY:-${HOME}/.ssh/id_podman}"
 
 # Build-time parallelism. scitrera's Dockerfile.sglang-nightly defaults to
@@ -112,7 +112,7 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") [--no-push] [--help]
 
-Builds ${IMAGE_TAG} on spark1 via remote podman socket, copies the result
+Builds ${IMAGE_TAG} on spark4 via remote podman socket, copies the result
 back to this host, and pushes it from here.
 
 Options:
@@ -120,7 +120,7 @@ Options:
   --help       Show this help.
 
 Environment overrides:
-  BUILD_SM121_REMOTE_HOST        user@host for spark1 SSH.
+  BUILD_SM121_REMOTE_HOST        user@host for spark4 SSH.
                                  Default: ${REMOTE_HOST}
   BUILD_SM121_PODMAN_CONNECTION  Registered podman connection name.
                                  Default: derived from REMOTE_HOST (${PODMAN_CONNECTION})
@@ -135,7 +135,7 @@ Environment overrides:
                                  memory headroom is available.
                                  Default: ${BUILD_JOBS}
 
-The entire script runs on the x86 control host. spark1 is used purely as
+The entire script runs on the x86 control host. spark4 is used purely as
 a remote podman build runner — it holds no credentials, no clone, and no
 state between runs (except the local podman image store and layer cache,
 which persist and accelerate rebuilds).
@@ -206,7 +206,7 @@ ensure_podman_connection() {
     else
         echo "Registering new podman connection..."
 
-        # Resolve the remote podman socket path. For root on spark1 this is
+        # Resolve the remote podman socket path. For root on spark4 this is
         # /run/podman/podman.sock; for rootless it would be
         # /run/user/<uid>/podman/podman.sock. We always SSH as root to the
         # cluster (per project convention), so root-socket is the default.
@@ -377,8 +377,8 @@ run_build() {
     echo "  BUILD_JOBS           = ${BUILD_JOBS} (overrides Dockerfile ARG default of 2)"
 
     # The build context is container-build/ (contains Dockerfile + patches/
-    # subdir). Podman streams it to spark1 over the socket; the build runs
-    # natively on arm64 and the result lands in spark1's local image store.
+    # subdir). Podman streams it to spark4 over the socket; the build runs
+    # natively on arm64 and the result lands in spark4's local image store.
     podman --connection "${PODMAN_CONNECTION}" build \
         -f "container-build/${R_DOCKERFILE}" \
         --target "${R_TARGET}" \
