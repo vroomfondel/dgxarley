@@ -680,7 +680,7 @@ sglang_model_profiles:
     #   reduction on TP=4 NVFP4 to 3/1/4 if verification latency dominates).
     speculative_enabled: true
     speculative_algo: "EAGLE3"
-    speculative_draft_model_path: "lmsys/Qwen3-235B-A22B-EAGLE3"
+    speculative_draft_model_path: "nvidia/Qwen3-235B-A22B-Eagle3"
     # Force draft load without quantization. Without this override SGLang
     # inherits quantization=modelopt_fp4 from the target, routes the draft
     # through _load_modelopt_base_model → AutoModelForCausalLM.from_pretrained,
@@ -691,7 +691,7 @@ sglang_model_profiles:
     speculative_draft_model_quantization: "unquant"
     speculative_num_steps: 5
     speculative_eagle_topk: 8
-    speculative_num_draft_tokens: 32
+    speculative_num_draft_tokens: 16
   "zai-org/GLM-4.7-FP8":
     info_url: "https://huggingface.co/zai-org/GLM-4.7-FP8"
     # 358B/~58B-active MoE (160 experts, top-8, sigmoid routing), FP8 quantized (~358 GB).

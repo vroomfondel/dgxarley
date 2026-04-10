@@ -8,3 +8,5 @@ default_route_iface: "br0.124"
 clevis_luks_passphrase: "changeme"
 qsfp_ip: "10.10.10.4"
 k3s_node_ip: "192.168.124.104"
+
+wantspodman: true
