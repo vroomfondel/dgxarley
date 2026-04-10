@@ -552,6 +552,9 @@ fi
 if [ "$SGLANG_TRUST_REMOTE_CODE" = "true" ]; then
   args+=(--trust-remote-code)
 fi
+if [ -n "$SGLANG_JSON_MODEL_OVERRIDE_ARGS" ]; then
+  args+=(--json-model-override-args "$SGLANG_JSON_MODEL_OVERRIDE_ARGS")
+fi
 if [ -n "$SGLANG_MOE_RUNNER_BACKEND" ]; then
   args+=(--moe-runner-backend "$SGLANG_MOE_RUNNER_BACKEND")
 fi

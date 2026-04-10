@@ -596,7 +596,20 @@ sglang_model_profiles:
     # Recommended: TP=4 (model card), context up to 131K with YaRN.
     nccl_transport: "socket"
     tp_size: 4  # num_kv_heads=4 → TP=4 works (1 KV head/GPU)
-    context_length: 131072  # YaRN-extended from 32K native
+    # Qwen3 config.json ships with rope_scaling=null, rope_theta=1000000.0,
+    # max_position_embeddings=40960. To use the full 131K context, YaRN must
+    # be enabled explicitly via --json-model-override-args. Qwen3 model card
+    # recommends factor=4.0 with original_max_position_embeddings=32768
+    # → derived 131072. The ALLOW_OVERWRITE env var is auto-set by sglang.yml
+    # when json_model_override_args is non-empty (SGLang's _derive_context_length
+    # in v0.5.10+ runs BEFORE json overrides are applied → hard ValueError
+    # unless bypassed).
+    # rope_theta MUST be duplicated inside rope_scaling: SGLang's
+    # get_rope_config (hf_transformers_utils.py:162) builds rope_params from
+    # rope_scaling alone and indexes rope_params["rope_theta"] — KeyError
+    # otherwise, even though rope_theta exists at config top level.
+    context_length: 131072  # YaRN-extended, requires json_model_override_args below
+    json_model_override_args: '{"rope_scaling":{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768,"rope_theta":1000000.0}}'
     quantization: "modelopt_fp4"
     trust_remote_code: true
     # Same MoE kernel issues as other NVFP4 models on SM121:
@@ -608,7 +621,7 @@ sglang_model_profiles:
     # 128 experts (vs 512 for Qwen3.5) → much less JIT memory needed.
     mem_fraction_static: "0.80"
     attention_backend: "flashinfer"
-    fp4_gemm_backend: "flashinfer_cudnn"
+    fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 4
     disable_piecewise_cuda_graph: false
     # Start with eager mode (safe). Enable CUDA graphs after confirming stability.
@@ -722,6 +735,10 @@ sglang_reasoning_parser: "{{ sglang_model_profiles[sglang_model].reasoning_parse
 sglang_tool_call_parser: "{{ sglang_model_profiles[sglang_model].tool_call_parser | default('') }}"
 sglang_quantization: "{{ sglang_model_profiles[sglang_model].quantization | default('') }}"
 sglang_trust_remote_code: "{{ sglang_model_profiles[sglang_model].trust_remote_code | default(false) }}"
+# Raw JSON string passed to SGLang via --json-model-override-args. Used to
+# inject rope_scaling (YaRN) or other HF config overrides for models whose
+# shipped config.json lacks them. Empty string = flag omitted.
+sglang_json_model_override_args: "{{ sglang_model_profiles[sglang_model].json_model_override_args | default('') }}"
 sglang_moe_runner_backend: "{{ sglang_model_profiles[sglang_model].moe_runner_backend | default('') }}"
 # Load format: "auto" (default) or "sharded_state" (for pre-sharded models).
 # Use "sharded_state" after running sglang_shard Job to reduce peak GPU memory.
