@@ -2,7 +2,7 @@
 
 ## Problem
 
-All NVFP4 MoE models (GLM-4.7-NVFP4, MiniMax-M2.5-NVFP4, Qwen3.5-397B-NVFP4, Qwen3-235B-NVFP4) fail on DGX Spark (GB10 / SM121) with two distinct crash modes:
+NVFP4 MoE on DGX Spark (GB10 / SM121) has historically shown two distinct crash modes on SGLang. As of 2026-04-10, Crash B appears resolved upstream, Crash A remains. NVFP4 MoE models affected: GLM-4.7-NVFP4, MiniMax-M2.5-NVFP4, Qwen3.5-397B-NVFP4, Qwen3-235B-NVFP4.
 
 **Crash A — `triton` MoE runner (device-side assert):**
 ```
@@ -10,33 +10,40 @@ RuntimeError: Runtime check failed at nvfp4_blockwise_moe.cuh:78: CUDA error: de
 ```
 Occurs during both CUDA graph capture AND eager inference. Root cause: shared memory overflow in CUTLASS grouped GEMM kernel.
 
-**Crash B — `flashinfer_cutlass` MoE runner (Xid 13 Illegal Instruction):**
+**Crash B — `flashinfer_cutlass` MoE runner (Xid 13 Illegal Instruction):** *(LIKELY FIXED in FlashInfer 0.6.7.post3, see update below)*
 ```
 NVRM: Xid (PCI:000f:01:00): 13, Graphics SM Warp Exception: Illegal Instruction Parameter
 ESR 0x1c81fb60:0x1174  (consistent across all crashes)
 Fatal Python error: Aborted
   File "flashinfer/fused_moe/core.py", line 490 in cutlass_fused_moe
 ```
-Occurs during inference on v0.5.10 only. The same config worked on v0.5.10rc0. Root cause: FlashInfer CUTLASS MoE kernel regression between rc0 and 0.5.10.
+Occurred on v0.5.10 early builds. Original root cause suspected: FlashInfer CUTLASS MoE kernel regression between rc0 and 0.5.10. **Status update (2026-04-10):** The current `scitrera/dgx-spark-sglang:0.5.10` image ships FlashInfer `0.6.7.post3`, which includes two upstream fixes that address the SM121 Xid 13 symptom:
+- [flashinfer#2798](https://github.com/flashinfer-ai/flashinfer/pull/2798) (merged 2026-03-19): CUTLASS 4.2.1 → 4.4.2 upgrade — fixes TMA descriptor bug on `tma_warp_specialized_generic_moe_gemm_kernelLauncher<Sm120, fp4>` (directly addresses [flashinfer#2776](https://github.com/flashinfer-ai/flashinfer/issues/2776) "NVFP4 MoE crash on GB10 during CUDA graph capture").
+- [flashinfer#2913](https://github.com/flashinfer-ai/flashinfer/pull/2913) (merged 2026-04-01): GDC (Grid Dependency Control) flag fix for CUTLASS fused MoE kernel — fixes `cudaErrorIllegalInstruction` race on SM90/SM100/SM120/SM121 where host-side PDL activation raced against device-side GDC barrier no-ops.
 
-**Combined impact:** No NVFP4 MoE runner works on v0.5.10 for SM121. The only stable configuration known is v0.5.10**rc0** with `flashinfer_cutlass` MoE + `triton` attn + `flashinfer_cudnn` fp4 + eager (GLM-4.7 rc0 Test 23: 8.06/21.94/30.01 tok/s).
+**Verification:** Qwen3-235B-A22B-NVFP4 TP=4 EP=4 on v0.5.10 has 4 stable configurations with `flashinfer_cutlass` MoE + `flashinfer_cutlass` fp4_gemm (tests 13, 14, 16, 17 in `TESTLOGS/sglang_nn4_tp4_ep4/qwen-3-235b-a22b-nvfp4/TESTLOG_nv580.142_sglang-0.5.10_qwen3-235b-a22b-nvfp4_4n.md`), peaking at 42.70 tok/s @ n=8 (test 17). No Xid 13 observed. GLM-4.7 test 14 on v0.5.10 did show a single `bench_crash` during n=1 inference, but this is not the original systematic Xid 13 pattern — likely a separate model-specific issue.
+
+**Combined impact:** `flashinfer_cutlass` MoE runner is now the **known-good** NVFP4 MoE path on v0.5.10 for SM121 (model-dependent). The `cutlass_moe_fp4` path (reached via `moe_runner_backend=triton` or `cutlass`) remains broken by Crash A and has no upstream fix.
 
 ## Root Cause Analysis
 
 ### Crash A: shared memory overflow in `nvfp4_blockwise_moe.cuh`
 
-The SM120 kernel path in `nvfp4_blockwise_moe.cuh` uses:
+**File location (v0.5.10):** `python/sglang/jit_kernel/csrc/moe/nvfp4_blockwise_moe.cuh` inside the SGLang main package (moved from `sgl-kernel/csrc/moe/` via [#20012](https://github.com/sgl-project/sglang/pull/20012)). JIT-compiled via nvrtc at runtime.
+
+The `run_fp4_blockwise_scaled_group_mm_sm120()` kernel path uses:
 
 ```cpp
-// Line 290-293
 using ArchTag = cutlass::arch::Sm120;
 using ThreadBlockShape = Shape<_128, _128, _128>;
 using StageCountType = cutlass::gemm::collective::StageCountAuto;
-// KernelSchedule:
-cutlass::gemm::KernelPtrArrayTmaWarpSpecializedPingpong  // ← double-buffered
+// In the CollectiveBuilder:
+cutlass::gemm::collective::StageCountAutoCarveout<
+    static_cast<int>(sizeof(typename CollectiveEpilogue::SharedStorage))>,
+cutlass::gemm::KernelPtrArrayTmaWarpSpecializedPingpong>::CollectiveOp;
 ```
 
-`StageCountAuto` + `Pingpong` schedule double-buffers the tiles, requiring ~147 KB shared memory.
+`StageCountAutoCarveout` + `Pingpong` schedule double-buffers the tiles. It computes the stage count against the compile-time CUTLASS SM-family maximum (228 KB for SM12x), producing ~147 KB of requested shared memory. See [CUTLASS#3144](https://github.com/NVIDIA/cutlass/issues/3144) for the full root cause.
 
 | GPU | SM Version | Shared Memory per Block |
 |-----|-----------|------------------------|
@@ -44,20 +51,58 @@ cutlass::gemm::KernelPtrArrayTmaWarpSpecializedPingpong  // ← double-buffered
 | RTX 5090 (consumer) | SM120 | 228 KB |
 | **DGX Spark GB10** | **SM121** | **101 KB** |
 
-SM121 dispatches to the SM120 kernel (`sm_version >= 120`, line 809) but has 46 KB less shared memory than SM120 expects. Kernel launch triggers a device-side assert. All subsequent CUDA calls (including `cudaMallocAsync` at line 78) return `cudaErrorAssert` (sticky error).
+SM121 dispatches to the SM120 kernel (`sm_version >= 120`, the dispatch was relaxed from `== 120` to `>= 120` in the JIT reland) but has 46 KB less shared memory than CUTLASS's SM-family-max assumption. Kernel launch triggers a device-side assert. All subsequent CUDA calls (including the `cudaMallocAsync` near line 78) return `cudaErrorAssert` (sticky error).
 
-### Crash B: FlashInfer regression between rc0 and 0.5.10
+### Crash B: FlashInfer Xid 13 — likely resolved by FlashInfer 0.6.7.post3
+
+**Initial hypothesis (2026-04-08):** FlashInfer regression between rc0 and 0.5.10.
 
 Comparison of `scitrera/cuda-containers` recipes:
 
 | Aspect | rc0 recipe | 0.5.10 recipe |
 |--------|-----------|---------------|
 | Base image | `nvcr.io/nvidia/pytorch:26.02-py3` | `scitrera/dgx-spark-pytorch-dev:2.11.0-v1-cu132` |
-| FlashInfer version | unset (bundled with SGLang) | `0.6.7.post3` (explicit pin) |
+| FlashInfer version | unset (bundled with SGLang, likely 0.6.5/0.6.6) | `0.6.7.post3` (explicit pin) |
 | sgl-kernel ref | v0.5.10rc0 | v0.5.10 |
 | Transformers | unset | `5.5.0` |
 
-The `cutlass_fused_moe` kernel in `flashinfer/fused_moe/core.py:490` differs between the FlashInfer bundled with rc0 and 0.6.7.post3 used in 0.5.10. The 0.6.7.post3 version triggers Xid 13 Illegal Instruction on SM121 — a sgl-kernel / FlashInfer binary regression, NOT a Python-level change.
+**Revised (2026-04-10):** FlashInfer 0.6.7 (released 2026-03-25) introduced two SM121-targeted fixes that were NOT in 0.6.5/0.6.6 which rc0 likely bundled:
+1. **CUTLASS 4.4.2 bump** ([flashinfer#2798](https://github.com/flashinfer-ai/flashinfer/pull/2798)) — fixes TMA descriptor OOB address generation mode that caused non-deterministic crashes in `tma_warp_specialized_generic_moe_gemm_kernelLauncher<Sm120, fp4>`. Directly addresses [flashinfer#2776](https://github.com/flashinfer-ai/flashinfer/issues/2776).
+2. **GDC flag fix** ([flashinfer#2913](https://github.com/flashinfer-ai/flashinfer/pull/2913), in 0.6.7.post1+) — fixes `cudaErrorIllegalInstruction` on SM90/SM100/SM120/SM121 caused by host activating PDL while device GDC barriers were no-ops → race condition → Xid 13.
+
+Both fixes are present in `0.6.7.post3`, the version shipped in `scitrera/dgx-spark-sglang:0.5.10`. Qwen3-235B-A22B-NVFP4 on v0.5.10 runs stably with `flashinfer_cutlass` MoE (4 of 36 configs STABLE, test 17: 42.70 tok/s @ n=8). The original "rc0 → 0.5.10 regression" theory was based on GLM-4.7 data only — Qwen3-235B never saw Xid 13 on v0.5.10.
+
+**Conclusion:** Crash B is not a reproducible blocker on the current 0.5.10 image. The PRD's original "no NVFP4 MoE works on v0.5.10" is superseded by the Qwen3-235B test results. GLM-4.7 has a separate v0.5.10 regression (see Crash C below), not Crash B.
+
+### Crash C: `flashinfer_cudnn` fp4_gemm fully broken in v0.5.10
+
+**Symptom:** Any test with `fp4_gemm_backend=flashinfer_cudnn` fails on SM121 in v0.5.10:
+- **CUDA graph variants:** 100% startup_crash during graph capture
+- **Eager variants:** server stays alive but inference returns 0 tokens (infer_error)
+
+**Coverage of the failure:**
+| Model | Version | `fi_cudnn` tests | Outcome |
+|-------|---------|------------------|---------|
+| Qwen3-235B-A22B-NVFP4 | v0.5.10 | 18/18 | all startup_crash (tests 7–12, 19–24, 31–36) |
+| GLM-4.7-NVFP4 | v0.5.10 | tests 20, 23 | infer_error (0 tokens) — rc0 WINNER (test 23: 8.06/21.94/30.01 tok/s) now produces 0 output |
+| Qwen3.5-397B-A17B-NVFP4 | v0.5.10 | confirmed | same pattern |
+
+**Regression vs rc0:** The GLM-4.7 rc0 winner (test 23: `fi_cutlass` MoE + `triton` attn + **`fi_cudnn` fp4** + eager → 8.06/21.94/30.01 tok/s) was the single known-stable n=8 config for GLM-4.7. On v0.5.10 this config produces 0 tokens. Both GLM-4.7 test 20 and test 23 use `fi_cudnn` fp4_gemm — confirming the regression is isolated to the `flashinfer_cudnn` FP4 GEMM backend, not attention or MoE runner.
+
+**Root cause:** Not yet isolated. The FlashInfer `cudnn_fused_moe` / cuDNN FP4 GEMM path in 0.6.7.post3 differs from 0.6.5/0.6.6; possibly an interaction with CUDA 13 / cuDNN 9.x on SM121. Unlike Crash B, no upstream fix is identified yet.
+
+**Workaround:** Use `fp4_gemm_backend=flashinfer_cutlass` (the Qwen3-235B winning path). Accept that GLM-4.7 loses its rc0 baseline and must either (a) run on the degraded v0.5.10 `fi_cutlass` fp4 path (test 17: partial stable to n=4, 8.4/20.8 tok/s) or (b) stay on v0.5.10rc0 until the cuDNN regression is fixed.
+
+### Pattern 4: Piecewise CUDA graphs crash the `fi_cutlass` MoE family
+
+Within the working `fi_cutlass` MoE + `fi_cutlass` fp4 family on SM121, the piecewise CUDA graph variants consistently crash at startup while fixed-BS and eager variants run:
+
+| Model | Tests (piecewise ON) | Outcome |
+|-------|---------------------|---------|
+| Qwen3-235B-A22B-NVFP4 | 15, 18 | startup_crash |
+| Qwen3-235B-A22B-NVFP4 | 13, 14, 16, 17 (non-piecewise) | STABLE |
+
+**Implication:** Piecewise graph capture (`disable_piecewise_cuda_graph: false`) is incompatible with the SM121 FlashInfer CUTLASS MoE path. Must set `disable_piecewise_cuda_graph: true` (fixed-BS graphs) or `disable_cuda_graph: true` (eager).
 
 ### Previous investigations (ruled out)
 
@@ -88,116 +133,125 @@ This means `lmsysorg/sglang:spark` would **crash on SM121** if you tried to run 
 
 The v0.5.10 code change from `sm_version == 120` to `sm_version >= 120` was the SGLang team's attempt to enable SM121 — it "activates" the code path but fails at runtime because of the 46 KB shared memory shortfall. Copying the v0.5.4 `.cu` would regress us to `Unsupported SM version` crashes — worse than what we have now.
 
-## Known-good baseline
+## Known-good baselines
 
-**v0.5.10rc0** with `flashinfer_cutlass` MoE + `triton` attn + `flashinfer_cudnn` fp4 + eager (no CUDA graphs):
-- GLM-4.7-NVFP4 TP=4 EP=4: **8.06 / 21.94 / 30.01 tok/s** at n=1/n=4/n=8 (rc0 test #23)
-- Stable across all concurrency levels
+**Primary (as of 2026-04-10): v0.5.10 with `flashinfer_cutlass` MoE + `flashinfer_cutlass` fp4_gemm, non-piecewise CUDA graphs or eager.**
 
-Any change away from this baseline (newer SGLang, newer FlashInfer, different MoE runner, different fp4_gemm backend) breaks NVFP4 MoE on SM121.
+- **Qwen3-235B-A22B-NVFP4** TP=4 EP=4 (test 17 winner): 11.28 / 34.60 / **42.70 tok/s** at n=1/n=4/n=8, fully stable. Test 16 (fixed-BS CUDA graphs): 12.54 / 30.40 / 41.36 tok/s, fully stable with lower n=1 TTFT.
+- Image: `scitrera/dgx-spark-sglang:0.5.10` (FlashInfer 0.6.7.post3 ships both Crash B fixes).
+- Requires `disable_piecewise_cuda_graph: true` (Pattern 4).
 
-**Why does rc0 work?** The rc0 `flashinfer_cutlass` MoE runner routes through a FlashInfer kernel path (`flashinfer/fused_moe/core.py:cutlass_fused_moe`) that either:
-1. Does not invoke the problematic `nvfp4_blockwise_moe.cu` grouped GEMM (uses a different CUTLASS kernel with smaller tiles), OR
-2. Uses a FlashInfer version (likely 0.6.5 or 0.6.6) that handles SM121 shared memory differently
+**Legacy baseline (retained for GLM-4.7 only): v0.5.10rc0** with `flashinfer_cutlass` MoE + `triton` attn + `flashinfer_cudnn` fp4 + eager.
+- GLM-4.7-NVFP4 TP=4 EP=4: 8.06 / 21.94 / 30.01 tok/s (rc0 test #23).
+- On v0.5.10 this config regresses to 0 tokens (see Crash C). GLM-4.7 has no fully-stable n=8 config on v0.5.10.
 
-The rc0 → 0.5.10 FlashInfer upgrade (to 0.6.7.post3) introduced either a new kernel dispatch or a regression that triggers the Xid 13 Illegal Instruction on SM121.
+**Why did rc0 work for GLM-4.7?** The rc0 bundled FlashInfer (likely 0.6.5 or 0.6.6) predates both the CUTLASS 4.4.2 bump (#2798) and the GDC fix (#2913), but also predates the cuDNN FP4 GEMM regression (Crash C). rc0 was the last image where `flashinfer_cudnn` FP4 GEMM worked end-to-end on SM121 for GLM-4.7. On v0.5.10 that path broke for cuDNN, while `flashinfer_cutlass` fp4_gemm improved (Qwen3-235B now stable). Net: the model-specific winner shifted.
+
+## Target: the `cutlass_moe_fp4` codepath
+
+Crash B is (likely) gone and the `flashinfer_cutlass` MoE runner is production-viable for Qwen3-235B. The remaining unsolved problem is **Crash A**: the `cutlass_moe_fp4` codepath, reached via `moe_runner_backend=triton` (internal fallback to `cutlass_moe_fp4` for NVFP4 weights) and `moe_runner_backend=cutlass` (direct).
+
+**Why bother fixing this path at all?**
+1. Qwen3-235B v0.5.10 Tests 1–12 (triton MoE) and 25–36 (cutlass MoE) are all **startup_crash** or **infer_error** on the broken `nvfp4_blockwise_moe.cuh:78` path. That's 24 of 36 total configs permanently blocked.
+2. The `triton` MoE runner path tends to produce more competitive n=1 throughput on SM120 when working (TRT-LLM's benchmark results). Whether that's true on SM121 is unknown because we've never seen it run.
+3. Piecewise CUDA graphs (Pattern 4) may work on the `cutlass_moe_fp4` path (different kernel, different static_assert surface).
+4. MoE Triton kernel tuning (`sglang_tune_moe.sh`) only benefits models that use the Triton MoE runner. Models using `flashinfer_cutlass` derive zero benefit from tuned `E=...,N=...,device_name=NVIDIA_GB10.json` configs — the tuning work is wasted unless the Triton path is reachable.
 
 ## Implementation Options
 
-### Option 1: Pin FlashInfer to rc0 version (fastest, RECOMMENDED)
+### Option 1: Pin FlashInfer to rc0 version — **OBSOLETE (2026-04-10)**
 
-Determine which FlashInfer version rc0 bundled (likely 0.6.5 or 0.6.6) and pin it explicitly in the 0.5.10 recipe. This restores the proven-working `flashinfer_cutlass` MoE path on SM121.
+Original plan: pin FlashInfer back to the rc0-bundled version (likely 0.6.5/0.6.6) to recover the working `flashinfer_cutlass` MoE path.
 
-**Steps:**
-1. Run `docker run --rm scitrera/dgx-spark-sglang:0.5.10rc0 pip show flashinfer-python 2>/dev/null | grep Version`
-2. Fork `scitrera/cuda-containers`, edit `container-recipes/sglang-0.5.10.recipe`:
-   ```
-   FLASHINFER_VERSION=<rc0_version>
-   ```
-3. Build: `container-build/build.sh sglang 0.5.10-fi-pin`
-4. Update `sglang_image` in `roles/k8s_dgx/defaults/main.yml` to the new tag
+**Why obsolete:** FlashInfer `0.6.7.post3` (shipped in the current `scitrera/dgx-spark-sglang:0.5.10` image) already contains the two fixes that were expected to resolve Crash B: `#2798` (CUTLASS 4.4.2 TMA) and `#2913` (GDC flag race). Downgrading to 0.6.5/0.6.6 would **lose** these fixes rather than gain them. Qwen3-235B Test 17 on v0.5.10 (fi_cutlass MoE + fi_cutlass fp4 + eager → 42.70 tok/s @ n=8, fully stable) empirically confirms the path works on the current version.
 
-**Pros:** Minimal change. Restores rc0's stable baseline. No source code edits.
-**Cons:** Still only fixes `flashinfer_cutlass` MoE runner (Crash B). `triton` MoE runner (Crash A) remains broken. Locks out FlashInfer bug fixes.
+Option 1 is retained only as reference for the GLM-4.7 workaround ("stay on rc0" due to the independent Crash C `fi_cudnn` fp4 regression). It does not address Crash A.
 
-### Option 2: Modify sgl-kernel source before build (speculative)
+### Option 2: Modify sgl-kernel source before build — **PRIMARY PATH**
 
-Patch `sgl-kernel/csrc/moe/nvfp4_blockwise_moe.cu` (note: `.cu` in 0.5.10 as well, JIT happens via sgl_kernel's jit_kernel module) in `scitrera/cuda-containers` build to add a compile-time SM121-specific kernel path with reduced shared memory footprint. Speculative because:
+Patch the NVFP4 blockwise MoE kernel source in the SGLang clone during the `scitrera/cuda-containers` build to add an SM121-compatible kernel path with reduced shared memory footprint.
 
-1. Runtime `.cuh` patching failed with CUTLASS TMA static_asserts (see below)
-2. Compile-time patching has the same template constraints — same static_asserts will fire
-3. The valid tile/schedule combinations for CUTLASS Sm120 ArchTag with NVFP4 block-scaled ops within 101 KB shared memory are unknown
-4. Would require empirical iteration on a slow (30-60 min) sgl-kernel build loop
+**File location update (2026-04-10):** PR [#20012](https://github.com/sgl-project/sglang/pull/20012) ("Reland NVFP4 kernels to JIT", merged 2026-03-07) moved NVFP4 MoE kernels from `sgl-kernel/csrc/moe/nvfp4_blockwise_moe.cu` to a JIT-compiled template at **`python/sglang/jit_kernel/csrc/moe/nvfp4_blockwise_moe.cuh`** inside the main SGLang Python package. In v0.5.10, this is the authoritative source — the `.cu` file under `sgl-kernel/csrc/moe/` no longer exists. The kernel is JIT-compiled via nvrtc at runtime (see `python/sglang/jit_kernel/nvfp4.py`).
 
-**Recommendation: try Option 1 first.** If Option 1 works, Option 2 is unnecessary for the `flashinfer_cutlass` MoE codepath. Option 2 only makes sense if we need the `triton` MoE runner specifically, which has never worked on SM121 with any SGLang version.
+**Existence proof:** [TensorRT-LLM PR #12141](https://github.com/NVIDIA/TensorRT-LLM/pull/12141) (merged 2026-03-18) solved the identical SM121 shared memory overflow in TRT-LLM's `fp4_gemm_template.h` by making `CtaShape128x128x128B` the default tile and letting the autotuner profile all candidates. This proves the problem has a tractable solution within CUTLASS template constraints on SM121. TRT-LLM used a smaller tile (K=128 instead of K=256) + non-pingpong schedule. Our sgl-kernel equivalent is `StageCount<1>` + `KernelPtrArrayTmaWarpSpecialized` (non-pingpong) on the existing `Shape<_128, _128, _128>` tile.
+
+**Recommendation: Option 2 is the primary path.** Option 1 is obsolete. The target is the `cutlass_moe_fp4` codepath (Crash A), which has no upstream fix and is the only remaining NVFP4 MoE limitation on SM121 for the current 0.5.10 image.
 
 ## Implementation (Option 2)
 
 ### Target file
 
-`sgl-kernel/src/sgl-kernel/csrc/moe/nvfp4_blockwise_moe.cuh` in the SGLang source tree cloned during Docker build.
+**`python/sglang/jit_kernel/csrc/moe/nvfp4_blockwise_moe.cuh`** in the SGLang main-repo clone performed during the Docker build (NOT in sgl-kernel — that path was retired in PR #20012).
+
+Function to patch: `run_fp4_blockwise_scaled_group_mm_sm120()`. This is the dispatch target for `sm_version >= 120` (including SM121). Key lines:
+- `using StageCountType = cutlass::gemm::collective::StageCountAuto;` (followed by `StageCountAutoCarveout<sizeof(CollectiveEpilogue::SharedStorage)>` in the `CollectiveBuilder` template instantiation).
+- `cutlass::gemm::KernelPtrArrayTmaWarpSpecializedPingpong` — the double-buffered pingpong schedule.
 
 ### Patch location in build pipeline
 
-In `scitrera/cuda-containers/container-build/Dockerfile.sglang-nightly`, insert a `sed`/`python3` patch step **after** the sgl-kernel source is cloned and **before** `uv build --wheel` runs:
+In `scitrera/cuda-containers/container-build/Dockerfile.sglang-nightly`, insert a `COPY` + `RUN patch` step **after** the SGLang main-repo clone and **before** any pip/uv install that processes the Python package:
 
 ```dockerfile
-# Patch nvfp4_blockwise_moe.cuh for SM121 (GB10, 101 KB shared memory)
-# The default SM120 kernel path uses Pingpong schedule + Shape<_128,_128,_128>
-# which requires ~147 KB shared memory. SM121 only has 101 KB.
-# Fix: add SM121-specific kernel function with a schedule + tile combination
-# that fits in 101 KB.
-COPY patches/sgl-kernel-sm121.patch /tmp/
-RUN cd /data/sglang/sgl-kernel && \
+# Patch nvfp4_blockwise_moe.cuh for SM121 (GB10, 101 KB shared memory).
+# The default SM120 kernel path uses Pingpong schedule + StageCountAutoCarveout,
+# which sizes against the SM12x-family max (228 KB) — SM121 only has 101 KB.
+# Fix: StageCount<1> + non-pingpong schedule, cuts SMEM from ~147 KB to ~74 KB.
+# Equivalent to TensorRT-LLM PR #12141's approach.
+COPY patches/sgl-kernel-sm121.patch /tmp/sgl-kernel-sm121.patch
+RUN set -e; cd /data/sglang && \
+    patch --dry-run -p1 < /tmp/sgl-kernel-sm121.patch && \
     patch -p1 < /tmp/sgl-kernel-sm121.patch && \
-    grep -q 'run_fp4_blockwise_scaled_group_mm_sm121' src/sgl-kernel/csrc/moe/nvfp4_blockwise_moe.cuh
+    grep -q 'StageCount<1>' python/sglang/jit_kernel/csrc/moe/nvfp4_blockwise_moe.cuh && \
+    echo 'SM121 patch applied successfully'
 ```
 
-### Patch content: several candidate approaches
+The `--dry-run` before the real apply gives an early, clear failure on any drift between the upstream file and the shipped patch. `grep -q` confirms the change landed.
 
-#### Approach 2a: Reduce pipeline stages (keep tile shape, reduce double-buffering)
+### Patch content: primary approach + fallbacks
 
-Keep `Shape<_128, _128, _128>` but force `StageCount<1>` instead of `StageCountAuto`:
+#### Approach 2a (PRIMARY): `StageCount<1>` + `KernelPtrArrayTmaWarpSpecialized`
+
+Combines stage reduction and non-pingpong schedule in a single patch. This is the sgl-kernel equivalent of TRT-LLM PR #12141's approach (which uses `CtaShape128x128x128B` = smaller K-tile + single-stage in TRT-LLM's `fp4_gemm_template.h`).
 
 ```cpp
-// Current (SM120):
+// Current (SM120, in run_fp4_blockwise_scaled_group_mm_sm120):
 using StageCountType = cutlass::gemm::collective::StageCountAuto;
 // ... in CollectiveMainloop builder:
-cutlass::gemm::collective::StageCountAutoCarveout<...>,
+cutlass::gemm::collective::StageCountAutoCarveout<static_cast<int>(
+    sizeof(typename CollectiveEpilogue::SharedStorage))>,
+cutlass::gemm::KernelPtrArrayTmaWarpSpecializedPingpong>::CollectiveOp;
 
-// SM121 variant:
+// SM121 patch:
 using StageCountType = cutlass::gemm::collective::StageCount<1>;
 // ... in CollectiveMainloop builder:
-cutlass::gemm::collective::StageCount<1>,
+StageCountType,
+cutlass::gemm::KernelPtrArrayTmaWarpSpecialized>::CollectiveOp;
 ```
 
-Single-stage = no double buffering. Shared memory halves from ~147 KB to ~74 KB. Fits in 101 KB.
+- `StageCount<1>` — single-stage pipeline, no double buffering → cuts mainloop SMEM in half.
+- `KernelPtrArrayTmaWarpSpecialized` — non-pingpong grouped-GEMM schedule, smaller SMEM footprint than Pingpong.
+- `Shape<_128, _128, _128>` — **unchanged**. TMA descriptor validation rejects M/N reduction but tolerates stage + schedule changes.
 
-**Risk:** Lower throughput (no pipeline overlap). But: still faster than no inference at all.
+Expected total SMEM: ~74 KB (from ~147 KB). Fits in the 101 KB SM121 budget with ~27 KB headroom.
 
-#### Approach 2b: Switch to single-SM schedule (like SM100 path)
+**Risk:** Lower throughput vs pingpong (no pipeline overlap on the mainloop). Any working kernel is better than 0 tokens.
 
-The SM100 path uses `KernelPtrArrayTmaWarpSpecialized1SmNvf4Sm100`. Create an SM121 variant using the generic 1Sm schedule:
+#### Approach 2b (FALLBACK if 2a fails to compile): `StageCount<2>` + Pingpong
+
+If CUTLASS rejects the combination of `StageCount<1>` with the non-pingpong schedule (some collective builders have schedule/stage coupling constraints), try halving stages while keeping pingpong:
 
 ```cpp
-// Replace:
-cutlass::gemm::KernelPtrArrayTmaWarpSpecializedPingpong
-// With:
-cutlass::gemm::KernelPtrArrayTmaWarpSpecialized  // Non-pingpong variant
+using StageCountType = cutlass::gemm::collective::StageCount<2>;
+// Keep KernelPtrArrayTmaWarpSpecializedPingpong
 ```
 
-**Risk:** The generic `KernelPtrArrayTmaWarpSpecialized` (non-pingpong) may not exist as a named schedule for FP4 block-scaled kernels, or may have different API requirements.
+SMEM ~98 KB — cuts it very close to 101 KB, but may fit.
 
-#### Approach 2c: Combined — smaller tile + Sm100 schedule hybrid
+#### Approach 2c (FALLBACK if 2a and 2b fail): Port TRT-LLM #12141 tile shape
 
-Use `Shape<_128, _128, _64>` (reduce K from 128 to 64, not M/N). K is the accumulation dimension — reducing it doesn't affect TMA descriptor validation the same way as M/N reductions do.
+Mirror TRT-LLM PR #12141 more literally: force `CtaShape128x128x128B` (in CUTLASS template language this maps to the K-dimension reduction within the collective builder). Requires deeper inspection of whether sgl-kernel's `Shape<_128, _128, _128>` tile shape (`M=128, N=128, K=128`) matches TRT-LLM's `128x128x128B` semantics exactly.
 
-```cpp
-using ThreadBlockShape = Shape<_128, _128, _64>;
-// Keep Pingpong schedule unchanged
-```
-
-**Risk:** K=64 may violate CUTLASS FP4 granularity requirements (FP4 uses group_size=16 scales, K must be multiple of scale block).
+**Risk:** K=64 (if attempted) may violate CUTLASS FP4 granularity requirements (FP4 block-scaled uses group_size=16, K must be multiple of the scale block).
 
 ### Validation plan
 
@@ -213,54 +267,62 @@ If one approach fails to compile, try the next. Approach 2a (StageCount<1>) has 
 
 ### Docker build integration
 
-The patch file `sgl-kernel-sm121.patch` should be stored in `scitrera/cuda-containers/container-build/patches/` and referenced from the Dockerfile as shown above. Build with:
+The patch file `sgl-kernel-sm121.patch` is stored in `scitrera/cuda-containers/container-build/patches/` and referenced from a new Dockerfile variant as shown above. The actual build flow is automated by `scripts/build_sm121_image.sh` in this repo, which handles:
+- Local clone of `scitrera/cuda-containers` at `~/pythondev_workspace/cuda-containers`
+- Dispatch to an arm64 build host (spark1) via SSH (since the base image is aarch64)
+- Docker Hub push to `vroofoo/dgx-spark-sglang:0.5.10-sm121`
+
+See Phase 4 in `plans/squishy-napping-starlight.md` for the script structure. Manual invocation:
 
 ```bash
-cd scitrera/cuda-containers
-container-build/build.sh sglang 0.5.10-sm121
+bash /home/thiess/pythondev_workspace/dgxarley/scripts/build_sm121_image.sh
 ```
 
-Resulting image: `scitrera/dgx-spark-sglang:0.5.10-sm121`.
+Resulting image: `vroofoo/dgx-spark-sglang:0.5.10-sm121`.
 
-### Fix for Crash B (FlashInfer regression) — separate change
+### Crash B fix — already shipped upstream
 
-Independently of the sgl-kernel patch, `FLASHINFER_VERSION` in the 0.5.10 recipe should be downgraded from `0.6.7.post3` to whatever version rc0 bundled. This fixes `flashinfer_cutlass` MoE runner stability.
-
-Check rc0 bundled FlashInfer version:
-```bash
-docker run --rm scitrera/dgx-spark-sglang:0.5.10rc0 \
-  pip show flashinfer-python 2>/dev/null | grep Version
-```
-
-Then pin in `container-recipes/sglang-0.5.10.recipe`:
-```
-FLASHINFER_VERSION=<rc0_version>
-```
+FlashInfer 0.6.7.post3 (in the current `scitrera/dgx-spark-sglang:0.5.10`) already contains [#2798](https://github.com/flashinfer-ai/flashinfer/pull/2798) (CUTLASS 4.4.2 TMA descriptor fix) and [#2913](https://github.com/flashinfer-ai/flashinfer/pull/2913) (GDC flag race fix). No downgrade or separate recipe change is needed for Crash B. See "Crash B" in Root Cause Analysis above.
 
 ## Validation — Success Criteria
 
-- Crash A fixed: `triton` MoE runner (→ `cutlass_moe_fp4`) works on SM121 without device-side assert
-- Crash B fixed: `flashinfer_cutlass` MoE runner works on SM121 without Xid 13 Illegal Instruction
-- GLM-4.7-NVFP4 TP=4 EP=4 throughput ≥ rc0 baseline (8.06 / 21.94 / 30.01 tok/s)
-- All other NVFP4 MoE models (MiniMax-M2.5, Qwen3-235B, Qwen3.5-397B) also stable
-- CUDA graphs can be enabled (previously forced off with `disable_cuda_graph: true`)
+1. **Build succeeds:** `docker build` completes without CUTLASS `static_assert` failures. `grep 'StageCount<1>'` on the patched `nvfp4_blockwise_moe.cuh` in the image confirms the diff landed.
+2. **Crash A fixed:** Qwen3-235B-A22B-NVFP4 TP=4 EP=4 with `moe_runner_backend=triton` + `fp4_gemm_backend=flashinfer_cutlass` + eager comes up without `nvfp4_blockwise_moe.cuh:78` device-side assert (this is the reactivation of Qwen3-235B Test 2 which previously returned 0 tokens).
+3. **Inference produces tokens:** Single-request test generates >0 output tokens.
+4. **Throughput baseline:** `triton` MoE path matches or exceeds `flashinfer_cutlass` MoE baseline on Qwen3-235B (Test 17: 42.70 tok/s @ n=8). If it's significantly slower, the custom image is redundant — upstream `flashinfer_cutlass` is the better path.
+5. **Matrix reactivation:** Qwen3-235B Tests 1–6 and 25–30 (previously all `startup_crash` or `infer_error`) should have at least some stable results with the patched kernel.
+
+**Non-goals:** Piecewise CUDA graphs and `fi_cudnn` fp4_gemm are separate issues (Pattern 4, Crash C). Not in scope for this patch.
 
 ## Risks
 
-1. **CUTLASS template constraints are strict**: Smaller tiles may fail compilation with static_asserts. Multiple approaches need trying (2a, 2b, 2c).
-2. **StageCount<1> reduces throughput**: Single-stage pipeline is slower than pingpong. Expected ~20-40% slower per-kernel.
-3. **SGL-kernel build is long**: Full sgl-kernel compilation takes 30-60 minutes. Iteration cycle is slow.
-4. **Custom image maintenance**: The patched image must be rebuilt for every SGLang upgrade. Grep/sed anchors may break with upstream changes.
-5. **Upstream fix may land first**: SGLang [#11658](https://github.com/sgl-project/sglang/issues/11658) tracks SM121 support. An official fix may come before our custom build is ready.
-6. **Crash B (FlashInfer) may need separate fix**: Approach 2 only addresses Crash A. If `flashinfer_cutlass` MoE is also broken, both fixes are needed.
+1. **CUTLASS template constraints are strict:** `StageCount<1>` combined with `KernelPtrArrayTmaWarpSpecialized` may trip `static_assert` in the `CollectiveBuilder`. Fallback 2b (`StageCount<2>` + Pingpong) is the first alternative.
+2. **Single-stage throughput is lower:** `StageCount<1>` eliminates mainloop pipeline overlap. Expect 20–40% slower per-kernel than upstream SM120. Still, `triton` MoE may beat `flashinfer_cutlass` MoE on n=1 latency because it avoids the FlashInfer dispatch overhead.
+3. **JIT recompile per process:** The kernel is JIT-compiled via nvrtc at runtime (see `python/sglang/jit_kernel/nvfp4.py`). First-run startup is slower than an AOT-compiled kernel. The patched `.cuh` source is baked into the image, so the JIT picks it up automatically.
+4. **Image maintenance overhead:** The patched image must be rebuilt for every SGLang upgrade. Patch anchors (`StageCountAuto`, `KernelPtrArrayTmaWarpSpecializedPingpong`) may drift. Patch uses `patch -p1` with hard fail on mismatch, so drift is detected immediately.
+5. **Upstream fix may land first:** [sgl-project/sglang#11658](https://github.com/sgl-project/sglang/issues/11658) tracks SM121 support. [NVIDIA/cutlass#3144](https://github.com/NVIDIA/cutlass/issues/3144) is the CUTLASS-side root cause issue, open since 2026-04-02. If either resolves in the next 4 weeks, our custom build can be retired.
+6. **Exit criterion — the custom image might turn out unnecessary:** If the patched `triton` MoE path does not exceed the current `flashinfer_cutlass` baseline (42.70 tok/s @ n=8 on Qwen3-235B), the patch is proof-of-concept only. The Qwen3-235B cluster can continue using upstream 0.5.10 with `flashinfer_cutlass` MoE in production.
 
 ## References
 
-- [NVIDIA/cutlass#2800](https://github.com/NVIDIA/cutlass/issues/2800) — Python DSL arch restriction (not the root cause)
-- [SGLang SM121 tracking #11658](https://github.com/sgl-project/sglang/issues/11658) — upstream support status
-- [BTankut/dgx-spark-sglang-moe-configs](https://github.com/BTankut/dgx-spark-sglang-moe-configs) — GLM-4.7-**FP8** (not NVFP4) workaround for v0.5.4
-- [scitrera/cuda-containers](https://github.com/scitrera/cuda-containers) — our base image build recipes
-- [Forum: SM121 CUTLASS optimization](https://forums.developer.nvidia.com/t/sm121-cutlass-kernel-optimization-results-nvfp4-356-tflops-moe-grouped-gemm-on-dgx-spark/359960) — 356 TFLOPS NVFP4 **dense GEMM** benchmark only (not a working MoE inference pipeline)
-- [Forum: GLM-4.7-FP8 on 4x DGX Spark](https://forums.developer.nvidia.com/t/running-glm-4-7-fp8-355b-moe-on-4x-dgx-spark-with-sglang-eagle-speculative-decoding/359256) — MoE tuning + EAGLE (FP8 only)
-- `nvfp4_blockwise_moe.cu` source analysis — compared v0.5.4 (`lmsysorg/sglang:spark`) and v0.5.10 (`scitrera/dgx-spark-sglang:0.5.10`). **Both versions have the identical SM120 kernel** (same Pingpong schedule, same `Shape<_128,_128,_128>`), neither has an SM121-specific kernel path. Only difference: v0.5.4 dispatches `sm_version == 120` (SM121 → Unsupported), v0.5.10 dispatches `sm_version >= 120` (SM121 → crashes).
-- rc0 vs 0.5.10 recipe comparison from `scitrera/cuda-containers`
+### Primary (our fix path)
+- [NVIDIA/TensorRT-LLM#12141](https://github.com/NVIDIA/TensorRT-LLM/pull/12141) — merged 2026-03-18. **Our reference approach.** Makes `CtaShape128x128x128B` the default tile in `fp4_gemm_template.h` for SM120+ and lets the autotuner profile all candidates. Solves the identical SM121 shared memory overflow in TRT-LLM. Proves the problem has a tractable CUTLASS-level solution.
+- [NVIDIA/cutlass#3144](https://github.com/NVIDIA/cutlass/issues/3144) — open since 2026-04-02. Root cause documented precisely: `StageCountAutoCarveout` computes against the compile-time SM-family maximum (228 KB) rather than the actual device SMEM (101 KB on SM121). Exact failure: "102400 bytes required but device supports 101376" — 1 KB over.
+- [sgl-project/sglang#20012](https://github.com/sgl-project/sglang/pull/20012) — merged 2026-03-07. Reland of NVFP4 kernel JIT migration. Moved `nvfp4_blockwise_moe.cu` from `sgl-kernel/csrc/moe/` to `python/sglang/jit_kernel/csrc/moe/nvfp4_blockwise_moe.cuh`. This is why the v0.5.10 patch target path differs from the original PRD.
+
+### Crash B related (already fixed upstream)
+- [flashinfer-ai/flashinfer#2798](https://github.com/flashinfer-ai/flashinfer/pull/2798) — merged 2026-03-19. CUTLASS 4.2.1 → 4.4.2 upgrade. Fixes TMA descriptor OOB bug in `tma_warp_specialized_generic_moe_gemm_kernelLauncher<Sm120, fp4>` on DGX Spark SM121. Shipped in FlashInfer 0.6.7.
+- [flashinfer-ai/flashinfer#2913](https://github.com/flashinfer-ai/flashinfer/pull/2913) — merged 2026-04-01. GDC flag fix for CUTLASS fused MoE kernel. Fixes `cudaErrorIllegalInstruction` (Xid 13) race on SM90/100/120/121 where host PDL activation raced against device GDC barrier no-ops. Shipped in FlashInfer 0.6.7.post1+.
+- [flashinfer-ai/flashinfer#2776](https://github.com/flashinfer-ai/flashinfer/issues/2776) — the original "NVFP4 MoE models crash on GB10 (SM121) during CUDA graph capture" issue, resolved by #2798.
+
+### Tracking / context
+- [sgl-project/sglang#11658](https://github.com/sgl-project/sglang/issues/11658) — SM121 tracking issue (closed 2026-01-17 as "completed" for basic boot + CUDA Graph, but NVFP4 MoE kernel support remains unresolved per JCorners68's 2026-03-29 comment).
+- [sgl-project/sglang#19637](https://github.com/sgl-project/sglang/issues/19637) — SM120 Performance Optimization Plan. Item "improve grouped GEMM (highest importance) on SM120" is still in progress.
+- [sgl-project/sglang#21314](https://github.com/sgl-project/sglang/pull/21314) — merged 2026-04-01. Separated SM100 and SM120 dense NVFP4 GEMM into `nvfp4_scaled_mm_sm100.cuh` and `nvfp4_scaled_mm_sm120.cuh`. Dense-GEMM only, does NOT cover MoE grouped GEMM (Crash A remains).
+- [NVIDIA/cutlass#2800](https://github.com/NVIDIA/cutlass/issues/2800) — Python DSL `admissible_archs` restriction. NOT the root cause — our patches in `sglang_launch.sh:146` and `sglang_tune_moe.sh:24-34` are harmless but ineffective for Crash A (the kernel path is nvrtc-compiled C++, not Python DSL).
+
+### Not applicable
+- [BTankut/dgx-spark-sglang-moe-configs](https://github.com/BTankut/dgx-spark-sglang-moe-configs) — GLM-4.7-**FP8** workaround for v0.5.4. No NVFP4 support. Last update February 2026, no SM121 NVFP4 fix.
+- [Forum: SM121 CUTLASS optimization](https://forums.developer.nvidia.com/t/sm121-cutlass-kernel-optimization-results-nvfp4-356-tflops-moe-grouped-gemm-on-dgx-spark/359960) — 356 TFLOPS NVFP4 **dense GEMM** micro-benchmark only (not a working MoE inference pipeline).
+- [Forum: Marlin Fix NVFP4 actually works on SM121 (2026-03-30)](https://forums.developer.nvidia.com/t/marlin-fix-nvfp4-actually-works-on-sm121-dgx-spark/365119) — vLLM-specific (Marlin dequantizes FP4 → BF16). Not a native FP4 MoE solution and not applicable to SGLang.
+- [scitrera/cuda-containers](https://github.com/scitrera/cuda-containers) — base image build recipes. Used as build substrate for this PRD's custom image.
