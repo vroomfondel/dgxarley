@@ -128,6 +128,12 @@ Environment overrides:
                                  Default: ${PODMAN_SSH_IDENTITY}
   BUILD_SM121_CC_DIR             Local cuda-containers clone path (on x86).
                                  Default: ${CUDA_CONTAINERS_DIR}
+  BUILD_SM121_BUILD_JOBS         Parallel compile jobs on the build host
+                                 (--build-arg BUILD_JOBS, sets MAX_JOBS env).
+                                 Upstream Dockerfile default is 2 — useless
+                                 on GB10's 20-core CPU. Push higher if more
+                                 memory headroom is available.
+                                 Default: ${BUILD_JOBS}
 
 The entire script runs on the x86 control host. spark1 is used purely as
 a remote podman build runner — it holds no credentials, no clone, and no
@@ -368,6 +374,7 @@ run_build() {
     echo "  SGLANG_VERSION       = ${R_SGLANG_VERSION}"
     echo "  SGLANG_REF           = ${R_SGLANG_REF}"
     echo "  IMAGE_TAG            = ${IMAGE_TAG}"
+    echo "  BUILD_JOBS           = ${BUILD_JOBS} (overrides Dockerfile ARG default of 2)"
 
     # The build context is container-build/ (contains Dockerfile + patches/
     # subdir). Podman streams it to spark1 over the socket; the build runs
@@ -380,6 +387,7 @@ run_build() {
         --build-arg "TRANSFORMERS_VERSION=${R_TRANSFORMERS_VERSION}" \
         --build-arg "SGLANG_VERSION=${R_SGLANG_VERSION}" \
         --build-arg "SGLANG_REF=${R_SGLANG_REF}" \
+        --build-arg "BUILD_JOBS=${BUILD_JOBS}" \
         -t "${IMAGE_TAG}" \
         container-build/
 
