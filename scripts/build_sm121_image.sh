@@ -113,6 +113,14 @@ BUILD_JOBS="${BUILD_SM121_BUILD_JOBS:-8}"
 
 PUSH_IMAGE=1
 
+# When set to 1 (via --no-local-copy), skip the ~15 min save|load transfer
+# of the built image from the remote build host back to this control host.
+# Implies PUSH_IMAGE=0 because `run_push` reads from the local podman store
+# which would be empty. Intended use: immediately follow the build with a
+# `distrsm121image.sh --source <host>` call that distributes from the
+# build host's podman store directly via a throwaway registry:2.
+NO_LOCAL_COPY=0
+
 # Base image selection. The recipe ships with a default BASE_IMAGE
 # (currently our custom xomoxcc 2.11/cu132 build); --base lets you swap
 # it at build time without editing the recipe. Supported aliases:
@@ -186,10 +194,11 @@ Usage: $(basename "$0") [--base xomoxcc|scitrera|<image>]
                         [--remote-host user@host] [--podman-connection NAME]
                         [--no-arch-prune] [--keep-fa3] [--keep-sm90-target]
                         [--keep-flashmla] [--sm121-debug]
-                        [--no-push] [--help]
+                        [--no-local-copy] [--no-push] [--help]
 
 Builds ${IMAGE_TAG} on the remote build host via podman socket, copies
-the result back to this host, and pushes it from here.
+the result back to this host (unless --no-local-copy), and pushes it
+from here (unless --no-push or --no-local-copy).
 
 Options:
   --base VALUE Select the PyTorch dev base image this build sits on:
@@ -233,6 +242,15 @@ Options:
                gated at runtime by the SGL_SM121_DEBUG_CUTLASS env var.
                Set that env var on the sglang pod to turn the diagnostic
                on at runtime without any additional rebuild.
+  --no-local-copy
+               Skip the 'podman save | podman load' transfer of the built
+               image from the remote build host back to this control host.
+               Use when you will distribute the image directly via
+               scripts/distrsm121image.sh, which runs a temporary registry
+               on the build host and lets all K3s nodes pull from there —
+               the local copy would be a pure ~15-minute time sink.
+               Implies --no-push (you cannot push without a local copy;
+               the build host has no Docker Hub credentials by design).
   --no-push    Skip 'podman push' after build + scp.
   --help       Show this help.
 
@@ -270,6 +288,7 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --no-push) PUSH_IMAGE=0; shift ;;
+        --no-local-copy) NO_LOCAL_COPY=1; PUSH_IMAGE=0; shift ;;
         --base)
             shift
             [[ $# -gt 0 ]] || die "--base requires an argument (xomoxcc|scitrera|<image>)"
@@ -823,6 +842,29 @@ run_push() {
 # ============================================================================
 
 print_next_steps() {
+    if (( NO_LOCAL_COPY == 1 )); then
+        cat <<EOF
+
+$(log "Remote-only build complete")
+
+Image: ${IMAGE_TAG}
+Location: docker.io/${IMAGE_TAG} in ${PODMAN_CONNECTION}'s podman store only
+          (NOT on this control host, NOT pushed to Docker Hub)
+
+Next step — distribute to all 4 K3s nodes via the throwaway registry on
+the build host (uses QSFP 200 GbE for the heavy transfers, source-fast-
+path avoids the registry roundtrip for the build host itself):
+
+  ./scripts/distrsm121image.sh --source ${REMOTE_HOST#*@} \\
+      --registry-host <QSFP-IP of ${REMOTE_HOST#*@}>
+
+Then redeploy:
+  ansible-playbook k8s_dgx.yml --tags sglang
+
+EOF
+        return
+    fi
+
     cat <<EOF
 
 $(log "Build + push complete")
@@ -880,8 +922,12 @@ main() {
     prepare_cuda_containers
     apply_patches
     run_build
-    transfer_image_from_remote
-    run_push
+    if (( NO_LOCAL_COPY == 0 )); then
+        transfer_image_from_remote
+        run_push
+    else
+        log "Skipping local copy + push (--no-local-copy) — image stays on ${PODMAN_CONNECTION}"
+    fi
     print_next_steps
 }
 
