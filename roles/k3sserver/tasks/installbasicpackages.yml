@@ -17,6 +17,7 @@
       - rsyslog
       - conntrack
       - sqlite3
+      - skopeo
     state: present
   when:
     - isk3smaster is defined
