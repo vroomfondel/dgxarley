@@ -138,6 +138,24 @@ BASE_IMAGE_OVERRIDE="${BUILD_SM121_BASE_IMAGE:-}"
 EFFECTIVE_BASE_IMAGE=""
 BASE_IMAGE_SOURCE=""
 
+# sgl-kernel source patch toggles. These map to build-args consumed by the
+# patched Dockerfile (APPLY_SGL_KERNEL_ARCH_PRUNE / APPLY_SGL_KERNEL_DISABLE_FA3)
+# and are applied conditionally inside the builder stage BEFORE the sgl-kernel
+# wheel build. The patch FILES themselves are always copied into the build
+# context by apply_patches() — only the in-container `patch` invocation is
+# gated, which keeps the build deterministic regardless of toggle state.
+#
+# Defaults:
+#   arch-prune  ON  — Low risk, high reward. Strips sm_90 + all non-sm_121a
+#                     Blackwell variants. No runtime behavior change on GB10.
+#   disable-fa3 OFF — Higher uncertainty. FA3 is Hopper-only and cannot run
+#                     on GB10 anyway, but disabling may theoretically break
+#                     sgl-kernel's Python __init__ if FA3 symbols are
+#                     unconditionally imported. Enable manually once
+#                     verified in a test build. Saves ~475 flash_fwd TUs.
+APPLY_ARCH_PRUNE=1
+APPLY_DISABLE_FA3=0
+
 # ============================================================================
 # Helpers
 # ============================================================================
@@ -150,6 +168,7 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") [--base xomoxcc|scitrera|<image>]
                         [--remote-host user@host] [--podman-connection NAME]
+                        [--no-arch-prune] [--disable-fa3]
                         [--no-push] [--help]
 
 Builds ${IMAGE_TAG} on the remote build host via podman socket, copies
@@ -169,6 +188,16 @@ Options:
   --podman-connection NAME
                Registered podman connection name to use (or create). If
                omitted, derived from --remote-host (strip user@ and domain).
+  --no-arch-prune
+               Skip sgl-kernel-arch-prune.patch. Default is to apply it.
+               Disable only if you need a build that runs on other
+               Blackwell SKUs besides GB10.
+  --disable-fa3
+               Apply sgl-kernel-disable-fa3.patch. Default is NOT to apply.
+               Skips ~475 flash-attention Hopper TUs (huge build-time
+               saving) but requires that sglang's Python import of
+               sgl_kernel still succeeds with FA3 symbols missing.
+               Verify in a test build before adopting as default.
   --no-push    Skip 'podman push' after build + scp.
   --help       Show this help.
 
@@ -236,6 +265,14 @@ while [[ $# -gt 0 ]]; do
             PODMAN_CONNECTION="${1#--podman-connection=}"
             shift
             ;;
+        --no-arch-prune)
+            APPLY_ARCH_PRUNE=0
+            shift
+            ;;
+        --disable-fa3)
+            APPLY_DISABLE_FA3=1
+            shift
+            ;;
         --help|-h) usage; exit 0 ;;
         *)         die "Unknown argument: $1 (use --help)" ;;
     esac
@@ -256,7 +293,8 @@ preflight() {
     log "Preflight"
 
     local missing=0
-    for f in sgl-kernel-sm121.patch dockerfile-sm121.patch \
+    for f in sgl-kernel-sm121.patch sgl-kernel-arch-prune.patch \
+             sgl-kernel-disable-fa3.patch dockerfile-sm121.patch \
              build-image-sh-podman.patch "${RECIPE_NAME}.recipe"; do
         if [[ ! -f "${PATCHES_DIR}/${f}" ]]; then
             warn "Missing patch file: ${PATCHES_DIR}/${f}"
@@ -494,11 +532,16 @@ apply_patches() {
 
     cd "${CUDA_CONTAINERS_DIR}"
 
-    # 1. Drop sgl-kernel source patch into the build context (Dockerfile COPY reads from here).
+    # 1. Drop all sgl-kernel source patches into the build context.
+    # The Dockerfile COPY steps read from container-build/patches/ and the
+    # in-container `patch` invocations are conditionally gated by the
+    # APPLY_SGL_KERNEL_* build-args — we always copy the files so the
+    # build context is deterministic regardless of toggle state.
     mkdir -p container-build/patches
-    install -m 0644 "${PATCHES_DIR}/sgl-kernel-sm121.patch" \
-        container-build/patches/sgl-kernel-sm121.patch
-    echo "Installed container-build/patches/sgl-kernel-sm121.patch"
+    for p in sgl-kernel-sm121.patch sgl-kernel-arch-prune.patch sgl-kernel-disable-fa3.patch; do
+        install -m 0644 "${PATCHES_DIR}/${p}" "container-build/patches/${p}"
+        echo "Installed container-build/patches/${p}"
+    done
 
     # 2. Patch the Dockerfile (adds `patch` apt-get dependency + COPY/RUN step).
     #    Dry-run first so any upstream drift fails early with a clear diagnostic
@@ -586,6 +629,10 @@ run_build() {
     echo "  SGLANG_REF           = ${R_SGLANG_REF}"
     echo "  IMAGE_TAG            = ${IMAGE_TAG}"
     echo "  BUILD_JOBS           = ${BUILD_JOBS} (overrides Dockerfile ARG default of 2)"
+    echo "  sgl-kernel patches:"
+    echo "    sm121 JIT kernel   = ALWAYS (late stage, cheap to re-apply)"
+    echo "    arch-prune         = $([ ${APPLY_ARCH_PRUNE} -eq 1 ] && echo APPLY || echo skip)  (--no-arch-prune toggles)"
+    echo "    disable-fa3        = $([ ${APPLY_DISABLE_FA3} -eq 1 ] && echo APPLY || echo skip)  (--disable-fa3 toggles)"
 
     # The build context is container-build/ (contains Dockerfile + patches/
     # subdir). Podman streams it to the remote build host over the socket;
@@ -600,6 +647,8 @@ run_build() {
         --build-arg "SGLANG_VERSION=${R_SGLANG_VERSION}" \
         --build-arg "SGLANG_REF=${R_SGLANG_REF}" \
         --build-arg "BUILD_JOBS=${BUILD_JOBS}" \
+        --build-arg "APPLY_SGL_KERNEL_ARCH_PRUNE=${APPLY_ARCH_PRUNE}" \
+        --build-arg "APPLY_SGL_KERNEL_DISABLE_FA3=${APPLY_DISABLE_FA3}" \
         -t "${IMAGE_TAG}" \
         -t "docker.io/${IMAGE_TAG}" \
         container-build/

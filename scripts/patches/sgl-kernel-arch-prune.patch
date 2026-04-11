@@ -1,0 +1,101 @@
+sgl-kernel GPU architecture prune for DGX Spark GB10 (SM121).
+
+Problem:
+  Upstream sgl-kernel/CMakeLists.txt hardcodes a large gencode list that
+  builds CUDA binaries for every Blackwell variant (sm_100a B200,
+  sm_103a Grace-Blackwell server, sm_110a, sm_120a RTX Blackwell,
+  sm_121a GB10) PLUS an unconditional sm_90 baseline. On aarch64 +
+  CUDA 13.x the effective list is:
+
+      sm_90, sm_100a, sm_103a, sm_110a, sm_120a, sm_121a
+
+  Six binaries per translation unit, of which only sm_121a is ever
+  selected by the CUDA loader on a DGX Spark. The rest is dead weight
+  that multiplies sgl-kernel build time 5-6x.
+
+  (sm_90a is a separate matter — see sgl-kernel-disable-fa3.patch. This
+  patch leaves sm_90a compilation as-is since it is scoped to the FA3
+  branch, which only activates when FA3 itself is enabled.)
+
+Fix:
+  1. Remove the unconditional "-gencode=arch=compute_90,code=sm_90"
+     baseline from the SGL_KERNEL_CUDA_FLAGS list. GB10 has compute
+     capability 12.1 — the loader never selects sm_90 SASS, it selects
+     sm_121a. Keeping sm_90 just wastes ptxas time.
+
+  2. Strip sm_100a, sm_103a, sm_110a, sm_120a and sm_101a out of the
+     CUDA >= 12.8 / >= 13.0 expansion block. Keep sm_121a as the only
+     Blackwell arch emitted, and keep the "--compress-mode=size" nvcc
+     flag (it is not arch-specific).
+
+Expected impact:
+  - sgl-kernel (excluding FA3) binaries shrink from 5-6 variants per TU
+    to 1 → ptxas stage collapses proportionally.
+  - Build time for the sgl-kernel layer drops roughly by the same
+    factor, assuming the host is ptxas-bound (it is on GB10 cold builds).
+  - Resulting wheel is a fraction of the upstream size (fewer cubins
+    packed).
+  - IMAGE IS NOW GB10-ONLY. Do not deploy this wheel to any other
+    Blackwell or Hopper SKU — they will find no matching SASS and fall
+    back to PTX JIT which will silently fail for sm_121a PTX.
+
+Drift risk:
+  If scitrera / sgl-kernel refactor the CUDA_FLAGS list layout, both
+  hunks of this patch may need to be regenerated. patch --dry-run in
+  the Docker build step catches this at build time with a clear error
+  rather than producing a silently-broken image.
+
+Apply to: sgl-kernel/CMakeLists.txt in the sglang source tree, inside
+the Dockerfile builder stage (BEFORE the sgl-kernel `uv build --wheel`
+step, since the arch list is consumed at CMake configure time).
+
+Upstream source: sgl-project/sglang tag v0.5.10
+
+--- a/sgl-kernel/CMakeLists.txt
++++ b/sgl-kernel/CMakeLists.txt
+@@ -136,7 +136,8 @@
+     "-O3"
+     "-Xcompiler"
+     "-fPIC"
+-    "-gencode=arch=compute_90,code=sm_90"
++    # dgxarley sgl-kernel-arch-prune.patch: baseline sm_90 removed.
++    # GB10 is sm_121a; sm_90 SASS would never be loaded. See patch header.
+     "-std=c++17"
+     "-DFLASHINFER_ENABLE_F16"
+     "-DCUTE_USE_PACKED_TUPLE=1"
+@@ -216,29 +217,22 @@
+ 
+ endif()
+ 
++# dgxarley sgl-kernel-arch-prune.patch: SM121-only Blackwell expansion.
++# Upstream emits sm_100a (B200), sm_120a (RTX Blackwell), sm_103a (Grace-
++# Blackwell server), sm_110a (other Blackwell), sm_121a (GB10), sm_101a.
++# On the DGX Spark fleet only sm_121a is ever loaded by the runtime; the
++# rest is 5-6x dead weight per TU. We keep the --compress-mode=size global
++# nvcc flag because it is not arch-specific.
+ if ("${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.8" OR SGL_KERNEL_ENABLE_SM100A)
+-    list(APPEND SGL_KERNEL_CUDA_FLAGS
+-        "-gencode=arch=compute_100a,code=sm_100a"
+-        "-gencode=arch=compute_120a,code=sm_120a"
+-    )
+-    # refer sm_121, sm_110 and sm_101 description  https://github.com/pytorch/pytorch/pull/156176
+     if ("${CUDA_VERSION}" VERSION_GREATER_EQUAL "13.0")
+         list(APPEND SGL_KERNEL_CUDA_FLAGS
+-            "-gencode=arch=compute_103a,code=sm_103a"
+             "--compress-mode=size"
+         )
+         if (CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+             list(APPEND SGL_KERNEL_CUDA_FLAGS
+-                "-gencode=arch=compute_110a,code=sm_110a"
+                 "-gencode=arch=compute_121a,code=sm_121a"
+             )
+         endif()
+-    else()
+-        if (CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+-            list(APPEND SGL_KERNEL_CUDA_FLAGS
+-                "-gencode=arch=compute_101a,code=sm_101a"
+-            )
+-        endif()
+     endif()
+ endif()
+ 

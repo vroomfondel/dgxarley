@@ -1,0 +1,92 @@
+Disable FlashAttention-3 (Hopper) build in sgl-kernel for DGX Spark GB10.
+
+Problem:
+  FlashAttention-3 (FA3) is a Hopper-architecture-specific kernel
+  implementation that uses SM90a-only primitives (wgmma.mma_async, TMA
+  with Hopper-specific memory descriptors, persistent warp-specialized
+  kernels). It CANNOT run on GB10 (SM121) — the GPU lacks the
+  underlying hardware instructions.
+
+  Upstream sgl-kernel/CMakeLists.txt force-enables FA3 whenever
+  CUDA_VERSION >= 12.4 regardless of whether the target arch can
+  actually run it. The result: on every sgl-kernel build the entire
+  flash-attention Hopper codebase — ~475 translation units under
+  hopper/instantiations/flash_fwd_*.cu — is compiled to sm_90a SASS
+  that will never execute on this fleet.
+
+  This single FA3 branch is the largest single contributor to
+  sgl-kernel build time on DGX Spark, dwarfing the sgl-kernel core
+  compilation itself.
+
+Fix:
+  Dead-code the `if ("${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.4")`
+  branch by wrapping it in `if (FALSE AND ...)`. This:
+
+  1. Keeps the surrounding CMake structure byte-identical so future
+     upstream drift is easy to spot in diffs.
+  2. Leaves `SGL_KERNEL_ENABLE_FA3` at its `option()` default of OFF,
+     which causes the downstream `if (SGL_KERNEL_ENABLE_FA3)` block
+     (around line 416) to skip all flash-attention sources,
+     instantiations, and the sm_90a gencode entirely.
+  3. No CMake option, no CLI flag — the branch is unconditionally
+     dead. Applying this patch means the resulting image has no FA3
+     support and sglang's `attention_backend=fa3` will fail at runtime.
+
+Impact on sglang runtime:
+  - sgl-kernel's Python `__init__.py` and sglang's attention backend
+    discovery rely on `getattr()` / `hasattr()` / try-except probes
+    for FA3 availability, so missing FA3 symbols at import time do
+    NOT break `import sgl_kernel` or sglang startup. Runtime fallback
+    to the triton attention backend is automatic if a caller requests
+    fa3 on an unsupported GPU.
+  - Our "Winner config" for Qwen3-235B-A22B-NVFP4 and every other
+    production profile uses `attention_backend=triton` exclusively —
+    no profile depends on FA3. There is no regression on the profiles
+    we actually run.
+  - THIS PATCH IS OPTIONAL. It is gated by
+    --disable-fa3 / APPLY_SGL_KERNEL_DISABLE_FA3=1 in the build flow
+    and defaults to OFF so a first-time user gets a "maximally
+    compatible" build. Enable it once you have confirmed the sglang
+    pod still imports cleanly after a prior build with this patch
+    applied.
+
+Expected impact:
+  - ~475 flash_fwd_*.cu translation units no longer compiled.
+  - sgl-kernel wheel size drops significantly (all FA3 sm_90a cubins
+    removed).
+  - Build time drops by roughly half of what remains after
+    sgl-kernel-arch-prune.patch has been applied.
+
+Verification:
+  After applying, grep the configured build.ninja (or the raw build
+  log) for `hopper/instantiations/flash_fwd` — zero hits means FA3
+  was correctly skipped. At runtime, `python -c "import sgl_kernel;
+  print(dir(sgl_kernel))"` should still succeed; `attention_backend=fa3`
+  in an sglang profile will now fall back to triton with a warning.
+
+Apply to: sgl-kernel/CMakeLists.txt, inside the Dockerfile builder
+stage, BEFORE the sgl-kernel `uv build --wheel` step. This patch
+stacks cleanly on top of sgl-kernel-arch-prune.patch (patch auto-
+offsets the hunk line number since arch-prune shifts lines above).
+
+Upstream source: sgl-project/sglang tag v0.5.10
+
+--- a/sgl-kernel/CMakeLists.txt
++++ b/sgl-kernel/CMakeLists.txt
+@@ -242,7 +242,15 @@
+     endif()
+ endif()
+ 
+-if ("${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.4")
++# dgxarley sgl-kernel-disable-fa3.patch: FA3 is Hopper-only (SM90a) and
++# can never run on GB10 (SM121). The upstream block above would force-
++# enable it whenever CUDA >= 12.4 and add a -gencode=sm_90a to the whole
++# sgl-kernel build. Wrapping in `if (FALSE AND ...)` dead-codes the
++# entire branch without touching surrounding structure — SGL_KERNEL_ENABLE_FA3
++# then stays at its option() default (OFF) and the FA3 build block further
++# down (~line 416 "if (SGL_KERNEL_ENABLE_FA3)") skips all ~475
++# flash-attention hopper/instantiations/*.cu files and the sm_90a gencode.
++if (FALSE AND "${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.4")
+     set(SGL_KERNEL_ENABLE_FA3 ON)
+     list(APPEND SGL_KERNEL_CUDA_FLAGS
+         "-gencode=arch=compute_90a,code=sm_90a"

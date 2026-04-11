@@ -14,14 +14,12 @@
     path: "{{ lookup('env', 'HOME') }}/.ssh/id_podman.pub"
   delegate_to: localhost
   become: false
-  run_once: true
   register: local_podman_pubkey
 
 - name: Inform user that id_podman.pub is missing locally
   ansible.builtin.debug:
     msg: "~/.ssh/id_podman.pub not found on control node — skipping podman SSH key authorization for root. Generate it with: ssh-keygen -t ed25519 -f ~/.ssh/id_podman -N ''"
   when: not local_podman_pubkey.stat.exists
-  run_once: true
 
 - name: Ensure id_podman authorized key is present for root
   ansible.builtin.authorized_key:
