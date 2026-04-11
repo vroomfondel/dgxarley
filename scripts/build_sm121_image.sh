@@ -163,6 +163,14 @@ APPLY_ARCH_PRUNE=1
 APPLY_DISABLE_FA3=1
 APPLY_SKIP_SM90_TARGET=1
 
+# sm121-debug: opt-in diagnostic that adds a cudaStreamSynchronize +
+# cudaGetLastError check immediately after gemm_op.run() in
+# run_fp4_blockwise_scaled_group_mm_sm120(). Gated at runtime by the
+# SGL_SM121_DEBUG_CUTLASS env var so it can be toggled without a rebuild,
+# but the patch itself needs to be compiled into the image first (via
+# --sm121-debug below). Default OFF.
+APPLY_SM121_DEBUG=0
+
 # ============================================================================
 # Helpers
 # ============================================================================
@@ -176,7 +184,7 @@ usage() {
 Usage: $(basename "$0") [--base xomoxcc|scitrera|<image>]
                         [--remote-host user@host] [--podman-connection NAME]
                         [--no-arch-prune] [--keep-fa3] [--keep-sm90-target]
-                        [--no-push] [--help]
+                        [--sm121-debug] [--no-push] [--help]
 
 Builds ${IMAGE_TAG} on the remote build host via podman socket, copies
 the result back to this host, and pushes it from here.
@@ -208,6 +216,14 @@ Options:
                (i.e. common_ops_sm90_build target is dead-coded since
                GB10 always loads sgl_kernel/sm100/common_ops.*). Use this
                if you plan to run the wheel on an actual Hopper GPU.
+  --sm121-debug
+               Apply sgl-kernel-sm121-debug.patch on top of the primary
+               sm121 patch. Default is NOT to apply. When applied, the
+               JIT-compiled sm120 GEMM path gets a post-launch
+               cudaStreamSynchronize + cudaGetLastError diagnostic block,
+               gated at runtime by the SGL_SM121_DEBUG_CUTLASS env var.
+               Set that env var on the sglang pod to turn the diagnostic
+               on at runtime without any additional rebuild.
   --no-push    Skip 'podman push' after build + scp.
   --help       Show this help.
 
@@ -287,6 +303,10 @@ while [[ $# -gt 0 ]]; do
             APPLY_SKIP_SM90_TARGET=0
             shift
             ;;
+        --sm121-debug)
+            APPLY_SM121_DEBUG=1
+            shift
+            ;;
         --help|-h) usage; exit 0 ;;
         *)         die "Unknown argument: $1 (use --help)" ;;
     esac
@@ -307,10 +327,10 @@ preflight() {
     log "Preflight"
 
     local missing=0
-    for f in sgl-kernel-sm121.patch sgl-kernel-arch-prune.patch \
-             sgl-kernel-disable-fa3.patch sgl-kernel-skip-sm90-target.patch \
-             dockerfile-sm121.patch build-image-sh-podman.patch \
-             "${RECIPE_NAME}.recipe"; do
+    for f in sgl-kernel-sm121.patch sgl-kernel-sm121-debug.patch \
+             sgl-kernel-arch-prune.patch sgl-kernel-disable-fa3.patch \
+             sgl-kernel-skip-sm90-target.patch dockerfile-sm121.patch \
+             build-image-sh-podman.patch "${RECIPE_NAME}.recipe"; do
         if [[ ! -f "${PATCHES_DIR}/${f}" ]]; then
             warn "Missing patch file: ${PATCHES_DIR}/${f}"
             missing=1
@@ -553,8 +573,9 @@ apply_patches() {
     # APPLY_SGL_KERNEL_* build-args — we always copy the files so the
     # build context is deterministic regardless of toggle state.
     mkdir -p container-build/patches
-    for p in sgl-kernel-sm121.patch sgl-kernel-arch-prune.patch \
-             sgl-kernel-disable-fa3.patch sgl-kernel-skip-sm90-target.patch; do
+    for p in sgl-kernel-sm121.patch sgl-kernel-sm121-debug.patch \
+             sgl-kernel-arch-prune.patch sgl-kernel-disable-fa3.patch \
+             sgl-kernel-skip-sm90-target.patch; do
         install -m 0644 "${PATCHES_DIR}/${p}" "container-build/patches/${p}"
         echo "Installed container-build/patches/${p}"
     done
@@ -647,6 +668,7 @@ run_build() {
     echo "  BUILD_JOBS           = ${BUILD_JOBS} (overrides Dockerfile ARG default of 2)"
     echo "  sgl-kernel patches:"
     echo "    sm121 JIT kernel   = ALWAYS (late stage, cheap to re-apply)"
+    echo "    sm121-debug        = $([ ${APPLY_SM121_DEBUG} -eq 1 ] && echo APPLY || echo skip)  (--sm121-debug opts in; runtime-gated by SGL_SM121_DEBUG_CUTLASS env)"
     echo "    arch-prune         = $([ ${APPLY_ARCH_PRUNE} -eq 1 ] && echo APPLY || echo skip)  (--no-arch-prune opts out)"
     echo "    disable-fa3        = $([ ${APPLY_DISABLE_FA3} -eq 1 ] && echo APPLY || echo skip)  (--keep-fa3 opts out)"
     echo "    skip-sm90-target   = $([ ${APPLY_SKIP_SM90_TARGET} -eq 1 ] && echo APPLY || echo skip)  (--keep-sm90-target opts out)"
@@ -667,6 +689,7 @@ run_build() {
         --build-arg "APPLY_SGL_KERNEL_ARCH_PRUNE=${APPLY_ARCH_PRUNE}" \
         --build-arg "APPLY_SGL_KERNEL_DISABLE_FA3=${APPLY_DISABLE_FA3}" \
         --build-arg "APPLY_SGL_KERNEL_SKIP_SM90_TARGET=${APPLY_SKIP_SM90_TARGET}" \
+        --build-arg "APPLY_SGL_KERNEL_SM121_DEBUG=${APPLY_SM121_DEBUG}" \
         -t "${IMAGE_TAG}" \
         -t "docker.io/${IMAGE_TAG}" \
         container-build/

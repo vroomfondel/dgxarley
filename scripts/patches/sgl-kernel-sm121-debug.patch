@@ -1,0 +1,101 @@
+Post-launch CUDA error check for run_fp4_blockwise_scaled_group_mm_sm120.
+
+Problem:
+  `gemm_op.run()` in nvfp4_blockwise_moe.cuh is an async kernel launch.
+  Any runtime failure (device-side assert, invalid dynamic SMEM,
+  illegal instruction, out-of-bounds) does not surface at the launch
+  site — it propagates as a sticky stream error and is reported at
+  the NEXT sync-point, which is typically `cudaMallocAsync` inside
+  `get_cached_workspace()` during the SUBSEQUENT call. That sync-point
+  happens to be at nvfp4_blockwise_moe.cuh:78, so every crash in the
+  sm120 path shows up as "Runtime check failed at line 78" regardless
+  of what actually broke — completely obscuring the real failure site.
+
+  This makes iterative debugging of the sm120 GEMM path (tile shape,
+  schedule, stage count, CUTLASS template instantiation failures on
+  GB10) extremely frustrating: every experiment either "works" or
+  fails with the same uninformative line-78 traceback.
+
+Fix:
+  Insert a diagnostic block immediately AFTER `gemm_op.run()` in
+  run_fp4_blockwise_scaled_group_mm_sm120() that:
+    1. Forces a `cudaStreamSynchronize(stream)` — converts the async
+       failure into a synchronous one, attributable to this call site.
+    2. Captures `cudaGetLastError()` to grab the sticky error.
+    3. Prints a structured line to stderr with the call site tag,
+       both error codes, their string forms, and the num_experts.
+    4. Also prints on success so we see how many calls succeeded
+       before the failing one — helps narrow down which layer / MoE
+       call asserts.
+
+  Gated at runtime by the env var `SGL_SM121_DEBUG_CUTLASS`. When
+  unset (default), the `static const bool _dgx_debug` is false on
+  first touch and the branch predictor folds the check away — near-
+  zero overhead in production. When set to any non-empty value, the
+  diagnostic fires on every sm120 GEMM call. No rebuild required to
+  toggle — just set the env var in the sglang pod (e.g. via
+  roles/k8s_dgx/files/sglang_launch.sh).
+
+  Gated at BUILD time by `APPLY_SGL_KERNEL_SM121_DEBUG` build-arg
+  (default 0, opt-in via `--sm121-debug` in build_sm121_image.sh).
+  When 0, the patch is skipped entirely and the upstream .cuh is
+  used as-is, so production builds have zero footprint from this.
+
+  Only touches the sm120 path (run_fp4_blockwise_scaled_group_mm_sm120).
+  The sm100 sibling path at ~line 636 is left untouched because GB10
+  never dispatches to it.
+
+Stacking:
+  This patch is designed to stack on top of sgl-kernel-sm121.patch
+  (the tile-shrink + Cooperative-schedule fix). `patch` auto-offsets
+  the hunk line number when applied in sequence. Safe to apply on
+  pristine upstream too (standalone), but the intended workflow is
+  tile-shrink first, then debug.
+
+Apply to: python/sglang/jit_kernel/csrc/moe/nvfp4_blockwise_moe.cuh,
+inside the Dockerfile builder stage, LATE (same layer as the main
+sgl-kernel-sm121.patch — this is a JIT kernel header not touched by
+the sgl-kernel C++ wheel build).
+
+Upstream source: sgl-project/sglang tag v0.5.10
+
+--- a/python/sglang/jit_kernel/csrc/moe/nvfp4_blockwise_moe.cuh
++++ b/python/sglang/jit_kernel/csrc/moe/nvfp4_blockwise_moe.cuh
+@@ -449,6 +449,37 @@
+
+   status = gemm_op.run(args, workspace, stream);
+   RuntimeCheck(status == cutlass::Status::kSuccess, "Failed to run GEMM: ", cutlassGetStatusString(status));
++
++  // dgxarley sgl-kernel-sm121-debug.patch: synchronous post-launch error check.
++  // Normally gemm_op.run() is async and errors only surface at the next
++  // sync-point (cudaMallocAsync in get_cached_workspace on the subsequent
++  // call), making the real failure site invisible. This block forces a
++  // stream sync immediately after launch, captures cudaGetLastError, and
++  // prints a diagnostic to stderr tagged with the call site (sm120 path)
++  // and the problem shape. Gated at runtime by env var so it can be
++  // toggled without a rebuild: set SGL_SM121_DEBUG_CUTLASS=1 in the
++  // pod env (e.g. via sglang_launch.sh).
++  {
++    static const bool _dgx_debug = (std::getenv("SGL_SM121_DEBUG_CUTLASS") != nullptr);
++    if (_dgx_debug) {
++      cudaError_t _sync_err = cudaStreamSynchronize(stream);
++      cudaError_t _last_err = cudaGetLastError();
++      if (_sync_err != cudaSuccess || _last_err != cudaSuccess) {
++        std::fprintf(stderr,
++          "[dgxarley sm121-debug] run_fp4_blockwise_scaled_group_mm_sm120 "
++          "post-launch error: sync=%d (%s) last=%d (%s) num_experts=%d\n",
++          (int)_sync_err, cudaGetErrorString(_sync_err),
++          (int)_last_err, cudaGetErrorString(_last_err),
++          num_experts);
++        std::fflush(stderr);
++      } else {
++        std::fprintf(stderr,
++          "[dgxarley sm121-debug] run_fp4_blockwise_scaled_group_mm_sm120 "
++          "post-launch OK (num_experts=%d)\n", num_experts);
++        std::fflush(stderr);
++      }
++    }
++  }
+ }
+
+ template <typename OutType>
