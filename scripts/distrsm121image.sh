@@ -85,7 +85,7 @@ ssh "${SSH_OPTS[@]}" "root@${SOURCE}" \
         docker.io/library/registry:2 >/dev/null"
 
 # Auf Registry-Readiness warten (bis zu 10s).
-for i in 1 2 3 4 5 6 7 8 9 10; do
+for i in {1..10}; do
     if ssh "${SSH_OPTS[@]}" "root@${SOURCE}" \
         "curl -sf http://${REGISTRY_HOST}:${REGISTRY_PORT}/v2/ >/dev/null"; then
         echo "registry ready"
