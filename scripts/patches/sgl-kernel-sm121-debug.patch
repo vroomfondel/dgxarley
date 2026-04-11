@@ -1,4 +1,4 @@
-Post-launch CUDA error check for run_fp4_blockwise_scaled_group_mm_sm120.
+Diagnostic probes for run_fp4_blockwise_scaled_group_mm_sm120.
 
 Problem:
   `gemm_op.run()` in nvfp4_blockwise_moe.cuh is an async kernel launch.
@@ -7,54 +7,78 @@ Problem:
   site — it propagates as a sticky stream error and is reported at
   the NEXT sync-point, which is typically `cudaMallocAsync` inside
   `get_cached_workspace()` during the SUBSEQUENT call. That sync-point
-  happens to be at nvfp4_blockwise_moe.cuh:78, so every crash in the
-  sm120 path shows up as "Runtime check failed at line 78" regardless
-  of what actually broke — completely obscuring the real failure site.
+  happens to be at nvfp4_blockwise_moe.cuh:78, so every crash along
+  the sm120 path shows up as "Runtime check failed at line 78"
+  regardless of what actually broke.
 
-  This makes iterative debugging of the sm120 GEMM path (tile shape,
-  schedule, stage count, CUTLASS template instantiation failures on
-  GB10) extremely frustrating: every experiment either "works" or
-  fails with the same uninformative line-78 traceback.
+  Worse: the failing kernel might not even be our cutlass GEMM. The
+  triton MoE runner calls several upstream kernels (topk, expert
+  gather, scale factor reshuffle) BEFORE calling cutlass_fp4_group_mm.
+  Any of those upstream kernels can set the stream error state, and
+  then OUR function's first CUDA op (the workspace alloc) reports
+  the error as if it originated here.
 
 Fix:
-  Insert a diagnostic block immediately AFTER `gemm_op.run()` in
-  run_fp4_blockwise_scaled_group_mm_sm120() that:
-    1. Forces a `cudaStreamSynchronize(stream)` — converts the async
-       failure into a synchronous one, attributable to this call site.
-    2. Captures `cudaGetLastError()` to grab the sticky error.
-    3. Prints a structured line to stderr with the call site tag,
-       both error codes, their string forms, and the num_experts.
-    4. Also prints on success so we see how many calls succeeded
-       before the failing one — helps narrow down which layer / MoE
-       call asserts.
+  Insert TWO diagnostic probes in run_fp4_blockwise_scaled_group_mm_sm120():
 
-  Gated at runtime by the env var `DGXARLEY_SM121_DEBUG`. When unset
-  (default), the `static const bool _dgx_debug` is false on first
-  touch and the branch predictor folds the check away — near-zero
-  overhead in production. When set to any value, the diagnostic fires
-  on every sm120 GEMM call. No rebuild required to toggle — just set
-  the env var in the sglang pod.
+    1. Pre-workspace probe (ENTRY side). Right after `const
+       cudaStream_t stream = ...` and BEFORE `get_cached_workspace`,
+       call cudaStreamSynchronize + cudaGetLastError and print a
+       diagnostic line if the stream is already in error state. This
+       distinguishes "upstream kernel asserted" from "our kernel
+       asserted" — if this probe reports an error, the assertion is
+       from a kernel launched BEFORE this function was entered
+       (topk, expert gather, scale reshuffle, etc.). If this probe
+       reports clean, the assertion must be from OUR gemm_op.run().
 
-  Previously named SGL_SM121_DEBUG_CUTLASS, renamed because sglang's
-  environ.py deprecation check iterates every SGL_* prefixed env var
-  at startup and emits a UserWarning, spamming the pod log. Prefixing
-  with DGXARLEY_ puts this var clearly outside sglang's namespace.
+    2. Post-launch probe (EXIT side). Immediately after `gemm_op.run`
+       returns, call cudaStreamSynchronize + cudaGetLastError again
+       and print the result. This catches assertions from our main
+       GEMM kernel at their actual launch site (without waiting for
+       the next sync-point to surface them).
+
+  Both probes are gated at runtime by the `DGXARLEY_SM121_DEBUG` env
+  var. When unset, the `static const bool` is false on first touch
+  and the branch is folded away — near-zero production overhead. When
+  set to any value, both probes fire on every sm120 GEMM invocation.
+  No rebuild required to toggle — set the env var in the sglang pod.
 
   Gated at BUILD time by `APPLY_SGL_KERNEL_SM121_DEBUG` build-arg
   (default 0, opt-in via `--sm121-debug` in build_sm121_image.sh).
-  When 0, the patch is skipped entirely and the upstream .cuh is
+  When 0, this patch is skipped entirely and the upstream .cuh is
   used as-is, so production builds have zero footprint from this.
 
   Only touches the sm120 path (run_fp4_blockwise_scaled_group_mm_sm120).
   The sm100 sibling path at ~line 636 is left untouched because GB10
   never dispatches to it.
 
+Diagnostic output format:
+
+  "[dgxarley sm121-debug] sm120 pre-workspace clean (num_experts=N)"
+      → entry probe sees no prior error, our function is the first
+        to touch a clean stream since the last sync
+
+  "[dgxarley sm121-debug] sm120 PRE-WORKSPACE stream error: ...
+       -- UPSTREAM kernel asserted, not our cutlass GEMM"
+      → entry probe sees a pre-existing error, some kernel launched
+        BEFORE this function was called is the asserting one. Not
+        a CUTLASS issue — look at the triton MoE preprocessing chain.
+
+  "[dgxarley sm121-debug] sm120 post-launch OK (num_experts=N)"
+      → our gemm_op.run() succeeded
+
+  "[dgxarley sm121-debug] sm120 post-launch error: ...
+       -- OUR cutlass GEMM kernel asserted"
+      → our kernel is the failing one; the CUTLASS CollectiveBuilder
+        / schedule / stage count / tile shape combination has a
+        runtime invariant that GB10 violates
+
 Stacking:
   This patch is designed to stack on top of sgl-kernel-sm121.patch
-  (the tile-shrink + Cooperative-schedule fix). `patch` auto-offsets
-  the hunk line number when applied in sequence. Safe to apply on
+  (the StageCount<2> + Cooperative-schedule fix). `patch` auto-offsets
+  the hunk line numbers when applied in sequence. Safe to apply on
   pristine upstream too (standalone), but the intended workflow is
-  tile-shrink first, then debug.
+  sm121 patch first, then debug.
 
 Apply to: python/sglang/jit_kernel/csrc/moe/nvfp4_blockwise_moe.cuh,
 inside the Dockerfile builder stage, LATE (same layer as the main
@@ -65,41 +89,69 @@ Upstream source: sgl-project/sglang tag v0.5.10
 
 --- a/python/sglang/jit_kernel/csrc/moe/nvfp4_blockwise_moe.cuh
 +++ b/python/sglang/jit_kernel/csrc/moe/nvfp4_blockwise_moe.cuh
-@@ -449,6 +449,37 @@
-
+@@ -431,6 +431,34 @@
+ 
+   size_t workspace_size = Gemm::get_workspace_size(args);
+   const cudaStream_t stream = LaunchKernel::resolve_device(a.device());
++
++  // dgxarley sgl-kernel-sm121-debug.patch: pre-workspace stream error probe.
++  // The device-side-assert observed at cuh:78 (cudaMallocAsync) is the next
++  // sync-point after an assert. We probe BEFORE calling cudaMallocAsync so
++  // we can distinguish "this function's kernel asserted" from "upstream
++  // kernel asserted, we are just the sync point". Gated by DGXARLEY_SM121_DEBUG
++  // env var. sm120 path only — the sm100 sibling below is unmodified.
++  {
++    static const bool _dgx_entry = (std::getenv("DGXARLEY_SM121_DEBUG") != nullptr);
++    if (_dgx_entry) {
++      cudaError_t _sync = cudaStreamSynchronize(stream);
++      cudaError_t _last = cudaGetLastError();
++      if (_sync != cudaSuccess || _last != cudaSuccess) {
++        std::fprintf(stderr,
++          "[dgxarley sm121-debug] sm120 PRE-WORKSPACE stream error: "
++          "sync=%d (%s) last=%d (%s) -- UPSTREAM kernel asserted, "
++          "not our cutlass GEMM\n",
++          (int)_sync, cudaGetErrorString(_sync),
++          (int)_last, cudaGetErrorString(_last));
++        std::fflush(stderr);
++      } else {
++        std::fprintf(stderr,
++          "[dgxarley sm121-debug] sm120 pre-workspace clean (num_experts=%d)\n",
++          num_experts);
++        std::fflush(stderr);
++      }
++    }
++  }
+   void* workspace = get_cached_workspace(workspace_size, hw_info.device_id, stream);
+ 
+   auto can_implement_status = gemm_op.can_implement(args);
+@@ -445,6 +473,30 @@
+ 
    status = gemm_op.run(args, workspace, stream);
    RuntimeCheck(status == cutlass::Status::kSuccess, "Failed to run GEMM: ", cutlassGetStatusString(status));
 +
-+  // dgxarley sgl-kernel-sm121-debug.patch: synchronous post-launch error check.
-+  // Normally gemm_op.run() is async and errors only surface at the next
-+  // sync-point (cudaMallocAsync in get_cached_workspace on the subsequent
-+  // call), making the real failure site invisible. This block forces a
-+  // stream sync immediately after launch, captures cudaGetLastError, and
-+  // prints a diagnostic to stderr tagged with the call site (sm120 path)
-+  // and the problem shape. Gated at runtime by env var so it can be
-+  // toggled without a rebuild: set DGXARLEY_SM121_DEBUG=1 in the pod env.
-+  // DGXARLEY_ prefix avoids sglang's SGL_*/SGLANG_* deprecation spam.
++  // dgxarley sgl-kernel-sm121-debug.patch: post-launch error probe.
 +  {
-+    static const bool _dgx_debug = (std::getenv("DGXARLEY_SM121_DEBUG") != nullptr);
-+    if (_dgx_debug) {
++    static const bool _dgx_post = (std::getenv("DGXARLEY_SM121_DEBUG") != nullptr);
++    if (_dgx_post) {
 +      cudaError_t _sync_err = cudaStreamSynchronize(stream);
 +      cudaError_t _last_err = cudaGetLastError();
 +      if (_sync_err != cudaSuccess || _last_err != cudaSuccess) {
 +        std::fprintf(stderr,
-+          "[dgxarley sm121-debug] run_fp4_blockwise_scaled_group_mm_sm120 "
-+          "post-launch error: sync=%d (%s) last=%d (%s) num_experts=%d\n",
++          "[dgxarley sm121-debug] sm120 post-launch error: "
++          "sync=%d (%s) last=%d (%s) num_experts=%d -- OUR cutlass "
++          "GEMM kernel asserted\n",
 +          (int)_sync_err, cudaGetErrorString(_sync_err),
 +          (int)_last_err, cudaGetErrorString(_last_err),
 +          num_experts);
 +        std::fflush(stderr);
 +      } else {
 +        std::fprintf(stderr,
-+          "[dgxarley sm121-debug] run_fp4_blockwise_scaled_group_mm_sm120 "
-+          "post-launch OK (num_experts=%d)\n", num_experts);
++          "[dgxarley sm121-debug] sm120 post-launch OK (num_experts=%d)\n",
++          num_experts);
 +        std::fflush(stderr);
 +      }
 +    }
 +  }
  }
-
+ 
  template <typename OutType>
