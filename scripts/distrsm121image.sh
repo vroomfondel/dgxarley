@@ -281,10 +281,34 @@ EOF
     done
     tmux select-layout -t "${session}" tiled >/dev/null
 
+    # Background watcher: polls for all .rc files, then auto-detaches the
+    # tmux client 5 seconds later so the user gets a beat to read the final
+    # banners before the session disappears. The user can also detach early
+    # with Ctrl+B d at any time — the manual detach makes tmux attach return,
+    # and we then kill the watcher in the cleanup path below.
+    (
+        while true; do
+            local ready=0 w_host w_short
+            for w_host in "${TARGETS[@]}"; do
+                w_short="${w_host%%.*}"
+                [[ -f "${work_dir}/${w_short}.rc" ]] && ready=$((ready + 1))
+            done
+            if (( ready == ${#TARGETS[@]} )); then
+                sleep 5
+                tmux detach-client -s "${session}" 2>/dev/null || true
+                exit 0
+            fi
+            sleep 1
+        done
+    ) &
+    local watcher_pid=$!
+
     echo "=== attaching to tmux session '${session}' ==="
-    echo "=== detach with Ctrl+B d once each pane shows its final banner ==="
+    echo "=== Auto-detach 5 s after all 4 panes finish (or Ctrl+B d to leave early) ==="
     sleep 1
     tmux attach-session -t "${session}"
+    kill "${watcher_pid}" 2>/dev/null || true
+    wait "${watcher_pid}" 2>/dev/null || true
     tmux kill-session -t "${session}" 2>/dev/null || true
 
     local fail=0 rc
