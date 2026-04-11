@@ -99,6 +99,13 @@
         SGLANG_MOE_CONFIG_DIR: "{{ sglang_moe_config_dir }}"
         HF_HUB_OFFLINE: "1"
         SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK: "0"
+        # Activates the dgxarley sgl-kernel-sm121-debug.patch diagnostic block
+        # in run_fp4_blockwise_scaled_group_mm_sm120(). Only has an effect when
+        # the sglang image was built with --sm121-debug
+        # (APPLY_SGL_KERNEL_SM121_DEBUG=1) — for default builds the compiled
+        # binary contains no consuming code and this env var is inert. Always
+        # on: if you build with --sm121-debug you want the diagnostic.
+        SGL_SM121_DEBUG_CUTLASS: "1"
         NCCL_SOCKET_IFNAME: "{{ nccl_socket_ifname }}"
         # NCCL transport: controlled by sglang_nccl_transport (roce/socket).
         # With apply: true, the ConfigMap is fully replaced — keys from the
