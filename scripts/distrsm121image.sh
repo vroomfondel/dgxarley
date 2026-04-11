@@ -173,7 +173,7 @@ ssh "${SSH_OPTS[@]}" "root@${SOURCE}" "podman tag '${SRC_IMAGE}' '${IMAGE}'"
 # damit die Registry sowohl über die QSFP-IP (${REGISTRY_HOST}, für die
 # Sparks) als auch über die LAN-IP (für --pull-local von hyperion) er-
 # reichbar ist. Kurzlebig + LAN-only + plain HTTP — kein Security-Issue.
-echo "=== starting temporary registry on 0.0.0.0:${REGISTRY_PORT} (advertised as ${REGISTRY_HOST}) ==="
+echo "=== starting temporary registry on 0.0.0.0:${REGISTRY_PORT} (clients pull via ${REGISTRY_HOST}) ==="
 ssh "${SSH_OPTS[@]}" "root@${SOURCE}" \
     "podman rm -f ${REGISTRY_CONTAINER} >/dev/null 2>&1 || true; \
      podman run -d --name ${REGISTRY_CONTAINER} --network host \
@@ -221,26 +221,16 @@ parallel_pull_flat() {
         short="${host%%.*}"
         (
             if [[ "${host}" == "${SOURCE}" ]]; then
-                # Source host fast-path: bypass the registry entirely. The
-                # image already exists in this host's podman store; pipe it
-                # directly into k3s containerd via save|import. Avoids
-                # loopback TCP, avoids HTTP/registry overhead, and (more
-                # importantly) frees the registry process to serve the
-                # other targets without self-contention. See function docs.
+                # Source host: pull from the registry over loopback
+                # (127.0.0.1:${REGISTRY_PORT}) instead of the QSFP IP so
+                # we don't bounce through the NIC on the way back in.
                 ssh "${SSH_OPTS[@]}" "root@${host}" \
                     "set -e; \
                      k3s ctr -n k8s.io image pull --plain-http '${REGISTRY_IMAGE_LOCAL}'; \
                      k3s ctr -n k8s.io image rm '${IMAGE}' >/dev/null 2>&1 || true; \
-                     k3s ctr -n k8s.io image tag '${REGISTRY_IMAGE}' '${IMAGE}'; \
-                     k3s ctr -n k8s.io image rm '${REGISTRY_IMAGE}' >/dev/null" \
+                     k3s ctr -n k8s.io image tag '${REGISTRY_IMAGE_LOCAL}' '${IMAGE}'; \
+                     k3s ctr -n k8s.io image rm '${REGISTRY_IMAGE_LOCAL}' >/dev/null" \
                     2>&1 | sed "s/^/[${short}] /"
-
-#                ssh "${SSH_OPTS[@]}" "root@${host}" \
-#                    "set -e; \
-#                     podman save --format docker-archive '${IMAGE}' \
-#                       | k3s ctr -n k8s.io image import -; \
-#                     k3s ctr -n k8s.io image ls -q | grep -qxF '${IMAGE}'" \
-#                    2>&1 | sed "s/^/[${short}] /"
             else
                 ssh "${SSH_OPTS[@]}" "root@${host}" \
                     "set -e; \
@@ -267,41 +257,31 @@ parallel_pull_tmux() {
 
     # Per-target driver scripts: avoid nested-quoting hell when shoving
     # commands into tmux "..." arguments. Each script ssh-es to its target,
-    # runs either the source-host fast-path or a registry pull, writes its
-    # exit code to work_dir/${short}.rc, and prints a final banner so the
-    # pane tells you at a glance whether it succeeded. Shell vars are
-    # expanded NOW (at heredoc write time) except \${rc} which escapes to
-    # stay literal and is evaluated inside the generated script after ssh
-    # returns.
-    #
-    # Source-host fast-path: when host == SOURCE the image is already in
-    # this host's podman store, so we skip the registry roundtrip entirely
-    # and pipe `podman save` directly into `k3s ctr image import`. This
-    # avoids loopback TCP (slower than real QSFP on GB10 due to software
-    # TCP stack vs. Mellanox hardware offload), avoids HTTP framing/gzip
-    # re-stream overhead, and frees the registry process to service the
-    # 3 remote pulls without self-contention. Measured: spark4 pull via
-    # registry took ~340 s while spark1/2/3 finished in ~80 s; with the
-    # fast-path spark4 should come in at ~40-60 s.
+    # runs a registry pull (over loopback on the source host, over QSFP
+    # elsewhere), writes its exit code to work_dir/${short}.rc, and prints
+    # a final banner so the pane tells you at a glance whether it succeeded.
+    # Shell vars are expanded NOW (at heredoc write time) except \${rc}
+    # which escapes to stay literal and is evaluated inside the generated
+    # script after ssh returns.
     for host in "${TARGETS[@]}"; do
         short="${host%%.*}"
         if [[ "${host}" == "${SOURCE}" ]]; then
             cat > "${work_dir}/${short}.sh" <<EOF
 #!/usr/bin/env bash
 set -o pipefail
-echo "=== ${short}: source-host fast-path (podman save | k3s ctr image import) ==="
+echo "=== ${short}: registry pull via loopback (${REGISTRY_IMAGE_LOCAL}) ==="
 ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "root@${host}" \\
     "set -e; \\
-     podman save --format docker-archive '${IMAGE}' \\
-       | k3s ctr -n k8s.io image import -; \\
-     k3s ctr -n k8s.io image ls -q | grep -qxF '${IMAGE}' \\
-       || { echo 'ERROR: ${IMAGE} not in containerd after import' >&2; exit 1; }"
+     k3s ctr -n k8s.io image pull --plain-http '${REGISTRY_IMAGE_LOCAL}'; \\
+     k3s ctr -n k8s.io image rm '${IMAGE}' >/dev/null 2>&1 || true; \\
+     k3s ctr -n k8s.io image tag '${REGISTRY_IMAGE_LOCAL}' '${IMAGE}'; \\
+     k3s ctr -n k8s.io image rm '${REGISTRY_IMAGE_LOCAL}' >/dev/null"
 rc=\$?
 echo "\${rc}" > "${work_dir}/${short}.rc"
 echo
 if [[ \${rc} -eq 0 ]]; then
     echo "================================================================"
-    echo "  ${short}: OK (source fast-path — no registry roundtrip)"
+    echo "  ${short}: OK (loopback pull)"
     echo "  detach with Ctrl+B then d once all 4 are done"
     echo "================================================================"
 else
@@ -434,10 +414,17 @@ if (( PULL_LOCAL == 1 )); then
     LOCAL_REGISTRY_IMAGE="${SOURCE}:${REGISTRY_PORT}/${REGISTRY_REF}"
     echo "=== pulling ${IMAGE} into local podman store via ${LOCAL_REGISTRY_IMAGE} ==="
     podman pull --tls-verify=false "${LOCAL_REGISTRY_IMAGE}"
+    # Set BOTH tags so the local store looks identical to what a normal
+    # build_sm121_image.sh flow leaves behind (save|load keeps ${SRC_IMAGE}
+    # = localhost/..., run_push adds ${IMAGE} = docker.io/... for pushing).
+    # Without ${SRC_IMAGE}, a later manual rerun of run_push would find
+    # neither tag and fail.
     podman rmi "${IMAGE}" >/dev/null 2>&1 || true
+    podman rmi "${SRC_IMAGE}" >/dev/null 2>&1 || true
     podman tag "${LOCAL_REGISTRY_IMAGE}" "${IMAGE}"
+    podman tag "${LOCAL_REGISTRY_IMAGE}" "${SRC_IMAGE}"
     podman rmi "${LOCAL_REGISTRY_IMAGE}" >/dev/null
-    echo "=== local pull complete: ${IMAGE} ==="
+    echo "=== local pull complete: ${IMAGE} (also tagged ${SRC_IMAGE}) ==="
 fi
 
 echo "=== distribution complete ==="

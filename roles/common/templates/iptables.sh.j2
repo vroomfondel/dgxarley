@@ -184,6 +184,9 @@ iptables -A HTSTUFFIN -m state --state NEW -p udp -m multiport --dport 22 -m set
 
 {% if 'k3sserver' in group_names %}
 
+# accept temporary registry (distrsm121image.sh throwaway registry:2)
+iptables -A HTSTUFFIN -m state --state NEW -p tcp --dport 5000 -m set --match-set localnets src -j ACCEPT
+
 {% for ip in iptables_k3s_external_ips | default([]) %}
 iptables -A HTSTUFFIN -m state --state NEW -p tcp --dport 443 -s {{ ip }} -j RETURN
 {% endfor %}
