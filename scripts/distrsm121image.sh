@@ -60,11 +60,12 @@ REGISTRY_HOST="10.10.10.4"
 REGISTRY_PORT="5000"
 
 USE_TMUX=1
+PULL_LOCAL=0
 
 usage() {
     cat <<EOF
 Usage: $(basename "$0") [--source HOST] [--registry-host IP]
-                        [--no-tmux] [--help]
+                        [--pull-local] [--no-tmux] [--help]
 
 Distribute the sgl-kernel sm121 image from a build host to all 4 DGX
 Spark K3s nodes via a throwaway registry:2 on the build host.
@@ -80,6 +81,13 @@ Options:
                          in this cluster). Typically the --source host's
                          QSFP IP.
                          Default: ${REGISTRY_HOST}
+  --pull-local           Additionally pull the image into this control
+                         host's local podman store via the temporary
+                         registry. Happens serially after the 4 Sparks
+                         finish (so the QSFP pulls run at full speed).
+                         Uses \${SOURCE}:\${REGISTRY_PORT} as pull address
+                         (spark4's LAN IP, reachable from hyperion).
+                         Default: off.
   --no-tmux              Disable the 4-pane tmux view for the parallel
                          pulls and use the flat merged-output fallback
                          instead. Auto-enabled when tmux is not installed
@@ -123,6 +131,10 @@ while [[ $# -gt 0 ]]; do
             USE_TMUX=0
             shift
             ;;
+        --pull-local)
+            PULL_LOCAL=1
+            shift
+            ;;
         --help|-h)
             usage
             exit 0
@@ -135,6 +147,7 @@ while [[ $# -gt 0 ]]; do
 done
 REGISTRY_REF="xomoxcc/dgx-spark-sglang:0.5.10-sm121"
 REGISTRY_IMAGE="${REGISTRY_HOST}:${REGISTRY_PORT}/${REGISTRY_REF}"
+REGISTRY_IMAGE_LOCAL="127.0.0.1:${REGISTRY_PORT}/${REGISTRY_REF}"
 REGISTRY_CONTAINER="tmp-distr-registry"
 
 # Target sparks (management addresses). Includes spark4 itself, which can
@@ -156,13 +169,15 @@ trap cleanup EXIT
 ssh "${SSH_OPTS[@]}" "root@${SOURCE}" "podman tag '${SRC_IMAGE}' '${IMAGE}'"
 
 # 2. Throwaway registry:2 auf spark4 starten. --network host vermeidet
-# slirp/netns-Overhead für die großen Blob-Transfers; REGISTRY_HTTP_ADDR
-# bindet explizit nur auf die QSFP-IP (10.10.10.4), nicht auf 0.0.0.0.
-echo "=== starting temporary registry on ${REGISTRY_HOST}:${REGISTRY_PORT} ==="
+# slirp/netns-Overhead für die großen Blob-Transfers. Bind auf 0.0.0.0,
+# damit die Registry sowohl über die QSFP-IP (${REGISTRY_HOST}, für die
+# Sparks) als auch über die LAN-IP (für --pull-local von hyperion) er-
+# reichbar ist. Kurzlebig + LAN-only + plain HTTP — kein Security-Issue.
+echo "=== starting temporary registry on 0.0.0.0:${REGISTRY_PORT} (advertised as ${REGISTRY_HOST}) ==="
 ssh "${SSH_OPTS[@]}" "root@${SOURCE}" \
     "podman rm -f ${REGISTRY_CONTAINER} >/dev/null 2>&1 || true; \
      podman run -d --name ${REGISTRY_CONTAINER} --network host \
-        -e REGISTRY_HTTP_ADDR=${REGISTRY_HOST}:${REGISTRY_PORT} \
+        -e REGISTRY_HTTP_ADDR=0.0.0.0:${REGISTRY_PORT} \
         docker.io/library/registry:2 >/dev/null"
 
 # Auf Registry-Readiness warten (bis zu 10s).
@@ -214,10 +229,18 @@ parallel_pull_flat() {
                 # other targets without self-contention. See function docs.
                 ssh "${SSH_OPTS[@]}" "root@${host}" \
                     "set -e; \
-                     podman save --format docker-archive '${IMAGE}' \
-                       | k3s ctr -n k8s.io image import -; \
-                     k3s ctr -n k8s.io image ls -q | grep -qxF '${IMAGE}'" \
+                     k3s ctr -n k8s.io image pull --plain-http '${REGISTRY_IMAGE_LOCAL}'; \
+                     k3s ctr -n k8s.io image rm '${IMAGE}' >/dev/null 2>&1 || true; \
+                     k3s ctr -n k8s.io image tag '${REGISTRY_IMAGE}' '${IMAGE}'; \
+                     k3s ctr -n k8s.io image rm '${REGISTRY_IMAGE}' >/dev/null" \
                     2>&1 | sed "s/^/[${short}] /"
+
+#                ssh "${SSH_OPTS[@]}" "root@${host}" \
+#                    "set -e; \
+#                     podman save --format docker-archive '${IMAGE}' \
+#                       | k3s ctr -n k8s.io image import -; \
+#                     k3s ctr -n k8s.io image ls -q | grep -qxF '${IMAGE}'" \
+#                    2>&1 | sed "s/^/[${short}] /"
             else
                 ssh "${SSH_OPTS[@]}" "root@${host}" \
                     "set -e; \
@@ -400,6 +423,21 @@ fi
 if [[ ${fail} -ne 0 ]]; then
     echo "=== one or more targets failed ==="
     exit 1
+fi
+
+# Optional local pull to this control host's podman store. Runs serially
+# AFTER the Spark parallel-pulls so the fast QSFP transfers finish first
+# without being slowed by hyperion's LAN-bandwidth pull. Uses ${SOURCE}
+# (spark4.local) as the pull hostname because hyperion isn't on the QSFP
+# 10.10.10.0/24 mesh — spark4.local resolves to the LAN IP from hyperion.
+if (( PULL_LOCAL == 1 )); then
+    LOCAL_REGISTRY_IMAGE="${SOURCE}:${REGISTRY_PORT}/${REGISTRY_REF}"
+    echo "=== pulling ${IMAGE} into local podman store via ${LOCAL_REGISTRY_IMAGE} ==="
+    podman pull --tls-verify=false "${LOCAL_REGISTRY_IMAGE}"
+    podman rmi "${IMAGE}" >/dev/null 2>&1 || true
+    podman tag "${LOCAL_REGISTRY_IMAGE}" "${IMAGE}"
+    podman rmi "${LOCAL_REGISTRY_IMAGE}" >/dev/null
+    echo "=== local pull complete: ${IMAGE} ==="
 fi
 
 echo "=== distribution complete ==="
