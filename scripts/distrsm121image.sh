@@ -46,12 +46,93 @@ set -euo pipefail
 SRC_IMAGE="localhost/xomoxcc/dgx-spark-sglang:0.5.10-sm121"
 IMAGE="docker.io/xomoxcc/dgx-spark-sglang:0.5.10-sm121"
 
-# Source host: where the built image lives in podman.
+# Source host: where the built image lives in podman. Defaults to spark4
+# (the historical build host); override with --source when the image was
+# built elsewhere (e.g. spark3 after build_sm121_image.sh --remote-host).
 SOURCE="spark4.local"              # management address for outer ssh
 
-# Temporary registry on spark4, reachable from all targets via QSFP.
+# Temporary registry address. Must be an IP/host reachable by ALL targets
+# over the fast network — in our cluster that's the QSFP mesh on
+# 10.10.10.0/24. The default matches spark4's QSFP IP; when --source
+# changes, you almost always also need to change --registry-host to the
+# new source's QSFP IP, so the two are kept independent.
 REGISTRY_HOST="10.10.10.4"
 REGISTRY_PORT="5000"
+
+USE_TMUX=1
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [--source HOST] [--registry-host IP]
+                        [--no-tmux] [--help]
+
+Distribute the sgl-kernel sm121 image from a build host to all 4 DGX
+Spark K3s nodes via a throwaway registry:2 on the build host.
+
+Options:
+  --source HOST          Management address of the host that holds the
+                         built image in its podman store. SSH is used to
+                         run podman commands on this host.
+                         Default: ${SOURCE}
+  --registry-host IP     Address the temporary registry should bind to
+                         and that targets will pull from. Must be on a
+                         network reachable by all targets (QSFP subnet
+                         in this cluster). Typically the --source host's
+                         QSFP IP.
+                         Default: ${REGISTRY_HOST}
+  --no-tmux              Disable the 4-pane tmux view for the parallel
+                         pulls and use the flat merged-output fallback
+                         instead. Auto-enabled when tmux is not installed
+                         or when the script is run without a TTY (cron,
+                         pipes, etc.). Default: tmux enabled when
+                         interactive.
+  --help                 Show this help.
+
+Examples:
+  # Default — image was built on spark4
+  $(basename "$0")
+
+  # Image was built on spark3 instead (via build_sm121_image.sh --remote-host)
+  $(basename "$0") --source spark3.local --registry-host 10.10.10.3
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --source)
+            shift
+            [[ $# -gt 0 ]] || { echo "ERROR: --source requires an argument" >&2; exit 1; }
+            SOURCE="$1"
+            shift
+            ;;
+        --source=*)
+            SOURCE="${1#--source=}"
+            shift
+            ;;
+        --registry-host)
+            shift
+            [[ $# -gt 0 ]] || { echo "ERROR: --registry-host requires an argument" >&2; exit 1; }
+            REGISTRY_HOST="$1"
+            shift
+            ;;
+        --registry-host=*)
+            REGISTRY_HOST="${1#--registry-host=}"
+            shift
+            ;;
+        --no-tmux)
+            USE_TMUX=0
+            shift
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "ERROR: Unknown argument: $1 (use --help)" >&2
+            exit 1
+            ;;
+    esac
+done
 REGISTRY_REF="xomoxcc/dgx-spark-sglang:0.5.10-sm121"
 REGISTRY_IMAGE="${REGISTRY_HOST}:${REGISTRY_PORT}/${REGISTRY_REF}"
 REGISTRY_CONTAINER="tmp-distr-registry"
@@ -109,28 +190,134 @@ ssh "${SSH_OPTS[@]}" "root@${SOURCE}" \
 # und snapshotter-unpack sind lokal CPU-bound und skalieren dadurch.
 # Nach dem Pull: retag auf den docker.io/... Namen und das ephemerale
 # ${REGISTRY_HOST}:${REGISTRY_PORT}/... Referenz-Tag entfernen.
-echo "=== parallel pull on all targets ==="
-pids=()
-for host in "${TARGETS[@]}"; do
-    short="${host%%.*}"
-    (
-        ssh "${SSH_OPTS[@]}" "root@${host}" \
-            "set -e; \
-             k3s ctr -n k8s.io image pull --plain-http '${REGISTRY_IMAGE}'; \
-             k3s ctr -n k8s.io image rm '${IMAGE}' >/dev/null 2>&1 || true; \
-             k3s ctr -n k8s.io image tag '${REGISTRY_IMAGE}' '${IMAGE}'; \
-             k3s ctr -n k8s.io image rm '${REGISTRY_IMAGE}' >/dev/null" \
-            2>&1 | sed "s/^/[${short}] /"
-    ) &
-    pids+=($!)
-done
+#
+# Zwei Implementierungen:
+#   parallel_pull_tmux   4-pane tiled tmux session, ein Target pro Pane.
+#                        Vorteil: native, ungemischte Outputs + progress bars,
+#                        pane-Title zeigt Host, remain-on-exit lässt Ergebnisse
+#                        stehen bis manuell per Ctrl+B d detached wird.
+#   parallel_pull_flat   Background-Subshells mit "[${short}]" Prefix-sed.
+#                        Fallback für non-TTY runs (cron, nohup, CI).
 
-fail=0
-for pid in "${pids[@]}"; do
-    if ! wait "${pid}"; then
-        fail=1
+parallel_pull_flat() {
+    echo "=== parallel pull on all targets (flat mode) ==="
+    local pids=() host short
+    for host in "${TARGETS[@]}"; do
+        short="${host%%.*}"
+        (
+            ssh "${SSH_OPTS[@]}" "root@${host}" \
+                "set -e; \
+                 k3s ctr -n k8s.io image pull --plain-http '${REGISTRY_IMAGE}'; \
+                 k3s ctr -n k8s.io image rm '${IMAGE}' >/dev/null 2>&1 || true; \
+                 k3s ctr -n k8s.io image tag '${REGISTRY_IMAGE}' '${IMAGE}'; \
+                 k3s ctr -n k8s.io image rm '${REGISTRY_IMAGE}' >/dev/null" \
+                2>&1 | sed "s/^/[${short}] /"
+        ) &
+        pids+=($!)
+    done
+    local fail=0 pid
+    for pid in "${pids[@]}"; do
+        wait "${pid}" || fail=1
+    done
+    return ${fail}
+}
+
+parallel_pull_tmux() {
+    local work_dir session host short first_short i
+    work_dir=$(mktemp -d -t "distrsm121-pull.XXXXXX")
+    session="distrsm121-pull-$$"
+
+    # Per-target driver scripts: avoid nested-quoting hell when shoving
+    # commands into tmux "..." arguments. Each script ssh-es to its target,
+    # runs the ctr pipeline, writes its exit code to work_dir/${short}.rc,
+    # and prints a final banner so the pane tells you at a glance whether
+    # it succeeded. Shell vars are expanded NOW (at heredoc write time)
+    # except \${rc} which escapes to stay literal and is evaluated inside
+    # the generated script after ssh returns.
+    for host in "${TARGETS[@]}"; do
+        short="${host%%.*}"
+        cat > "${work_dir}/${short}.sh" <<EOF
+#!/usr/bin/env bash
+set -o pipefail
+ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new "root@${host}" \\
+    "set -e; \\
+     k3s ctr -n k8s.io image pull --plain-http '${REGISTRY_IMAGE}'; \\
+     k3s ctr -n k8s.io image rm '${IMAGE}' >/dev/null 2>&1 || true; \\
+     k3s ctr -n k8s.io image tag '${REGISTRY_IMAGE}' '${IMAGE}'; \\
+     k3s ctr -n k8s.io image rm '${REGISTRY_IMAGE}' >/dev/null"
+rc=\$?
+echo "\${rc}" > "${work_dir}/${short}.rc"
+echo
+if [[ \${rc} -eq 0 ]]; then
+    echo "================================================================"
+    echo "  ${short}: OK  —  detach with Ctrl+B then d once all 4 are done"
+    echo "================================================================"
+else
+    echo "################################################################"
+    echo "  ${short}: FAILED (rc=\${rc})"
+    echo "################################################################"
+fi
+EOF
+        chmod +x "${work_dir}/${short}.sh"
+    done
+
+    # Layout: 2x2 tiled grid. Start a detached session with the first
+    # target, then three splits, re-tile after each so the layout stays
+    # balanced. remain-on-exit keeps panes visible after their command
+    # finishes (otherwise they'd close and you'd lose the output).
+    tmux kill-session -t "${session}" 2>/dev/null || true
+    first_short="${TARGETS[0]%%.*}"
+    tmux new-session -d -s "${session}" -x 220 -y 50 \
+        "bash ${work_dir}/${first_short}.sh"
+    tmux set-option -t "${session}" remain-on-exit on
+    tmux set-option -t "${session}" -g pane-border-status top 2>/dev/null || true
+    tmux select-pane -t "${session}.0" -T "${first_short}"
+
+    for i in 1 2 3; do
+        short="${TARGETS[$i]%%.*}"
+        tmux split-window -t "${session}" "bash ${work_dir}/${short}.sh"
+        tmux select-layout -t "${session}" tiled >/dev/null
+        tmux select-pane -t "${session}.${i}" -T "${short}"
+    done
+    tmux select-layout -t "${session}" tiled >/dev/null
+
+    echo "=== attaching to tmux session '${session}' ==="
+    echo "=== detach with Ctrl+B d once each pane shows its final banner ==="
+    sleep 1
+    tmux attach-session -t "${session}"
+    tmux kill-session -t "${session}" 2>/dev/null || true
+
+    local fail=0 rc
+    for host in "${TARGETS[@]}"; do
+        short="${host%%.*}"
+        rc=$(cat "${work_dir}/${short}.rc" 2>/dev/null || echo "missing")
+        if [[ "${rc}" == "0" ]]; then
+            echo "[${short}] ok"
+        else
+            echo "[${short}] FAILED (rc=${rc})"
+            fail=1
+        fi
+    done
+    rm -rf "${work_dir}"
+    return ${fail}
+}
+
+# Dispatcher: prefer tmux, fall back to flat if tmux is missing or the
+# environment is not interactive. --no-tmux forces flat regardless.
+if (( USE_TMUX == 1 )) && command -v tmux >/dev/null 2>&1 && [[ -t 0 ]] && [[ -t 1 ]]; then
+    parallel_pull_tmux
+    fail=$?
+else
+    if (( USE_TMUX == 1 )); then
+        if ! command -v tmux >/dev/null 2>&1; then
+            echo "=== tmux not installed, falling back to flat mode ===" >&2
+        elif ! [[ -t 0 && -t 1 ]]; then
+            echo "=== no TTY, falling back to flat mode ===" >&2
+        fi
     fi
-done
+    parallel_pull_flat
+    fail=$?
+fi
 
 if [[ ${fail} -ne 0 ]]; then
     echo "=== one or more targets failed ==="

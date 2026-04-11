@@ -696,9 +696,24 @@ transfer_image_from_remote() {
     # Stream save → load so pv can show progress. Use the docker.io/ FQN
     # so the loaded image lands under the same name the downstream tools
     # (containerd, ansible, k3s) expect.
-    local size
+    #
+    # Image size comes from `podman image inspect --format '{{.Size}}'` and
+    # is passed to pv as -s so the progress bar can compute percent + ETA.
+    # The raw byte total is echoed first — pv's -ptebar format does not
+    # print the absolute target itself, only the running count and percent,
+    # so without this line the user has no way to tell up-front how big
+    # the transfer will be.
+    local size size_human
     size=$(podman --connection "${PODMAN_CONNECTION}" image inspect \
             --format '{{.Size}}' "docker.io/${IMAGE_TAG}" 2>/dev/null || echo "")
+    if [[ -n "${size}" ]] && command -v numfmt >/dev/null 2>&1; then
+        size_human=$(numfmt --to=iec --suffix=B "${size}")
+        echo "Transfer target: ${size_human} (${size} bytes)"
+    elif [[ -n "${size}" ]]; then
+        echo "Transfer target: ${size} bytes"
+    else
+        warn "Could not determine image size on ${PODMAN_CONNECTION}; pv will run without ETA"
+    fi
 
     if command -v pv >/dev/null 2>&1; then
         local pv_args=(-ptebar)
