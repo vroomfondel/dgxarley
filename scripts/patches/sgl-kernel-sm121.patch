@@ -19,18 +19,28 @@ Problem:
   moe_runner_backend=triton or =cutlass under SGLang v0.5.10.
 
 Fix:
-  Force StageCount<1> (single-stage mainloop, no double buffering) and
-  switch from KernelPtrArrayTmaWarpSpecializedPingpong to the non-pingpong
+  Switch from KernelPtrArrayTmaWarpSpecializedPingpong to the non-pingpong
   KernelPtrArrayTmaWarpSpecialized schedule. Pingpong duplicates mainloop
-  SMEM across two warp groups; removing pingpong eliminates that
-  duplication, and StageCount<1> removes any remaining multi-buffering.
-  Together they free well more than the 1 KiB needed to fit inside 99 KiB.
+  and epilogue buffers across two persistent math warp groups; the
+  non-pingpong schedule uses only one math warp group plus a producer
+  warp for TMA loads, eliminating that duplication. The savings are
+  several KiB — well more than the 1 KiB needed to fit inside 99 KiB.
+
+  Stages are explicitly set to StageCount<2>. Warp-specialized schedules
+  require at least 2 pipeline stages to have anything to overlap between
+  producer (TMA) and consumer (compute) warps; StageCount<1> is NOT a
+  valid combination and CUTLASS rejects it at compile time with an SFINAE
+  error on CollectiveBuilder::CollectiveOp. This was confirmed empirically
+  on 2026-04-11 — an earlier variant of this patch used StageCount<1>
+  and failed nvrtc JIT compile with "incomplete type" errors on every
+  GemmKernel reference downstream.
 
   The ThreadBlockShape<_128, _128, _128> is unchanged — TMA descriptor
   validation allows stage/schedule changes but rejects M/N reduction.
 
-  This is the same approach TensorRT-LLM merged in PR #12141 (2026-03-18)
-  for the analogous fp4_gemm_template.h path on SM121.
+  This follows the same general approach TensorRT-LLM merged in PR #12141
+  (2026-03-18) for the analogous fp4_gemm_template.h path on SM121, though
+  their fix operates on a different layer of the CUTLASS stack.
 
 Refs:
   - https://github.com/NVIDIA/cutlass/issues/3144
@@ -47,18 +57,21 @@ Upstream source: sgl-project/sglang tag v0.5.10
 
 --- a/python/sglang/jit_kernel/csrc/moe/nvfp4_blockwise_moe.cuh
 +++ b/python/sglang/jit_kernel/csrc/moe/nvfp4_blockwise_moe.cuh
-@@ -289,7 +289,9 @@
+@@ -289,7 +289,12 @@
    // Architecture definitions
    using ArchTag = cutlass::arch::Sm120;
    using OperatorClass = cutlass::arch::OpClassBlockScaledTensorOp;
 -  using StageCountType = cutlass::gemm::collective::StageCountAuto;
 +  // SM120/121 both have 99 KiB (101376 B) SMEM/block — not 228 KiB.
 +  // Default Pingpong + auto-stages requests 100 KiB → 1 KiB over budget.
-+  using StageCountType = cutlass::gemm::collective::StageCount<1>;
++  // StageCount<2> is the minimum for warp-specialized schedules (producer
++  // + consumer pipelining needs >= 2 stages); StageCount<1> was tried and
++  // fails CUTLASS SFINAE at template instantiation time.
++  using StageCountType = cutlass::gemm::collective::StageCount<2>;
    using ThreadBlockShape = Shape<_128, _128, _128>;
    // on the tile size
 
-@@ -327,9 +329,8 @@
+@@ -327,9 +332,8 @@
        ElementAccumulator,
        ThreadBlockShape,
        ClusterShape,
