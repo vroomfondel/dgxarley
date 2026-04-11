@@ -109,7 +109,8 @@
         # sglang's env namespace; sglang's environ.py iterates every SGL_*
         # env var at startup and emits a UserWarning deprecation spam — using
         # our own prefix avoids that noise in the pod logs.
-        DGXARLEY_SM121_DEBUG: "1"
+        # DGXARLEY_SM121_DEBUG: "1"
+
         # CUDA_LAUNCH_BLOCKING=1: force every kernel launch synchronous so
         # device-side asserts surface at their actual launch site instead
         # of at the next cudaMallocAsync sync-point. Needed to narrow down
@@ -119,7 +120,7 @@
         # and points at nvfp4_blockwise_moe.cuh:78 regardless of the real
         # culprit. Significant runtime overhead (all kernels serialized);
         # remove once the root-cause kernel is identified.
-        CUDA_LAUNCH_BLOCKING: "1"
+        CUDA_LAUNCH_BLOCKING: "0"
         NCCL_SOCKET_IFNAME: "{{ nccl_socket_ifname }}"
         # NCCL transport: controlled by sglang_nccl_transport (roce/socket).
         # With apply: true, the ConfigMap is fully replaced — keys from the

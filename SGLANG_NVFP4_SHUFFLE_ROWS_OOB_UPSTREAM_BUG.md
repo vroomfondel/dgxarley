@@ -2,7 +2,13 @@
 
 ## Status
 
-**Unreported as a root-cause analysis**, but adjacent work exists upstream:
+**Fix verified end-to-end on 2026-04-11 18:24 UTC** on the 4-node GB10 cluster
+with Qwen3-235B-A22B-NVFP4, TP=4 EP=4, `moe_runner_backend=triton`. First
+successful run of the triton/cutlass NVFP4 MoE path on SM121 under EP — see
+"Verification" section below for the pod log excerpt showing both debug probes
+green.
+
+**Unreported as a root-cause analysis** upstream, but adjacent work exists:
 
 - [PR #20869](https://github.com/sgl-project/sglang/pull/20869) ("fix(moe): support EP
   for modelopt FP4 MoE weight processing") — **open, unmerged as of 2026-04-11**,
@@ -344,6 +350,83 @@ winner (`TESTLOGS/sglang_nn4_tp4_ep4/qwen-3-235b-a22b-nvfp4/`).
    `forward_extend` of the first layer that dispatches routed experts,
    with the traceback shown above.
 
-Remove `CUDA_LAUNCH_BLOCKING=1` for normal operation once the workaround
-(`moe_runner_backend: "flashinfer_cutlass"`) is in place — it carries
-significant overhead from serialized kernel launches.
+Remove `CUDA_LAUNCH_BLOCKING=1` for normal operation once the torch.zeros
+monkey-patch is in place and verified — it carries significant overhead from
+serialized kernel launches.
+
+## Verification
+
+The first clean end-to-end run of the triton MoE backend on this cluster,
+2026-04-11 18:24 UTC, after deploying the three sglang_launch.sh python
+monkey-patches (modelopt_quant.py EP input-scale slicing + num_local_experts,
+plus our new cutlass_moe.py a_map/c_map zero-init):
+
+```
+[2026-04-11 18:24:04] INFO:     10.68.2.1:0 - "GET /v1/models HTTP/1.1" 200 OK
+[2026-04-11 18:24:19] INFO:     10.68.2.1:0 - "GET /v1/models HTTP/1.1" 200 OK
+[dgxarley sm121-debug] sm120 pre-workspace clean (num_experts=32)
+[dgxarley sm121-debug] sm120 post-launch OK (num_experts=32)
+[dgxarley sm121-debug] sm120 pre-workspace clean (num_experts=32)
+[dgxarley sm121-debug] sm120 post-launch OK (num_experts=32)
+```
+
+Three independent signals of success:
+
+1. **`num_experts=32`** — not 128. Confirms the two existing
+   `modelopt_quant.py` monkey-patches (CutlassMoEParams uses
+   `num_local_experts`, input scales sliced per EP rank) are applied and
+   effective. These came from PR #20869 hunks 1+2, already in
+   `sglang_launch.sh` from a previous debug session.
+
+2. **`sm120 pre-workspace clean`** — the entry-probe from
+   `sgl-kernel-sm121-debug.patch` sees NO prior stream-error state when
+   `run_fp4_blockwise_scaled_group_mm_sm120()` is called. Directly proves
+   the `torch.empty` → `torch.zeros` fix in `cutlass_moe.py` worked:
+   `_shuffle_rows_torch`'s `a.index_select(0, a_map)` no longer OOBs, so
+   the stream reaches the CUTLASS GEMM entry in a clean state.
+
+3. **`sm120 post-launch OK`** — the exit-probe after `gemm_op.run()`
+   returns with `cudaSuccess`. First time our
+   `sgl-kernel-sm121.patch` (StageCount<2> + `KernelPtrArrayTma
+   WarpSpecializedCooperative`) has executed a real GEMM launch. The
+   patch itself was designed in `CUTLASS_NVFP4_SM121_PRD.md` around
+   the 99 KiB SM121 SMEM budget and the CUTLASS#3144 root-cause
+   numbers, but until today could never be verified end-to-end
+   because the upstream `shuffle_rows` OOB was crashing the pipeline
+   two layers earlier.
+
+Config that produced these lines:
+
+- Model: `nvidia/Qwen3-235B-A22B-NVFP4` (128 routed experts, top-8)
+- Topology: TP=4, EP=4 on 4 × DGX Spark GB10 (SM121), NCCL socket
+- Image: `scitrera/dgx-spark-sglang:0.5.10-sm121` (our sm121 build with
+  `sgl-kernel-sm121.patch` + `sgl-kernel-sm121-debug.patch` compiled in)
+- Pod env: `DGXARLEY_SM121_DEBUG=1` (probe output), `CUDA_LAUNCH_BLOCKING=1`
+  (kept on for the verification run so any regression would still surface
+  at its actual launch site)
+- Runtime monkey-patches from `sglang_launch.sh`: modelopt_quant.py
+  EP-aware input-scale slicing, modelopt_quant.py CutlassMoEParams
+  num_local_experts, cutlass_moe.py a_map/c_map zero-init
+- Backend: `moe_runner_backend=triton` (the previously-broken path).
+  The `flashinfer_cutlass` winner config was not needed for this run.
+
+## Follow-ups
+
+- Remove `CUDA_LAUNCH_BLOCKING=1` from the sglang ConfigMap env vars
+  now that the fix is validated — the serialized-kernel overhead was
+  needed only to pin the assert site during debugging.
+- Optional: submit a PR to `sgl-project/sglang` with the one-line
+  `torch.empty` → `torch.zeros` fix on top of the (still unmerged)
+  PR #20869 hunks. Rationale: the `cutlass_moe_fp4` codepath can stay
+  operational under EP instead of being permanently sidestepped by
+  SM120 auto-routing to `flashinfer_cutlass`, which matters for other
+  NVFP4 MoE models where `triton`/`cutlass` may have a latency edge
+  over `flashinfer_cutlass`.
+- Re-run the 4-node Qwen3-235B NVFP4 test matrix (`TESTLOGS/sglang_nn4
+  _tp4_ep4/qwen-3-235b-a22b-nvfp4/`) with the three monkey-patches
+  active to see whether the `triton` / `cutlass` backends now
+  outperform the `flashinfer_cutlass` winner (Test 17: 11.28 / 34.60 /
+  42.70 tok/s at n=1 / n=4 peak / n=8 peak).
+- Optional: remove the `sgl-kernel-sm121-debug.patch` compile-time
+  gate from routine builds once we trust the fix end-to-end. Keep it
+  in the tree for future sm121 kernel-level debugging.
