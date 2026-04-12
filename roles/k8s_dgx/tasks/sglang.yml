@@ -687,3 +687,10 @@
     ttl: "{{ nsupdate_ttl }}"
     value: "{{ nsupdate_ingress_ip }}"
     state: present
+  ignore_errors: true
+  register: dns_result
+
+- name: Warn if DNS registration failed
+  ansible.builtin.debug:
+    msg: "DNS registration failed (non-critical): {{ dns_result.msg | default('unknown') }}"
+  when: dns_result is failed
