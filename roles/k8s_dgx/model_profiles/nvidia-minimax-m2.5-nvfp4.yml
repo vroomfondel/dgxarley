@@ -1,0 +1,76 @@
+# Model profile: nvidia/MiniMax-M2.5-NVFP4
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+_model_profile:
+  "nvidia/MiniMax-M2.5-NVFP4":
+    info_url: "https://huggingface.co/nvidia/MiniMax-M2.5-NVFP4"
+    # 229B/8-active MoE (256 experts, sigmoid routing), NVFP4 quantized (~139 GB weights).
+    # num_key_value_heads=8 → not divisible by 3 → TP=3 impossible.
+    # Uses Pipeline Parallelism (PP=nnodes) instead: each GPU gets ~21 of 62 layers
+    # (~46 GB weights), leaving ~82 GB for KV cache. No head splitting needed (TP=1).
+    # Trade-off: higher per-request latency (pipeline bubbles) but same throughput
+    # with sufficient concurrency (micro-batching hides bubbles).
+    # Recommended launch (NVIDIA model card):
+    #   python3 -m sglang.launch_server --model nvidia/MiniMax-M2.5-NVFP4 --tensor-parallel-size 8 \
+    #     --quantization modelopt_fp4 --trust-remote-code --reasoning-parser minimax-append-think \
+    #     --tool-call-parser minimax-m2 --moe-runner-backend flashinfer_cutlass --attention-backend flashinfer
+    # load_format: "sharded_state" — disabled for NVFP4 because:
+    # 1. NVFP4 process_weights_after_loading runs on the empty model first, then
+    #    shard tensors are copied in. This double-processing eats ~4 GB extra memory
+    #    vs. the default loader (streaming weights → process once), leaving less
+    #    headroom for CUDA graph capture.
+    # 2. No real speedup observed with TP=2 EP=2: NVFP4 weight loading is dominated
+    #    by process_weights_after_loading (scale recalibration, FP4 repacking), not
+    #    by file I/O. Sharded loading skips the slow safetensors redistribute but
+    #    the post-processing cost remains the same (~360s either way).
+    # load_format: "sharded_state"
+    nccl_transport: "roce"
+    #nccl_transport: "roce"
+    tp_size: 1  # PP=4 (nnodes/tp=4/1=4). TP=1 avoids KV head split issue (8 heads not divisible by 3 or 4 with EP).
+    context_length: 196608
+    quantization: "modelopt_fp4"
+    # trust_remote_code: required because MiniMax-M2.5 ships custom model code
+    # (minimax_m2.py, custom tokenizer) in the HF repo that SGLang must execute.
+    # Without it, transformers refuses to load the model class. Safe here because
+    # the code comes from NVIDIA's official nvidia/MiniMax-M2.5-NVFP4 repo.
+    trust_remote_code: true
+    # PP mode: triton MoE is mandatory — fi_cutlass MoE causes worker crashes
+    # and Xid 13 on SM121. All 16 fi_cutlass tests (17–32) failed on PP=4.
+    # PP=4 winner: Test 2 (triton moe, flashinfer attn, fi_cutlass fp4, eager) → 63.9 tok/s at 8∥.
+    moe_runner_backend: "triton"
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.80"
+    # mem_fraction_static: "0.40"  # for speculative_enabled=true
+    # PP=4 winner uses flashinfer attention (Test 2: 63.9 at 8∥).
+    # triton attention also stable (Test 5: 52.2 at 8∥, Test 13: 62.0 at 8∥).
+    attention_backend: "flashinfer"
+    # flashinfer_cutlass fp4: stable on PP=4. fi_cudnn also works but slightly
+    # lower throughput (Test 9: 48.9 vs Test 1: 61.2 at 8∥).
+    fp4_gemm_backend: "flashinfer_cutlass"
+    jit_max_jobs: 4
+    # Piecewise CUDA graphs: always OOM on PP (58 chunks × 256 experts per stage).
+    disable_piecewise_cuda_graph: true
+    # Eager mode: PP=4 winner. 1∥ is slower (5.5 vs 16.2 tok/s) but 8∥ is best
+    # (63.9 tok/s). CUDA graphs (Test 1: 61.2) are close — switch back if TTFT matters.
+    disable_cuda_graph: true
+    cuda_graph_max_bs: 16
+    pp_async_batch_depth: 0  # pp_async hurts throughput on PP=4 (Test 4: 50.0 vs Test 2: 63.9)
+    # DeepGemm is designed for FP8 with ue8m0 scale format. For NVFP4 models
+    # (scale_fmt != ue8m0): JIT kernels not optimized, blocks scheduler watchdog,
+    # exhausts system RAM. Disabled — FP4 GEMM falls to fp4_gemm_backend above.
+    disable_deep_gemm: true
+    # "minimax" parser maps to Qwen3Detector which properly separates
+    # <think>...</think> into reasoning_content. Works with OpenWebUI and CLI tools.
+    reasoning_parser: "minimax"
+    tool_call_parser: "minimax-m2"
+    num_experts: 256
+    # ep_size: "{{ sglang_nnodes if (256 % (sglang_nnodes | int) == 0) else 1 }}"  # for TP=4 EP=4 mode
+    ep_size: 1  # PP mode: no expert parallelism, each pipeline stage has all 256 experts
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 40
+    speculative_enabled: false
+    speculative_algo: NEXTN
+    speculative_num_steps: 3
+    speculative_num_draft_tokens: 4
+    speculative_draft_model_path: ""

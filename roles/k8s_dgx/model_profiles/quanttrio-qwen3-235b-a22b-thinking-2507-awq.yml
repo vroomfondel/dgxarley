@@ -1,0 +1,94 @@
+# Model profile: QuantTrio/Qwen3-235B-A22B-Thinking-2507-AWQ
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+_model_profile:
+  "QuantTrio/Qwen3-235B-A22B-Thinking-2507-AWQ":
+    # NOTE: i cannot get this to work properly - NGRAM repeats, loops etc... stepping away from this model for now...
+    info_url: "https://huggingface.co/QuantTrio/Qwen3-235B-A22B-Thinking-2507-AWQ"
+    # 235B/22B MoE, AWQ 4-bit (~124 GB / ~62 GB per GPU with TP=2)
+    load_format: "sharded_state"  # default: auto
+    #load_format: "auto"
+    context_length_max: 262144
+    context_length: 262144
+    #context_length: 131072
+    #context_length: 65536
+    #context_length: 32768
+    # KV cache quantization options:
+    #   "auto" / "bfloat16" — full precision, best quality, 2× memory vs fp8
+    #   "fp8_e4m3"  — 3 mantissa bits, higher precision, better for long contexts
+    #   "fp8_e5m2"  — 2 mantissa bits, wider range, but more rounding error
+    #                  caused kv-degradation (loops/repeats) in earlier testing
+    # fp8_e4m3 is the sweet spot: halves KV memory with minimal quality loss.
+    # Use "auto" only if output quality degrades (doubles KV memory usage).
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.7"
+    # quantization: "moe_wna16" avoids the Marlin repack that causes OOM on
+    # memory-constrained GPUs. Auto-detect (no flag) creates AWQMarlinConfig which
+    # works correctly but needs ~109 GB peak during repack (old+new tensors coexist).
+    # moe_wna16 uses Triton INT4 kernels directly — no repack, peak = final ~62 GB.
+    # --quantization awq is WRONG for MoE: AWQConfig.get_quant_method() returns None
+    # for FusedMoE → falls through to unquantized FP16 → OOM.
+    #
+    # Quantization options for AWQ MoE models (e.g. Qwen3-235B) in SGLang 0.5.9:
+    #
+    #  ┌────────────────┬─────────────────────┬────────────────┬────────────────────┬──────────────────────────────────────┐
+    #  │ --quantization │     Internal        │ MoE-compatible │       Repack       │              Notes                   │
+    #  ├────────────────┼─────────────────────┼────────────────┼────────────────────┼──────────────────────────────────────┤
+    #  │ (unset)        │ Auto-detect →       │                │ Yes (~109 GB peak  │ Default path, EP-aware via           │
+    #  │                │ AWQMarlinConfig     │ Yes            │ at TP=2, ~55 GB    │ FusedMoE.weight_loader               │
+    #  │                │                     │                │ at EP=2)           │                                      │
+    #  ├────────────────┼─────────────────────┼────────────────┼────────────────────┼──────────────────────────────────────┤
+    #  │ moe_wna16      │ MoeWNA16Config →    │ Yes            │ No (peak =         │ No repack, but qzeros EP bug         │
+    #  │                │ Triton INT4         │                │ final)             │ (our monkey-patch)                   │
+    #  ├────────────────┼─────────────────────┼────────────────┼────────────────────┼──────────────────────────────────────┤
+    #  │ awq            │ AWQConfig           │ No             │ —                  │ get_quant_method() returns None for  │
+    #  │                │                     │                │                    │ FusedMoE → FP16 fallback → OOM       │
+    #  ├────────────────┼─────────────────────┼────────────────┼────────────────────┼──────────────────────────────────────┤
+    #  │ awq_marlin     │ AWQMarlinConfig     │ Yes            │ Yes                │ Explicitly same as auto-detect       │
+    #  └────────────────┴─────────────────────┴────────────────┴────────────────────┴──────────────────────────────────────┘
+    #
+    #  SGLang (via vLLM) also supports: gptq, gptq_marlin, marlin, fp8, compressed_tensors, bitsandbytes,
+    #  experts_int8, gguf, squeezellm — but those are not relevant for AWQ models.
+    #
+    #  Full list in sglang/srt/layers/quantization/__init__.py.
+    quantization: "moe_wna16"
+    #quantization: "awq_marlin"
+    attention_backend: "triton"
+    disable_deep_gemm: true
+    tool_call_parser: "qwen3_coder"
+    # Expert parallelism: 128 experts split across 2 GPUs (64 each).
+    # MoE layers use all-to-all instead of all-reduce — attention stays TP=2.
+    # Re-run sglang_shard/sglang_cpu_shard after enabling (old shards incompatible).
+    # SGLang 0.5.9 qzeros EP bug is monkey-patched at runtime in sglang_launch.sh
+    # and sglang_shard_launch.sh (w13_qzeros/w2_qzeros expert_id remapping).
+    num_experts: 128
+    ep_size: "{{ sglang_nnodes if (128 % (sglang_nnodes | int) == 0) else 1 }}"
+    # EPLB disabled: EPLBManager crashes after ~1000 forward passes with AttributeError:
+    # 'Qwen3MoeForCausalLM' has no 'routed_experts_weights_of_layer' (eplb_manager.py:110).
+    # Confirmed broken on both 0.5.9-t5 AND 0.5.9-dev2-acab24a7-t5 (PR #19767 does not
+    # fix Qwen3MoE, only claims to fix Qwen3_5 — but Qwen3_5 also still crashes, see
+    # SGLANG_TP_EP_MOE_UPSTREAM_BUG.md). EP=2 works fine with static assignment.
+    enable_eplb: false
+    enable_expert_distribution_metrics: false
+    # Standard MoE (128 experts, 8 active) — triton attention backend required
+    # on SM121 (flashinfer has edge cases with large MoE models).
+    # Weight loading (~170s for 25 shards) can be halved with pre-sharding:
+    # run sglang_shard job, then enable load_format: "sharded_state" above.
+    # thinking only!
+    reasoning_parser: "qwen3"  #deepseek-r1
+    # thinking_budget: caps reasoning tokens via Qwen3ThinkingBudgetLogitProcessor.
+    # This is NOT a sampling param — it uses SGLang's custom logit processor.
+    # Set per-profile here, override per-request via --thinking-budget CLI arg.
+    #thinking_budget: 2048
+    recommended_sampling:
+      temperature: 0.6
+      top_p: 0.95
+      top_k: 20
+    #      min_p: 0
+    #    sampling_overrides:
+    #      presence_penalty: 1.0
+    #      temperature: 0.6
+    #      top_p: 0.95
+    #      top_k: 40
+    #      min_p: 0.1
+    #      repetition_penalty: 1.15
+    #      frequency_penalty: 0.3

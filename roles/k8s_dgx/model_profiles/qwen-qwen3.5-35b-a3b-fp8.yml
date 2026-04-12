@@ -1,0 +1,25 @@
+# Model profile: Qwen/Qwen3.5-35B-A3B-FP8
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+_model_profile:
+  "Qwen/Qwen3.5-35B-A3B-FP8":
+    info_url: "https://huggingface.co/Qwen/Qwen3.5-35B-A3B-FP8"
+    context_length: 262144
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.50"
+    attention_backend: "triton"  # trtllm_mha
+    disable_deep_gemm: true
+    fp8_gemm_runner_backend: "cutlass"
+    reasoning_parser: "qwen3"
+    tool_call_parser: "qwen3_coder"
+    # supports thinking (default) and non-thinking modes
+    # Server-side defaults use "thinking" mode sampling (the default mode).
+    # For other modes, override per-request via API params.
+    #   thinking:              temperature=1.0  top_p=0.95  top_k=20  presence_penalty=1.5
+    #   thinking_coding:       temperature=0.6  top_p=0.95  top_k=20  presence_penalty=0.0
+    #   non_thinking:          temperature=0.7  top_p=0.8   top_k=20  presence_penalty=1.5
+    #   non_thinking_reasoning: temperature=1.0  top_p=1.0   top_k=40  presence_penalty=2.0
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 20
+      presence_penalty: 1.5

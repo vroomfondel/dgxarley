@@ -1,0 +1,59 @@
+# Model profile: nvidia/GLM-4.7-NVFP4
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+_model_profile:
+  "nvidia/GLM-4.7-NVFP4":
+    info_url: "https://huggingface.co/nvidia/GLM-4.7-NVFP4"
+    # 358B/~58B-active MoE (160 experts, top-8, sigmoid routing), NVFP4 quantized (~214 GB).
+    # Architecture: GLM-4 MoE — standard GQA (num_kv_heads=8, 12:1 ratio), 92 layers
+    # (first 3 dense, rest MoE), 1 shared expert + 160 routed experts per MoE layer.
+    # Has MTP head (1 layer) for speculative decoding (NEXTN).
+    # num_attention_heads=96, num_key_value_heads=8 → TP=4 works (2 KV heads/GPU).
+    # NVFP4 quantization: only MoE FFN weights are FP4; attention projections,
+    # lm_head, and MTP layer remain in BF16.
+    # ~214 GB / 4 GPUs (TP=4) ≈ ~54 GB/GPU — fits on 4× DGX Spark.
+    # Recommended launch (NVIDIA model card):
+    #   python3 -m sglang.launch_server --model nvidia/GLM-4.7-NVFP4 --tensor-parallel-size 4 \
+    #     --quantization modelopt_fp4 --trust-remote-code --reasoning-parser glm45 \
+    #     --tool-call-parser glm47 --chunked-prefill-size 131072 --mem-fraction-static 0.80
+    # Note: model card does NOT specify --moe-runner-backend or --attention-backend.
+    # model_type=glm4_moe is in transformers 4.57.6 — no upgrade needed (unlike GLM-5).
+    nccl_transport: "roce"
+    tp_size: 4  # num_kv_heads=8 → TP=4 works (2 KV heads/GPU). EP=4 from nnodes.
+    context_length: 196608  # model max 202752; leave headroom
+    #chunked_prefill_size: 131072  # NVIDIA model card recommendation
+    quantization: "modelopt_fp4"
+    trust_remote_code: true
+    # triton MoE → cutlass_moe_fp4: crashes on SM121 (101 KB shared memory too small
+    # for 128x128x128 tiles, device-side assert). Not patchable at runtime — needs
+    # SM121-specific sgl-kernel build. See CUTLASS_NVFP4_SM121_PRD.md.
+    # flashinfer_cutlass MoE: only working NVFP4 MoE runner on SM121.
+    # v0.5.10 TP=4 EP=4 best result: Test 17 (fi_cutlass + triton attn + fi_cutlass fp4
+    # + eager) → 8.4/20.8 tok/s (n=1/n=4, n=8 unstable).
+    # rc0 winner (#23): fi_cutlass MoE + triton attn + fi_cudnn fp4 → 8.06/21.94/30.01
+    # but fi_cudnn regressed in v0.5.10 (0 tokens).
+    moe_runner_backend: "flashinfer_cutlass"
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.60"
+    # triton attn: required for stability with fi_cutlass MoE on v0.5.10 (Test 17).
+    # flashinfer attn + fi_cutlass MoE crashes with Xid 13 (Test 14).
+    attention_backend: "triton"
+    fp4_gemm_backend: "flashinfer_cutlass"
+    jit_max_jobs: 4
+    disable_piecewise_cuda_graph: true
+    # Start with eager mode to verify SM121 patch works. Enable CUDA graphs
+    # after MoE Triton tuning provides SM121-optimized configs (101 KB shared mem).
+    disable_cuda_graph: true
+    cuda_graph_max_bs: 8
+    pp_async_batch_depth: 0
+    disable_deep_gemm: true
+    reasoning_parser: "glm45"
+    tool_call_parser: "glm47"
+    num_experts: 160
+    ep_size: 4
+    #ep_size: "{{ sglang_nnodes if (160 % (sglang_nnodes | int) == 0) else 1 }}"
+    recommended_sampling:
+      temperature: 1.0
+    speculative_enabled: false
+    speculative_algo: NEXTN
+    speculative_num_steps: 3
+    speculative_num_draft_tokens: 4

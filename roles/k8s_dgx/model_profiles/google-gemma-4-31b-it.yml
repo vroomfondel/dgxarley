@@ -1,0 +1,41 @@
+# Model profile: google/gemma-4-31B-it
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+_model_profile:
+  "google/gemma-4-31B-it":
+    info_url: "https://huggingface.co/google/gemma-4-31B-it"
+    # 30.7B dense, multimodal-capable (Gemma4ForConditionalGeneration ships
+    # with text + vision + audio heads; SGLang uses the text path).
+    # Architecture: 60 layers, hybrid attention with 5:1 sliding-to-full
+    # pattern (every 6th layer is full_attention, rest are sliding_window=1024).
+    # num_attention_heads=32, num_key_value_heads=16 (2:1 GQA), head_dim=256.
+    # Global layers use Unified Keys/Values (global_head_dim=512, num_global_kv_heads=4)
+    # + proportional RoPE (partial_rotary_factor=0.25) for memory-efficient long context.
+    # rope_theta: 10000 (sliding) / 1000000 (full). vocab_size: 262144.
+    # Context: 262144 native (256K, no YaRN extension needed).
+    # BF16 weights ~62 GB total → TP=4 gives ~15.5 GB/GPU; lots of KV-cache headroom.
+    # SGLang has day-one Gemma 4 support (per Google/LMSYS blog). Still new —
+    # Gemma4 backend path, sliding+full attention hybrid, and proportional RoPE
+    # may have edge cases on SM121 that need testing before production use.
+    # No MTP heads → no NEXTN. No public EAGLE3 draft exists for Gemma 4 yet.
+    nccl_transport: "roce"
+    tp_size: 4  # num_kv_heads=16 → 4 per GPU
+    context_length: 262144  # 256K native
+    quantization: ""  # native BF16
+    trust_remote_code: false  # official Google model, no custom code
+    kv_cache_dtype: "fp8_e4m3"  # sliding window dominates → large KV-savings
+    mem_fraction_static: "0.85"  # weights ~15.5 GB/GPU, lots of room
+    attention_backend: "flashinfer"  # needs sliding+full hybrid support
+    jit_max_jobs: 4
+    disable_piecewise_cuda_graph: false
+    # Start with CUDA graphs enabled (dense BF16 model, no NVFP4 MoE crashes).
+    # Disable if first startup hits unresolved Gemma4-specific graph issues.
+    disable_cuda_graph: false
+    cuda_graph_max_bs: 8
+    pp_async_batch_depth: 0
+    disable_deep_gemm: false
+    recommended_sampling:
+      # Gemma family defaults — verify against latest model card before production.
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 64
+    speculative_enabled: false

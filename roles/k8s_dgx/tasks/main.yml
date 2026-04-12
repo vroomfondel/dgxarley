@@ -1,4 +1,29 @@
 ---
+# Load per-model profile files from model_profiles/ and merge them into
+# the sglang_model_profiles dict. Each file defines _model_profile with
+# one key (the model name) — we combine_dict them all together.
+- name: Load model profile files
+  ansible.builtin.include_vars:
+    file: "{{ item }}"
+    name: "_mp_{{ idx }}"
+  loop: "{{ lookup('fileglob', role_path ~ '/model_profiles/*.yml', wantlist=True) | sort }}"
+  loop_control:
+    index_var: idx
+    label: "{{ item | basename }}"
+  tags: always
+
+- name: Merge model profiles into sglang_model_profiles
+  ansible.builtin.set_fact:
+    sglang_model_profiles: >-
+      {{ sglang_model_profiles | default({}) | combine(
+         lookup('vars', '_mp_' ~ item)._model_profile | default({}),
+         recursive=True
+      ) }}
+  loop: "{{ range(lookup('fileglob', role_path ~ '/model_profiles/*.yml', wantlist=True) | length) | list }}"
+  loop_control:
+    label: "profile {{ item }}"
+  tags: always
+
 - name: Deploy workload namespaces
   ansible.builtin.import_tasks: namespace.yml
   tags: namespace

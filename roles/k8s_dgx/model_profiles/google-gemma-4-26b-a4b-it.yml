@@ -1,0 +1,57 @@
+# Model profile: google/gemma-4-26B-A4B-it
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+_model_profile:
+  "google/gemma-4-26B-A4B-it":
+    info_url: "https://huggingface.co/google/gemma-4-26B-A4B-it"
+    # 26B total / ~3.8B active MoE (top_k=8 of 128 experts per token),
+    # multimodal-capable. The "A4B" suffix denotes ~4B active params — Google's
+    # latency-optimized variant (lmarena ~1441 with only 3.8B active compute).
+    # Architecture: Gemma4ForConditionalGeneration with enable_moe_block=true.
+    # 30 layers, hybrid attention with 5:1 sliding-to-full pattern (sliding_window=1024).
+    # num_attention_heads=16, num_key_value_heads=8 (2:1 GQA), head_dim=256.
+    # Global layers: Unified K/V (global_head_dim=512, num_global_kv_heads=2)
+    # + proportional RoPE (partial_rotary_factor=0.25).
+    # MoE: num_experts=128, top_k_experts=8, moe_intermediate_size=704.
+    # rope_theta: 10000 (sliding) / 1000000 (full). vocab_size: 262144.
+    # Context: 262144 native (256K).
+    # BF16 weights ~52 GB total → TP=4 EP=4 → ~13 GB/GPU, huge headroom.
+    # Per-token compute is tiny (3.8B active) → expected very high tok/s.
+    # SGLang day-one support per Google/LMSYS blog. Still new — Gemma4 MoE
+    # path hasn't been stress-tested on SM121, may need tuning.
+    # No MTP, no public EAGLE3 draft.
+    nccl_transport: "roce"
+    tp_size: 4  # num_kv_heads=8 → 2 per GPU
+    context_length: 262144
+    quantization: ""  # native BF16
+    trust_remote_code: false
+    moe_runner_backend: "triton"  # BF16 MoE — no NVFP4 fallback crash path
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.85"
+    attention_backend: "flashinfer"
+    jit_max_jobs: 4
+    disable_piecewise_cuda_graph: false
+    disable_cuda_graph: false
+    cuda_graph_max_bs: 8
+    pp_async_batch_depth: 0
+    disable_deep_gemm: false
+    num_experts: 128
+    # EP distributes 128 experts across nnodes (4 nodes → 32 experts/GPU).
+    # Auto-computed: if num_experts is divisible by nnodes, use ep_size=nnodes,
+    # else fall back to 1 (no EP). Same pattern as the other 128-expert profiles
+    # above. With only 3.8B active params per token, EP communication may be the
+    # bottleneck rather than compute — benchmark vs ep_size=1 (expert replication)
+    # before deciding what's faster at production concurrency.
+    ep_size: "{{ sglang_nnodes if (128 % (sglang_nnodes | int) == 0) else 1 }}"
+    # EPLB (Expert Parallel Load Balancer) disabled initially — Gemma 4 MoE
+    # routing is softmax top_k=8, and EPLB's rebalancing has been unstable on
+    # other similar MoE setups in this project. Enable later if load imbalance
+    # shows in expert_distribution_metrics.
+    enable_eplb: false
+    enable_expert_distribution_metrics: false
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 64
+    speculative_enabled: false
+
+

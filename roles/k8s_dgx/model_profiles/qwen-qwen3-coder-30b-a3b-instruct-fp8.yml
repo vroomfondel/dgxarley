@@ -1,0 +1,23 @@
+# Model profile: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+_model_profile:
+  "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8":
+    info_url: "https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
+    context_length: 262144
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.50"
+    disable_deep_gemm: true
+    fp8_gemm_runner_backend: "cutlass"
+    # non-thinking only — no <think> blocks
+    recommended_sampling:
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20
+      repetition_penalty: 1.05
+    # local overrides (anti-repetition tuning, not from model card)
+    sampling_overrides:
+      top_k: -1
+      min_p: 0.15
+      presence_penalty: 1.5
+      frequency_penalty: 0.8
+      repetition_penalty: 1.55

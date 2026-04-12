@@ -1,0 +1,123 @@
+# Model profile: nvidia/Qwen3-235B-A22B-NVFP4
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+_model_profile:
+  "nvidia/Qwen3-235B-A22B-NVFP4":
+    info_url: "https://huggingface.co/nvidia/Qwen3-235B-A22B-NVFP4"
+    # 235B/22B-active MoE (128 experts, top-8, softmax routing), NVFP4 quantized.
+    # Architecture: standard Qwen3 MoE — 94 layers, GQA (num_kv_heads=4, 16:1 ratio),
+    # 1 shared expert + 128 routed experts per MoE layer. Text-only (no vision encoder).
+    # No MTP heads → no NEXTN speculative decoding.
+    # num_attention_heads=64, num_key_value_heads=4 → TP=4 works (1 KV head/GPU).
+    # NVFP4: only MoE expert FFN weights are FP4; attention, shared experts, lm_head
+    # remain in BF16. ~3.3× smaller than BF16 → ~70 GB total / 4 GPUs ≈ ~18 GB/GPU.
+    # Much lighter than Qwen3.5-397B (~59 GB/GPU) — leaves ample room for KV cache.
+    # Recommended: TP=4 (model card), context up to 131K with YaRN.
+    nccl_transport: "roce"
+    tp_size: 4  # num_kv_heads=4 → TP=4 works (1 KV head/GPU)
+    # Qwen3 config.json ships with rope_scaling=null, rope_theta=1000000.0,
+    # max_position_embeddings=40960. To use the full 131K context, YaRN must
+    # be enabled explicitly via --json-model-override-args. Qwen3 model card
+    # recommends factor=4.0 with original_max_position_embeddings=32768
+    # → derived 131072. The ALLOW_OVERWRITE env var is auto-set by sglang.yml
+    # when json_model_override_args is non-empty (SGLang's _derive_context_length
+    # in v0.5.10+ runs BEFORE json overrides are applied → hard ValueError
+    # unless bypassed).
+    # rope_theta MUST be duplicated inside rope_scaling: SGLang's
+    # get_rope_config (hf_transformers_utils.py:162) builds rope_params from
+    # rope_scaling alone and indexes rope_params["rope_theta"] — KeyError
+    # otherwise, even though rope_theta exists at config top level.
+    # context_length: 40960  # without yarn
+    # enabling yarn leads to change (reduction) of tok/s by a factor of 0.5
+    context_length: 131072  # YaRN-extended, requires json_model_override_args below
+    json_model_override_args: '{"rope_scaling":{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768,"rope_theta":1000000.0}}'
+    quantization: "modelopt_fp4"
+    trust_remote_code: true
+    # Backend selection = v0.5.10 TP=4 EP=4 matrix winner (Test 17).
+    # See TESTLOGS/sglang_nn4_tp4_ep4/qwen-3-235b-a22b-nvfp4/
+    #     TESTLOG_nv580.142_sglang-0.5.10_qwen3-235b-a22b-nvfp4_4n.md
+    # Result: 11.28 / 34.60 / 42.70 tok/s (n=1 / n=4 peak / n=8 peak), fully
+    # stable at all three concurrency levels. Only 4 of 36 matrix configs
+    # pass — all share this MoE+FP4 combo; attention backend is orthogonal.
+    # Why these exact values (NOT to be "optimized" without a new matrix run):
+    #   moe_runner_backend=flashinfer_cutlass — triton and cutlass MoE runners
+    #     both fall through to nvfp4_blockwise_moe.cuh on NVFP4, which hits
+    #     a device-side assert under CUDA graphs and returns 0 tokens under
+    #     eager on SM121 (Tests 1–6, 25–30 all fail).
+    #   fp4_gemm_backend=flashinfer_cutlass — flashinfer_cudnn FP4 GEMM is
+    #     completely broken in v0.5.10 on SM121 (100% startup_crash across
+    #     all 18 fi_cudnn tests in this matrix; same regression as GLM-4.7
+    #     and Qwen3.5-397B).
+    #   disable_cuda_graph=true (eager) — Test 17 peaks ~3% higher at n=4/n=8
+    #     than the fixed-BS CUDA graph variant (Test 16), at the cost of
+    #     worse n=1 TTFT (~11s vs ~1s). Switch to false if first-request
+    #     latency matters more than peak concurrent throughput.
+    #   disable_piecewise_cuda_graph=true — piecewise graphs crash at startup
+    #     in this kernel family on SM121 (Tests 15, 18).
+    #   attention_backend=triton — flashinfer attn also works (Tests 13/14),
+    #     but triton attn gave ~3% better peak at n=4/n=8 in the winner row.
+
+    moe_runner_backend: "flashinfer_cutlass"
+
+    kv_cache_dtype: "fp8_e4m3"
+    # ~18 GB/GPU weights → ~100 GB free → 0.80 leaves plenty for KV + JIT.
+    # 128 experts (vs 512 for Qwen3.5) → much less JIT memory needed.
+    # Test 17 winner value; do not lower without a new matrix run.
+    mem_fraction_static: "0.70"
+    attention_backend: "triton"
+    fp4_gemm_backend: "flashinfer_cutlass"
+    jit_max_jobs: 4
+    disable_piecewise_cuda_graph: true
+    disable_cuda_graph: false
+    cuda_graph_max_bs: 8
+    pp_async_batch_depth: 0
+    disable_deep_gemm: true
+    reasoning_parser: "qwen3"
+    num_experts: 128
+    ep_size: 4
+    # EPLB disabled: same Qwen3MoE routed_experts_weights_of_layer crash as AWQ variant.
+    enable_eplb: false
+    enable_expert_distribution_metrics: false
+    recommended_sampling:
+      temperature: 0.6
+      top_p: 0.95
+      top_k: 20
+    # EAGLE3 speculative decoding — experimental, toggle via speculative_enabled.
+    # Draft model: lmsys/Qwen3-235B-A22B-EAGLE3 (~0.3B, published by LMSYS via
+    # SpecForge). LMSYS benchmarks on H100/H200 TP=8 BF16 target: gsm8k 224 tok/s
+    # @ accept length 3.54; mtbench 241 tok/s @ accept length 3.02. Roughly 2.5-3x
+    # speedup vs baseline.
+    # ⚠ Unvalidated combinations on this setup — no published report covers:
+    #   - NVFP4 target × BF16 draft (tokenizer matches, dtype handoff untested)
+    #   - TP=4 vs published TP=8
+    #   - SM121 Blackwell / DGX Spark (LMSYS tested H100/H200, NVIDIA's variant
+    #     targets B200)
+    #   - SGLang v0.5.10 EAGLE3 + Qwen3 MoE + EP=4
+    # ⚠ SGLang issue #8870: EAGLE3 + CUDA graphs → "index out of bounds" in
+    #   flashinfer. Closed Dec 2025 as inactive, not fixed. The Test-17 winner
+    #   config already runs disable_cuda_graph: true, so this bug doesn't apply.
+    # ⚠ Enabling speculative may require lowering mem_fraction_static (0.80 →
+    #   ~0.72-0.75) to fit draft weights + hidden-state buffers. Start low and
+    #   tune up in 0.02 steps.
+    # Params from the LMSYS README launch example (tuned for TP=8 BF16; may need
+    #   reduction on TP=4 NVFP4 to 3/1/4 if verification latency dominates).
+    # Empirical result (2026-04-10, n=4 matrix Test 37): EAGLE3 × NVFP4 target
+    # is NOT viable on SM121. NaN logprobs in the draft due to FP4→BF16 hidden-
+    # state distribution drift degenerate the tree, forcing the "ignore the
+    # token" recovery on most draft cycles. Measured: 2.3-3.4 tok/s/stream
+    # (~32% of baseline 8.65), 5.9 tok/s peak at n=4 (~17% of baseline 34.60).
+    # Parallelism collapses because NaN recovery breaks batched verify. Kept
+    # disabled unless/until an NVFP4-aware draft exists.
+    speculative_enabled: false
+    speculative_algo: "EAGLE3"
+    speculative_draft_model_path: "lmsys/Qwen3-235B-A22B-EAGLE3"
+    # Force draft load without quantization. Without this override SGLang
+    # inherits quantization=modelopt_fp4 from the target, routes the draft
+    # through _load_modelopt_base_model → AutoModelForCausalLM.from_pretrained,
+    # and tries to instantiate a full Qwen3MoE shell. The LMSYS EAGLE3 draft
+    # ships as plain BF16 with a single midlayer + draft_vocab_size=32000 →
+    # state-dict shape mismatch on lm_head ([32000,4096] vs [151936,4096])
+    # and missing layer weights. "unquant" bypasses the modelopt loader.
+    speculative_draft_model_quantization: "unquant"
+    speculative_num_steps: 5
+    speculative_eagle_topk: 8
+    speculative_num_draft_tokens: 32

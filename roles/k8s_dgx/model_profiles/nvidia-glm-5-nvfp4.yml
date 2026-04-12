@@ -1,0 +1,59 @@
+# Model profile: nvidia/GLM-5-NVFP4
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+_model_profile:
+  "nvidia/GLM-5-NVFP4":
+    info_url: "https://huggingface.co/nvidia/GLM-5-NVFP4"
+    # 744B/40B-active MoE (256 experts, top-8, sigmoid routing), NVFP4 quantized.
+    # Architecture: GlmMoeDsa — MLA (Multi-head Latent Attention) with DSA
+    # (Document-level Sparse Attention). 78 layers (first 3 dense, rest MoE),
+    # 1 shared expert + 256 routed experts per MoE layer. Has MTP head (1 layer)
+    # for speculative decoding (NEXTN).
+    # num_attention_heads=64, num_key_value_heads=64 (full MHA via MLA).
+    # NVFP4 quantization: only MoE FFN weights are FP4; attention projections
+    # (q/k/v/o), DSA indexer, lm_head, and MTP layer remain in BF16.
+    # EP=4/TP=4 OOM at weight init (~108 GB/GPU, exceeds 121 GB usable).
+    # Use PP=4/TP=1 instead: each GPU gets ~20 of 78 layers with all experts.
+    # Recommended launch (NVIDIA model card, for 8-GPU B300):
+    #   python3 -m sglang.launch_server --model nvidia/GLM-5-NVFP4 --tensor-parallel-size 8 \
+    #     --quantization modelopt_fp4 --trust-remote-code --reasoning-parser glm45 \
+    #     --tool-call-parser glm47 --chunked-prefill-size 131072 --mem-fraction-static 0.80
+    # Note: model card does NOT specify --moe-runner-backend or --attention-backend.
+    nccl_transport: "roce"
+    tp_size: 1  # PP=nnodes, TP=1 — each GPU gets ~20 layers with all 256 experts
+    context_length: 16384 #196608  # model max 202752; leave headroom
+    #chunked_prefill_size: 131072  # NVIDIA model card recommendation
+    quantization: "modelopt_fp4"
+    # trust_remote_code: required because GLM-5 ships custom model code
+    # (GlmMoeDsaForCausalLM, custom tokenizer) in the HF repo that SGLang must
+    # execute. Without it, transformers refuses to load the model class. Safe here
+    # because the code comes from NVIDIA's official nvidia/GLM-5-NVFP4 repo.
+    trust_remote_code: true
+    # Untested on DGX Spark — values below are initial defaults, pending test matrix.
+    moe_runner_backend: "flashinfer_cutlass"
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.20"  # PP=4 should leave enough room (~20 layers/GPU)
+    attention_backend: "flashinfer"
+    fp4_gemm_backend: "flashinfer_cutlass"
+    jit_max_jobs: 4
+    disable_piecewise_cuda_graph: true
+    disable_cuda_graph: false
+    cuda_graph_max_bs: 8
+    pp_async_batch_depth: 0
+    # DeepGemm is designed for FP8 with ue8m0 scale format. For NVFP4 models
+    # (scale_fmt != ue8m0): (1) the JIT-compiled kernels aren't optimized for
+    # this format and may degrade accuracy, (2) JIT compilation blocks the
+    # scheduler forward loop synchronously, triggering the 300s watchdog kill,
+    # (3) parallel nvcc/cicc processes exhaust system RAM. With DeepGemm
+    # disabled, FP4 GEMM selection falls to fp4_gemm_backend.
+    disable_deep_gemm: true
+    # GLM-5 reasoning/tool parsers (from model card):
+    # "glm45" — GLM-4.5 detector, separates <think>...</think> into reasoning_content.
+    # "glm47" — GLM-4.7 tool call format.
+    reasoning_parser: "glm45"
+    tool_call_parser: "glm47"
+    num_experts: 256
+    # ep_size: with TP=1/PP=4, EP must be 1 (EP requires ep_size <= tp_size).
+    ep_size: 1
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95

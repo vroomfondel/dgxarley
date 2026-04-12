@@ -1,0 +1,17 @@
+# Model profile: Qwen/Qwen3-Next-80B-A3B-Instruct-FP8
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+_model_profile:
+  "Qwen/Qwen3-Next-80B-A3B-Instruct-FP8":
+    info_url: "https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct-FP8"
+    context_length_max: 262144
+    context_length: 262144
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.50"
+    attention_backend: "triton"
+    disable_deep_gemm: true
+    fp8_gemm_runner_backend: "cutlass"
+    # FP8 quantized, non-thinking only — 80B/3B MoE hybrid (DeltaNet + Attention)
+    recommended_sampling:
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20

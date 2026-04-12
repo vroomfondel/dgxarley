@@ -1,0 +1,26 @@
+# Model profile: unsloth/Qwen3-235B-A22B-Instruct-2507-FP8
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+_model_profile:
+  "unsloth/Qwen3-235B-A22B-Instruct-2507-FP8":
+    # DISCOURAGED on 2× DGX Spark (128 GB each). FP8 weights alone consume ~118.5 GB
+    # per GPU (TP=2), leaving only ~9.5 GB for CUDA context, activations, and KV cache.
+    # Realistic context_length is ~32K with minimal concurrency. The ~1-2% quality gain
+    # over AWQ 4-bit does not justify 8× less context and near-zero request parallelism.
+    # Prefer the AWQ profile below (62 GB/GPU → 66 GB free → 262K context comfortably).
+    info_url: "https://huggingface.co/unsloth/Qwen3-235B-A22B-Instruct-2507-FP8"
+    # 235B/22B MoE, FP8 (~237 GB / ~118.5 GB per GPU with TP=2)
+    # load_format: "sharded_state"  # default: auto
+    context_length_max: 262144
+    #context_length: 32768
+    context_length: 65536
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.9"
+    disable_deep_gemm: true
+    fp8_gemm_runner_backend: "cutlass"
+    attention_backend: "triton"
+    tool_call_parser: "qwen3_coder"
+    # non-thinking only — no <think> blocks, no reasoning_parser needed
+    recommended_sampling:
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20

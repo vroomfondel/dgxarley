@@ -1,0 +1,53 @@
+# Model profile: Qwen/Qwen3.5-122B-A10B-FP8
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+_model_profile:
+  "Qwen/Qwen3.5-122B-A10B-FP8":
+    # status: runs very well. 25t/s single-request throughput. works with sharding and tuned kernel. qualitatively good output
+    info_url: "https://huggingface.co/Qwen/Qwen3.5-122B-A10B-FP8"
+    # 122B/10B MoE (Gated DeltaNet hybrid), FP8 fine-grained (~127 GB / ~63.5 GB per GPU with TP=2)
+    # Fits comfortably on 2× DGX Spark with full 262K context.
+    # Community-confirmed: ~31 tok/s single-request on dual Spark.
+    # Quality on par or better than Qwen3-235B-A22B despite fewer total params.
+    load_format: "auto"  # "sharded_state"  # default: auto
+    context_length: 262144
+    kv_cache_dtype: "fp8_e4m3"
+    # quantization: "auto"
+    mem_fraction_static: "0.60"
+    attention_backend: "flashinfer"
+    disable_deep_gemm: true
+    fp8_gemm_runner_backend: "cutlass"
+    reasoning_parser: "qwen3"
+    tool_call_parser: "qwen3_coder"
+    #     quantization: "moe_wna16"
+    #    attention_backend: "triton"
+    #    disable_deep_gemm: true
+    # Expert parallelism: monkey-patched at runtime (see Thinking profile comment).
+    num_experts: 256
+    # ep_size: "{{ sglang_nnodes if (256 % (sglang_nnodes | int) == 0) else 1 }}"
+    ep_size: 4
+    tp_size: 4
+    # EPLB disabled: Qwen3_5MoeForConditionalGeneration also lacks
+    # 'routed_experts_weights_of_layer'. Crashes after ~1000 forward passes.
+    # Confirmed broken on 0.5.9-dev2-acab24a7-t5 (2026-03-20, pod sglang-head-5d7585955).
+    # PR #19767 claims to fix this but the fix is not effective in this build.
+    enable_eplb: false
+    enable_expert_distribution_metrics: false
+    # Qwen3.5: all models think by default (no separate -Thinking variant).
+    # Control via enable_thinking=false in API or chat_template_kwargs.
+    # Server-side defaults use "thinking" mode sampling (the default mode).
+    # For non-thinking or coding modes, override per-request via API params.
+    #   thinking:          temperature=1.0  top_p=0.95  top_k=20  presence_penalty=1.5
+    #   thinking_coding:   temperature=0.6  top_p=0.95  top_k=20  presence_penalty=0.0
+    #   non_thinking:      temperature=0.7  top_p=0.8   top_k=20  presence_penalty=1.5
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 20
+      presence_penalty: 1.5
+    nccl_transport: roce
+    moe_runner_backend: triton
+    disable_cuda_graph: false
+    disable_piecewise_cuda_graph: true
+    pp_async_batch_depth: 0
+    cuda_graph_max_bs: 8
+    speculative_enabled: false
