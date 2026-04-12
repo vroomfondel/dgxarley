@@ -1187,6 +1187,16 @@ qsfp_ip_spark2: "10.10.10.102"
 qsfp_ip_spark3: "10.10.10.103"
 qsfp_ip_spark4: "10.10.10.104"
 
+# Host-PF QSFP IPs (the IPs configured on the physical PF interface via netplan).
+# These are reachable from hostNetwork pods and from the host itself. Different
+# from the qsfp_ip_sparkN / SR-IOV VF IPs which are only reachable inside Multus
+# pod namespaces. Used by the host-network NCCL test variant.
+# Real values in group_vars/all/vault.yml.
+qsfp_pf_ip_spark1: "10.10.10.1"
+qsfp_pf_ip_spark2: "10.10.10.2"
+qsfp_pf_ip_spark3: "10.10.10.3"
+qsfp_pf_ip_spark4: "10.10.10.4"
+
 # SR-IOV VF assignments per deployment.
 # Each deployment gets its own VF index + dedicated IPs per spark node.
 # This allows multiple engines to run on different VFs simultaneously.
