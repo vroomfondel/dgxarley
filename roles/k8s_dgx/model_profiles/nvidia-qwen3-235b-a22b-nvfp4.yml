@@ -1,3 +1,4 @@
+---
 # Model profile: nvidia/Qwen3-235B-A22B-NVFP4
 # Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
 _model_profile:
@@ -109,7 +110,8 @@ _model_profile:
     # disabled unless/until an NVFP4-aware draft exists.
     speculative_enabled: false
     speculative_algo: "EAGLE3"
-    speculative_draft_model_path: "lmsys/Qwen3-235B-A22B-EAGLE3"
+    speculative_draft_model_path: "nvidia/Qwen3-235B-A22B-Eagle3"
+    # speculative_draft_model_path: "lmsys/Qwen3-235B-A22B-EAGLE3"
     # Force draft load without quantization. Without this override SGLang
     # inherits quantization=modelopt_fp4 from the target, routes the draft
     # through _load_modelopt_base_model → AutoModelForCausalLM.from_pretrained,

@@ -62,6 +62,32 @@ The Test 17 winner (34.6 tok/s) was the previous all-time best for this
 model on this cluster. The new RoCE config replaces it as the production
 baseline.
 
+### Speculative decoding with RoCE (2026-04-12 ~15:25)
+
+Model: nvidia/Qwen3-235B-A22B-NVFP4 + nvidia/Qwen3-235B-A22B-Eagle3
+(EAGLE3), n=8 concurrent, RoCE transport.
+
+| Config | n=8 gen throughput | accept rate |
+|--------|-------------------|-------------|
+| Normal decode (RoCE) | **~105 tok/s** | — |
+| Speculative EAGLE3 (RoCE) | ~75-80 tok/s | **9%** |
+
+Speculative is **~25% slower** than normal decode. Root cause: the EAGLE3
+draft model's accept rate is only 9% — 91% of speculative tokens are
+rejected. Each draft-verify cycle requires the same NCCL all-reduce
+roundtrip as a normal decode step, but produces almost no accepted tokens.
+The overhead of the wasted draft steps outweighs the throughput gain from
+the few accepted ones.
+
+This was also the case with socket transport (Test 37/38 in the kikube
+matrix: 31.4 tok/s speculative vs 42.70 tok/s normal at n=8). RoCE makes
+both modes faster but doesn't change the speculative-vs-normal ratio —
+the bottleneck is the low accept rate, not network latency.
+
+Conclusion: speculative decoding is not viable for this model on this
+cluster. Normal decode with RoCE at n=8 (105 tok/s) is the fastest
+configuration.
+
 ### Root causes identified
 
 Two independent prerequisites for NCCL RoCE over SR-IOV VFs in K8s:
