@@ -53,7 +53,7 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4
 | 8 | roce | triton | fi | fi_cudnn | true | true | **STABLE** | 14.7 | 60.8 | 92.6 |
 | 9 | roce | triton | fi | fi_cudnn | false | false | **STABLE** | 20.4 | 64.2 | 97.5 |
 | 10 | roce | triton | triton | fi_cudnn | false | true | **STABLE** | 21.3 | 65.0 | 98.0 |
-| 11 | roce | triton | triton | fi_cudnn | true | true | pending | — | — | — |
+| 11 | roce | triton | triton | fi_cudnn | true | true | **STABLE** | 14.3 | 62.6 | 94.0 |
 | 12 | roce | triton | triton | fi_cudnn | false | false | pending | — | — | — |
 | 13 | roce | fi_cutlass | fi | fi_cutlass | false | true | pending | — | — | — |
 | 14 | roce | fi_cutlass | fi | fi_cutlass | true | true | pending | — | — | — |
@@ -117,7 +117,7 @@ Every configuration with `moe_runner_backend=triton` works — both fi_cutlass a
 - **CUDA graphs ON vs OFF:** ~50% speedup at n=1 (22.2 vs 14.6 tok/s). Smaller gap at n=4/n=8 (~8-10%). Piecewise graphs ≈ regular graphs.
 - **triton attn vs flashinfer attn:** Near-identical. Test 4 (triton) marginally beats Test 1 (fi) at all concurrency levels.
 - **fi_cutlass vs fi_cudnn FP4:** fi_cutlass slightly better at high concurrency (101.3 vs 100.2 at n=8). Difference is within noise.
-- **No CRASHes:** 10/10 tests completed cleanly (Test 10 n=8 still running). This is the first matrix run where triton-moe doesn't crash on SM121 NVFP4 — enabled by EP=1 (avoids the EP dispatch bug) and the `cute/mma.py` admissible_archs patch.
+- **No CRASHes:** 11/11 tests completed cleanly (Test 11 n=8 still running). This is the first matrix run where triton-moe doesn't crash on SM121 NVFP4 — enabled by EP=1 (avoids the EP dispatch bug) and the `cute/mma.py` admissible_archs patch.
 
 ### Context: comparison with EP=4 (v0.5.10rc0)
 
@@ -130,6 +130,6 @@ This EP=1 + RoCE run eliminates both bottlenecks: no EP dispatch, 4.6× network 
 
 ---
 
-## Tests 11–36: pending (matrix still running)
+## Tests 12–36: pending (matrix still running)
 
 Results will be filled in as the kikube-bench matrix progresses.
