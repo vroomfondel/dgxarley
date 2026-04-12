@@ -52,7 +52,7 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4
 | 7 | roce | triton | fi | fi_cudnn | false | true | **STABLE** | 21.9 | 65.6 | 100.2 |
 | 8 | roce | triton | fi | fi_cudnn | true | true | **STABLE** | 14.7 | 60.8 | 92.6 |
 | 9 | roce | triton | fi | fi_cudnn | false | false | **STABLE** | 20.4 | 64.2 | 97.5 |
-| 10 | roce | triton | triton | fi_cudnn | false | true | **STABLE** | 21.3 | 65.0 | pending |
+| 10 | roce | triton | triton | fi_cudnn | false | true | **STABLE** | 21.3 | 65.0 | 98.0 |
 | 11 | roce | triton | triton | fi_cudnn | true | true | pending | — | — | — |
 | 12 | roce | triton | triton | fi_cudnn | false | false | pending | — | — | — |
 | 13 | roce | fi_cutlass | fi | fi_cutlass | false | true | pending | — | — | — |
