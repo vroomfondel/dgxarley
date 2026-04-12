@@ -611,6 +611,8 @@ sglang_model_profiles:
     # get_rope_config (hf_transformers_utils.py:162) builds rope_params from
     # rope_scaling alone and indexes rope_params["rope_theta"] — KeyError
     # otherwise, even though rope_theta exists at config top level.
+    # context_length: 40960  # without yarn
+    # enabling yarn leads to change (reduction) of tok/s by a factor of 0.5
     context_length: 131072  # YaRN-extended, requires json_model_override_args below
     json_model_override_args: '{"rope_scaling":{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768,"rope_theta":1000000.0}}'
     quantization: "modelopt_fp4"
