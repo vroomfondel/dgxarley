@@ -16,6 +16,48 @@ Determine why RoCE is not delivering RDMA throughput (2.2 GB/s observed vs
 
 Both are ~2.1 GB/s → NCCL is falling back to TCP socket in the RoCE test.
 
+### Test 1.1 → 2.2: RoCE debugging sequence (2026-04-12 13:30–15:00)
+
+| Test | Config | NCCL transport | Peak BW | Finding |
+|------|--------|---------------|---------|---------|
+| 1.1 | VF7, non-privileged | Socket (fallback) | 2.20 GB/s | `NET/IB: No device found` — `/dev/infiniband/` not visible in container |
+| 2.2a | PF hostNetwork, non-privileged | Socket (fallback) | 2.19 GB/s | Same `No device found` — hostNetwork alone doesn't expose IB char devices |
+| 2.2b | PF hostNetwork, **privileged** | **IB/RoCE** | crash | `ibv_modify_qp failed: Network unreachable` — VF GID table has no IPv4 entries |
+| fix | Added IPv4 addresses to VF netplan | — | — | RoCE GID table populated: `::ffff:10.10.100.x` at GID index 3 |
+| 2.2c | PF hostNetwork, privileged, GIDs fixed | **IB/RoCE** | crash | QP connect uses VF sub-devices whose GIDs were still link-local |
+| 1.1b | VF7, **privileged**, GIDs fixed | **IB/RoCE** | **9.78 GB/s** | All channels `via NET/IB/0` — first successful RoCE run |
+
+### Final result (2026-04-12 15:15)
+
+| Transport | Peak bus BW | Latency @4KB | Speedup vs socket |
+|-----------|-------------|--------------|-------------------|
+| socket (VF7) | 2.12 GB/s | 209 µs | 1× |
+| **RoCE (VF7)** | **9.78 GB/s** | **40 µs** | **4.6×** |
+| Theorie 200 GbE | ~25 GB/s | — | — |
+
+9.78 GB/s = ~39% of 200 GbE line rate. The gap to theoretical is likely
+from missing PFC/DCBX lossless Ethernet config, no GPU Direct RDMA (GDR),
+and default NCCL tuning parameters.
+
+### Root causes identified
+
+Two independent prerequisites for NCCL RoCE over SR-IOV VFs in K8s:
+
+1. **VF IPv4 addresses in netplan** — without an IPv4 on the VF interface,
+   the RoCE GID table only contains link-local `fe80::` entries. NCCL's IB
+   plugin needs an IPv4-mapped GID (`::ffff:x.x.x.x`) at the configured
+   GID index for RoCEv2 QP establishment. Fixed by adding `addresses:` to
+   the VF block in `roles/dgx_prepare/templates/etc_netplan_10-qsfp.yaml.j2`.
+   The VF IP matches the Multus IPAM-assigned pod IP (same IP on host and
+   in pod).
+
+2. **`privileged: true` on the pod** — `host-device` CNI moves the network
+   interface into the pod namespace, but `/dev/infiniband/uverbs*` and
+   `/sys/class/infiniband/rocep1s0f0vN/` remain on the host. Without
+   `privileged: true` (which exposes all host `/dev/` and `/sys/` to the
+   container), NCCL's IB plugin cannot open the RDMA verbs devices and
+   falls back to TCP socket. `hostNetwork: true` alone is NOT sufficient.
+
 ### Test 1.1: RoCE VF7 with NCCL_DEBUG=INFO (2026-04-12 14:15)
 
 **Result: RoCE FAILED — NCCL falls back to Socket.**

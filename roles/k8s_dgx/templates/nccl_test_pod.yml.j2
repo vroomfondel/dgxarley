@@ -49,10 +49,8 @@ spec:
   containers:
     - name: nccl-test
       image: "{{ sglang_image }}"
-{% if tc.host_network | default(false) %}
       securityContext:
         privileged: true
-{% endif %}
       command: ["python3", "/scripts/nccl_test.py"]
       env:
         - name: RANK
