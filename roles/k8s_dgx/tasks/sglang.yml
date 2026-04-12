@@ -345,6 +345,9 @@
                   limits:
                     nvidia.com/gpu: "1"
                 securityContext:
+                  # privileged required for: (1) hostIPC NCCL shared memory,
+                  # (2) RoCE transport — NCCL's IB plugin needs /dev/infiniband/uverbs*
+                  # which host-device CNI doesn't expose to non-privileged containers.
                   privileged: true
                 # Liveness probe: restart stale workers when head dies and NCCL breaks.
                 # Uses process check (not HTTP) because PP workers have no API server.
@@ -497,6 +500,9 @@
                   limits:
                     nvidia.com/gpu: "1"
                 securityContext:
+                  # privileged required for: (1) hostIPC NCCL shared memory,
+                  # (2) RoCE transport — NCCL's IB plugin needs /dev/infiniband/uverbs*
+                  # which host-device CNI doesn't expose to non-privileged containers.
                   privileged: true
                 readinessProbe:
                   httpGet:

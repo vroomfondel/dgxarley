@@ -309,7 +309,7 @@ sglang_model_profiles:
       top_p: 0.95
       top_k: 20
       presence_penalty: 1.5
-    nccl_transport: socket
+    nccl_transport: roce
     moe_runner_backend: triton
     disable_cuda_graph: false
     disable_piecewise_cuda_graph: true
@@ -338,7 +338,7 @@ sglang_model_profiles:
     #    by file I/O. Sharded loading skips the slow safetensors redistribute but
     #    the post-processing cost remains the same (~360s either way).
     # load_format: "sharded_state"
-    nccl_transport: "socket"  # RoCE is 2× slower (IBext overhead, see TESTLOG). Socket until debugged.
+    nccl_transport: "roce"
     #nccl_transport: "roce"
     tp_size: 1  # PP=4 (nnodes/tp=4/1=4). TP=1 avoids KV head split issue (8 heads not divisible by 3 or 4 with EP).
     context_length: 196608
@@ -442,7 +442,7 @@ sglang_model_profiles:
     #     --quantization modelopt_fp4 --trust-remote-code --reasoning-parser glm45 \
     #     --tool-call-parser glm47 --chunked-prefill-size 131072 --mem-fraction-static 0.80
     # Note: model card does NOT specify --moe-runner-backend or --attention-backend.
-    nccl_transport: "socket"  # RoCE is 2× slower (IBext overhead, see TESTLOG). Socket until debugged.
+    nccl_transport: "roce"
     tp_size: 1  # PP=nnodes, TP=1 — each GPU gets ~20 layers with all 256 experts
     context_length: 16384 #196608  # model max 202752; leave headroom
     #chunked_prefill_size: 131072  # NVIDIA model card recommendation
@@ -497,7 +497,7 @@ sglang_model_profiles:
     #     --tool-call-parser glm47 --chunked-prefill-size 131072 --mem-fraction-static 0.80
     # Note: model card does NOT specify --moe-runner-backend or --attention-backend.
     # model_type=glm4_moe is in transformers 4.57.6 — no upgrade needed (unlike GLM-5).
-    nccl_transport: "socket"
+    nccl_transport: "roce"
     tp_size: 4  # num_kv_heads=8 → TP=4 works (2 KV heads/GPU). EP=4 from nnodes.
     context_length: 196608  # model max 202752; leave headroom
     #chunked_prefill_size: 131072  # NVIDIA model card recommendation
@@ -555,7 +555,7 @@ sglang_model_profiles:
     #     --tensor-parallel-size 4 --quantization modelopt_fp4 --trust-remote-code
     # Note: model card does NOT specify parsers, moe_runner_backend, or attention_backend.
     # WARNING: model_type=qwen3_5_moe may require transformers upgrade.
-    nccl_transport: "socket"
+    nccl_transport: "roce"
     tp_size: 4  # model card says TP=4; num_kv_heads=2 may limit to TP=2 — needs testing
     context_length: 196608  # model max 262144; conservative start
     quantization: "modelopt_fp4"
@@ -597,7 +597,7 @@ sglang_model_profiles:
     # remain in BF16. ~3.3× smaller than BF16 → ~70 GB total / 4 GPUs ≈ ~18 GB/GPU.
     # Much lighter than Qwen3.5-397B (~59 GB/GPU) — leaves ample room for KV cache.
     # Recommended: TP=4 (model card), context up to 131K with YaRN.
-    nccl_transport: "socket"
+    nccl_transport: "roce"
     tp_size: 4  # num_kv_heads=4 → TP=4 works (1 KV head/GPU)
     # Qwen3 config.json ships with rope_scaling=null, rope_theta=1000000.0,
     # max_position_embeddings=40960. To use the full 131K context, YaRN must
@@ -724,7 +724,7 @@ sglang_model_profiles:
     #     --tp-size 8 --tool-call-parser glm47 --reasoning-parser glm45 \
     #     --mem-fraction-static 0.8
     # Note: model card targets 8 GPUs. On 4× DGX Spark, memory is very tight.
-    nccl_transport: "socket"
+    nccl_transport: "roce"
     tp_size: 4  # num_kv_heads=8 → TP=4 works (2 KV heads/GPU)
     context_length: 131072  # conservative — less KV cache headroom than NVFP4
     # quantization: auto-detected from checkpoint (no explicit flag needed)
@@ -781,7 +781,7 @@ sglang_model_profiles:
     # Gemma4 backend path, sliding+full attention hybrid, and proportional RoPE
     # may have edge cases on SM121 that need testing before production use.
     # No MTP heads → no NEXTN. No public EAGLE3 draft exists for Gemma 4 yet.
-    nccl_transport: "socket"
+    nccl_transport: "roce"
     tp_size: 4  # num_kv_heads=16 → 4 per GPU
     context_length: 262144  # 256K native
     quantization: ""  # native BF16
@@ -821,7 +821,7 @@ sglang_model_profiles:
     # SGLang day-one support per Google/LMSYS blog. Still new — Gemma4 MoE
     # path hasn't been stress-tested on SM121, may need tuning.
     # No MTP, no public EAGLE3 draft.
-    nccl_transport: "socket"
+    nccl_transport: "roce"
     tp_size: 4  # num_kv_heads=8 → 2 per GPU
     context_length: 262144
     quantization: ""  # native BF16

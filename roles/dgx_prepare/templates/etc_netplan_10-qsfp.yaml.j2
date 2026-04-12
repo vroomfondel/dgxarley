@@ -17,10 +17,36 @@ network:
 {% endif %}
 {% endfor %}
 {% if qsfp_sriov_enabled | default(false) %}
+{% set _rank = groups['dgxsparks'].index(inventory_hostname) %}
 {% for vf_idx in range(0, qsfp_sriov_numvfs | default(8) | int) %}
+    # VF IPv4: needed for RoCE GID table population. The IB/RoCE stack
+    # derives GID entries from the interface's IPv4 address (e.g.
+    # 10.10.100.1 -> GID ::ffff:10.10.100.1 at the RoCEv2 GID index).
+    # Without an IPv4 on the VF, the GID table only has link-local fe80::
+    # entries and NCCL's IB plugin fails with "ibv_modify_qp: Network is
+    # unreachable". The IP matches the Multus IPAM-assigned pod IP -- same
+    # VF, same IP, whether on host or in pod namespace.
+{% set _vf_ip = namespace(val='') %}
+{% for _dep_name, _dep_cfg in qsfp_sriov_assignments.items() %}
+{% if _dep_cfg.vf | int == vf_idx %}
+{% if _rank == 0 and _dep_cfg.head_ip is defined %}
+{% set _vf_ip.val = _dep_cfg.head_ip %}
+{% elif _rank == 1 and _dep_cfg.worker_ip1 is defined %}
+{% set _vf_ip.val = _dep_cfg.worker_ip1 %}
+{% elif _rank == 2 and _dep_cfg.worker_ip2 is defined %}
+{% set _vf_ip.val = _dep_cfg.worker_ip2 %}
+{% elif _rank == 3 and _dep_cfg.worker_ip3 is defined %}
+{% set _vf_ip.val = _dep_cfg.worker_ip3 %}
+{% endif %}
+{% endif %}
+{% endfor %}
     {{ qsfp_sriov_vf_prefix }}v{{ vf_idx }}:
       macaddress: {{ '02:00:0a:0a:%02x:%02x' | format(host_octet | int, vf_idx) }}
       mtu: {{ qsfp_mtu }}
+{% if _vf_ip.val %}
+      addresses:
+        - {{ _vf_ip.val }}/24
+{% endif %}
       dhcp4: false
       dhcp6: false
 {% endfor %}
