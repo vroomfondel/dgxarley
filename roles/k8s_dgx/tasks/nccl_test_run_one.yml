@@ -36,8 +36,21 @@
         "nccl_env": {
           "NCCL_SOCKET_IFNAME": "{{ nccl_socket_ifname }}",
           "NCCL_IB_HCA": "roce{{ qsfp_sriov_vf_prefix | regex_replace('^en', '') }}v{{ qsfp_sriov_assignments.iperf_test.vf }}",
-          "NCCL_IB_GID_INDEX": "{{ _sglang_nccl_env_roce.NCCL_IB_GID_INDEX | default('3') }}",
-          "NCCL_IB_MERGE_NICS": "{{ _sglang_nccl_env_roce.NCCL_IB_MERGE_NICS | default('0') }}"
+          "NCCL_IB_GID_INDEX": "{{ nccl_test_gid_index | default('3') }}",
+          "NCCL_IB_MERGE_NICS": "0"
+        }
+      }
+      {%- elif _transport_name == 'host_roce' -%}
+      {
+        "host_network": true,
+        "master_addr": "{{ qsfp_pf_ip_spark1 }}",
+        "pf_ips": ["{{ qsfp_pf_ip_spark1 }}", "{{ qsfp_pf_ip_spark2 }}", "{{ qsfp_pf_ip_spark3 }}", "{{ qsfp_pf_ip_spark4 }}"],
+        "nccl_env": {
+          "NCCL_SOCKET_IFNAME": "enP2p1s0f0np0",
+          "NCCL_IB_HCA": "rocep1s0f0",
+          "NCCL_IB_GID_INDEX": "{{ nccl_test_gid_index | default('3') }}",
+          "NCCL_IB_MERGE_NICS": "0",
+          "HOST_NETWORK_MODE": "1"
         }
       }
       {%- endif -%}
@@ -65,7 +78,7 @@
     api_version: v1
     kind: Pod
     namespace: "{{ sglang_namespace }}"
-    name: "nccl-test-{{ _transport_name }}-rank{{ item }}"
+    name: "nccl-test-{{ _transport_name | replace('_', '-') }}-rank{{ item }}"
   loop: [0, 1, 2, 3]
   loop_control:
     label: "rank{{ item }}"
@@ -86,7 +99,7 @@
   kubernetes.core.k8s_info:
     api_version: v1
     kind: Pod
-    name: "nccl-test-{{ _transport_name }}-rank0"
+    name: "nccl-test-{{ _transport_name | replace('_', '-') }}-rank0"
     namespace: "{{ sglang_namespace }}"
   register: _nccl_r0
   until: >
@@ -110,7 +123,7 @@
   kubernetes.core.k8s_info:
     api_version: v1
     kind: Pod
-    name: "nccl-test-{{ _transport_name }}-rank0"
+    name: "nccl-test-{{ _transport_name | replace('_', '-') }}-rank0"
     namespace: "{{ sglang_namespace }}"
   register: _nccl_r0_done
   until: >
@@ -123,7 +136,7 @@
   ansible.builtin.command:
     cmd: >-
       kubectl --context=ht@dgxarley -n {{ sglang_namespace }}
-      logs nccl-test-{{ _transport_name }}-rank0
+      logs nccl-test-{{ _transport_name | replace('_', '-') }}-rank0
   register: _nccl_log
   ignore_errors: true
   become: false

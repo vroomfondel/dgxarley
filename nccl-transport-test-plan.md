@@ -1,0 +1,167 @@
+# NCCL Transport Test Plan — RoCE vs Socket vs Host-Network
+
+## Goal
+
+Determine why RoCE is not delivering RDMA throughput (2.2 GB/s observed vs
+20+ GB/s expected on 200 GbE ConnectX-7), and whether it can be fixed.
+
+## Results log
+
+### Baseline (2026-04-12 13:50)
+
+| Transport | NCCL_IB_HCA | Peak bus BW | Actual NCCL transport | Notes |
+|-----------|-------------|-------------|----------------------|-------|
+| socket (VF7) | — | 2.12 GB/s | NET/Socket | NCCL_NET=Socket, NCCL_IB_DISABLE=1 |
+| "roce" (VF7) | rocep1s0f0v7 | 2.20 GB/s | NET/Socket (fallback) | IB init failed, see below |
+
+Both are ~2.1 GB/s → NCCL is falling back to TCP socket in the RoCE test.
+
+### Test 1.1: RoCE VF7 with NCCL_DEBUG=INFO (2026-04-12 14:15)
+
+**Result: RoCE FAILED — NCCL falls back to Socket.**
+
+Key NCCL init log lines from rank0:
+```
+NCCL INFO NCCL_IB_HCA set to rocep1s0f0v7
+NCCL INFO NET/IB : No device found.
+NCCL INFO NET/IB : Using [RO]; OOB net1:10.10.100.241<0>
+NCCL INFO Failed to initialize NET plugin IB
+NCCL INFO NET/Socket : Using [0]net1:10.10.100.241<0>
+NCCL INFO Initialized NET plugin Socket
+```
+
+All 8 channels: `via NET/Socket/0`.
+
+**Root cause:** The `host-device` CNI moves the network interface
+(`enp1s0f0v7` → `net1`) into the pod namespace, but the corresponding
+IB/RoCE device (`/sys/class/infiniband/rocep1s0f0v7`) stays on the host.
+NCCL's IB plugin looks for the device in `/sys/class/infiniband/` inside
+the container and finds nothing → "No device found" → falls back to Socket.
+
+**Implication:** RoCE over SR-IOV VFs in non-privileged containers requires
+either `privileged: true` with IB device mounts, or the `k8s-rdma-shared-
+dev-plugin` that exposes IB devices as K8s allocatable resources. The
+current `host-device` CNI alone is insufficient for RDMA.
+
+## Test matrix
+
+All tests use `NCCL_DEBUG=INFO` (now baked into the pod template) so we can
+see what transport NCCL actually negotiates.
+
+### Phase 1: Diagnose RoCE on SR-IOV VFs (current setup)
+
+**Test 1.1: RoCE VF7 with NCCL_DEBUG=INFO** (can run now)
+```bash
+ansible-playbook k8s_dgx.yml --tags nccl_test -e nccl_test_transport=roce
+```
+Goal: Read NCCL init logs to see WHY RoCE fails. Look for:
+- `NCCL INFO NET/IB : Using [0]rocep1s0f0v7:1/RoCE` → RoCE is used
+- `NCCL INFO NET/Socket : Using [0]net1:...` → fell back to socket
+- Any `NCCL WARN` about IB/RoCE init failure
+
+**Test 1.2: RoCE VF7 with different GID_INDEX values**
+GID_INDEX=3 is for RoCEv2 over IPv4. But VF interfaces might need a
+different GID. Try GID_INDEX=0,1,2,5:
+```bash
+ansible-playbook k8s_dgx.yml --tags nccl_test -e nccl_test_transport=roce -e nccl_test_gid_index=0
+```
+(Requires adding `nccl_test_gid_index` override to the roce transport config.)
+
+### Phase 2: Test without SR-IOV (PF direct)
+
+SR-IOV adds a layer of complexity. Testing on the bare PF eliminates VF-level
+issues (eSwitch forwarding, VF RoCE capability, GID table per-VF).
+
+**Prerequisite:** No pods running that use host-device on the QSFP PF.
+Since nothing is running now, this is clear.
+
+**Test 2.1: Host-network with QSFP PF (socket transport)**
+```bash
+ansible-playbook k8s_dgx.yml --tags nccl_test -e nccl_test_transport=host
+```
+This uses hostNetwork:true + NCCL_SOCKET_IFNAME=enP2p1s0f0np0. TCP socket
+over the PF directly, no Multus, no VF. Establishes the PF socket baseline.
+
+**Test 2.2: Host-network with QSFP PF (RoCE transport)**
+Requires a new transport variant `host_roce` that uses:
+- `hostNetwork: true`
+- `NCCL_IB_HCA=mlx5_0` (or whatever the PF's RoCE device is)
+- `NCCL_SOCKET_IFNAME=enP2p1s0f0np0` (for bootstrap)
+- `NCCL_IB_GID_INDEX=3` (or auto)
+- NO `NCCL_NET=Socket`, NO `NCCL_IB_DISABLE=1`
+
+This tests RoCE on the bare PF with zero SR-IOV/Multus/CNI abstraction.
+If this gives 20+ GB/s → SR-IOV VFs are the bottleneck.
+If this also gives ~2 GB/s → RoCE is fundamentally broken on these NICs.
+
+To find the PF RoCE device name:
+```bash
+ssh root@spark1.local 'ls /sys/class/infiniband/ && ibstat'
+```
+
+**Test 2.3: Host-network with iperf3 (raw TCP baseline)**
+Not NCCL — just raw TCP throughput over the PF to establish the link-level
+maximum:
+```bash
+# spark1:
+iperf3 -s -B 10.10.10.1
+# spark2:
+iperf3 -c 10.10.10.1 -t 10 -P 4
+```
+Expected: 20-24 Gbit/s (~2.5-3 GB/s) for TCP, limited by kernel stack.
+This is the ceiling for socket transport; RoCE should exceed it via RDMA bypass.
+
+### Phase 3: RoCE prerequisites check
+
+If Phase 2 RoCE also fails, check the hardware/driver prerequisites:
+
+**Test 3.1: RoCE device existence**
+```bash
+for h in spark1 spark2 spark3 spark4; do
+  echo "=== $h ==="
+  ssh root@$h.local 'ls /sys/class/infiniband/ 2>/dev/null || echo "(no IB devices)"'
+  ssh root@$h.local 'cat /sys/class/infiniband/*/ports/1/link_layer 2>/dev/null || echo "(no link_layer)"'
+  ssh root@$h.local 'cat /sys/class/infiniband/*/ports/1/gids/3 2>/dev/null || echo "(no GID 3)"'
+done
+```
+
+**Test 3.2: DCBX / PFC configuration**
+RoCE requires lossless Ethernet (PFC enabled). Check:
+```bash
+ssh root@spark1.local 'mlnx_qos -i enp1s0f0np0 2>/dev/null || echo "mlnx_qos not available"'
+ssh root@spark1.local 'ethtool --show-pause enp1s0f0np0'
+```
+
+**Test 3.3: RoCE mode**
+ConnectX-7 supports RoCEv1 and RoCEv2. NCCL needs RoCEv2:
+```bash
+ssh root@spark1.local 'cma_roce_mode -d mlx5_0 -p 1 2>/dev/null || echo "cma_roce_mode not available"'
+```
+
+## Execution order
+
+1. **Test 1.1** — RoCE VF7 with debug (immediate, just re-run with NCCL_DEBUG)
+2. Read the NCCL init logs → understand failure mode
+3. **Test 2.1** — Host-network socket baseline (PF direct)
+4. **Test 3.1** — RoCE device check on hosts (SSH one-liners)
+5. **Test 2.2** — Host-network RoCE on PF (if 3.1 shows IB devices exist)
+6. **Test 2.3** — iperf3 TCP baseline (optional, for reference)
+7. **Test 1.2** — GID_INDEX sweep (if 2.2 works but 1.1 doesn't → VF-specific)
+
+## Implementation needed
+
+- `NCCL_DEBUG=INFO` → done (in pod template)
+- `host_roce` transport variant → needs adding to `nccl_test_run_one.yml`
+  (hostNetwork:true + RoCE env vars, PF IPs as master_addr)
+- `nccl_test_gid_index` override → minor template change
+- SSH-based checks (Phase 3) → can run ad-hoc, no Ansible task needed
+
+## Expected outcomes
+
+| If... | Then... |
+|-------|---------|
+| Test 1.1 shows "NET/Socket" fallback | NCCL can't init RoCE on VF7 |
+| Test 2.2 gives 20+ GB/s on PF | RoCE works on PF but not VFs → SR-IOV RoCE config issue |
+| Test 2.2 also gives ~2 GB/s | RoCE not functional on these NICs → check Phase 3 prerequisites |
+| Test 3.1 shows no IB devices | RDMA/IB kernel modules not loaded or NIC firmware issue |
+| Test 3.2 shows no PFC | Lossless Ethernet not configured → RoCE will have drops under load |

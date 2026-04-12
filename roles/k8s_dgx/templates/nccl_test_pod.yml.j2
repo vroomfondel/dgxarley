@@ -12,7 +12,7 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: "nccl-test-{{ _transport_name }}-rank{{ rank }}"
+  name: "nccl-test-{{ _transport_name | replace('_', '-') }}-rank{{ rank }}"
   namespace: "{{ sglang_namespace }}"
   labels:
     app: "nccl-test-{{ _transport_name }}"
@@ -49,6 +49,10 @@ spec:
   containers:
     - name: nccl-test
       image: "{{ sglang_image }}"
+{% if tc.host_network | default(false) %}
+      securityContext:
+        privileged: true
+{% endif %}
       command: ["python3", "/scripts/nccl_test.py"]
       env:
         - name: RANK
