@@ -73,7 +73,7 @@ All tests use: `tp=4, pp=1, ep=4, nccl_transport=roce, quantization=modelopt_fp4
 | 25 | roce | cutlass | fi | fi_cutlass | false | true | **STABLE** | 20.26 | 64.5 | 93.4 |
 | 26 | roce | cutlass | fi | fi_cutlass | true | true | **FAIL** (repetition @ n=4) | 12.32 | ~~rep~~ | — |
 | 27 | roce | cutlass | fi | fi_cutlass | false | false | **STABLE** | 20.12 | 61.9 | 93.6 |
-| 28 | roce | cutlass | triton | fi_cutlass | false | true | pending | — | — | — |
+| 28 | roce | cutlass | triton | fi_cutlass | false | true | **STABLE** | 18.54 | 61.5 | **94.5** |
 | 29 | roce | cutlass | triton | fi_cutlass | true | true | pending | — | — | — |
 | 30 | roce | cutlass | triton | fi_cutlass | false | false | pending | — | — | — |
 | 31 | roce | cutlass | fi | fi_cudnn | false | true | pending | — | — | — |
