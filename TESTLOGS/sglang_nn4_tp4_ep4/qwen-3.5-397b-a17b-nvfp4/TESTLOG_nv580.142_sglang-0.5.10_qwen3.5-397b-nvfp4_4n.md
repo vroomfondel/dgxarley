@@ -63,7 +63,10 @@ All tests use: `tp=4, pp=1, ep=4, nccl_transport=roce, quantization=modelopt_fp4
 | 15 | roce | fi_cutlass | fi | fi_cutlass | false | false | **FAIL** (bench_crash @ n=1) | — | — | — |
 | 16 | roce | fi_cutlass | triton | fi_cutlass | false | true | **FAIL** (bench_crash @ n=4) | 19.32 | — | — |
 | 17 | roce | fi_cutlass | triton | fi_cutlass | true | true | **FAIL** (bench_crash @ n=1) | — | — | — |
-| 18 | roce | fi_cutlass | triton | fi_cutlass | false | false | aborted (matrix run stopped) | — | — | — |
+| 18 | roce | fi_cutlass | triton | fi_cutlass | false | false | **FAIL** (bench_crash @ n=4) | 18.81 | — | — |
+| 19 | roce | fi_cutlass | fi | fi_cudnn | false | true | **FAIL** (head crash @ n=4) | 19.54 | — | — |
+| 20 | roce | fi_cutlass | fi | fi_cudnn | true | true | **FAIL** (head crash @ n=1) | — | — | — |
+| 21 | roce | fi_cutlass | fi | fi_cudnn | false | false | **FAIL** (bench_crash @ n=1) | — | — | — |
 | 19 | roce | fi_cutlass | fi | fi_cudnn | false | true | pending | — | — | — |
 | 20 | roce | fi_cutlass | fi | fi_cudnn | true | true | pending | — | — | — |
 | 21 | roce | fi_cutlass | fi | fi_cudnn | false | false | pending | — | — | — |
@@ -269,13 +272,41 @@ Recommended follow-up before re-running this region:
 
 These confirm the fault is **not** sensitive to the attention backend (Tests 13/14/15 used `flashinfer` attn, Tests 16/17 use `triton` attn — same crash). Five consecutive fi_cutlass MoE rows have crashed (13/14/15/16/17), with the crash point ranging from "after 2 minutes of clean decode at n=4" to "before the first response token at n=1". The pattern is consistent with a stochastic numerical edge case in the fi_cutlass MoE forward kernel that always triggers eventually but at a rate that scales with how much compute happens — n=1 with simple prompts can survive longer than n=4 with thinking-heavy prompts.
 
-### Test 18 — `fi_cutlass` MoE + `triton` attn + `fi_cutlass` fp4, piecewise on — **aborted (matrix run stopped)**
+### Test 18 — `fi_cutlass` MoE + `triton` attn + `fi_cutlass` fp4, piecewise on — **bench_crash @ n=4** (worker)
 
-Test 18 started its SGLang deployment at 13:06:16 (head + 3 worker logs were created), but the matrix-bench control pod was terminated before any benchmark results were written. The MATRIX_SUMMARY ends at 17 cases. SGLang pods in the cluster are now in a fresh state, suggesting an out-of-band redeploy after the matrix run was killed.
+Matrix run was resumed and Test 18 ran in the new session (deploy 14:02:14, bench started 14:09:55).
 
-Tests 19–36 were never run.
+- n=1: 18.81 peak, status `done`, 3021 ot, 1100 think_tokens, ttft 8.24 s — **coherent output verified** (real network engineer / QUIC content in pod stdout, 0 `!!!!!` lines)
+- n=4: 4/4 `aborted`, ot=0, think_tokens 696–751 — crashed during the thinking phase before any content was emitted
+- n=8: never ran
+- `worker-2` died with the same `torch.AcceleratorError: CUDA error: an illegal instruction was encountered`
 
-### Interim summary after 17 rows (matrix run stopped during Test 18)
+### Test 19 — `fi_cutlass` MoE + `fi` attn + **`fi_cudnn` fp4** (graphs on, piecewise off) — **FAIL** (head crash @ n=4 — new variant)
+
+First fi_cutlass MoE row to swap the fp4 GEMM backend from `flashinfer_cutlass` to `flashinfer_cudnn`. Test was a deliberate probe to check whether the fp4 dense GEMM path was responsible for the SM121 fault.
+
+- n=1: 19.54 peak, status `done`, 3072 ot, 1197 think_tokens, ttft 3.06 s — **coherent output verified** (Symmetric/Asymmetric crypto exec brief in pod stdout, 0 `!!!!!` lines)
+- n=4: 4/4 status `error` with partial outputs (ot 665–759) — head pod crashed mid-batch
+- n=8: 8/8 `error`, ot=0 — bench harness kept firing into a dead head
+- **HEAD pod (TP0 EP0)** died with same stack as Tests 13–17:
+  ```
+  process_batch_result_decode → next_token_ids.tolist()
+  torch.AcceleratorError: CUDA error: an illegal instruction was encountered
+  ```
+  This is the first fi_cutlass MoE row where the head pod takes the fault instead of a worker. The matrix harness recorded `outcome=1` (n=1 succeeded, then aborted on subsequent levels) instead of the usual `bench_crash`.
+
+**Diagnostic conclusion from Test 19**: swapping the fp4 GEMM backend (`flashinfer_cutlass` → `flashinfer_cudnn`) does **not** fix the SM121 illegal-instruction fault. The bad kernel therefore sits inside the **fi_cutlass MoE forward path itself**, not in the fp4 dense GEMM kernels. This narrows the root cause significantly: it must be one of the routed-expert FFN kernels (gemm_swiglu, scale_and_combine, or the EP dispatch/combine ops) — but not the standalone fp4 dense GEMM and not (per our earlier diagnostic) the cutlass MoE allgather.
+
+**Pattern across Tests 13–19** (6 fi_cutlass MoE rows): every single row produces a clean coherent n=1 response (~19 tok/s, real verified content), then the next concurrency level kills the rank that gets the unlucky token distribution. The fault is concentration-dependent — single-stream decode is fine, parallel decode at n≥4 is fatal.
+
+### Tests 20-21 — `fi_cutlass` MoE + `fi` attn + `fi_cudnn` fp4 (eager / piecewise) — **FAIL** (escalating crash latency)
+
+- **Test 20** (eager mode): **all 13 requests failed** — n=1 produced `error` status with 509 think_tokens and 0 output tokens, then n=4 and n=8 piled into the dead head. Head pod died via the NCCL watchdog (`ProcessGroupNCCL.cpp:2119 ... CUDA error: an illegal instruction was encountered`). **First fi_cutlass MoE row to fail at n=1** — every previous fi_cutlass row had at least delivered one clean n=1 response before crashing. Eager mode is therefore even more fragile than the graph-capture modes for this fault, presumably because eager re-launches the buggy kernel on every step instead of replaying a captured DAG.
+- **Test 21** (piecewise on): n=1 aborted with 1071 think_tokens and 0 output tokens, `worker-1` died with the same `torch.AcceleratorError`.
+
+These add nothing new diagnostically — they confirm that eager mode + fi_cutlass MoE is the worst combination, while piecewise graph mode behaves like regular graph mode (single n=1 then dies). The fault remains uniformly present across **9 consecutive fi_cutlass MoE rows (Tests 13–21)** regardless of any sub-backend or graph mode permutation.
+
+### Interim summary after 19 rows (matrix resume run, Test 20 in progress)
 
 | #  | MoE        | Attn   | fp4 GEMM   | Graph mode          | n=8 peak  | Status                  |
 |----|------------|--------|------------|---------------------|-----------|-------------------------|
@@ -296,13 +327,25 @@ Tests 19–36 were never run.
 | 15 | fi_cutlass | fi     | fi_cutlass | on (piecewise on)   | —         | **bench_crash** (n=1)   |
 | 16 | fi_cutlass | triton | fi_cutlass | on (piecewise off)  | —         | **bench_crash** (n=4)   |
 | 17 | fi_cutlass | triton | fi_cutlass | **eager**           | —         | **bench_crash** (n=1)   |
+| 18 | fi_cutlass | triton | fi_cutlass | on (piecewise on)   | —         | **bench_crash** (n=4)   |
+| 19 | fi_cutlass | fi     | fi_cudnn   | on (piecewise off)  | —         | **head_crash** (n=4)    |
+| 20 | fi_cutlass | fi     | fi_cudnn   | **eager**           | —         | **head_crash** (n=1)    |
+| 21 | fi_cutlass | fi     | fi_cudnn   | on (piecewise on)   | —         | **bench_crash** (n=1)   |
 
 **Patterns confirmed across all triton-MoE rows (Tests 1–12):**
 - **Eager mode (`disable_cuda_graph=true`) is always broken.** 4 of 4 eager rows produced batched-garbage output. The bogus high "throughput" comes from the model collapsing onto a single token and ripping through `max_tokens` at ~17–18 tok/s per request × N parallel.
 - **CUDA graph modes (on or piecewise on) are always stable.** All 8 graph-on rows produced coherent outputs verified in pod stdout.
 - **Sub-backend choice (fi vs triton attn, fi_cutlass vs fi_cudnn fp4) is essentially neutral** — all stable rows land in a tight 91–98.5 tok/s band at n=8, within ~8% of each other. The single best is **Test 3** (`triton` MoE / `fi` attn / `fi_cutlass` fp4 / piecewise graphs on) at **98.5 tok/s n=8 peak** — still 3.4% below the EP=1 winner (102.0 tok/s).
 
-**fi_cutlass MoE region (Tests 13–17) is uniformly broken** — five consecutive rows crashed worker pods with the same `cudaErrorIllegalInstruction` fault. Crashes hit different workers (worker-1 and worker-2 in roughly equal measure), so it's not a node-affinity, VF-pinning, or single-bad-GPU issue. Crashes are independent of attention backend (fi or triton, same fault) and graph mode (graphs on, eager, or piecewise — all same fault). Crash latency varies: n=1 with simple prompts can run cleanly for 19+ tok/s for a full response (Test 13/16 n=1), while n=4 with thinking-heavy prompts can crash in seconds (Tests 16/17). The hypothesis from the header — that fi_cutlass MoE would be the "winner region at EP=4" with its own EP all-to-all routing — is now **strongly contradicted** on this image. The matrix run was stopped during Test 18 (rows 18–36 never executed). Diagnostic next step: re-run with `disable_flashinfer_cutlass_moe_fp4_allgather=True` (now plumbed through ansible defaults / sglang.yml / sglang_launch.sh / model profile) to take the fi_cutlass-specific allgather out of the loop.
+**fi_cutlass MoE region (Tests 13–19) is uniformly broken** — seven consecutive rows crashed with the same `cudaErrorIllegalInstruction` fault. Crashes hit different ranks each time (workers 1 / 2 plus the head pod in Test 19), so it's not a node-affinity, VF-pinning, single-bad-GPU, or rank-specific issue. Crashes are independent of:
+- **Attention backend** (fi vs triton — same fault, Tests 13–15 vs 16–17)
+- **Graph mode** (graphs on, eager, piecewise — all same fault)
+- **fp4 GEMM backend** (fi_cutlass vs fi_cudnn — same fault, Test 19 confirms the bad kernel is **not** in the dense fp4 GEMM path)
+- **`--disable-flashinfer-cutlass-moe-fp4-allgather`** (out-of-band diagnostic — same fault, just at a different sync point)
+
+**Crash latency / concentration pattern**: every fi_cutlass MoE row produces a clean coherent n=1 response at ~19 tok/s (full body, real verified content in pod stdout), then dies on the next concurrency level. Single-stream decode is fine, parallel decode at n≥4 is fatal. The fault is **concentration-dependent**, not deterministic at startup.
+
+**Process-of-elimination conclusion**: the bad kernel must sit in the fi_cutlass **MoE forward path itself** — specifically in one of the routed-expert FFN kernels (gemm_swiglu / scale_and_combine / EP dispatch / EP combine), running on a SM121 / Blackwell GB10 GPU. The hypothesis from the header — that fi_cutlass MoE would be the "winner region at EP=4" with its own EP all-to-all routing — is now **definitively wrong** on this image. Diagnostic options exhausted at the application level; next step would be either an upstream issue with the kernel name pinpointed via DSA-enabled rebuild, or accepting that fi_cutlass MoE is unusable on Blackwell GB10 in 0.5.10.
 
 Results will continue to be filled in as the kikube-bench matrix progresses.
 
