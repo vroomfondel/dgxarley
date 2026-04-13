@@ -37,3 +37,40 @@ With TP=2, every weight tensor is split across 2 GPUs. Only 2 of 3 nodes are use
 | **Latency** | Higher (pipeline bubbles) | Lower (no pipeline stalls) |
 | **Throughput** | Same with enough concurrency | Same |
 | **Constraint** | KV heads not divisible by nnodes | Needs even KV head count per TP degree |
+
+## Expert Parallelism (EP) — Inter-Node Traffic Considerations
+
+For MoE models (MiniMax, Qwen3-MoE, GLM-MoE, …) the choice of `ep_size` determines where expert computation lives — and crucially, **where the inter-node communication happens**. Counterintuitively, higher `ep` typically means *less* cross-node traffic, not more.
+
+### `tp=4, ep=1` on 4 nodes
+
+The TP group spans **all 4 nodes** (1 GPU per node in the TP group). Every layer — attention AND expert FFN — requires a cross-node all-reduce over RoCE for every token. The three other GPUs per node sit idle unless a separate DP replica is scheduled on them.
+
+- **Dense layers:** cross-node all-reduce (RoCE) at every layer boundary.
+- **Expert layers:** cross-node all-reduce (RoCE) — experts are TP-sharded across nodes.
+- **Active GPUs:** 4 (1 per node).
+- **Inter-node traffic:** every layer, every token.
+
+### `tp=4, ep=4` on 4 nodes
+
+TP now stays **intra-node** (4 GPUs per node connected via NVLink). EP distributes experts across the 4 nodes, so each node owns 1/4 of the expert pool. Only the MoE routing step needs to cross the network.
+
+- **Dense layers:** intra-node TP via NVLink (~900 GB/s). No inter-node traffic.
+- **Expert layers:** cross-node all-to-all (RoCE) for token→expert routing only.
+- **Active GPUs:** 16 (4 per node).
+- **Inter-node traffic:** only for expert dispatch, not for dense computation.
+
+### Comparison
+
+| | `tp=4, ep=1` | `tp=4, ep=4` |
+|---|---|---|
+| **TP group spans** | 4 nodes (cross-node) | 1 node (NVLink) |
+| **Active GPUs** | 4 | 16 |
+| **Dense layer comms** | Cross-node all-reduce per layer | Intra-node NVLink |
+| **Expert layer comms** | Cross-node all-reduce per layer | Cross-node all-to-all (routing only) |
+| **RoCE traffic** | every layer, every token | only MoE dispatch |
+| **Expected throughput** | baseline | 2-4× higher |
+
+**Key insight:** Under-estimating `ep` on a multi-node MoE deployment doesn't save communication — it *maximizes* it, because TP is forced across the slow inter-node link. Matching `ep_size` to `nnodes` keeps TP on NVLink and only pays the network cost for the (relatively sparse) expert dispatch step.
+
+**When `ep=1` still makes sense:** if the entire model fits on a single node and you run pure data-parallel replicas (one full copy per node), each node serves requests independently with *zero* inter-node traffic. This only works when `weights_per_node ≤ GPU_VRAM × GPUs_per_node`, and trades off KV-cache headroom against replica count.
