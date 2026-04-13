@@ -52,15 +52,15 @@ All tests use: `tp=4, pp=1, ep=4, nccl_transport=roce, quantization=modelopt_fp4
 | 4 | roce | triton | triton | fi_cutlass | false | true | **STABLE** | 19.37 | 61.2 | 93.2 |
 | 5 | roce | triton | triton | fi_cutlass | true | true | **FAIL** (garbage all levels) | ~~8.56~~ | ~~62.6~~ | ~~142.8~~ |
 | 6 | roce | triton | triton | fi_cutlass | false | false | **STABLE** | 19.61 | 60.7 | 91.0 |
-| 7 | roce | triton | fi | fi_cudnn | false | true | pending | — | — | — |
-| 8 | roce | triton | fi | fi_cudnn | true | true | pending | — | — | — |
-| 9 | roce | triton | fi | fi_cudnn | false | false | pending | — | — | — |
-| 10 | roce | triton | triton | fi_cudnn | false | true | pending | — | — | — |
-| 11 | roce | triton | triton | fi_cudnn | true | true | pending | — | — | — |
-| 12 | roce | triton | triton | fi_cudnn | false | false | pending | — | — | — |
-| 13 | roce | fi_cutlass | fi | fi_cutlass | false | true | pending | — | — | — |
-| 14 | roce | fi_cutlass | fi | fi_cutlass | true | true | pending | — | — | — |
-| 15 | roce | fi_cutlass | fi | fi_cutlass | false | false | pending | — | — | — |
+| 7 | roce | triton | fi | fi_cudnn | false | true | **STABLE** | 19.49 | 62.4 | 94.1 |
+| 8 | roce | triton | fi | fi_cudnn | true | true | **FAIL** (garbage all levels) | ~~13.42~~ | ~~68.1~~ | ~~144.2~~ |
+| 9 | roce | triton | fi | fi_cudnn | false | false | **STABLE** | 20.10 | 61.0 | 93.7 |
+| 10 | roce | triton | triton | fi_cudnn | false | true | **STABLE** | 19.37 | 61.8 | 94.0 |
+| 11 | roce | triton | triton | fi_cudnn | true | true | **FAIL** (garbage all levels) | ~~8.54~~ | ~~62.0~~ | ~~143.1~~ |
+| 12 | roce | triton | triton | fi_cudnn | false | false | **STABLE** | 19.84 | 60.8 | 93.9 |
+| 13 | roce | fi_cutlass | fi | fi_cutlass | false | true | **FAIL** (bench_crash @ n=8) | 19.61 | — | — |
+| 14 | roce | fi_cutlass | fi | fi_cutlass | true | true | **FAIL** (bench_crash @ n=4) | — | — | — |
+| 15 | roce | fi_cutlass | fi | fi_cutlass | false | false | running | — | — | — |
 | 16 | roce | fi_cutlass | triton | fi_cutlass | false | true | pending | — | — | — |
 | 17 | roce | fi_cutlass | triton | fi_cutlass | true | true | pending | — | — | — |
 | 18 | roce | fi_cutlass | triton | fi_cutlass | false | false | pending | — | — | — |
@@ -182,17 +182,85 @@ This is the second confirmed eager-mode failure (Test 2 was the first, same back
 
 Tracks Test 4 closely across all levels (19.6 vs 19.4, 60.7 vs 61.2, 91.0 vs 93.2). Piecewise graphs add no measurable benefit on the triton-attn path here. Worst n=8 peak of the triton-attn stable rows (vs 93.2 for Test 4), though the difference is within noise.
 
-### Interim summary after 6 rows
+### Test 7 — `triton` MoE + `fi` attn + **`fi_cudnn` fp4** (CUDA graphs on, piecewise off) — **STABLE**
 
-| MoE    | Attn   | Graph mode          | n=8 peak   | Status            |
-|--------|--------|---------------------|------------|-------------------|
-| triton | fi     | on (piecewise off)  | 96.1       | STABLE (Test 1)   |
-| triton | fi     | **eager**           | ~~156.4~~  | **FAIL** (Test 2) |
-| triton | fi     | on (piecewise on)   | 98.5       | STABLE (Test 3)   |
-| triton | triton | on (piecewise off)  | 93.2       | STABLE (Test 4)   |
-| triton | triton | **eager**           | ~~142.8~~  | **FAIL** (Test 5) |
-| triton | triton | on (piecewise on)   | 91.0       | STABLE (Test 6)   |
+- n=1: 19.49 tok/s (ttft 0.74 s)
+- n=4: 62.44 peak (15.61 per-request, ttft 0.78 s), think_tokens vary 1160–1300
+- n=8: 94.12 peak (11.76 per-request, ttft 1.09 s), 8/8 successful, think_tokens vary 1134–1442 — **coherent output verified** (real TCP-vs-UDP senior-engineer content, no `!!!!` pattern)
 
-Clear pattern on the triton MoE path: **eager mode always corrupts, graph modes are always stable**. Attention backend choice (fi vs triton) costs ~3% but is otherwise neutral. Best n=8 peak so far is Test 3 at 98.5 tok/s — still short of the EP=1 winner (102.0 tok/s).
+Switching the fp4 GEMM backend from `flashinfer_cutlass` (Test 1) to `flashinfer_cudnn` costs ~2% at n=8 (94.1 vs 96.1). The cudnn path is slightly slower here but equally stable. Matches Test 4 closely (93.2 n=8) even though Test 4 varied the *attention* backend instead — both sub-backend swaps land in the same ~93-96 peak band on the stable triton-MoE path.
+
+### Test 8 — `triton` MoE + `fi` attn + `fi_cudnn` fp4, **eager** — **FAIL** (garbage all levels)
+
+- n=1: ~~13.42~~ (ttft 54.77 s) — 54s TTFT matches Test 2/5 eager-mode JIT penalty signature.
+- n=4: ~~68.12~~ — all 4 requests have `output_tokens=3072`, all `finish_reason=length`, think_tokens cluster tightly (1419–1481).
+- n=8: ~~144.24~~ — all 8 requests identical (`tt_est=768`, `ot=3072`, fr=length). **Garbage confirmed** via pod stdout grep (440 `!!!!!!` lines in Test 8 range).
+
+Third confirmed eager-mode failure. The `fi_cudnn` fp4 GEMM swap doesn't rescue eager mode — same corruption pattern as Tests 2 and 5. Eager + triton MoE is broken regardless of attn/fp4-gemm sub-backend.
+
+### Test 9 — `triton` MoE + `fi` attn + `fi_cudnn` fp4, piecewise CUDA graphs on — **STABLE**
+
+- n=1: 20.10 tok/s (ttft 0.73 s)
+- n=4: 61.00 peak (15.25 per-request, ttft 0.88 s), think_tokens vary 1078–1301
+- n=8: 93.68 peak (11.71 per-request, ttft 1.24 s), 8/8 successful, think_tokens vary 1070–1632 — **clean output verified** (0 `!!!!` lines in pod stdout)
+
+### Test 10 — `triton` MoE + **`triton` attn** + `fi_cudnn` fp4 (graphs on, piecewise off) — **STABLE**
+
+- n=1: 19.37 tok/s (ttft 2.77 s)
+- n=4: 61.80 peak (15.45 per-request, ttft 0.76 s), think_tokens vary 1086–1329
+- n=8: 94.03 peak (11.76 per-request, ttft 1.16 s), 8/8 successful, think_tokens vary 1080–1430 — **clean output verified**
+
+### Test 11 — `triton` MoE + `triton` attn + `fi_cudnn` fp4, **eager** — **FAIL** (garbage all levels)
+
+- n=1: ~~8.54~~ (ttft 61.45 s, only 1046 ot, fr=stop) — same Test 5 n=1 degradation pattern (real thinking then LaTeX-ish collapse).
+- n=4: ~~62.03~~ — one request has ot=1696 (short), another tt=2001 (unusual).
+- n=8: ~~143.12~~ — all 8 requests identical (`tt_est=769`, `ot=3072`). **Garbage confirmed** via pod stdout grep (383 `!!!!!!` lines).
+
+Fourth confirmed eager-mode failure. All four eager-mode rows (Tests 2, 5, 8, 11) on the triton MoE path have produced the same batched-garbage signature.
+
+### Test 12 — `triton` MoE + `triton` attn + `fi_cudnn` fp4, piecewise CUDA graphs on — **STABLE**
+
+- n=1: 19.84 tok/s (ttft 2.07 s)
+- n=4: 60.83 peak (15.21 per-request, ttft 0.82 s), think_tokens vary 1103–1262
+- n=8: 93.87 peak (11.73 per-request, ttft 1.14 s), 8/8 successful, think_tokens vary 1056–1693 — **clean output verified**
+
+### Tests 13-14 — `flashinfer_cutlass` MoE — **bench_crash**
+
+The fi_cutlass MoE region was supposed to be the "winner region" from the hypothesis in the header — it has its own EP all-to-all routing and bypasses the broken `cutlass_moe_fp4` combine path. In practice both Test 13 and Test 14 crashed a worker pod mid-benchmark:
+
+- **Test 13** (graphs on, piecewise off): n=1 completed cleanly at 19.61 tok/s with real CAP-theorem content verified in pod stdout. n=4 started, all 4 requests began generating coherent content (CAP theorem, encryption architecture briefs — 1160–1422 think_tokens in flight) but the bench harness aborted them at ~120 s each with `output_tokens=0` and status `aborted`. During the n=8 setup, `sglang-worker-2` pod restarted (+1 restart). The matrix harness performed an emergency drain and moved on. The n=4 "aborted" result with non-zero think-token estimates but zero output tokens suggests the stream was cut off before the model finished the thinking phase — likely the worker was already unhealthy.
+- **Test 14** (eager): `sglang-worker-1` restarted during the n=4 benchmark (+1 restart). Bench harness drained and moved on. No usable data.
+
+These are **hard crashes**, not output corruption. Root cause not yet diagnosed from the runtime logs — need to pull the crashed worker container logs (`kubectl logs --previous`) to confirm whether it's an OOM, a cuDNN/CUTLASS fault from the fi_cutlass MoE backend, or NCCL timeout. Deferring investigation until the matrix completes.
+
+### Test 15 — `flashinfer_cutlass` MoE, piecewise on — running
+
+SGLang head still waiting for readiness as of last check.
+
+### Interim summary after 14 rows
+
+| #  | MoE        | Attn   | fp4 GEMM   | Graph mode          | n=8 peak  | Status                  |
+|----|------------|--------|------------|---------------------|-----------|-------------------------|
+| 1  | triton     | fi     | fi_cutlass | on (piecewise off)  | 96.1      | STABLE                  |
+| 2  | triton     | fi     | fi_cutlass | **eager**           | ~~156.4~~ | **FAIL** (garbage)      |
+| 3  | triton     | fi     | fi_cutlass | on (piecewise on)   | **98.5**  | STABLE (best so far)    |
+| 4  | triton     | triton | fi_cutlass | on (piecewise off)  | 93.2      | STABLE                  |
+| 5  | triton     | triton | fi_cutlass | **eager**           | ~~142.8~~ | **FAIL** (garbage)      |
+| 6  | triton     | triton | fi_cutlass | on (piecewise on)   | 91.0      | STABLE                  |
+| 7  | triton     | fi     | fi_cudnn   | on (piecewise off)  | 94.1      | STABLE                  |
+| 8  | triton     | fi     | fi_cudnn   | **eager**           | ~~144.2~~ | **FAIL** (garbage)      |
+| 9  | triton     | fi     | fi_cudnn   | on (piecewise on)   | 93.7      | STABLE                  |
+| 10 | triton     | triton | fi_cudnn   | on (piecewise off)  | 94.0      | STABLE                  |
+| 11 | triton     | triton | fi_cudnn   | **eager**           | ~~143.1~~ | **FAIL** (garbage)      |
+| 12 | triton     | triton | fi_cudnn   | on (piecewise on)   | 93.9      | STABLE                  |
+| 13 | fi_cutlass | fi     | fi_cutlass | on (piecewise off)  | —         | **bench_crash** (n=8)   |
+| 14 | fi_cutlass | fi     | fi_cutlass | **eager**           | —         | **bench_crash** (n=4)   |
+
+**Patterns confirmed across all triton-MoE rows (Tests 1–12):**
+- **Eager mode (`disable_cuda_graph=true`) is always broken.** 4 of 4 eager rows produced batched-garbage output. The bogus high "throughput" comes from the model collapsing onto a single token and ripping through `max_tokens` at ~17–18 tok/s per request × N parallel.
+- **CUDA graph modes (on or piecewise on) are always stable.** All 8 graph-on rows produced coherent outputs verified in pod stdout.
+- **Sub-backend choice (fi vs triton attn, fi_cutlass vs fi_cudnn fp4) is essentially neutral** — all stable rows land in a tight 91–98.5 tok/s band at n=8, within ~8% of each other. The single best is **Test 3** (`triton` MoE / `fi` attn / `fi_cutlass` fp4 / piecewise graphs on) at **98.5 tok/s n=8 peak** — still 3.4% below the EP=1 winner (102.0 tok/s).
+
+**fi_cutlass MoE region (Tests 13+) is unstable** — first two rows crashed worker pods mid-benchmark instead of producing data. The hypothesis from the header that fi_cutlass MoE would be the "winner region at EP=4" is in trouble; need to look at crash logs before the rest of that region runs.
 
 Results will continue to be filled in as the kikube-bench matrix progresses.
