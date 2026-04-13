@@ -24,19 +24,37 @@ _model_profile:
     context_length: 196608  # model max 262144; conservative start
     quantization: "modelopt_fp4"
     trust_remote_code: true
-    # triton MoE → cutlass_moe_fp4 fallback: crashes with device-side assert
-    # (nvfp4_blockwise_moe.cuh:78) during both CUDA graph capture AND eager inference.
-    # flashinfer_cutlass MoE is the only working backend (same as GLM-4.7 TP=4 EP=4).
-    moe_runner_backend: "flashinfer_cutlass"
+    # Backend selection = EP=1 test matrix winner (Test 28).
+    # See TESTLOGS/sglang_nn4_tp4_ep1/qwen-3.5-397b-a17b-nvfp4/
+    #     TESTLOG_nv580.142_sglang-0.5.10_qwen3.5-397b-nvfp4_4n.md
+    # Result: 21.5 / 67.8 / 102.0 tok/s (n=1 / n=4 peak / n=8 peak). 24 of 36
+    # tests passed; top 5 all ≥100 tok/s @ n=8 and all use CUDA graphs ON.
+    # Key findings:
+    #   ep_size=1 — avoids the StandardDispatcher EP combine bug that makes
+    #     flashinfer_cutlass/triton/cutlass MoE all crash at EP=4 on NVFP4.
+    #     At EP=1 all 512 experts replicated on every GPU, TP-sharded intermediate.
+    #   moe_runner_backend=cutlass — cutlass-direct wins by ~1% over triton-moe
+    #     (both pipe through cutlass_moe_fp4 at the kernel level; cutlass-direct
+    #     has less Python overhead). flashinfer_cutlass MoE is BROKEN at EP=1
+    #     (9/12 tests FAILED — backend assumes EP>1 semantics).
+    #   attention_backend=triton — marginally beats flashinfer attn at high
+    #     concurrency (Test 28 vs Test 25: 102.0 vs 100.8 @ n=8).
+    #   fp4_gemm_backend=flashinfer_cutlass — ~1-2 tok/s better than
+    #     flashinfer_cudnn at n=8.
+    #   disable_cuda_graph=false (graphs ON) — delivers ~50% n=1 speedup
+    #     (21.5 vs 14.6 tok/s); narrows to ~8% at n=8 as batching amortizes.
+    #   disable_piecewise_cuda_graph=true — fixed-BS graphs; piecewise ≈
+    #     regular graphs within noise.
+    moe_runner_backend: "cutlass"
     kv_cache_dtype: "fp8_e4m3"
     # 0.80 OOMs on workers — flashinfer_cutlass MoE JIT for 512 experts needs
     # significant extra VRAM beyond model weights. 0.60 leaves ~30 GB headroom.
     mem_fraction_static: "0.80"
-    attention_backend: "flashinfer"
+    attention_backend: "triton"
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 4
     disable_piecewise_cuda_graph: true
-    disable_cuda_graph: true
+    disable_cuda_graph: false
     cuda_graph_max_bs: 8
     pp_async_batch_depth: 0
     disable_deep_gemm: true
@@ -44,7 +62,11 @@ _model_profile:
     # vLLM uses "qwen3". For SGLang, try "deepseek-r1" or "qwen3" if available.
     reasoning_parser: "qwen3"
     num_experts: 512
-    ep_size: 4
+    # EP=1 required: flashinfer_cutlass/triton/cutlass MoE all crash at EP>1
+    # due to the StandardDispatcher EP combine bug (see
+    # SGLANG_NVFP4_SHUFFLE_ROWS_OOB_UPSTREAM_BUG.md). At EP=1 each GPU has all
+    # 512 experts (TP-sharded intermediate), no per-layer EP all-reduce.
+    ep_size: 1
     recommended_sampling:
       temperature: 0.6
       top_p: 0.95
