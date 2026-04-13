@@ -2,9 +2,9 @@
 
 ## Status
 
-**Open upstream (vLLM only)** as of 2026-04-10 (re-verified: no movement on any open PR since last check). Bug exists in both SGLang and vLLM (code originated in vLLM PR #14447). Present in SGLang v0.5.10 (2026-04-06) and v0.5.10.post1 (2026-04-09, flashinfer bump only). EPLB Qwen3 fix (PR #21822) merged 2026-04-09; all other referenced PRs re-verified 2026-04-10 — none merged, none touched.
+**Open upstream (vLLM only)** as of 2026-04-13 (re-verified: no review movement on any open PR since last check). Bug exists in both SGLang and vLLM (code originated in vLLM PR #14447). Present in SGLang v0.5.10 (2026-04-06) and v0.5.10.post1 (2026-04-09, flashinfer bump only). EPLB Qwen3 fix (PR #21822) merged 2026-04-09; all other referenced PRs re-verified 2026-04-13 — none merged, none reviewed.
 
-- vLLM: [PR #35598](https://github.com/vllm-project/vllm/pull/35598) — open since 2026-02-28, stale ~5 weeks (last activity 2026-03-05), not merged
+- vLLM: [PR #35598](https://github.com/vllm-project/vllm/pull/35598) — open since 2026-02-28, not merged. Author rebased onto `main` on 2026-04-13 (commit `c56eae0e`, merge-from-main only, no code changes); prior rebase 2026-03-05. Still only the initial Gemini bot review from 2026-02-28 — no human reviewer has engaged
 - vLLM: [PR #36026](https://github.com/vllm-project/vllm/pull/36026) — fix wrong num_experts in moe_wna16 kernel dispatch, open since 2026-03-29, author pinged for review 2026-03-29, still unreviewed
 - SGLang: no upstream issue or PR filed
 
@@ -392,7 +392,7 @@ However, the CUDA kernel-level issue cannot be patched. For NVFP4 + EP > 1, use
 ## Related Upstream Issues & PRs
 
 ### Directly addressing our bugs
-- vLLM [PR #35598](https://github.com/vllm-project/vllm/pull/35598) — fix moe_wna16 qzeros EP (open, stale since 2026-03-05, only bot review)
+- vLLM [PR #35598](https://github.com/vllm-project/vllm/pull/35598) — fix moe_wna16 qzeros EP (open, author rebased onto main 2026-04-13, only bot review)
 - SGLang [PR #21461](https://github.com/sgl-project/sglang/pull/21461) — fix EPLB Qwen3 missing `routed_experts_weights_of_layer` (closed without merge 2026-03-30, CI failure)
 - SGLang [PR #19767](https://github.com/sgl-project/sglang/pull/19767) — fix EPLB Qwen3.5 (merged 2026-03-09)
 - SGLang [#21602](https://github.com/sgl-project/sglang/issues/21602) — our report: NVFP4 input_scale not EP-aware
