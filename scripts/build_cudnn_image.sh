@@ -86,6 +86,14 @@ PODMAN_SSH_IDENTITY="${BUILD_CUDNN_SSH_IDENTITY:-${HOME}/.ssh/id_podman}"
 PUSH_IMAGE=1
 NO_LOCAL_COPY=0
 
+# Temporary build-context directory. Declared at script scope so the EXIT
+# trap can clean it up regardless of which function raised an error. We do
+# NOT use `trap ... RETURN` inside run_build — RETURN is global, so it
+# would re-fire for every subsequent function return and, under `set -u`,
+# crash trying to expand an unset ctx_dir after run_build has already
+# cleaned it up.
+BUILD_CTX_DIR=""
+
 # ============================================================================
 # Helpers
 # ============================================================================
@@ -298,26 +306,32 @@ ensure_base_image() {
 # Build via remote podman socket
 # ============================================================================
 
+cleanup_build_ctx() {
+    if [[ -n "${BUILD_CTX_DIR}" && -d "${BUILD_CTX_DIR}" ]]; then
+        rm -rf "${BUILD_CTX_DIR}"
+    fi
+}
+trap cleanup_build_ctx EXIT
+
 run_build() {
     log "Building ${IMAGE_TAG} on '${PODMAN_CONNECTION}' (~5-10 min cold)"
 
     # The build context is just the Dockerfile — copy it into a temp dir so
-    # we don't accidentally upload the whole scripts/ tree as context.
-    local ctx_dir
-    ctx_dir="$(mktemp -d)"
-    trap 'rm -rf "${ctx_dir}"' RETURN
-    cp "${DOCKERFILE}" "${ctx_dir}/Dockerfile"
+    # we don't accidentally upload the whole scripts/ tree as context. The
+    # EXIT trap above cleans it up regardless of which function errors later.
+    BUILD_CTX_DIR="$(mktemp -d)"
+    cp "${DOCKERFILE}" "${BUILD_CTX_DIR}/Dockerfile"
 
     # Tag with BOTH the short name and the docker.io/ fully-qualified name.
     # Reason: same as in build_pytorch_base_image.sh — podman stores images
     # built with short `-t` arguments under `localhost/` by default, which
     # breaks downstream `FROM` resolution that normalizes to `docker.io/`.
     podman --connection "${PODMAN_CONNECTION}" build \
-        -f "${ctx_dir}/Dockerfile" \
+        -f "${BUILD_CTX_DIR}/Dockerfile" \
         --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
         -t "${IMAGE_TAG}" \
         -t "docker.io/${IMAGE_TAG}" \
-        "${ctx_dir}"
+        "${BUILD_CTX_DIR}"
 
     if ! podman --connection "${PODMAN_CONNECTION}" image exists "docker.io/${IMAGE_TAG}"; then
         die "Build finished but docker.io/${IMAGE_TAG} not present in remote image store"
@@ -415,17 +429,21 @@ Quick fi_cudnn sanity check (run inside the image on any spark):
 
 Next steps:
 
-1. Distribute to all 4 sparks:
-     bash scripts/distrsm121image.sh ${IMAGE_TAG}
-   (or adapt to your distribution mechanism — ctr import / skopeo copy / etc.)
+1. Distribute to all 4 sparks via a throwaway registry on the build host:
+     bash scripts/distrcudnnimage.sh --source ${PODMAN_CONNECTION}.local \\
+                                     --registry-host 10.10.10.4
 
 2. Point the matrix test runs at the new image by editing
    matrixtest_matrices/sglang_nn4_tp4_ep1/glm-4.7-nvfp4/*.yaml:
      image: "${IMAGE_TAG}"
 
-3. Re-run the fi_cudnn rows of the matrix (tests 7-12, 19-24, 31-36 for
-   the GLM-4.7 EP=1 sweep) to find out whether fi_cudnn actually beats
-   fi_cutlass at FP4 GEMM on GLM-4.7 once cuDNN is available.
+3. Re-run only the fi_cudnn rows where cuDNN was the sole blocker —
+   skip piecewise (always crashes) and skip fi_cutlass MoE rows (broken
+   at EP=1 independently). For GLM-4.7 EP=1 that's 8 tests:
+     tests 7, 8, 10, 11   (triton MoE + fi_cudnn non-piecewise)
+     tests 31, 32, 34, 35 (cutlass MoE + fi_cudnn non-piecewise)
+   Plus the new MTP variants 37 (triton MoE) and 38 (cutlass MoE) if
+   you want to measure speculative decoding on the cuDNN path.
 
 EOF
 }

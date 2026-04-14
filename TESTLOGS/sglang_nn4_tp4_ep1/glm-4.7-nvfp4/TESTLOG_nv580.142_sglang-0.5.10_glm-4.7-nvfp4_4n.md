@@ -83,7 +83,8 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4
 | 34 | roce | cutlass | triton | fi_cudnn | false | true | **startup_crash** | — | — | — |
 | 35 | roce | cutlass | triton | fi_cudnn | true | true | *running* | — | — | — |
 | 36 | roce | cutlass | triton | fi_cudnn | false | false | *pending* | — | — | — |
-| 37 | roce | fi_cutlass | triton | fi_cudnn | true | true | *pending (MTP, NEXTN k=3/4)* | — | — | — |
+| 37 | roce | triton | triton | fi_cudnn | true | true | *pending (MTP, NEXTN k=3/4, needs cuDNN image)* | — | — | — |
+| 38 | roce | cutlass | triton | fi_cudnn | true | true | *pending (MTP, NEXTN k=3/4, needs cuDNN image)* | — | — | — |
 
 ### Column Legend
 

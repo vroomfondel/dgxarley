@@ -42,11 +42,12 @@ REGISTRY_PORT="5000"
 
 USE_TMUX=1
 PULL_LOCAL=0
+LOCAL_ONLY=0
 
 usage() {
     cat <<EOF
 Usage: $(basename "$0") [--source HOST] [--registry-host IP]
-                        [--pull-local] [--no-tmux] [--help]
+                        [--pull-local | --local-only] [--no-tmux] [--help]
 
 Distribute the sglang cuDNN image from a build host to all 4 DGX Spark
 K3s nodes via a throwaway registry:2 on the build host.
@@ -68,6 +69,14 @@ Options:
                          finish (so the QSFP pulls run at full speed).
                          Uses \${SOURCE}:\${REGISTRY_PORT} as pull address.
                          Default: off.
+  --local-only           Skip the 4-spark parallel distribution entirely
+                         and ONLY pull the image into this control host's
+                         local podman store. Starts the throwaway registry
+                         on --source, pushes the image into it, pulls it
+                         back to the control host, then tears the registry
+                         down. Useful when you just want a local copy for
+                         inspection/push-to-hub without touching K3s.
+                         Mutually exclusive with --pull-local.
   --no-tmux              Disable the 4-pane tmux view for the parallel
                          pulls and use the flat merged-output fallback
                          instead. Auto-enabled when tmux is not installed
@@ -76,11 +85,14 @@ Options:
   --help                 Show this help.
 
 Examples:
-  # Default — image was built on spark4
+  # Default — image was built on spark4, distribute to all 4 sparks
   $(basename "$0")
 
   # Image was built on spark3 instead
   $(basename "$0") --source spark3.local --registry-host 10.10.10.3
+
+  # Only pull the image to this host's local podman store (no K3s)
+  $(basename "$0") --local-only --source spark4.local --registry-host 10.10.10.4
 EOF
 }
 
@@ -111,6 +123,11 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --pull-local)
+            PULL_LOCAL=1
+            shift
+            ;;
+        --local-only)
+            LOCAL_ONLY=1
             PULL_LOCAL=1
             shift
             ;;
@@ -351,7 +368,13 @@ EOF
 
 # Dispatcher: prefer tmux, fall back to flat if tmux is missing or the
 # environment is not interactive. --no-tmux forces flat regardless.
-if (( USE_TMUX == 1 )) && command -v tmux >/dev/null 2>&1 && [[ -t 0 ]] && [[ -t 1 ]]; then
+# Skipped entirely when --local-only is set — in that case the registry
+# is started on the source, the image gets pushed into it, and the
+# control host pulls it back via the PULL_LOCAL block below.
+if (( LOCAL_ONLY == 1 )); then
+    echo "=== --local-only: skipping 4-spark parallel distribution ==="
+    fail=0
+elif (( USE_TMUX == 1 )) && command -v tmux >/dev/null 2>&1 && [[ -t 0 ]] && [[ -t 1 ]]; then
     parallel_pull_tmux
     fail=$?
 else
