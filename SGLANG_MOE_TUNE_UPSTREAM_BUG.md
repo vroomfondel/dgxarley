@@ -2,7 +2,7 @@
 
 ## Status
 
-**Fixed upstream** as of 2026-03-27. Re-verified 2026-04-10: no regressions reported; fix remains in current `main`.
+**Fixed upstream** as of 2026-03-27. Re-verified 2026-04-14: no regressions reported; fix remains in current `main`.
 
 - Fix PR: [#20232](https://github.com/sgl-project/sglang/pull/20232) — "[fix] qwen3.5 fuse_moe_triton_tune bug", merged 2026-03-27 (commit `e2b8463c`)
 - File: `benchmark/kernels/fused_moe_triton/common_utils.py`, function `get_model_config()`

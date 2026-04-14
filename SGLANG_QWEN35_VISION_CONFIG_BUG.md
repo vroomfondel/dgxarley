@@ -111,6 +111,6 @@ PR opened 2026-04-12. Fixes silent weight-dropping for `compressed-tensors` NVFP
 
 ## Upstream references
 
-- Not yet reported (re-verified 2026-04-12: GitHub search for `sub_configs Qwen3_5` in sgl-project/sglang still returns no matching issues or PRs)
+- Not yet reported (re-verified 2026-04-14: GitHub search for `sub_configs Qwen3_5` in sgl-project/sglang still returns no matching issues or PRs)
 - Related: transformers 5.x `PretrainedConfig.__init_subclass__` auto-init behavior
 - Related: sgl-project/sglang#20973 (different Qwen3.5 NVFP4 checkpoint, different bug)

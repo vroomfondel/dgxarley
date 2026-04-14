@@ -2,19 +2,19 @@
 
 ## Environment
 
-| Component | Value |
-|-----------|-------|
-| GPU | NVIDIA GB10 (SM121/Blackwell), 128 GB per node |
-| Driver | 580.142 |
-| CUDA | 13.2 |
-| Kernel | 6.19.11-custom |
-| OS | Ubuntu 24.04 LTS (aarch64) |
-| K3s | v1.35.3+k3s1 |
-| Nodes | spark1, spark2, spark3, spark4 (1 GPU each) |
-| Image | `scitrera/dgx-spark-sglang:0.5.10` |
-| Model | `nvidia/Qwen3.5-397B-A17B-NVFP4` |
-| NCCL | 2.29.7+cuda13.2 (`dgxspark-3node-ring` build tag from scitrera image — functionally unrelated to our 4-node setup) |
-| Transport | **RoCE** via SR-IOV VF (9.78 GB/s measured bus BW) |
+| Component | Value                                                                                                              |
+|-----------|--------------------------------------------------------------------------------------------------------------------|
+| GPU       | NVIDIA GB10 (SM121/Blackwell), 128 GB per node                                                                     |
+| Driver    | 580.142                                                                                                            |
+| CUDA      | 13.2                                                                                                               |
+| Kernel    | 6.19.11-custom                                                                                                     |
+| OS        | Ubuntu 24.04 LTS (aarch64)                                                                                         |
+| K3s       | v1.35.3+k3s1                                                                                                       |
+| Nodes     | spark1, spark2, spark3, spark4 (1 GPU each)                                                                        |
+| Image     | `scitrera/dgx-spark-sglang:0.5.10`                                                                                 |
+| Model     | `nvidia/Qwen3.5-397B-A17B-NVFP4`                                                                                   |
+| NCCL      | 2.29.7+cuda13.2 (`dgxspark-3node-ring` build tag from scitrera image — functionally unrelated to our 4-node setup) |
+| Transport | **RoCE** via SR-IOV VF (9.78 GB/s measured bus BW)                                                                 |
 
 ---
 
@@ -44,58 +44,58 @@
 
 All tests use: `tp=4, pp=1, ep=4, nccl_transport=roce, quantization=modelopt_fp4, kv_cache_dtype=fp8_e4m3, mem_fraction_static=0.70, disable_deep_gemm=true, context_length=196608, max_running_requests=32, schedule_policy=lpm, watchdog_timeout=3600, dist_timeout=1800` unless noted.
 
-| # | nccl | moe_runner | attention | fp4_gemm | dis_cuda_graph | dis_piecewise | Status | n=1 tok/s | n=4 peak | n=8 peak |
-|---|------|------------|-----------|----------|----------------|---------------|--------|-----------|----------|----------|
-| 1 | roce | triton | fi | fi_cutlass | false | true | **STABLE** | 20.65 | 64.4 | 96.1 |
-| 2 | roce | triton | fi | fi_cutlass | true | true | **FAIL†** (garbage @ n=8) | 13.16 | 75.4 | ~~156.4~~ |
-| 3 | roce | triton | fi | fi_cutlass | false | false | **STABLE** | 21.43 | 65.7 | 98.5 |
-| 4 | roce | triton | triton | fi_cutlass | false | true | **STABLE** | 19.37 | 61.2 | 93.2 |
-| 5 | roce | triton | triton | fi_cutlass | true | true | **FAIL** (garbage all levels) | ~~8.56~~ | ~~62.6~~ | ~~142.8~~ |
-| 6 | roce | triton | triton | fi_cutlass | false | false | **STABLE** | 19.61 | 60.7 | 91.0 |
-| 7 | roce | triton | fi | fi_cudnn | false | true | **STABLE** | 19.49 | 62.4 | 94.1 |
-| 8 | roce | triton | fi | fi_cudnn | true | true | **FAIL** (garbage all levels) | ~~13.42~~ | ~~68.1~~ | ~~144.2~~ |
-| 9 | roce | triton | fi | fi_cudnn | false | false | **STABLE** | 20.10 | 61.0 | 93.7 |
-| 10 | roce | triton | triton | fi_cudnn | false | true | **STABLE** | 19.37 | 61.8 | 94.0 |
-| 11 | roce | triton | triton | fi_cudnn | true | true | **FAIL** (garbage all levels) | ~~8.54~~ | ~~62.0~~ | ~~143.1~~ |
-| 12 | roce | triton | triton | fi_cudnn | false | false | **STABLE** | 19.84 | 60.8 | 93.9 |
-| 13 | roce | fi_cutlass | fi | fi_cutlass | false | true | **FAIL** (bench_crash @ n=8) | 19.61 | — | — |
-| 14 | roce | fi_cutlass | fi | fi_cutlass | true | true | **FAIL** (bench_crash @ n=4) | — | — | — |
-| 15 | roce | fi_cutlass | fi | fi_cutlass | false | false | **FAIL** (bench_crash @ n=1) | — | — | — |
-| 16 | roce | fi_cutlass | triton | fi_cutlass | false | true | **FAIL** (bench_crash @ n=4) | 19.32 | — | — |
-| 17 | roce | fi_cutlass | triton | fi_cutlass | true | true | **FAIL** (bench_crash @ n=1) | — | — | — |
-| 18 | roce | fi_cutlass | triton | fi_cutlass | false | false | **FAIL** (bench_crash @ n=4) | 18.81 | — | — |
-| 19 | roce | fi_cutlass | fi | fi_cudnn | false | true | **FAIL** (head crash @ n=4) | 19.54 | — | — |
-| 20 | roce | fi_cutlass | fi | fi_cudnn | true | true | **FAIL** (head crash @ n=1) | — | — | — |
-| 21 | roce | fi_cutlass | fi | fi_cudnn | false | false | **FAIL** (bench_crash @ n=1) | — | — | — |
-| 22 | roce | fi_cutlass | triton | fi_cudnn | false | true | **FAIL** (bench_crash @ n=4) | 19.75 | — | — |
-| 23 | roce | fi_cutlass | triton | fi_cudnn | true | true | **FAIL** (bench_crash @ n=1) | — | — | — |
-| 24 | roce | fi_cutlass | triton | fi_cudnn | false | false | **FAIL** (bench_crash @ n=1) | — | — | — |
-| 25 | roce | cutlass | fi | fi_cutlass | false | true | **STABLE** | 20.26 | 64.5 | 93.4 |
-| 26 | roce | cutlass | fi | fi_cutlass | true | true | **FAIL** (repetition @ n=4) | 12.32 | ~~rep~~ | — |
-| 27 | roce | cutlass | fi | fi_cutlass | false | false | **STABLE** | 20.12 | 61.9 | 93.6 |
-| 28 | roce | cutlass | triton | fi_cutlass | false | true | **STABLE** | 18.54 | 61.5 | 94.5 |
-| 29 | roce | cutlass | triton | fi_cutlass | true | true | **FAIL** (eager: rep @ n=4, garbage @ n=8) | 8.18 | ~~14.5~~ | ~~144.6~~ |
-| 30 | roce | cutlass | triton | fi_cutlass | false | false | **FAIL†** (head unreach after n=1) | 20.24 | — | — |
-| 31 | roce | cutlass | fi | fi_cudnn | false | true | **STABLE** | 19.35 | 61.7 | 93.8 |
-| 32 | roce | cutlass | fi | fi_cudnn | true | true | **FAIL** (eager: rep @ n=4, garbage @ n=8) | 13.04 | ~~—~~ | ~~147.0~~ |
-| 33 | roce | cutlass | fi | fi_cudnn | false | false | **STABLE** | 19.52 | 61.7 | **95.2** |
-| 34 | roce | cutlass | triton | fi_cudnn | false | true | **STABLE** | 19.72 | 61.9 | 95.1 |
-| 35 | roce | cutlass | triton | fi_cudnn | true | true | **FAIL** (eager: rep @ n=4, garbage @ n=8) | 7.71 | ~~14.5~~ | ~~143.0~~ |
-| 36 | roce | cutlass | triton | fi_cudnn | false | false | **STABLE** | 19.5 | 62.0 | 94.6 |
+| #  | nccl | moe_runner | attention | fp4_gemm   | dis_cuda_graph | dis_piecewise | Status                                     | n=1 tok/s | n=4 peak | n=8 peak  |
+|----|------|------------|-----------|------------|----------------|---------------|--------------------------------------------|-----------|----------|-----------|
+| 1  | roce | triton     | fi        | fi_cutlass | false          | true          | **STABLE**                                 | 20.65     | 64.4     | 96.1      |
+| 2  | roce | triton     | fi        | fi_cutlass | true           | true          | **FAIL†** (garbage @ n=8)                  | 13.16     | 75.4     | ~~156.4~~ |
+| 3  | roce | triton     | fi        | fi_cutlass | false          | false         | **STABLE**                                 | 21.43     | 65.7     | 98.5      |
+| 4  | roce | triton     | triton    | fi_cutlass | false          | true          | **STABLE**                                 | 19.37     | 61.2     | 93.2      |
+| 5  | roce | triton     | triton    | fi_cutlass | true           | true          | **FAIL** (garbage all levels)              | ~~8.56~~  | ~~62.6~~ | ~~142.8~~ |
+| 6  | roce | triton     | triton    | fi_cutlass | false          | false         | **STABLE**                                 | 19.61     | 60.7     | 91.0      |
+| 7  | roce | triton     | fi        | fi_cudnn   | false          | true          | **STABLE**                                 | 19.49     | 62.4     | 94.1      |
+| 8  | roce | triton     | fi        | fi_cudnn   | true           | true          | **FAIL** (garbage all levels)              | ~~13.42~~ | ~~68.1~~ | ~~144.2~~ |
+| 9  | roce | triton     | fi        | fi_cudnn   | false          | false         | **STABLE**                                 | 20.10     | 61.0     | 93.7      |
+| 10 | roce | triton     | triton    | fi_cudnn   | false          | true          | **STABLE**                                 | 19.37     | 61.8     | 94.0      |
+| 11 | roce | triton     | triton    | fi_cudnn   | true           | true          | **FAIL** (garbage all levels)              | ~~8.54~~  | ~~62.0~~ | ~~143.1~~ |
+| 12 | roce | triton     | triton    | fi_cudnn   | false          | false         | **STABLE**                                 | 19.84     | 60.8     | 93.9      |
+| 13 | roce | fi_cutlass | fi        | fi_cutlass | false          | true          | **FAIL** (bench_crash @ n=8)               | 19.61     | —        | —         |
+| 14 | roce | fi_cutlass | fi        | fi_cutlass | true           | true          | **FAIL** (bench_crash @ n=4)               | —         | —        | —         |
+| 15 | roce | fi_cutlass | fi        | fi_cutlass | false          | false         | **FAIL** (bench_crash @ n=1)               | —         | —        | —         |
+| 16 | roce | fi_cutlass | triton    | fi_cutlass | false          | true          | **FAIL** (bench_crash @ n=4)               | 19.32     | —        | —         |
+| 17 | roce | fi_cutlass | triton    | fi_cutlass | true           | true          | **FAIL** (bench_crash @ n=1)               | —         | —        | —         |
+| 18 | roce | fi_cutlass | triton    | fi_cutlass | false          | false         | **FAIL** (bench_crash @ n=4)               | 18.81     | —        | —         |
+| 19 | roce | fi_cutlass | fi        | fi_cudnn   | false          | true          | **FAIL** (head crash @ n=4)                | 19.54     | —        | —         |
+| 20 | roce | fi_cutlass | fi        | fi_cudnn   | true           | true          | **FAIL** (head crash @ n=1)                | —         | —        | —         |
+| 21 | roce | fi_cutlass | fi        | fi_cudnn   | false          | false         | **FAIL** (bench_crash @ n=1)               | —         | —        | —         |
+| 22 | roce | fi_cutlass | triton    | fi_cudnn   | false          | true          | **FAIL** (bench_crash @ n=4)               | 19.75     | —        | —         |
+| 23 | roce | fi_cutlass | triton    | fi_cudnn   | true           | true          | **FAIL** (bench_crash @ n=1)               | —         | —        | —         |
+| 24 | roce | fi_cutlass | triton    | fi_cudnn   | false          | false         | **FAIL** (bench_crash @ n=1)               | —         | —        | —         |
+| 25 | roce | cutlass    | fi        | fi_cutlass | false          | true          | **STABLE**                                 | 20.26     | 64.5     | 93.4      |
+| 26 | roce | cutlass    | fi        | fi_cutlass | true           | true          | **FAIL** (repetition @ n=4)                | 12.32     | ~~rep~~  | —         |
+| 27 | roce | cutlass    | fi        | fi_cutlass | false          | false         | **STABLE**                                 | 20.12     | 61.9     | 93.6      |
+| 28 | roce | cutlass    | triton    | fi_cutlass | false          | true          | **STABLE**                                 | 18.54     | 61.5     | 94.5      |
+| 29 | roce | cutlass    | triton    | fi_cutlass | true           | true          | **FAIL** (eager: rep @ n=4, garbage @ n=8) | 8.18      | ~~14.5~~ | ~~144.6~~ |
+| 30 | roce | cutlass    | triton    | fi_cutlass | false          | false         | **FAIL†** (head unreach after n=1)         | 20.24     | —        | —         |
+| 31 | roce | cutlass    | fi        | fi_cudnn   | false          | true          | **STABLE**                                 | 19.35     | 61.7     | 93.8      |
+| 32 | roce | cutlass    | fi        | fi_cudnn   | true           | true          | **FAIL** (eager: rep @ n=4, garbage @ n=8) | 13.04     | ~~—~~    | ~~147.0~~ |
+| 33 | roce | cutlass    | fi        | fi_cudnn   | false          | false         | **STABLE**                                 | 19.52     | 61.7     | **95.2**  |
+| 34 | roce | cutlass    | triton    | fi_cudnn   | false          | true          | **STABLE**                                 | 19.72     | 61.9     | 95.1      |
+| 35 | roce | cutlass    | triton    | fi_cudnn   | true           | true          | **FAIL** (eager: rep @ n=4, garbage @ n=8) | 7.71      | ~~14.5~~ | ~~143.0~~ |
+| 36 | roce | cutlass    | triton    | fi_cudnn   | false          | false         | **STABLE**                                 | 19.5      | 62.0     | 94.6      |
 
 ### Column Legend
 
-| Column | Description |
-|--------|-------------|
-| nccl | `nccl_transport` — NCCL inter-node transport (`socket` = TCP/IP, `roce` = RDMA/RoCE via SR-IOV VF) |
-| moe_runner | `moe_runner_backend` — MoE expert dispatch kernel (`fi_cutlass` = flashinfer_cutlass, `triton` = triton→cutlass_moe_fp4 fallback for NVFP4, `cutlass` = cutlass direct) |
-| attention | `attention_backend` — attention kernel (`fi` = FlashInfer, `triton` = Triton) |
-| fp4_gemm | `fp4_gemm_backend` — FP4 dense GEMM kernel (`fi_cutlass` = flashinfer_cutlass, `fi_cudnn` = flashinfer_cudnn) |
-| dis_cuda_graph | `disable_cuda_graph` — true = eager mode, false = capture CUDA graphs |
-| dis_piecewise | `disable_piecewise_cuda_graph` — true = only fixed-BS graphs, false = piecewise variable-length graphs |
-| n=1 tok/s | Per-request throughput at concurrency 1 |
-| n=4 peak | Sum of per-request tok/s at concurrency 4 |
-| n=8 peak | Sum of per-request tok/s at concurrency 8 |
+| Column         | Description                                                                                                                                                             |
+|----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| nccl           | `nccl_transport` — NCCL inter-node transport (`socket` = TCP/IP, `roce` = RDMA/RoCE via SR-IOV VF)                                                                      |
+| moe_runner     | `moe_runner_backend` — MoE expert dispatch kernel (`fi_cutlass` = flashinfer_cutlass, `triton` = triton→cutlass_moe_fp4 fallback for NVFP4, `cutlass` = cutlass direct) |
+| attention      | `attention_backend` — attention kernel (`fi` = FlashInfer, `triton` = Triton)                                                                                           |
+| fp4_gemm       | `fp4_gemm_backend` — FP4 dense GEMM kernel (`fi_cutlass` = flashinfer_cutlass, `fi_cudnn` = flashinfer_cudnn)                                                           |
+| dis_cuda_graph | `disable_cuda_graph` — true = eager mode, false = capture CUDA graphs                                                                                                   |
+| dis_piecewise  | `disable_piecewise_cuda_graph` — true = only fixed-BS graphs, false = piecewise variable-length graphs                                                                  |
+| n=1 tok/s      | Per-request throughput at concurrency 1                                                                                                                                 |
+| n=4 peak       | Sum of per-request tok/s at concurrency 4                                                                                                                               |
+| n=8 peak       | Sum of per-request tok/s at concurrency 8                                                                                                                               |
 
 ---
 
@@ -373,11 +373,11 @@ All three rows are the eager (`disable_cuda_graph=true`) variants of cutlass-dir
 - **n=4**: the repetition guard fires on 3 of 4 requests (`status=repetition`, `ot=0`) — same `Let's!!!!!...` / `Here's a thinking!!!` collapse as Test 26. The 4th request in each run completes at ~14.5 tok/s and is real text, but the test counts as failed.
 - **n=8**: all 8 "complete" at bogus ~143–147 tok/s (18.08 / 18.37 / 17.88 tok/s per request × 8) with **identical stats** (`ttft≈1.14 s, tt_est=768, ot=3072, fr=length`) — textbook batched-garbage signature, same as Tests 2/5/8/11. The n=8 collapse still slips past the repetition guard as fake success.
 
-| Test | attn | fp4 GEMM | n=1 tok/s | n=4 outcome | n=8 (garbage) |
-|------|------|----------|-----------|-------------|---------------|
-| 29 | triton | fi_cutlass | 8.18 (57 s TTFT) | 3/4 `repetition`, 1/4 `done` | 144.6 |
-| 32 | fi     | fi_cudnn   | 13.04 (68 s TTFT) | 4/4 `repetition` | 147.0 |
-| 35 | triton | fi_cudnn   | 7.71 (64 s TTFT) | 3/4 `repetition`, 1/4 `done` | 143.1 |
+| Test | attn   | fp4 GEMM   | n=1 tok/s        | n=4 outcome                 | n=8 garbage |
+|------|--------|------------|------------------|-----------------------------|------------:|
+| 29   | triton | fi_cutlass | 8.18 (57 s TTFT) | 3/4 repetition, 1/4 done    |       144.6 |
+| 32   | fi     | fi_cudnn   | 13.04 (68 s TTFT)| 4/4 repetition              |       147.0 |
+| 35   | triton | fi_cudnn   | 7.71 (64 s TTFT) | 3/4 repetition, 1/4 done    |       143.1 |
 
 These confirm (again) that the eager-mode garbage is **completely insensitive to attention or fp4 GEMM sub-backend** — it is a pure `cutlass_moe_fp4` combine-path failure. Every eager-mode row in the entire matrix (Tests 2, 5, 8, 11, 26, 29, 32, 35 = 8 of 8) has now produced the same collapse. The repetition guard is doing its job at n=4 but still cannot detect the n=8 case where the collapse is uniform across the whole batch.
 
@@ -402,12 +402,12 @@ Given that the surrounding rows on the same backend stack (Tests 27, 28, 31, 33,
 
 The four remaining graph-mode rows on the cutlass-direct MoE path — all using `fi_cudnn` as the fp4 dense GEMM backend — are **uniformly stable** with coherent output at all three concurrency levels. Thinking-token counts vary per request (1074–1762 range), output lengths vary between `stop` and `length` finishes, and per-request throughput matches the other stable cutlass-direct rows — none of the uniform-garbage signatures from the eager-mode cluster.
 
-| Test | attn | graph mode | n=1 tok/s | n=4 peak | n=8 peak | Notes |
-|------|------|------------|-----------|---------:|---------:|-------|
-| 31 | fi     | graphs on, piecewise off | 19.35 | 61.7 | 93.8 | ttft 3.84 s at n=1 |
-| **33** | **fi**     | **graphs on + piecewise on** | **19.52** | **61.7** | **95.2** | **best cutlass-direct row** |
-| 34 | triton | graphs on, piecewise off | 19.72 | 61.9 | 95.1 | within noise of Test 33 |
-| 36 | triton | graphs on + piecewise on | 19.50 | 62.0 | 94.6 | — |
+| Test | attn   | graph mode                 | n=1 tok/s | n=4 peak | n=8 peak | Notes                        |
+|------|--------|----------------------------|----------:|---------:|---------:|------------------------------|
+| 31   | fi     | graphs on, piecewise off   |     19.35 |     61.7 |     93.8 | ttft 3.84 s at n=1           |
+| 33   | fi     | graphs on + piecewise on   |     19.52 |     61.7 |     95.2 | best cutlass-direct row      |
+| 34   | triton | graphs on, piecewise off   |     19.72 |     61.9 |     95.1 | within noise of Test 33      |
+| 36   | triton | graphs on + piecewise on   |     19.50 |     62.0 |     94.6 | —                            |
 
 **Test 33 is the new best cutlass-direct EP=4 row at 95.2 tok/s n=8 peak**, narrowly edging Test 34 (95.1), Test 28 (94.5), Test 36 (94.6), and Test 25 (93.4). Swapping the fp4 dense GEMM backend from `fi_cutlass` → `fi_cudnn` delivers a consistent ~0.7–1.5 tok/s improvement at n=8 on the cutlass-direct path (both attention backends, both graph modes), while leaving n=1 and n=4 essentially unchanged. This is a modest but real speedup attributable purely to the dense-FP4 GEMM kernel — orthogonal to the MoE expert path.
 
@@ -415,25 +415,25 @@ The four remaining graph-mode rows on the cutlass-direct MoE path — all using 
 
 ### Final matrix summary — 36 / 36 complete
 
-| Category | Count | Stable | Failed |
-|----------|------:|-------:|-------:|
-| triton MoE (Tests 1–12) | 12 | 8 | 4 (all eager) |
-| fi_cutlass MoE (Tests 13–24) | 12 | 0 | 12 (all SM121 `illegal instruction`) |
-| cutlass direct MoE (Tests 25–36) | 12 | 8 | 3 eager + 1 anomaly (Test 30) |
-| **Total** | **36** | **16** | **20** |
+| Category                            | Count | Stable | Failed                                   |
+|-------------------------------------|------:|-------:|------------------------------------------|
+| triton MoE (Tests 1–12)             |    12 |      8 | 4 (all eager)                            |
+| fi_cutlass MoE (Tests 13–24)        |    12 |      0 | 12 (all SM121 illegal instruction)       |
+| cutlass direct MoE (Tests 25–36)    |    12 |      8 | 3 eager + 1 anomaly (Test 30)            |
+| Total                               |    36 |     16 | 20                                       |
 
 **Backend ranking at n=8 peak tok/s** (stable rows only, top 8):
 
-| Rank | Test | MoE | attn | fp4 GEMM | Graph mode | n=8 peak |
-|-----:|:----:|-----|------|----------|------------|---------:|
-| 1 | 3  | triton  | fi     | fi_cutlass | graphs+piecewise | **98.5** |
-| 2 | 1  | triton  | fi     | fi_cutlass | graphs on        | 96.1 |
-| 3 | 33 | cutlass | fi     | fi_cudnn   | graphs+piecewise | 95.2 |
-| 4 | 34 | cutlass | triton | fi_cudnn   | graphs on        | 95.1 |
-| 5 | 36 | cutlass | triton | fi_cudnn   | graphs+piecewise | 94.6 |
-| 6 | 28 | cutlass | triton | fi_cutlass | graphs on        | 94.5 |
-| 7 | 7  | triton  | fi     | fi_cudnn   | graphs on        | 94.1 |
-| 8 | 10 | triton  | triton | fi_cudnn   | graphs on        | 94.0 |
+| Rank | Test | MoE     | attn   | fp4 GEMM   | Graph mode        | n=8 peak |
+|-----:|-----:|---------|--------|------------|-------------------|---------:|
+|    1 |    3 | triton  | fi     | fi_cutlass | graphs+piecewise  |     98.5 |
+|    2 |    1 | triton  | fi     | fi_cutlass | graphs on         |     96.1 |
+|    3 |   33 | cutlass | fi     | fi_cudnn   | graphs+piecewise  |     95.2 |
+|    4 |   34 | cutlass | triton | fi_cudnn   | graphs on         |     95.1 |
+|    5 |   36 | cutlass | triton | fi_cudnn   | graphs+piecewise  |     94.6 |
+|    6 |   28 | cutlass | triton | fi_cutlass | graphs on         |     94.5 |
+|    7 |    7 | triton  | fi     | fi_cudnn   | graphs on         |     94.1 |
+|    8 |   10 | triton  | triton | fi_cudnn   | graphs on         |     94.0 |
 
 **Confirmed patterns** (after the full 36-row run):
 
@@ -445,50 +445,7 @@ The four remaining graph-mode rows on the cutlass-direct MoE path — all using 
 
 **Recommended production config for this model (EP=4):** Test 3 (`triton` MoE / `fi` attn / `fi_cutlass` fp4 / graphs on + piecewise on) at **98.5 tok/s n=8 peak**, 3.4% below the EP=1 winner. Second-best alternative: Test 33 (`cutlass` direct MoE / `fi` attn / `fi_cudnn` fp4 / graphs on + piecewise on) at **95.2 tok/s n=8 peak**, if the cutlass-direct path is preferred for operational reasons.
 
-### Interim summary after 19 rows (matrix resume run, Test 20 in progress)
-
-| #  | MoE        | Attn   | fp4 GEMM   | Graph mode          | n=8 peak  | Status                  |
-|----|------------|--------|------------|---------------------|-----------|-------------------------|
-| 1  | triton     | fi     | fi_cutlass | on (piecewise off)  | 96.1      | STABLE                  |
-| 2  | triton     | fi     | fi_cutlass | **eager**           | ~~156.4~~ | **FAIL** (garbage)      |
-| 3  | triton     | fi     | fi_cutlass | on (piecewise on)   | **98.5**  | STABLE (best so far)    |
-| 4  | triton     | triton | fi_cutlass | on (piecewise off)  | 93.2      | STABLE                  |
-| 5  | triton     | triton | fi_cutlass | **eager**           | ~~142.8~~ | **FAIL** (garbage)      |
-| 6  | triton     | triton | fi_cutlass | on (piecewise on)   | 91.0      | STABLE                  |
-| 7  | triton     | fi     | fi_cudnn   | on (piecewise off)  | 94.1      | STABLE                  |
-| 8  | triton     | fi     | fi_cudnn   | **eager**           | ~~144.2~~ | **FAIL** (garbage)      |
-| 9  | triton     | fi     | fi_cudnn   | on (piecewise on)   | 93.7      | STABLE                  |
-| 10 | triton     | triton | fi_cudnn   | on (piecewise off)  | 94.0      | STABLE                  |
-| 11 | triton     | triton | fi_cudnn   | **eager**           | ~~143.1~~ | **FAIL** (garbage)      |
-| 12 | triton     | triton | fi_cudnn   | on (piecewise on)   | 93.9      | STABLE                  |
-| 13 | fi_cutlass | fi     | fi_cutlass | on (piecewise off)  | —         | **bench_crash** (n=8)   |
-| 14 | fi_cutlass | fi     | fi_cutlass | **eager**           | —         | **bench_crash** (n=4)   |
-| 15 | fi_cutlass | fi     | fi_cutlass | on (piecewise on)   | —         | **bench_crash** (n=1)   |
-| 16 | fi_cutlass | triton | fi_cutlass | on (piecewise off)  | —         | **bench_crash** (n=4)   |
-| 17 | fi_cutlass | triton | fi_cutlass | **eager**           | —         | **bench_crash** (n=1)   |
-| 18 | fi_cutlass | triton | fi_cutlass | on (piecewise on)   | —         | **bench_crash** (n=4)   |
-| 19 | fi_cutlass | fi     | fi_cudnn   | on (piecewise off)  | —         | **head_crash** (n=4)    |
-| 20 | fi_cutlass | fi     | fi_cudnn   | **eager**           | —         | **head_crash** (n=1)    |
-| 21 | fi_cutlass | fi     | fi_cudnn   | on (piecewise on)   | —         | **bench_crash** (n=1)   |
-| 22 | fi_cutlass | triton | fi_cudnn   | on (piecewise off)  | —         | **bench_crash** (n=4)   |
-| 23 | fi_cutlass | triton | fi_cudnn   | **eager**           | —         | **bench_crash** (n=1)   |
-
-**Patterns confirmed across all triton-MoE rows (Tests 1–12):**
-- **Eager mode (`disable_cuda_graph=true`) is always broken.** 4 of 4 eager rows produced batched-garbage output. The bogus high "throughput" comes from the model collapsing onto a single token and ripping through `max_tokens` at ~17–18 tok/s per request × N parallel.
-- **CUDA graph modes (on or piecewise on) are always stable.** All 8 graph-on rows produced coherent outputs verified in pod stdout.
-- **Sub-backend choice (fi vs triton attn, fi_cutlass vs fi_cudnn fp4) is essentially neutral** — all stable rows land in a tight 91–98.5 tok/s band at n=8, within ~8% of each other. The single best is **Test 3** (`triton` MoE / `fi` attn / `fi_cutlass` fp4 / piecewise graphs on) at **98.5 tok/s n=8 peak** — still 3.4% below the EP=1 winner (102.0 tok/s).
-
-**fi_cutlass MoE region (Tests 13–19) is uniformly broken** — seven consecutive rows crashed with the same `cudaErrorIllegalInstruction` fault. Crashes hit different ranks each time (workers 1 / 2 plus the head pod in Test 19), so it's not a node-affinity, VF-pinning, single-bad-GPU, or rank-specific issue. Crashes are independent of:
-- **Attention backend** (fi vs triton — same fault, Tests 13–15 vs 16–17)
-- **Graph mode** (graphs on, eager, piecewise — all same fault)
-- **fp4 GEMM backend** (fi_cutlass vs fi_cudnn — same fault, Test 19 confirms the bad kernel is **not** in the dense fp4 GEMM path)
-- **`--disable-flashinfer-cutlass-moe-fp4-allgather`** (out-of-band diagnostic — same fault, just at a different sync point)
-
-**Crash latency / concentration pattern**: every fi_cutlass MoE row produces a clean coherent n=1 response at ~19 tok/s (full body, real verified content in pod stdout), then dies on the next concurrency level. Single-stream decode is fine, parallel decode at n≥4 is fatal. The fault is **concentration-dependent**, not deterministic at startup.
-
-**Process-of-elimination conclusion**: the bad kernel must sit in the fi_cutlass **MoE forward path itself** — specifically in one of the routed-expert FFN kernels (gemm_swiglu / scale_and_combine / EP dispatch / EP combine), running on a SM121 / Blackwell GB10 GPU. The hypothesis from the header — that fi_cutlass MoE would be the "winner region at EP=4" with its own EP all-to-all routing — is now **definitively wrong** on this image. Diagnostic options exhausted at the application level; next step would be either an upstream issue with the kernel name pinpointed via DSA-enabled rebuild, or accepting that fi_cutlass MoE is unusable on Blackwell GB10 in 0.5.10.
-
-Results will continue to be filled in as the kikube-bench matrix progresses.
+*(Obsolete interim summary superseded by "Final matrix summary — 36 / 36 complete" above.)*
 
 ---
 

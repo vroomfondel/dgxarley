@@ -2,7 +2,7 @@
 
 ## Status
 
-**Unreported** as of 2026-04-10 (re-verified: no upstream issue/PR for `speculative_draft_load_format` + `sharded_state`). Bug exists in SGLang v0.5.9, v0.5.10rc0, v0.5.10, and v0.5.10.post1.
+**Unreported** as of 2026-04-14 (re-verified: no upstream issue/PR for `speculative_draft_load_format` + `sharded_state`). Bug exists in SGLang v0.5.9, v0.5.10rc0, v0.5.10, and v0.5.10.post1.
 
 - File: `sglang/srt/managers/scheduler.py`, method `maybe_init_draft_worker()`
 - Root cause in: `sglang/srt/managers/tp_worker.py`, method `_init_model_config()`

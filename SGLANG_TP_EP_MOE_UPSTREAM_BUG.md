@@ -2,7 +2,7 @@
 
 ## Status
 
-**Open upstream (vLLM only)** as of 2026-04-13 (re-verified: no review movement on any open PR since last check). Bug exists in both SGLang and vLLM (code originated in vLLM PR #14447). Present in SGLang v0.5.10 (2026-04-06) and v0.5.10.post1 (2026-04-09, flashinfer bump only). EPLB Qwen3 fix (PR #21822) merged 2026-04-09; all other referenced PRs re-verified 2026-04-13 — none merged, none reviewed.
+**Open upstream (vLLM only)** as of 2026-04-14 (re-verified: no review movement on any open PR since last check). Bug exists in both SGLang and vLLM (code originated in vLLM PR #14447). Present in SGLang v0.5.10 (2026-04-06) and v0.5.10.post1 (2026-04-09, flashinfer bump only). EPLB Qwen3 fix (PR #21822) merged 2026-04-09; all other referenced PRs re-verified 2026-04-14 — none merged, none reviewed (vllm#35598 last touched 2026-04-13 by author rebase, vllm#36026 stale since 2026-03-29, sglang#20869 stale since 2026-03-18, sglang#21630 stale since 2026-03-29, sglang#21612 stale since 2026-03-29, sglang#20963 last collaborator activity 2026-04-06).
 
 - vLLM: [PR #35598](https://github.com/vllm-project/vllm/pull/35598) — open since 2026-02-28, not merged. Author rebased onto `main` on 2026-04-13 (commit `c56eae0e`, merge-from-main only, no code changes); prior rebase 2026-03-05. Still only the initial Gemini bot review from 2026-02-28 — no human reviewer has engaged
 - vLLM: [PR #36026](https://github.com/vllm-project/vllm/pull/36026) — fix wrong num_experts in moe_wna16 kernel dispatch, open since 2026-03-29, author pinged for review 2026-03-29, still unreviewed
