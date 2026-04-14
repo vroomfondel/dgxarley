@@ -50,14 +50,14 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4
 | 1 | roce | triton | fi | fi_cutlass | false | true | **STABLE** | 14.58 | 40.41 | 59.83 |
 | 2 | roce | triton | fi | fi_cutlass | true | true | **STABLE** | 10.82 | 37.88 | 59.18 |
 | 3 | roce | triton | fi | fi_cutlass | false | false | **startup_crash** | — | — | — |
-| 4 | roce | triton | triton | fi_cutlass | false | true | *running* | 14.28 | 40.11 | — |
-| 5 | roce | triton | triton | fi_cutlass | true | true | *pending* | — | — | — |
-| 6 | roce | triton | triton | fi_cutlass | false | false | *pending* | — | — | — |
-| 7 | roce | triton | fi | fi_cudnn | false | true | *pending* | — | — | — |
-| 8 | roce | triton | fi | fi_cudnn | true | true | *pending* | — | — | — |
-| 9 | roce | triton | fi | fi_cudnn | false | false | *pending* | — | — | — |
-| 10 | roce | triton | triton | fi_cudnn | false | true | *pending* | — | — | — |
-| 11 | roce | triton | triton | fi_cudnn | true | true | *pending* | — | — | — |
+| 4 | roce | triton | triton | fi_cutlass | false | true | **STABLE** | 14.28 | 40.11 | 59.71 |
+| 5 | roce | triton | triton | fi_cutlass | true | true | **STABLE** | 10.75 | 39.66 | 59.80 |
+| 6 | roce | triton | triton | fi_cutlass | false | false | **startup_crash** | — | — | — |
+| 7 | roce | triton | fi | fi_cudnn | false | true | **startup_crash** | — | — | — |
+| 8 | roce | triton | fi | fi_cudnn | true | true | **bench_crash** | — | — | — |
+| 9 | roce | triton | fi | fi_cudnn | false | false | **startup_crash** | — | — | — |
+| 10 | roce | triton | triton | fi_cudnn | false | true | **startup_crash** | — | — | — |
+| 11 | roce | triton | triton | fi_cudnn | true | true | *running* | — | — | — |
 | 12 | roce | triton | triton | fi_cudnn | false | false | *pending* | — | — | — |
 | 13 | roce | fi_cutlass | fi | fi_cutlass | false | true | *pending* | — | — | — |
 | 14 | roce | fi_cutlass | fi | fi_cutlass | true | true | *pending* | — | — | — |
@@ -103,7 +103,7 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4
 
 ## Results
 
-_Run in progress — 3/37 complete, Test 4 mid-run (n=1 and n=4 done, n=8 pending) as of 2026-04-14._
+_Run in progress — 10/37 complete, Test 11 running as of 2026-04-14._
 
 ### Test 1 — triton MoE + flashinfer attn + fi_cutlass FP4, CUDA graphs on
 
@@ -123,5 +123,35 @@ _Run in progress — 3/37 complete, Test 4 mid-run (n=1 and n=4 done, n=8 pendin
 ### Test 3 — triton MoE + flashinfer attn + fi_cutlass FP4, piecewise CUDA graphs
 
 - **startup_crash** — worker-1 restarted once during startup, bench never began.
-- This is the first failure of the run; the `piecewise` variant has been unstable on several earlier SM121 matrices but the exact root cause here still needs to be confirmed from the head/worker logs.
+- Root cause pending log inspection.
+
+### Test 4 — triton MoE + triton attn + fi_cutlass FP4, CUDA graphs on
+
+- **STABLE** — 14.28 / 40.11 / 59.71 (n=1/n=4/n=8).
+- Within noise of Test 1 (fi attn) — on GLM-4.7 the attention backend choice is throughput-neutral.
+
+### Test 5 — triton MoE + triton attn + fi_cutlass FP4, eager
+
+- **STABLE** — 10.75 / 39.66 / 59.80.
+- Matches Test 2 (fi attn + eager) within noise. Second confirmation that eager is stable with `triton` MoE at EP=1 on GLM-4.7.
+
+### Test 6 — triton MoE + triton attn + fi_cutlass FP4, piecewise CUDA graphs
+
+- **startup_crash** — same symptom as Test 3 (piecewise variant).
+- Pattern: both `piecewise` configs (Tests 3 and 6) crash at startup regardless of attention backend — suggests the `disable_piecewise_cuda_graph: false` path itself is broken for `triton` MoE + `fi_cutlass` FP4 on GLM-4.7 at EP=1.
+
+### Test 7 — triton MoE + flashinfer attn + fi_cudnn FP4, CUDA graphs on
+
+- **startup_crash** — first fi_cudnn config, crashed before bench.
+
+### Test 8 — triton MoE + flashinfer attn + fi_cudnn FP4, eager
+
+- **bench_crash** — server started, but all 13 benchmark requests (n=1 + n=4 + n=8) returned errors. 0 successful across all concurrencies.
+- Together with Test 7, this points to a broader **`fp4_gemm_backend=flashinfer_cudnn` regression on GLM-4.7 at EP=1** — tracks the rc0 finding that fi_cudnn regressed in v0.5.10 (0 tokens), documented in the EP=4 testlog.
+
+### Tests 9–10 — triton MoE + fi_cudnn FP4 (remaining variants)
+
+- **Test 9** (`fi` attn, piecewise): **startup_crash**.
+- **Test 10** (`triton` attn, CG on): **startup_crash**.
+- Combined with Tests 7–8: **all 4 `triton` MoE + `fi_cudnn` FP4 configs tested so far fail on GLM-4.7 at EP=1** — 3× startup_crash, 1× bench_crash (0 successful requests). `fi_cudnn` FP4 is unusable here.
 
