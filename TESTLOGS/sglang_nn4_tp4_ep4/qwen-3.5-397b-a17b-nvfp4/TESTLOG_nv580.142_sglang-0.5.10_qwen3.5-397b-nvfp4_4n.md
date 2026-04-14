@@ -75,7 +75,7 @@ All tests use: `tp=4, pp=1, ep=4, nccl_transport=roce, quantization=modelopt_fp4
 | 27 | roce | cutlass    | fi        | fi_cutlass | false          | false         | **STABLE**                                 | 20.12     | 61.9     | 93.6      |
 | 28 | roce | cutlass    | triton    | fi_cutlass | false          | true          | **STABLE**                                 | 18.54     | 61.5     | 94.5      |
 | 29 | roce | cutlass    | triton    | fi_cutlass | true           | true          | **FAIL** (eager: rep @ n=4, garbage @ n=8) | 8.18      | ~~14.5~~ | ~~144.6~~ |
-| 30 | roce | cutlass    | triton    | fi_cutlass | false          | false         | **FAIL†** (head unreach after n=1)         | 20.24     | —        | —         |
+| 30 | roce | cutlass    | triton    | fi_cutlass | false          | false         | **STABLE** (retest 2026-04-14)             | 19.86     | 61.1     | 93.1      |
 | 31 | roce | cutlass    | fi        | fi_cudnn   | false          | true          | **STABLE**                                 | 19.35     | 61.7     | 93.8      |
 | 32 | roce | cutlass    | fi        | fi_cudnn   | true           | true          | **FAIL** (eager: rep @ n=4, garbage @ n=8) | 13.04     | ~~—~~    | ~~147.0~~ |
 | 33 | roce | cutlass    | fi        | fi_cudnn   | false          | false         | **STABLE**                                 | 19.52     | 61.7     | **95.2**  |
@@ -381,22 +381,24 @@ All three rows are the eager (`disable_cuda_graph=true`) variants of cutlass-dir
 
 These confirm (again) that the eager-mode garbage is **completely insensitive to attention or fp4 GEMM sub-backend** — it is a pure `cutlass_moe_fp4` combine-path failure. Every eager-mode row in the entire matrix (Tests 2, 5, 8, 11, 26, 29, 32, 35 = 8 of 8) has now produced the same collapse. The repetition guard is doing its job at n=4 but still cannot detect the n=8 case where the collapse is uniform across the whole batch.
 
-### Test 30 — `cutlass` direct MoE + `triton` attn + `fi_cutlass` fp4, piecewise on — **FAIL†** (head unreachable after n=1, new failure mode)
+### Test 30 — `cutlass` direct MoE + `triton` attn + `fi_cutlass` fp4, piecewise on — **STABLE** (first run was spurious, verified via retest)
 
-This is the **only graphs+piecewise-on stable-expected row in the entire matrix that failed**. Config is cutlass-direct MoE / triton attn / fi_cutlass fp4 / `disable_cuda_graph=false`, `disable_piecewise_cuda_graph=false` — the direct sibling of Test 28 (same stack, piecewise off — STABLE at 94.5) and Test 27 (same stack with fi attn — STABLE at 93.6).
+Config: cutlass-direct MoE / triton attn / fi_cutlass fp4 / `disable_cuda_graph=false`, `disable_piecewise_cuda_graph=false` — direct sibling of Test 28 (same stack, piecewise off — STABLE at 94.5) and Test 27 (same stack with fi attn — STABLE at 93.6).
 
-- **n=1**: **`done`** at **20.24 tok/s**, 932 think_tokens, 2532 ot, `fr=stop`, ttft 0.74 s — fully coherent single-stream run.
-- **n=4**: all 4 requests `status=error`, `ttft=None`, `ot=0`, **total_time ≈ 6.04 s** per request — the bench failed to get a first token from any of them.
-- **n=8**: all 8 `status=error`, `ttft=None`, `ot=0`, **total_time ≈ 4.04 s** — same immediate-error pattern, even shorter.
+**First run (2026-04-13 16:48)** failed in a way that didn't match any known signature:
+- n=1 completed cleanly at 20.24 tok/s, 932 think_tokens, `fr=stop`.
+- n=4: all 4 `status=error`, `ttft=None`, `ot=0`, total_time ≈ 6.04 s — immediate error, no tokens generated.
+- n=8: all 8 `status=error`, same pattern, total_time ≈ 4.04 s.
 
-The uniform ~6 s / ~4 s total_time with zero progress strongly indicates the head pod became unreachable between n=1 completing and n=4 starting — the bench's HTTP client hit connect-refused or a socket-level error, not a model-level fault. **No repetition or garbage pattern** in the request bodies (no tokens were generated at all). There are no stack traces: the test-30 head log captured by the harness is from an earlier pod instance (timestamps 14:57–14:58, deployment ran at 16:48), so the actual 16:48 head/worker lifecycle events were never collected.
+Loki retrieval of the kikube bench pod later revealed the bench client was hitting `socket.gaierror: [Errno -3] Temporary failure in name resolution` against `sglang.dgx.elasticc.io` — a **transient cluster DNS hiccup** (CoreDNS or upstream), not a backend fault. The SGLang head and workers were healthy throughout; the bench simply couldn't reach them for the ~10 s window spanning the n=4 / n=8 start.
 
-This is the **first graph-mode failure on the cutlass-direct path** and does not match any previously seen signature:
-- Not the `cutlass_moe_fp4` eager-garbage collapse (those produce `!`-loops, not HTTP errors).
-- Not the fi_cutlass-MoE SM121 illegal-instruction fault (that path produces real streaming content before the worker dies, and the failure would surface mid-stream, not as immediate connect errors).
-- Not a startupProbe timeout (n=1 completed cleanly at full throughput).
+**Retest (2026-04-14 09:57)** with an explicit `--start-at 30 --end-at 30` single-case run on the same config delivered a full clean result:
 
-Given that the surrounding rows on the same backend stack (Tests 27, 28, 31, 33, 34, 36) all pass and deliver coherent output at ≥93 tok/s n=8, Test 30 is most likely a **pod-level transient** (head OOM, kubelet restart, or probe-kill after the long n=1 run) rather than a reproducible backend bug. **Not investigated further** because (a) the same config region already has 6 other stable winners, (b) the captured log stream is useless for root-cause, and (c) the matrix run has completed. If needed, a single redeploy of this exact config would tell us whether it reproduces.
+- n=1: 19.86 tok/s, ttft 0.75 s, 1516 tt, 3072 ot, `done`.
+- n=4: 61.11 peak (15.28 per-request, ttft 0.94 s), 4/4 done, tt vary 1050–1347.
+- n=8: **93.12** peak (11.64 per-request, ttft 1.13 s), 8/8 done, tt vary 1157–1543 — **clean output verified** via Loki (Rust vs. alternative-language deep-dive with Drop-trait / tail-latency / Arc-vs-Rc content; 0 `!!!!!!` lines, 0 `REPETITION` events).
+
+Test 30 is therefore **STABLE**, in-line with the other cutlass-direct graph-mode rows (25/27/28/31/33/34/36). The first-run failure was an infrastructure hiccup, not a backend bug. All **8 cutlass-direct graph-mode rows now verified stable**.
 
 ### Tests 31, 33, 34, 36 — `cutlass` direct MoE + `fi_cudnn` fp4 (four stable rows, new overall cutlass-direct winner)
 
@@ -417,10 +419,10 @@ The four remaining graph-mode rows on the cutlass-direct MoE path — all using 
 
 | Category                            | Count | Stable | Failed                                   |
 |-------------------------------------|------:|-------:|------------------------------------------|
-| triton MoE (Tests 1–12)             |    12 |      8 | 4 (all eager)                            |
+| triton MoE (Tests 1–12)             |    12 |      8 | 4 (all eager garbage)                    |
 | fi_cutlass MoE (Tests 13–24)        |    12 |      0 | 12 (all SM121 illegal instruction)       |
-| cutlass direct MoE (Tests 25–36)    |    12 |      8 | 3 eager + 1 anomaly (Test 30)            |
-| Total                               |    36 |     16 | 20                                       |
+| cutlass direct MoE (Tests 25–36)    |    12 |      8 | 4 (all eager garbage)                    |
+| Total                               |    36 |     17 | 19                                       |
 
 **Backend ranking at n=8 peak tok/s** (stable rows only, top 8):
 
@@ -441,7 +443,7 @@ The four remaining graph-mode rows on the cutlass-direct MoE path — all using 
 2. **fi_cutlass MoE is uniformly broken at EP=4 on SM121** — 12 of 12 rows crashed with `cudaErrorIllegalInstruction` inside the fi_cutlass MoE forward kernel. Concentration-dependent: every row delivered a clean coherent n=1 response, then died on n≥4. Not fixable at the application layer (see follow-up diagnostic below).
 3. **Triton MoE and cutlass-direct MoE are equivalently stable in graph mode.** Triton MoE peaks slightly higher (98.5 vs 95.2) but both are 3.3–8.4% below the EP=1 winner (102.0 tok/s). Cutlass-direct saves ~1% Python dispatch overhead, which does not translate into a net win here.
 4. **Sub-backend choices move the number by ≤2%.** Attention (`fi` vs `triton`) and fp4 GEMM (`fi_cutlass` vs `fi_cudnn`) are near-neutral; `fi_cudnn` slightly prefers the cutlass-direct path, `fi_cutlass` slightly prefers triton MoE.
-5. **New Test 30 anomaly** — a single row in a known-good region failed as a head-unreachable event with no diagnostic log. Likely a transient, not a backend bug; not reproduced.
+5. **Test 30 first-run anomaly was spurious** — the initial 2026-04-13 run failed with `socket.gaierror: Temporary failure in name resolution` (cluster DNS hiccup on the bench-pod side, not a backend fault). A single-case retest on 2026-04-14 (`--start-at 30 --end-at 30`) passed cleanly at 19.86 / 61.1 / 93.1 tok/s, matching the rest of the cutlass-direct graph-mode block. All **8 cutlass-direct graph-mode rows are now verified STABLE**.
 
 **Recommended production config for this model (EP=4):** Test 3 (`triton` MoE / `fi` attn / `fi_cutlass` fp4 / graphs on + piecewise on) at **98.5 tok/s n=8 peak**, 3.4% below the EP=1 winner. Second-best alternative: Test 33 (`cutlass` direct MoE / `fi` attn / `fi_cudnn` fp4 / graphs on + piecewise on) at **95.2 tok/s n=8 peak**, if the cutlass-direct path is preferred for operational reasons.
 
