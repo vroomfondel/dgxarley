@@ -69,18 +69,22 @@ DOCKERFILE="${PATCHES_DIR}/sglang-0.5.10-cudnn.Dockerfile"
 BASE_IMAGE="${BUILD_CUDNN_BASE_IMAGE:-scitrera/dgx-spark-sglang:0.5.10}"
 IMAGE_TAG="${BUILD_CUDNN_IMAGE_TAG:-xomoxcc/dgx-spark-sglang:0.5.10-cudnn}"
 
-# Remote build host. Defaults match build_sm121_image.sh / build_pytorch_base_image.sh
-# so the same registered podman connection can be reused.
+# Remote build host + podman connection. Defaults match
+# build_sm121_image.sh / build_pytorch_base_image.sh so the same registered
+# podman connection can be reused. Both can also be set by flags
+# (--remote-host / --podman-connection); PODMAN_CONNECTION is derived in
+# the flag handler (not here) so a late --remote-host override propagates.
 REMOTE_HOST="${BUILD_CUDNN_REMOTE_HOST:-root@spark4.local}"
-PODMAN_CONNECTION="${BUILD_CUDNN_PODMAN_CONNECTION:-${REMOTE_HOST##*@}}"
-PODMAN_CONNECTION="${PODMAN_CONNECTION%%.*}"
+PODMAN_CONNECTION="${BUILD_CUDNN_PODMAN_CONNECTION:-}"
 PODMAN_SSH_IDENTITY="${BUILD_CUDNN_SSH_IDENTITY:-${HOME}/.ssh/id_podman}"
 
 # Docker Hub push. ON by default to match build_sm121_image.sh's behavior —
-# pass --no-push to keep the image local on spark4 only. Push uses the x86
-# host's pre-configured registry credentials after streaming the image back
-# from the remote build host.
+# pass --no-push to keep a local copy on x86 without pushing, or
+# --no-local-copy to also skip the scp back so the image stays only on
+# the remote build host. Push uses the x86 host's pre-configured registry
+# credentials after streaming the image back from the remote build host.
 PUSH_IMAGE=1
+NO_LOCAL_COPY=0
 
 # ============================================================================
 # Helpers
@@ -92,28 +96,50 @@ die()  { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [--no-push] [--help]
+Usage: $(basename "$0") [--remote-host user@host] [--podman-connection NAME]
+                        [--no-local-copy] [--no-push] [--help]
 
-Builds ${IMAGE_TAG} on spark4 via remote podman socket. Adds
-nvidia-cudnn-cu12 + nvidia-cudnn-frontend wheels on top of
+Builds ${IMAGE_TAG} on the remote build host via the podman socket.
+Adds nvidia-cudnn-cu12 + nvidia-cudnn-frontend wheels on top of
 ${BASE_IMAGE}. Expected duration: ~5-10 min cold.
 
 Options:
-  --no-push    Keep the image only in spark4's local podman store
-               (skip the scp+push steps). Useful for iteration.
+  --remote-host user@host
+               SSH target for the remote build host. Must be the same user
+               whose podman.socket is running and whose registered podman
+               connection you want to use. Default: ${REMOTE_HOST}
+  --podman-connection NAME
+               Name of the registered podman connection to use. When
+               omitted, derived from --remote-host (strip user@ and domain).
+  --no-local-copy
+               Skip the image scp back to this host AFTER the remote build
+               finishes. The image stays only in the remote build host's
+               podman store. Use this when a subsequent distribute script
+               (e.g. distrcudnnimage.sh) will pull the image directly from
+               the build host via a throwaway registry, so the slow LAN
+               transfer back to x86 is unnecessary.
+               Implies --no-push.
+  --no-push    Skip 'podman push' to Docker Hub after the local copy.
+               A local copy still happens (unless --no-local-copy is also
+               given). Useful when you want the image in your x86 podman
+               store for inspection but don't want to publish it yet.
   --help       Show this help.
 
-Environment overrides:
+Environment overrides (lower precedence than flags):
   BUILD_CUDNN_BASE_IMAGE         FROM image for the Dockerfile.
                                  Default: ${BASE_IMAGE}
   BUILD_CUDNN_IMAGE_TAG          Output tag for the built image.
                                  Default: ${IMAGE_TAG}
-  BUILD_CUDNN_REMOTE_HOST        user@host for spark4 SSH.
+  BUILD_CUDNN_REMOTE_HOST        user@host for remote build SSH.
                                  Default: ${REMOTE_HOST}
   BUILD_CUDNN_PODMAN_CONNECTION  Registered podman connection name.
-                                 Default: derived from REMOTE_HOST (${PODMAN_CONNECTION})
+                                 Default: derived from REMOTE_HOST
   BUILD_CUDNN_SSH_IDENTITY       Unencrypted SSH private key for podman.
                                  Default: ${PODMAN_SSH_IDENTITY}
+
+Typical iteration flow (build remote, distribute via registry, no x86 copy):
+  ./scripts/build_cudnn_image.sh --remote-host root@spark4.local --no-local-copy
+  ./scripts/distrcudnnimage.sh   --source spark4.local --registry-host 10.10.10.4
 EOF
 }
 
@@ -123,11 +149,54 @@ EOF
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --no-push) PUSH_IMAGE=0; shift ;;
-        --help|-h) usage; exit 0 ;;
-        *)         die "Unknown argument: $1 (use --help)" ;;
+        --no-push)
+            PUSH_IMAGE=0
+            shift
+            ;;
+        --no-local-copy)
+            # Skip the save|load transfer back to x86 (and therefore also
+            # skip the push — you can't push what you don't have locally).
+            NO_LOCAL_COPY=1
+            PUSH_IMAGE=0
+            shift
+            ;;
+        --remote-host)
+            shift
+            [[ $# -gt 0 ]] || die "--remote-host requires an argument (user@host)"
+            REMOTE_HOST="$1"
+            shift
+            ;;
+        --remote-host=*)
+            REMOTE_HOST="${1#--remote-host=}"
+            shift
+            ;;
+        --podman-connection)
+            shift
+            [[ $# -gt 0 ]] || die "--podman-connection requires an argument"
+            PODMAN_CONNECTION="$1"
+            shift
+            ;;
+        --podman-connection=*)
+            PODMAN_CONNECTION="${1#--podman-connection=}"
+            shift
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            die "Unknown argument: $1 (use --help)"
+            ;;
     esac
 done
+
+# Derive PODMAN_CONNECTION from REMOTE_HOST if still unset. Done AFTER flag
+# parsing so that a late --remote-host override propagates to the derived
+# connection name. --podman-connection always wins.
+if [[ -z "${PODMAN_CONNECTION}" ]]; then
+    PODMAN_CONNECTION="${REMOTE_HOST##*@}"
+    PODMAN_CONNECTION="${PODMAN_CONNECTION%%.*}"
+fi
 
 # ============================================================================
 # Preflight
@@ -261,8 +330,8 @@ run_build() {
 # ============================================================================
 
 transfer_image_from_remote() {
-    if (( PUSH_IMAGE == 0 )); then
-        log "Skipping image scp (--no-push)"
+    if (( NO_LOCAL_COPY == 1 )); then
+        log "Skipping image scp (--no-local-copy) — image stays on ${PODMAN_CONNECTION}"
         return
     fi
 
