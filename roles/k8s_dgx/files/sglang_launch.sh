@@ -300,12 +300,28 @@ def _sglang_prewarm_fp4_quantization_module():
         import torch as _t
         if not _t.cuda.is_available():
             return
-        _p = _t.cuda.get_device_properties(0)
-        # flashinfer's fp4_quantize builds the backend key as f"{major}{minor}".
-        # On SM121/GB10 that's "121"; upstream has a "120f" feature-variant
-        # alias that flashinfer's registry translates to. Either way, calling
-        # get_fp4_quantization_module once here triggers the full build.
-        get_fp4_quantization_module(f"{_p.major}{_p.minor}")
+        # Drive the real fp4_quantize() code path with a dummy input. This
+        # goes through flashinfer's own key-derivation logic (which on SM121
+        # resolves to "sm120f" / "120f" via the feature-variant registry,
+        # NOT the raw "{major}{minor}" string), so the functools.cache gets
+        # populated with the exact key sglang will use from inside a
+        # dynamo trace later.
+        _x = _t.zeros((128, 4096), dtype=_t.bfloat16, device="cuda")
+        _scale = _t.ones((), dtype=_t.float32, device="cuda")
+        try:
+            fp4_quantize(_x, _scale)
+        except Exception as _fe:
+            # Fall back: enumerate all registered backends and warm each one
+            # individually. Some may not be applicable to this GPU and raise,
+            # that's fine — the ones that match will be cached.
+            import sys as _sys
+            print(f"[fp4_quantization prewarm] fp4_quantize(dummy) failed ({_fe}); falling back to backend_modules enumeration", file=_sys.stderr)
+            for _k in list(backend_modules.keys()):
+                try:
+                    get_fp4_quantization_module(_k)
+                    print(f"[fp4_quantization prewarm] warmed backend key={_k}", file=_sys.stderr)
+                except Exception as _ke:
+                    print(f"[fp4_quantization prewarm] backend key={_k} failed: {_ke}", file=_sys.stderr)
     except Exception as _e:
         import sys as _sys
         print(f"[fp4_quantization prewarm] skipped: {_e}", file=_sys.stderr)
