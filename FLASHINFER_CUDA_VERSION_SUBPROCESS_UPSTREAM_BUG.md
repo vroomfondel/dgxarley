@@ -15,7 +15,8 @@ operations blow up dynamo.
 
 ## Status
 
-**Both workarounds applied.** 2026-04-15 session outcome:
+**Patch 1 shipped and stable. Patch 2 is unresolved — see
+"Update 2026-04-15 evening" below.** 2026-04-15 morning session outcome:
 
 - **Issue 1 root cause**: `flashinfer.jit.cpp_ext.get_cuda_version()` calls
   `subprocess.check_output([nvcc, "--version"])` on its first invocation (it's
@@ -456,3 +457,141 @@ the patched `sglang_launch.sh` on all 4 sparks (re-deploy via
   `JitSpec.build_and_load` and `JitSpec.is_aot` live. Not directly patched,
   but their behavior is neutralized by Patch 2's cache (they never run again
   after the pre-warm).
+
+---
+
+## Update 2026-04-15 evening: Patch 2 was incomplete, deeper issues uncovered
+
+The original Patch 2 ("`functools.cache` wrap + import-time prewarm") **does not
+actually prevent** the dynamo tracing failure it was supposed to fix. It only
+worked on paper. Re-running the GLM-4.7-NVFP4 EP=1 piecewise + `fi_cudnn` matrix
+on `xomoxcc/dgx-spark-sglang:0.5.10-sm121` with Patch 2 applied reproduced the
+`posix.stat` error **unchanged**. Debug-walking it layer by layer uncovered an
+entire family of dynamo-incompatible behaviours inside the FP4 quantize
+codepath, each one revealed only after the previous one was bypassed.
+
+### Why the cache-wrap approach failed
+
+Dynamo's `polyfills.getattr_and_trace` (triggered by the `.fp4_quantize_sm100`
+attribute access on the *return value* of `get_fp4_quantization_module(...)`)
+**inlines and re-traces the wrapped function body every time**, bypassing
+`functools.cache` entirely. So the cache wrap was invisible to dynamo:
+
+- `get_fp4_quantization_module` is already `@functools.cache`-decorated upstream.
+  Wrapping it again changed nothing.
+- The import-time prewarm populated the cache, but dynamo never consulted it
+  during trace — it traced straight through `build_and_load` → `is_aot` →
+  `Path.exists` → `os.stat` as if no cache existed.
+- Verified empirically: the stat error landed at the exact same line,
+  byte-for-byte identical to the pre-patch traceback.
+
+### Failure chain (each layer unblocked, next layer revealed)
+
+Four distinct unpatched failures sit stacked inside `fp4_quantize`, each
+reachable only after fixing the prior one. Chronological order as discovered:
+
+| # | Location | Dynamo verdict | Root cause |
+|---|----------|----------------|------------|
+| 2a | `flashinfer/jit/core.py:261 is_aot → pathlib.Path.exists → os.stat` | `Attempted to call function marked as skipped: posix.stat` (gb0007) | `posix.stat` is a C builtin, not traceable by dynamo |
+| 2b | `flashinfer/quantization/fp4_quantization.py:222 fp4_quantize_sm100 → module.fp4_quantize(...)` | `Unsupported method call: Function.__call__` (gb0156) | The `module.fp4_quantize` returned by the JIT-built backend is a `torch.autograd.Function` subclass; dynamo cannot trace its `__call__` dispatch |
+| 2c | `flashinfer/quantization/fp4_quantization.py:700 fp4_quantize` wrapped with `@torch.compiler.disable` | `Skip calling torch.compiler.disable()d function` (gb0098) | sglang's `PiecewiseCudaGraphRunner.warmup_compile` treats disabled calls as a hard error rather than a graph break |
+| 2d | same, wrapped with `torch.compiler.allow_in_graph(fp4_quantize)` | `Dynamo failed to run FX node with fake tensors: call_function <function fp4_quantize>(FakeTensor(...), Parameter(FakeTensor(...)))` | `allow_in_graph` requires a meta/fake-kernel implementation so dynamo can propagate shapes/dtypes; `fp4_quantize` has none and cannot run on FakeTensors |
+
+### Attempt log
+
+All attempts to patch at the flashinfer-source level via `sglang_launch.sh`:
+
+1. **`functools.cache` + import-time prewarm** — `_fi_fp4_cache_and_prewarm_`
+   marker. No effect on dynamo re-tracing; identical `os.stat` failure.
+2. **Pre-resolve the FP4 backend into a module-level constant `_SGLANG_FP4_MOD`**
+   and rewrite the hot-path call to `_SGLANG_FP4_MOD.fp4_quantize_sm100(...)` —
+   `_fi_fp4_prewarm_const_` marker. Eliminated the `get_fp4_quantization_module`
+   lookup from the traced region, unblocked failure 2a, but hit failure 2b
+   (`Function.__call__` inside `fp4_quantize_sm100`).
+3. **`@torch.compiler.disable` decorator on `fp4_quantize`** —
+   `_fi_fp4_compiler_disable_` marker. Sidestepped tracing into the body
+   entirely, but sglang's piecewise compile path treats skipped calls as
+   gb0098-unsupported (failure 2c).
+4. **`torch.compiler.allow_in_graph(fp4_quantize)` at module-import time** —
+   `_fi_fp4_allow_in_graph_` marker. Progressed furthest: dynamo accepts the
+   opaque leaf node, gb0098 is gone, but fake-tensor propagation through the
+   node fails with `RuntimeError when making fake tensor call` (failure 2d).
+
+Currently on disk: revision 4 (`allow_in_graph`), which is itself broken.
+
+### Verification via Loki
+
+Each revision shows up cleanly in Loki logs and can be attributed to a
+specific pod generation by the patch-log-line they emit at container startup
+(`Patched flashinfer/quantization/fp4_quantization.py: ...`). Query example:
+
+```logql
+{namespace="sglang"} |~ "fp4_quantize|Piecewise CUDA Graph|posix.stat|Function\\.__call__|allow_in_graph"
+```
+
+Cross-referencing the error timestamps against the `Patched ...` startup line
+gives an unambiguous "which revision produced which error" timeline per pod.
+
+### Remaining options
+
+1. **`torch.library.custom_op` + `register_fake`**: the canonical dynamo-safe
+   path. Define a sglang-private op `sglang_patch::fp4_quantize` whose real
+   kernel delegates to the original `fp4_quantize` and whose fake kernel
+   computes output shapes manually:
+   - `x_q` shape = `(M, K // 2)`, dtype = `torch.float4_e2m1fn_x2` (or `uint8`
+     if the dtype isn't exposed in this torch build).
+   - `sf` shape = `(round_up(M, 128), round_up(K // sf_vec_size, 4))`, dtype
+     = `torch.uint8` (or `torch.float8_e4m3fn` depending on layout).
+   - `sf_vec_size` and layout flags are hardcoded to sglang's default
+     (`16`, `is_sf_swizzled_layout=True`) — sglang's `modelopt_quant.py:1482`
+     only calls `fp4_quantize(x, layer.input_scale_inv)` positionally.
+   - Rebind `flashinfer.quantization.fp4_quantization.fp4_quantize =
+     sglang_patch_fp4_quantize` at module-import time.
+   Pros: preserves piecewise CUDA graphs, robust if the shape formulas are
+   right. Cons: fragile if flashinfer changes output layouts or dtypes; needs
+   a test matrix re-run to prove correctness.
+
+2. **`--disable-piecewise-cuda-graph` for NVFP4 profiles**: stop tripping the
+   tracer by opting out of piecewise capture for models that hit this path.
+   Pros: zero extra patch surface, sglang itself suggests this in the error
+   message. Cons: gives up piecewise-compile wins (unquantified on this
+   hardware for NVFP4). Non-piecewise `fi_cudnn` runs (tests 7 and 8 in the
+   matrix) were green pre-bug, so this unblocks the whole 12-variant matrix
+   immediately.
+
+3. **Upstream fixes** in flashinfer: wrap `fp4_quantize` with `@torch.compile`'s
+   `custom_op` machinery upstream, OR hoist `is_aot` / `build_and_load` out of
+   the lazy path so a traced first-call doesn't trigger filesystem I/O. Either
+   fix would solve this cleanly for everyone; neither is in any open PR as of
+   2026-04-15.
+
+### Decision pending
+
+Given that non-piecewise `fi_cudnn` variants were already known to work and
+that the custom-op shape formulas depend on flashinfer internals that are not
+API-stable, the pragmatic unblock is **option 2** — make `disable_piecewise_cuda_graph=true`
+the default for NVFP4 model profiles in `roles/k8s_dgx/model_profiles/*.yml`
+and move on. Option 1 stays as a future task if piecewise numbers are ever
+needed for these models specifically.
+
+No changes made to model profiles yet — waiting for explicit go-ahead before
+touching deployment configuration (per standing feedback).
+
+### What to do with the current `sglang_launch.sh` patch
+
+The `allow_in_graph` revision currently in `sglang_launch.sh` is strictly
+worse than a no-op: it papers over failures 2a and 2b but introduces 2d. Once
+option 2 is chosen, the whole `PATCH_FI_FP4_*` block can be deleted — with
+piecewise off, dynamo never enters `fp4_quantize` in the first place, so none
+of the tracing issues matter. Patch 1 (`get_cuda_version` subprocess bypass)
+stays — it's independent and still needed.
+
+### Files changed in this update cycle
+
+- `roles/k8s_dgx/files/sglang_launch.sh` — `PATCH_FI_FP4_*` block iterated
+  through four revisions (markers `_fi_fp4_cache_and_prewarm_` →
+  `_fi_fp4_prewarm_const_` → `_fi_fp4_compiler_disable_` → `_fi_fp4_allow_in_graph_`).
+  Current file content = revision 4. Each revision includes cleanup logic to
+  strip earlier-revision append blocks and source edits, so repeated launches
+  within the same container converge to a clean state.
+- No commits made yet — current on-disk state is work-in-progress.
