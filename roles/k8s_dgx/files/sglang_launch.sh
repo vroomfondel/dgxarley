@@ -233,40 +233,33 @@ else:
 PATCH_FI_CUDA_VER_EOF
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Patch flashinfer.quantization.fp4_quantization: cache + pre-warm the FP4 JIT
-# backend modules at import time.
+# Patch flashinfer.quantization.fp4_quantization: eliminate the JIT lookup
+# from fp4_quantize()'s hot path so it survives a dynamo/torch.compile trace.
 #
-# Symptom (GLM-4.7-NVFP4 EP=1, piecewise CUDA graphs + fi_cudnn FP4), after
-# the subprocess patch above is already applied:
+# Symptom (GLM-4.7-NVFP4 EP=1, piecewise CUDA graphs):
 #   sglang/srt/compilation/compile.py:183 _ensure_compiled
 #   → torch._dynamo.eval_frame.py compile_wrapper
-#   → flashinfer/quantization/fp4_quantization.py:170 build_and_load
+#   → flashinfer/quantization/fp4_quantization.py:700 fp4_quantize
+#   → get_fp4_quantization_module(f"{major}{minor}")
 #   → flashinfer/jit/core.py:310  if self.is_aot:
 #   → flashinfer/jit/core.py:261  return self.aot_path.exists()
 #   → pathlib.py  os.stat(...)
 #   → torch._dynamo.exc.Unsupported: Attempted to call function marked as skipped
-#     (module: posix, qualname: stat)
+#     (module: posix, qualname: stat)  →  Piecewise CUDA Graph failed.
 #
-# Why: sglang's piecewise CUDA graph capture runs warmup_compile() which uses
-# torch.compile to trace the forward function. The trace goes through
-# flashinfer's `fp4_quantize` which ends up calling `get_fp4_quantization_module`
-# → `JitSpec.build_and_load` → `is_aot` → `pathlib.Path.exists` → `os.stat`.
-# Dynamo marks `posix.stat` as a "skipped builtin" and raises Unsupported.
+# Why the previous "functools.cache + prewarm" approach didn't work:
+# `get_fp4_quantization_module` is ALREADY `@functools.cache` upstream. But
+# dynamo's `polyfills.getattr_and_trace` (triggered by the `.fp4_quantize_sm100`
+# attribute access on the call result) INLINES the wrapped function's body and
+# re-traces it from scratch every time — bypassing the cache entirely. So
+# `build_and_load` → `is_aot` → `Path.exists` → `os.stat` is re-walked inside
+# the trace and hits the skipped-builtin wall.
 #
-# Fix: short-circuit the whole lazy-init chain by pre-warming the module at
-# import time, BEFORE any dynamo tracing starts, and cache the result so
-# subsequent calls from inside a trace just return the cached module object.
-#
-# 1) Wrap `get_fp4_quantization_module` in functools.cache so the JIT
-#    backend's `build_and_load()` is only called once per process.
-# 2) At the end of fp4_quantization.py's import, call
-#    `get_fp4_quantization_module(current_sm)` once to force the build. This
-#    happens during normal Python import, which is always outside any
-#    dynamo trace, so stat/subprocess/etc. all work normally.
-#
-# When sglang later calls `fp4_quantize(...)` from inside a dynamo-traced
-# forward, the cached return value is used — `build_and_load`, `is_aot`,
-# and all file-system operations are skipped.
+# Fix: remove the lookup from the traced region. Pre-resolve the module into
+# a plain module-level constant at import time (`_SGLANG_FP4_MOD`), then sed
+# fp4_quantize() to use that constant directly instead of calling
+# `get_fp4_quantization_module(f"{major}{minor}")`. Dynamo traces a plain
+# global attribute access, which is safe — no function inlining, no stat.
 # ─────────────────────────────────────────────────────────────────────────────
 python3 - <<'PATCH_FI_FP4_PREWARM_EOF'
 import pathlib
@@ -275,62 +268,43 @@ if not p.exists():
     print("flashinfer/quantization/fp4_quantization.py: not found, skipping")
 else:
     src = p.read_text()
-    marker = "# [patch] _fi_fp4_cache_and_prewarm_"
+    marker = "# [patch] _fi_fp4_prewarm_const_"
+    hot_call = 'get_fp4_quantization_module(f"{major}{minor}").fp4_quantize_sm100('
+    hot_replacement = '_SGLANG_FP4_MOD.fp4_quantize_sm100('
     if marker in src:
         print("flashinfer/quantization/fp4_quantization.py: already patched, skipping")
-    elif "def get_fp4_quantization_module(" not in src:
-        print("flashinfer/quantization/fp4_quantization.py: get_fp4_quantization_module not found, skipping")
+    elif hot_call not in src:
+        print(f"flashinfer/quantization/fp4_quantization.py: hot-path pattern not found, skipping")
     else:
+        src = src.replace(hot_call, hot_replacement)
         append_block = """
 
 # {MARKER}
-# Appended by sglang_launch.sh runtime patch. Wraps get_fp4_quantization_module
-# in functools.cache and pre-warms it with the current GPU's SM compute
-# capability at module import time. This keeps the flashinfer FP4 JIT build
-# chain out of any torch.compile/dynamo trace context — subsequent calls
-# from inside sglang's piecewise CUDA graph capture just return the cached
-# backend module without triggering stat/subprocess/etc. See
-# FLASHINFER_CUDA_VERSION_SUBPROCESS_UPSTREAM_BUG.md for the full rationale.
-import functools as _sglang_functools
-if not hasattr(get_fp4_quantization_module, "__wrapped__"):
-    get_fp4_quantization_module = _sglang_functools.cache(get_fp4_quantization_module)
-
-def _sglang_prewarm_fp4_quantization_module():
-    try:
-        import torch as _t
-        if not _t.cuda.is_available():
-            return
-        # Drive the real fp4_quantize() code path with a dummy input. This
-        # goes through flashinfer's own key-derivation logic (which on SM121
-        # resolves to "sm120f" / "120f" via the feature-variant registry,
-        # NOT the raw "{major}{minor}" string), so the functools.cache gets
-        # populated with the exact key sglang will use from inside a
-        # dynamo trace later.
-        _x = _t.zeros((128, 4096), dtype=_t.bfloat16, device="cuda")
-        _scale = _t.ones((), dtype=_t.float32, device="cuda")
-        try:
-            fp4_quantize(_x, _scale)
-        except Exception as _fe:
-            # Fall back: enumerate all registered backends and warm each one
-            # individually. Some may not be applicable to this GPU and raise,
-            # that's fine — the ones that match will be cached.
-            import sys as _sys
-            print(f"[fp4_quantization prewarm] fp4_quantize(dummy) failed ({_fe}); falling back to backend_modules enumeration", file=_sys.stderr)
-            for _k in list(backend_modules.keys()):
-                try:
-                    get_fp4_quantization_module(_k)
-                    print(f"[fp4_quantization prewarm] warmed backend key={_k}", file=_sys.stderr)
-                except Exception as _ke:
-                    print(f"[fp4_quantization prewarm] backend key={_k} failed: {_ke}", file=_sys.stderr)
-    except Exception as _e:
-        import sys as _sys
-        print(f"[fp4_quantization prewarm] skipped: {_e}", file=_sys.stderr)
-
-_sglang_prewarm_fp4_quantization_module()
-del _sglang_prewarm_fp4_quantization_module
+# Appended by sglang_launch.sh runtime patch. Pre-resolves the FP4 JIT backend
+# module for the current GPU's SM compute capability into a plain module-level
+# constant `_SGLANG_FP4_MOD`. The hot-path call inside fp4_quantize() was
+# rewritten to reference this constant directly instead of calling
+# `get_fp4_quantization_module(f"{major}{minor}")`, which dynamo would
+# otherwise inline and re-trace — triggering build_and_load → is_aot →
+# pathlib.Path.exists → os.stat (a dynamo-skipped builtin) and breaking
+# piecewise CUDA graph capture. See sglang_launch.sh header for full rationale.
+_SGLANG_FP4_MOD = None
+try:
+    import torch as _sglang_t
+    if _sglang_t.cuda.is_available():
+        _sglang_maj, _sglang_min = _sglang_t.cuda.get_device_capability(0)
+        _SGLANG_FP4_MOD = get_fp4_quantization_module(f"{_sglang_maj}{_sglang_min}")
+        import sys as _sglang_sys
+        print(
+            f"[fp4_quantization prewarm] resolved _SGLANG_FP4_MOD for sm{_sglang_maj}{_sglang_min}",
+            file=_sglang_sys.stderr,
+        )
+except Exception as _sglang_e:
+    import sys as _sglang_sys
+    print(f"[fp4_quantization prewarm] failed: {_sglang_e}", file=_sglang_sys.stderr)
 """.replace("{MARKER}", marker)
         p.write_text(src + append_block)
-        print("Patched flashinfer/quantization/fp4_quantization.py: cache + prewarm fp4 quant module")
+        print("Patched flashinfer/quantization/fp4_quantization.py: hot-path _SGLANG_FP4_MOD constant")
 PATCH_FI_FP4_PREWARM_EOF
 
 # Version gate: warn if the container image changed — patches below may need review.
