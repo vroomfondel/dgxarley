@@ -23,10 +23,11 @@ _model_profile:
     context_length: 202752
     quantization: "modelopt_fp4"
     trust_remote_code: true
-    # EP=1 TP=4 winner config (TESTLOG EP=1, 2026-04-15, 17/37 STABLE):
-    #   Test 31: cutlass MoE + fi attn + fi_cutlass FP4 + CG on → 14.51/40.60/60.03
-    #   All 17 STABLE configs within ±2%; cutlass/triton MoE and fi/triton attn
-    #   are interchangeable. CG on gives 30% better n=1 TTFT vs eager.
+    # EP=1 TP=4 winner config (TESTLOG EP=1, 2026-04-16):
+    #   Test 38: cutlass MoE + fi attn + fi_cutlass FP4 + CG on + MTP
+    #     → 22.8/53.2/81.1 tok/s (n=1/n=4/n=8)
+    #   MTP (NEXTN) gives +68% n=1, +35% n=4/n=8 over non-MTP best (Test 31).
+    #   cutlass/triton MoE within noise; fi/triton attn within noise.
     # EP=1 delivers ~2× throughput over EP=4 (40.6 vs 20.8 n=4, 60 vs 30 n=8).
     moe_runner_backend: "cutlass"
     kv_cache_dtype: "fp8_e4m3"
@@ -45,7 +46,7 @@ _model_profile:
     ep_size: 1
     recommended_sampling:
       temperature: 1.0
-    speculative_enabled: false
+    speculative_enabled: true
     speculative_algo: NEXTN
     speculative_num_steps: 3
     speculative_num_draft_tokens: 4
