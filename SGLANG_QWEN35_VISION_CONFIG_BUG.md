@@ -107,10 +107,10 @@ Reported for `AxionML/Qwen3.5-35B-A3B-NVFP4` on DGX Spark. Different root cause:
 
 ### sgl-project/sglang#22618 — Qwen3.5 `linear_attn` quantization guard for compressed-tensors NVFP4
 
-PR opened 2026-04-12, status **OPEN** (re-verified 2026-04-15, last touched 2026-04-14). Fixes silent weight-dropping for `compressed-tensors` NVFP4 checkpoints of Qwen3.5 hybrid models (RedHatAI/Qwen3.5-35B-A3B-NVFP4, RedHatAI/Qwen3.5-122B-A10B-NVFP4). Related to #20973 (same `linear_attn.in_proj_a.input_scale` symptom, different checkpoint format). **Not the same bug as the vision_config dict issue documented here** — this is a quantization guard issue in `qwen3_5.py`, not a `sub_configs` / auto-generated `__init__` problem.
+PR opened 2026-04-12, status **OPEN** (re-verified 2026-04-16, last touched 2026-04-14). Fixes silent weight-dropping for `compressed-tensors` NVFP4 checkpoints of Qwen3.5 hybrid models (RedHatAI/Qwen3.5-35B-A3B-NVFP4, RedHatAI/Qwen3.5-122B-A10B-NVFP4). Related to #20973 (same `linear_attn.in_proj_a.input_scale` symptom, different checkpoint format). **Not the same bug as the vision_config dict issue documented here** — this is a quantization guard issue in `qwen3_5.py`, not a `sub_configs` / auto-generated `__init__` problem.
 
 ## Upstream references
 
-- Not yet reported (re-verified 2026-04-15: GitHub search for `sub_configs Qwen3_5` in sgl-project/sglang still returns no matching issues or PRs)
+- Not yet reported (re-verified 2026-04-16: GitHub search for `sub_configs Qwen3_5` in sgl-project/sglang still returns no matching issues or PRs)
 - Related: transformers 5.x `PretrainedConfig.__init_subclass__` auto-init behavior
 - Related: sgl-project/sglang#20973 (different Qwen3.5 NVFP4 checkpoint, different bug)

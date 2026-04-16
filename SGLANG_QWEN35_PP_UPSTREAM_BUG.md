@@ -2,7 +2,7 @@
 
 ## Status
 
-**Fixed upstream** as of 2026-04-06 (re-verified 2026-04-15: all three PRs still merged, our v0.5.10 image includes them). Three PRs fixed three cascading bugs:
+**Fixed upstream** as of 2026-04-06 (re-verified 2026-04-16: all three PRs still merged, our v0.5.10 image includes them). Three PRs fixed three cascading bugs:
 
 | PR | What it fixed | Merged | In v0.5.10 |
 |----|--------------|--------|-----------|

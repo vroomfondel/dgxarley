@@ -2,7 +2,7 @@
 
 ## Status
 
-**Fixed upstream** as of 2026-04-05. Merged by maintainer `hnyls2002`. Re-verified 2026-04-15: fix still in place in current `main`, included in our v0.5.10 image.
+**Fixed upstream** as of 2026-04-05. Merged by maintainer `hnyls2002`. Re-verified 2026-04-16: fix still in place in current `main`, included in our v0.5.10 image.
 
 - Issue: [#15660](https://github.com/sgl-project/sglang/issues/15660) (closed 2025-12-29, but bug persisted until fix)
 - Fix PR: [#15562](https://github.com/sgl-project/sglang/pull/15562) — **merged 2026-04-04**. Re-tokenizes reasoning content at the API layer to compute `reasoning_tokens` and populates it into `UsageInfo`
