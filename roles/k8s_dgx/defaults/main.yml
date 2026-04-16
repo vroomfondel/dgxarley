@@ -19,6 +19,7 @@ openwebui_namespace: "openwebui"
 # sglang_image: "scitrera/dgx-spark-sglang:0.5.10"
 
 #sglang_image: "xomoxcc/dgx-spark-sglang:0.5.10-sm121"
+#sglang_image: "xomoxcc/dgx-spark-sglang:main-gemma4-sm121"
 sglang_image: "scitrera/dgx-spark-sglang:0.5.10"
 
 sglang_nnodes: 4
@@ -65,6 +66,7 @@ sglang_enable_spec_v2: "{{ sglang_model_profiles[sglang_model].enable_spec_v2 | 
 #sglang_model: "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
 
 sglang_model: "nvidia/Qwen3.5-397B-A17B-NVFP4"
+# sglang_model: "google/gemma-4-26B-A4B-it"
 # sglang_model: "nvidia/Qwen3-235B-A22B-NVFP4"
 # sglang_model: "zai-org/GLM-4.7-FP8"
 

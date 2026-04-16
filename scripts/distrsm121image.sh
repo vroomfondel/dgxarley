@@ -43,8 +43,11 @@
 
 set -euo pipefail
 
-SRC_IMAGE="localhost/xomoxcc/dgx-spark-sglang:0.5.10-sm121"
-IMAGE="docker.io/xomoxcc/dgx-spark-sglang:0.5.10-sm121"
+#SRC_IMAGE="localhost/xomoxcc/dgx-spark-sglang:0.5.10-sm121"
+#IMAGE="docker.io/xomoxcc/dgx-spark-sglang:0.5.10-sm121"
+
+SRC_IMAGE="docker.io/xomoxcc/dgx-spark-sglang:main-gemma4-sm121"
+IMAGE="docker.io/xomoxcc/dgx-spark-sglang:main-gemma4-sm121"
 
 # Source host: where the built image lives in podman. Defaults to spark4
 # (the historical build host); override with --source when the image was
@@ -183,7 +186,11 @@ trap cleanup EXIT
 # 1. Retag for docker.io namespace — wichtig für containerd name-match.
 # Ohne das Retag bleibt das Image als localhost/xomoxcc/... im podman store
 # und K3s findet es nicht unter dem docker.io/... Namen aus den Pod-Specs.
-ssh "${SSH_OPTS[@]}" "root@${SOURCE}" "podman tag '${SRC_IMAGE}' '${IMAGE}'"
+if [[ "${SRC_IMAGE}" != "${IMAGE}" ]]; then
+    ssh "${SSH_OPTS[@]}" "root@${SOURCE}" "podman tag '${SRC_IMAGE}' '${IMAGE}'"
+else
+    echo "SRC_IMAGE == IMAGE (${IMAGE}), skipping retag"
+fi
 
 # 2. Throwaway registry:2 auf spark4 starten. --network host vermeidet
 # slirp/netns-Overhead für die großen Blob-Transfers. Bind auf 0.0.0.0,
