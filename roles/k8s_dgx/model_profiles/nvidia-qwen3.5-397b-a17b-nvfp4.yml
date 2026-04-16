@@ -1,3 +1,4 @@
+---
 # Model profile: nvidia/Qwen3.5-397B-A17B-NVFP4
 # Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
 _model_profile:
@@ -47,9 +48,9 @@ _model_profile:
     #     regular graphs within noise.
     moe_runner_backend: "cutlass"
     kv_cache_dtype: "fp8_e4m3"
-    # 0.80 OOMs on workers — flashinfer_cutlass MoE JIT for 512 experts needs
-    # significant extra VRAM beyond model weights. 0.60 leaves ~30 GB headroom.
-    mem_fraction_static: "0.80"
+    # 0.75 with MTP: draft tokens need extra KV cache headroom.
+    # 0.80 was used without MTP but OOMs with speculative enabled.
+    mem_fraction_static: "0.75"
     attention_backend: "triton"
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 4
@@ -72,4 +73,14 @@ _model_profile:
       temperature: 0.6
       top_p: 0.95
       top_k: 20
-    speculative_enabled: false
+    speculative_enabled: true
+    speculative_algo: NEXTN
+    speculative_num_steps: 3
+    speculative_num_draft_tokens: 4
+    # Qwen3.5 MoE uses hybrid attention (linear + full GQA) — SGLang classifies
+    # this under its "mamba" scheduler path. MTP requires extra_buffer strategy
+    # and SGLANG_ENABLE_SPEC_V2=1, otherwise startup fails with:
+    #   "Speculative decoding for Qwen3_5MoeForConditionalGeneration is not
+    #    compatible with radix cache when using --mamba-scheduler-strategy no_buffer"
+    mamba_scheduler_strategy: "extra_buffer"
+    enable_spec_v2: true
