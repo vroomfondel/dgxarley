@@ -63,6 +63,8 @@
         SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS: "{{ sglang_speculative_num_draft_tokens | string }}"
         SGLANG_SPECULATIVE_DRAFT_MODEL_PATH: "{{ sglang_speculative_draft_model_path }}"
         SGLANG_SPECULATIVE_DRAFT_MODEL_QUANTIZATION: "{{ sglang_speculative_draft_model_quantization }}"
+        SGLANG_MAMBA_SCHEDULER_STRATEGY: "{{ sglang_mamba_scheduler_strategy }}"
+        SGLANG_ENABLE_SPEC_V2: "{{ '1' if (sglang_enable_spec_v2 | bool) else '' }}"
         SGLANG_DIST_TIMEOUT: "{{ sglang_dist_timeout | string }}"
         SGLANG_WATCHDOG_TIMEOUT: "{{ sglang_watchdog_timeout | string }}"
         SGLANG_ATTENTION_BACKEND: "{{ sglang_attention_backend }}"

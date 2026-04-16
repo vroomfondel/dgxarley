@@ -847,6 +847,9 @@ if [ "$SGLANG_SPECULATIVE_ENABLED" = "true" ]; then
     fi
   fi
 fi
+if [ -n "$SGLANG_MAMBA_SCHEDULER_STRATEGY" ]; then
+  args+=(--mamba-scheduler-strategy "$SGLANG_MAMBA_SCHEDULER_STRATEGY")
+fi
 if [ -n "$SGLANG_MAX_RUNNING_REQUESTS" ] && [ "$SGLANG_MAX_RUNNING_REQUESTS" != "0" ]; then
   args+=(--max-running-requests "$SGLANG_MAX_RUNNING_REQUESTS")
 fi

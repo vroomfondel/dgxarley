@@ -49,6 +49,15 @@ sglang_speculative_draft_model_path: "{{ sglang_model_profiles[sglang_model].spe
 # Empty string (default) = inherit target quantization (SGLang's default).
 sglang_speculative_draft_model_quantization: "{{ sglang_model_profiles[sglang_model].speculative_draft_model_quantization | default('') }}"
 
+# Mamba scheduler strategy — required for hybrid-attention models (Qwen3.5 MoE)
+# when speculative decoding is enabled. "extra_buffer" enables radix cache
+# compatibility with MTP. Empty string = SGLang default (no_buffer).
+sglang_mamba_scheduler_strategy: "{{ sglang_model_profiles[sglang_model].mamba_scheduler_strategy | default('') }}"
+
+# Enable MTP spec_v2 — required alongside mamba_scheduler_strategy=extra_buffer
+# for speculative decoding on hybrid-attention models. Sets SGLANG_ENABLE_SPEC_V2=1.
+sglang_enable_spec_v2: "{{ sglang_model_profiles[sglang_model].enable_spec_v2 | default(false) }}"
+
 # Select the active model — parameters are pulled from sglang_model_profiles
 #sglang_model: "Qwen/Qwen3-Next-80B-A3B-Instruct-FP8"
 #sglang_model: "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
