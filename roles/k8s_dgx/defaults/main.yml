@@ -476,6 +476,8 @@ hf_preload_models:
   - "lmsys/Qwen3-235B-A22B-EAGLE3"
   - "nvidia/Qwen3-235B-A22B-Eagle3"
   - "nvidia/Qwen3-235B-A22B-NVFP4"
+  - "nvidia/Gemma-4-31B-IT-NVFP4"
+  - "bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4"
   - "google/gemma-4-31B-it"
   - "google/gemma-4-26B-A4B-it"
 #  - "nvidia/Qwen3-235B-A22B-NVFP4"

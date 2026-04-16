@@ -1,0 +1,36 @@
+---
+# Model profile: bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+_model_profile:
+  "bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4":
+    info_url: "https://huggingface.co/bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4"
+    # NVFP4-quantized variant of google/gemma-4-26B-A4B-it.
+    # 26B total / ~3.8B active MoE (top_k=8 of 128 experts). 30 layers.
+    # num_attention_heads=16, num_key_value_heads=8 (2:1 GQA).
+    # MoE: num_experts=128, top_k_experts=8, moe_intermediate_size=704.
+    # Context: 262144 native (256K). vocab_size: 262144.
+    # NVFP4: MoE FFN weights are FP4; attention, lm_head remain BF16.
+    # ~13-15 GB total after quantization → ~3-4 GB/GPU at TP=4.
+    nccl_transport: "roce"
+    tp_size: 4
+    context_length: 262144
+    quantization: "modelopt_fp4"
+    trust_remote_code: true
+    moe_runner_backend: "cutlass"
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.90"
+    attention_backend: "flashinfer"
+    fp4_gemm_backend: "flashinfer_cutlass"
+    jit_max_jobs: 4
+    disable_piecewise_cuda_graph: true  # fp4_quantize has no fake-tensor impl
+    disable_cuda_graph: false
+    cuda_graph_max_bs: 8
+    pp_async_batch_depth: 0
+    disable_deep_gemm: true
+    num_experts: 128
+    ep_size: 1
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 64
+    speculative_enabled: false
