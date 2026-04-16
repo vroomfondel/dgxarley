@@ -532,33 +532,33 @@ ensure_base_image_present() {
         return 0
     fi
 
-    # Not found locally. If it's an xomoxcc-namespace image, that's the one
-    # we build ourselves via build_pytorch_base_image.sh — fail with a
-    # specific diagnostic. If it's a scitrera/ or other public image, let
-    # podman attempt a normal pull during the build (will 404 fast enough).
+    # Not found locally — try pulling from Docker Hub before giving up.
+    echo "Base image not found locally on ${PODMAN_CONNECTION}. Attempting pull from Docker Hub..."
+    if podman --connection "${PODMAN_CONNECTION}" pull "docker.io/${base_image}" 2>&1; then
+        echo "Base image pulled successfully from Docker Hub."
+        return 0
+    fi
+
+    # Pull failed. Give a specific diagnostic for xomoxcc images (which may
+    # not be published), generic hint for everything else.
     case "${base_image}" in
         xomoxcc/dgx-spark-pytorch-dev:*)
             cat >&2 <<EOF
 
-ERROR: Base image '${base_image}' is not present in the podman store on
-${PODMAN_CONNECTION} and will not be pullable from Docker Hub (it's only
-built locally).
+ERROR: Base image '${base_image}' is not present on ${PODMAN_CONNECTION}
+and could not be pulled from Docker Hub.
 
-Build it first:
+If the image has not been pushed to Docker Hub, build it first:
   bash ${SCRIPT_DIR}/build_pytorch_base_image.sh
 
 That build takes approximately 3-5 hours (cold) or 30-60 min (with warm
 ccache from a prior run). It produces the CUDA 13.2 + PyTorch 2.11 base
 that this sglang build depends on.
-
-See scripts/patches/sglang-0.5.10-sm121.recipe for the full rationale,
-and the reference_sm121_build_base_regression memory for context on why
-we build our own base instead of using the scitrera upstream.
 EOF
             exit 1
             ;;
         *)
-            warn "Base image '${base_image}' not found locally. podman will attempt to pull from Docker Hub during the build."
+            die "Base image '${base_image}' not found locally and pull from Docker Hub failed."
             ;;
     esac
 }
@@ -610,9 +610,13 @@ apply_patches() {
     mkdir -p container-build/patches
     for p in sgl-kernel-sm121.patch sgl-kernel-sm121-debug.patch \
              sgl-kernel-arch-prune.patch sgl-kernel-disable-fa3.patch \
-             sgl-kernel-skip-sm90-target.patch sgl-kernel-skip-flashmla.patch; do
-        install -m 0644 "${PATCHES_DIR}/${p}" "container-build/patches/${p}"
-        echo "Installed container-build/patches/${p}"
+             sgl-kernel-skip-sm90-target.patch sgl-kernel-skip-flashmla.patch \
+             sglang-gemma4-nvfp4-expert-loading.patch \
+             sglang-gemma4-geglu-nan-clamp.patch; do
+        if [[ -f "${PATCHES_DIR}/${p}" ]]; then
+            install -m 0644 "${PATCHES_DIR}/${p}" "container-build/patches/${p}"
+            echo "Installed container-build/patches/${p}"
+        fi
     done
 
     # 2. Patch the Dockerfile (adds `patch` apt-get dependency + COPY/RUN step).
@@ -625,6 +629,19 @@ apply_patches() {
     grep -q 'patches/sgl-kernel-sm121.patch' container-build/Dockerfile.sglang-nightly \
         || die "Dockerfile patch verification failed"
     echo "Dockerfile patched"
+
+    # 2b. Gemma-4 NVFP4 Dockerfile patch (optional — only if the patch file exists).
+    #     Adds COPY + apply steps for PR #22929 (per-expert weight loading) and
+    #     PR #22928 (GEGLU activation + NaN clamp). Stacks on top of the sm121 patch.
+    if [[ -f "${PATCHES_DIR}/dockerfile-gemma4-nvfp4.patch" ]]; then
+        echo "Applying dockerfile-gemma4-nvfp4.patch..."
+        patch --dry-run -p1 < "${PATCHES_DIR}/dockerfile-gemma4-nvfp4.patch" \
+            || die "Gemma4 Dockerfile patch dry-run failed — regenerate dockerfile-gemma4-nvfp4.patch"
+        patch -p1 < "${PATCHES_DIR}/dockerfile-gemma4-nvfp4.patch"
+        grep -q 'sglang-gemma4-nvfp4-expert-loading.patch' container-build/Dockerfile.sglang-nightly \
+            || die "Gemma4 Dockerfile patch verification failed"
+        echo "Gemma4 Dockerfile patched"
+    fi
 
     # 3. Drop in the recipe file. run_build() parses it inline and calls
     #    `podman build` directly, bypassing container-build/build-image.sh
