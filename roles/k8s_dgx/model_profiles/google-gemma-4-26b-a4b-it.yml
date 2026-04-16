@@ -3,6 +3,7 @@
 _model_profile:
   "google/gemma-4-26B-A4B-it":
     info_url: "https://huggingface.co/google/gemma-4-26B-A4B-it"
+    # ALTERNATIVE: https://huggingface.co/bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4
     # 26B total / ~3.8B active MoE (top_k=8 of 128 experts per token),
     # multimodal-capable. The "A4B" suffix denotes ~4B active params — Google's
     # latency-optimized variant (lmarena ~1441 with only 3.8B active compute).

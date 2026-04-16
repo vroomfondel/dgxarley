@@ -3,6 +3,7 @@
 _model_profile:
   "google/gemma-4-31B-it":
     info_url: "https://huggingface.co/google/gemma-4-31B-it"
+    # ALTERNATIVE: https://huggingface.co/nvidia/Gemma-4-31B-IT-NVFP4
     # 30.7B dense, multimodal-capable (Gemma4ForConditionalGeneration ships
     # with text + vision + audio heads; SGLang uses the text path).
     # Architecture: 60 layers, hybrid attention with 5:1 sliding-to-full
