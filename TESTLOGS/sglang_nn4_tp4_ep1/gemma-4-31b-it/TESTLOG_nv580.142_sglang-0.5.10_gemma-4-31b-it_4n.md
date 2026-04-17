@@ -62,9 +62,9 @@ All tests use: `tp=4, pp=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, mem_fr
 | 1 | roce | fi | false | true | **startup_crash** | — | — | — |
 | 2 | roce | fi | true | true | **bench_crash** | — | — | — |
 | 3 | roce | fi | false | false | **startup_crash** | — | — | — |
-| 4 | roce | triton | false | true | *running* | 10.8 | 40.8 | — |
-| 5 | roce | triton | true | true | *pending* | — | — | — |
-| 6 | roce | triton | false | false | *pending* | — | — | — |
+| 4 | roce | triton | false | true | **STABLE** | 10.8 | 40.8 | 66.3 |
+| 5 | roce | triton | true | true | **STABLE** | 9.6 | 37.2 | 66.7 |
+| 6 | roce | triton | false | false | **STABLE ★** | 10.6 | 36.8 | **70.6** |
 
 Tests 1–3 use `attention_backend=flashinfer` — expected to crash (FlashInfer `head_dim=512` dispatch bug). Tests 4–6 use `attention_backend=triton` and should work.
 
@@ -86,3 +86,42 @@ Tests 1–3 use `attention_backend=flashinfer` — expected to crash (FlashInfer
 - Test 1 (CG on) and 3 (piecewise): **startup_crash** — FlashInfer `head_dim=512` dispatch bug during CUDA graph capture. `prefill.cuh:2615: Invalid configuration`.
 - Test 2 (eager): **bench_crash** — same FlashInfer bug at first benchmark request.
 - Identical to Gemma-4 26B MoE Tests 1–3. See `FLASHINFER_HEAD_DIM_512_UPSTREAM_BUG.md`.
+
+### Test 4 — triton attn, CUDA graphs on
+
+- **STABLE** — 10.8 / 40.8 / 66.3 (n=1/n=4/n=8).
+- TTFT: 0.48s (n=1), 0.61s (n=4), 0.74s (n=8).
+- First successful Gemma-4 31B dense serving on the cluster. 30.7B dense = ~8× more active compute than the 26B MoE variant → ~2.7× lower throughput at n=8 (66.3 vs 180.5).
+
+### Test 5 — triton attn, eager (no CUDA graphs)
+
+- **STABLE** — 9.6 / 37.2 / 66.7 (n=1/n=4/n=8).
+- TTFT: **11.42s** (n=1) — heavy JIT warmup without pre-captured graphs. Drops to 0.54s at n=4.
+- Eager marginally faster at n=8 than CG-on (66.7 vs 66.3) — within noise.
+
+### Test 6 — triton attn, piecewise CUDA graphs
+
+- **STABLE ★** — 10.6 / 36.8 / **70.6** (n=1/n=4/n=8). **Overall winner at n=8.**
+- TTFT: 1.97s (n=1), 0.57s (n=4), 0.66s (n=8).
+- Piecewise outperforms CG-on at n=8 by **+6.5%** (70.6 vs 66.3) — same pattern as the MoE variant. BF16 dense has no FP4 fake-tensor issue, so piecewise works fine.
+- n=4 slightly behind CG-on (36.8 vs 40.8) — piecewise has higher per-graph overhead that's visible at moderate concurrency but pays off at n=8.
+
+### Overall conclusion (6/6)
+
+**3/6 STABLE, 3/6 crashed.** Clean split: all `flashinfer` tests crash, all `triton` tests pass.
+
+| Config | n=1 | n=4 | n=8 | n=1 TTFT |
+|--------|----:|----:|----:|--------:|
+| Test 4 (CG on) | **10.8** | **40.8** | 66.3 | **0.48s** |
+| Test 5 (eager) | 9.6 | 37.2 | 66.7 | 11.42s |
+| **Test 6 (piecewise)** | 10.6 | 36.8 | **70.6** | 1.97s |
+
+**Winner: Test 6** — piecewise at 70.6 tok/s n=8. CG-on (Test 4) is better for interactive workloads (best n=1 TTFT at 0.48s, best n=4 at 40.8).
+
+**Production profile recommendation:**
+
+```yaml
+attention_backend: triton            # mandatory — flashinfer crashes on head_dim=512
+disable_piecewise_cuda_graph: false  # piecewise works for BF16, best n=8
+disable_cuda_graph: false
+```

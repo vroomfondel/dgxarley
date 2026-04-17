@@ -23,13 +23,17 @@ _model_profile:
     context_length: 262144  # 256K native
     quantization: ""  # native BF16
     trust_remote_code: false  # official Google model, no custom code
-    kv_cache_dtype: "fp8_e4m3"  # sliding window dominates → large KV-savings
-    mem_fraction_static: "0.7"  # weights ~15.5 GB/GPU, lots of room
-    attention_backend: "flashinfer"  # needs sliding+full hybrid support
+    # Winner config (Test 6, 2026-04-17):
+    #   triton attn + piecewise → 10.6 / 36.8 / 70.6 tok/s (n=1/n=4/n=8)
+    #   attention_backend=triton is mandatory: FlashInfer crashes on
+    #   global_head_dim=512 (see FLASHINFER_HEAD_DIM_512_UPSTREAM_BUG.md).
+    #   piecewise works for BF16 (no fp4_quantize fake-tensor dynamo issue)
+    #   and gives +6.5% at n=8 over fixed-BS graphs.
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.85"
+    attention_backend: "triton"
     jit_max_jobs: 4
     disable_piecewise_cuda_graph: false
-    # Start with CUDA graphs enabled (dense BF16 model, no NVFP4 MoE crashes).
-    # Disable if first startup hits unresolved Gemma4-specific graph issues.
     disable_cuda_graph: false
     cuda_graph_max_bs: 8
     pp_async_batch_depth: 0
