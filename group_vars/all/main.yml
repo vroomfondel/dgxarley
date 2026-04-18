@@ -95,6 +95,13 @@ qsfp_sriov_assignments:
 # PostgreSQL
 postgresql_postgres_password: "changeme"
 postgresql_openwebui_password: "changeme"
+postgresql_litellm_password: "changeme"
+
+# LiteLLM
+litellm_master_key: "sk-changeme"
+litellm_salt_key: "changeme-salt-key"
+litellm_ui_username: "admin"
+litellm_ui_password: "changeme"
 
 # Grafana
 grafana_admin_password: "changeme"

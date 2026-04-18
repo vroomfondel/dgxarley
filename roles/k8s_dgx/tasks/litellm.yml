@@ -13,6 +13,95 @@
     state: present
 
 
+# ============================================================================
+# PostgreSQL Database Check/Create (idempotent)
+# ============================================================================
+# The init-script in kubectlstuff_postgresql.yml (4_createdb_litellm.sh) only
+# runs on a fresh PG data dir. For existing clusters we ensure the litellm
+# role + DB exist at runtime — same pattern as windmill/openwebui.
+
+- name: Get litellm database password from postgresql-secrets
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: postgresql-secrets
+    namespace: postgresql
+  register: postgresql_secrets_info
+
+- name: Set litellm credential facts
+  set_fact:
+    litellm_db_password: "{{ postgresql_secrets_info.resources[0].data.LITELLM_POSTGRES_PASSWORD | b64decode }}"
+
+- name: Get PostgreSQL pod
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: postgresql
+    label_selectors:
+      - app=postgresql
+  register: postgresql_pods
+
+- name: Set PostgreSQL pod name fact
+  set_fact:
+    postgresql_pod_name: "{{ postgresql_pods.resources[0].metadata.name }}"
+
+- name: Ensure litellm user and database exist in PostgreSQL
+  kubernetes.core.k8s_exec:
+    namespace: postgresql
+    pod: "{{ postgresql_pod_name }}"
+    command: |
+      bash -c '
+        set -e
+        LITELLM_PASSWORD="{{ litellm_db_password }}"
+
+        if psql -U postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='\''litellm'\''" | grep -q 1; then
+          psql -U postgres -c "ALTER USER litellm WITH PASSWORD '\''${LITELLM_PASSWORD}'\'';"
+          echo "User litellm: exists (password ensured)"
+        else
+          psql -U postgres -c "CREATE USER litellm WITH PASSWORD '\''${LITELLM_PASSWORD}'\'';"
+          echo "User litellm: created"
+        fi
+
+        if psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='\''litellm'\''" | grep -q 1; then
+          echo "Database litellm: exists"
+        else
+          psql -U postgres -c "CREATE DATABASE litellm OWNER litellm;"
+          psql -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE litellm TO litellm;"
+          echo "Database litellm: created"
+        fi
+      '
+  register: litellm_db_ensure
+  changed_when: "'created' in litellm_db_ensure.stdout"
+
+
+- name: Create litellm env secret (master_key, salt, DB URL, UI creds)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: litellm-env
+        namespace: "{{ litellm_namespace }}"
+      type: Opaque
+      stringData:
+        # Admin bearer token for the proxy API (sk-... style). Used as
+        # Authorization: Bearer <master_key> for /key/generate, /user/new etc.
+        LITELLM_MASTER_KEY: "{{ litellm_master_key }}"
+        # Encrypts persisted virtual-key hashes in the DB. Changing this
+        # invalidates existing keys — treat as immutable after first deploy.
+        LITELLM_SALT_KEY: "{{ litellm_salt_key }}"
+        # Postgres-backed mode: enables virtual keys, users, teams, budgets,
+        # spend tracking. Without DATABASE_URL LiteLLM runs in config-only mode.
+        DATABASE_URL: "postgresql://litellm:{{ litellm_db_password }}@postgresql.postgresql.svc.cluster.local:5432/litellm"
+        # Persist models added via the UI/API to the DB (in addition to the
+        # static model_list from config.yaml).
+        STORE_MODEL_IN_DB: "True"
+        # Admin UI at /ui — login form credentials.
+        UI_USERNAME: "{{ litellm_ui_username }}"
+        UI_PASSWORD: "{{ litellm_ui_password }}"
+
+
 - name: Create litellm config
   kubernetes.core.k8s:
     state: present
@@ -39,6 +128,11 @@
           {% for key, value in litellm_settings.items() %}
             {{ key }}: {{ value | to_json }}
           {% endfor %}
+
+          general_settings:
+            # master_key is sourced from LITELLM_MASTER_KEY env (see Secret).
+            # store_model_in_db mirrors STORE_MODEL_IN_DB — belt & suspenders.
+            store_model_in_db: true
   
 
 - name: Create litellm service
@@ -110,6 +204,9 @@
                 ports:
                   - containerPort: "{{ litellm_port }}"
                     protocol: TCP
+                envFrom:
+                  - secretRef:
+                      name: litellm-env
                 resources:
                   requests:
                     cpu: 100m
