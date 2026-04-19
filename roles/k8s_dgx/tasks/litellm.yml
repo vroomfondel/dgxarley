@@ -133,6 +133,21 @@
             # master_key is sourced from LITELLM_MASTER_KEY env (see Secret).
             # store_model_in_db mirrors STORE_MODEL_IN_DB — belt & suspenders.
             store_model_in_db: true
+          {% if litellm_guardrails | length > 0 %}
+
+          # Guardrails — rendered only when litellm_guardrails is non-empty.
+          # See defaults/main.yml for the commented catalogue of examples.
+          guardrails:
+          {% for entry in litellm_guardrails %}
+            - guardrail_name: "{{ entry.guardrail_name }}"
+              litellm_params:
+          {% for key, value in entry.litellm_params.items() %}
+          {% if value is defined and value is not none and value != omit %}
+                {{ key }}: {{ value | to_json }}
+          {% endif %}
+          {% endfor %}
+          {% endfor %}
+          {% endif %}
   
 
 - name: Create litellm service

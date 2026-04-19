@@ -542,7 +542,12 @@ _sglang_extra_body_defaults: >-
 
 litellm_enabled: true
 litellm_namespace: "litellm"
-litellm_image: "ghcr.io/berriai/litellm:main-latest"
+# Official BerriAI/LiteLLM image on GitHub Container Registry.
+# Tag choice: `main-stable` = release passed 12h load-test before publish
+# (https://docs.litellm.ai/docs/proxy/deploy#docker). `main-latest` tracks
+# HEAD of main and is NOT recommended for production. For pinned deploys
+# use a specific version tag, e.g. `v1.83.7-stable`.
+litellm_image: "ghcr.io/berriai/litellm:main-stable"
 litellm_port: 4000
 
 # Model list: each entry maps a model_name to a backend endpoint.
@@ -572,8 +577,12 @@ litellm_port: 4000
 # Override per-model by adding input_cost_per_token / output_cost_per_token
 # directly in litellm_model_list. Set both to 0 to track tokens without
 # charging spend. All values are in USD — LiteLLM has no currency switch.
-litellm_default_input_cost_per_token: 0.00000039   # $0.39 per 1M input  — OpenRouter Qwen3.5-397B median
-litellm_default_output_cost_per_token: 0.00000234  # $2.34 per 1M output — OpenRouter Qwen3.5-397B median
+# litellm_default_input_cost_per_token: 0.00000039   # $0.39 per 1M input  — OpenRouter Qwen3.5-397B median
+# litellm_default_output_cost_per_token: 0.00000234  # $2.34 per 1M output — OpenRouter Qwen3.5-397B median
+
+litellm_default_input_cost_per_token: 0.000003    # $3.00 per 1M input  — Anthropic Claude Sonnet 4.5 (≤200K ctx)
+litellm_default_output_cost_per_token: 0.000015   # $15.00 per 1M output — Anthropic Claude Sonnet 4.5 (≤200K ctx)
+
 
 litellm_model_list:
   - model_name: "{{ sglang_served_model_name }}"
@@ -635,4 +644,109 @@ litellm_settings:
   # verification for self-signed certs on our HAProxy TLS sidecars.
   # See LITELLM_UPSTREAM_BUG.md for details.
   ssl_verify: false
+
+
+# ============================================================================
+# Guardrails (DISABLED BY DEFAULT — uncomment entries to activate)
+# ============================================================================
+# Guardrails are pre/post/parallel hooks that inspect or modify prompts and
+# responses. Each entry becomes one item in the `guardrails:` block of
+# config.yaml. Rendering is gated: the ConfigMap task only emits the block
+# when `litellm_guardrails` is non-empty — see tasks/litellm.yml.
+#
+# Modes:
+#   pre_call      blocks/modifies prompt BEFORE LLM call (e.g. PII redaction)
+#   post_call     blocks/modifies response AFTER LLM call (e.g. toxicity filter)
+#   during_call   runs in parallel (cannot block, no added latency)
+#   logging_only  observe only, never intervene
+#
+# default_on:
+#   true   applies to every request globally ("Global Guardrail" in UI)
+#   false  opt-in per request (body: "guardrails":["name"]) or per key/team
+#
+# Reference: https://docs.litellm.ai/docs/proxy/guardrails/quick_start
+#
+# --- Recommended minimal on-prem set (no SaaS dependencies) ---
+#
+# litellm_guardrails:
+#   # 1) hide-secrets: built-in TruffleHog-based secret detector. Masks any
+#   #    accidentally-pasted API keys, AWS creds, SSH keys, JWTs etc. in prompts
+#   #    BEFORE they reach the LLM. Zero external deps, zero SaaS calls, local
+#   #    regex/entropy scan. Cheap insurance against credential leaks.
+#   - guardrail_name: "hide-secrets"
+#     litellm_params:
+#       guardrail: "hide-secrets"
+#       mode: "pre_call"
+#       default_on: true
+#
+#   # 2) presidio-pii-mask: Microsoft Presidio — PII detection + redaction
+#     #  (names, emails, IBANs, phone numbers, ID numbers, etc.). Requires the
+#     #  two Presidio containers running in-cluster (analyzer + anonymizer).
+#     #  Deploy via a separate role/task before enabling this guardrail.
+#     #  output_parse_pii: true also scrubs PII from the LLM's response.
+#   - guardrail_name: "presidio-pii-mask"
+#     litellm_params:
+#       guardrail: "presidio"
+#       mode: "pre_call"
+#       presidio_analyzer_api_base: "http://presidio-analyzer.guardrails.svc.cluster.local:3000"
+#       presidio_anonymizer_api_base: "http://presidio-anonymizer.guardrails.svc.cluster.local:5001"
+#       output_parse_pii: true
+#       default_on: false   # opt-in per key — not every workload wants PII redaction
+#
+# --- SaaS-based guardrails (require API keys in vault.yml) ---
+#
+#   # 3) lakera-prompt-injection: Prompt-injection & jailbreak detection.
+#     #  during_call mode = runs parallel to the LLM request, no added latency,
+#     #  but also cannot block — flags requests for later audit.
+#   - guardrail_name: "lakera-prompt-injection"
+#     litellm_params:
+#       guardrail: "lakera_v2"
+#       api_key: "os.environ/LAKERA_API_KEY"   # set via litellm-env Secret
+#       mode: "during_call"
+#       default_on: true
+#
+#   # 4) aporia: Content moderation, hallucination scoring, jailbreak detection.
+#   - guardrail_name: "aporia-pre"
+#     litellm_params:
+#       guardrail: "aporia"
+#       api_key: "os.environ/APORIA_API_KEY"
+#       api_base: "os.environ/APORIA_API_BASE"
+#       mode: "pre_call"
+#       default_on: false
+#
+#   # 5) openai_moderation: OpenAI /moderations endpoint (hate, violence, sexual,
+#     #  self-harm categories). Requires OPENAI_API_KEY — sends prompt text to
+#     #  OpenAI, NOT recommended if our on-prem goal is data sovereignty.
+#   - guardrail_name: "openai-moderation"
+#     litellm_params:
+#       guardrail: "openai_moderation"
+#       api_key: "os.environ/OPENAI_API_KEY"
+#       mode: "pre_call"
+#       default_on: false
+#
+#   # 6) bedrock: AWS Bedrock Guardrails — denied topics, content filters,
+#     #  word-policy, PII. Requires AWS creds. Guardrail must be pre-created
+#     #  in the AWS console; supply its ID + version here.
+#   - guardrail_name: "bedrock-content-filter"
+#     litellm_params:
+#       guardrail: "bedrock"
+#       guardrailIdentifier: "os.environ/BEDROCK_GUARDRAIL_ID"
+#       guardrailVersion: "DRAFT"
+#       mode: "pre_call"
+#       default_on: false
+#
+# --- Self-written custom guardrail ---
+#
+#   # 7) custom: Python class extending litellm.integrations.custom_guardrail.
+#     #  CustomGuardrail — mounted into the pod via ConfigMap/PVC. Useful for
+#     #  domain-specific rules (keyword blacklists, regex, LLM-as-judge etc.).
+#     #  See docs: https://docs.litellm.ai/docs/proxy/guardrails/custom_guardrail
+#   - guardrail_name: "domain-blacklist"
+#     litellm_params:
+#       guardrail: "custom_guardrail.MyGuardrail"
+#       mode: "pre_call"
+#       default_on: false
+
+# Empty default — guardrails block is omitted from config.yaml when empty.
+litellm_guardrails: []
 
