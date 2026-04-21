@@ -13,15 +13,47 @@
   set_fact:
     openwebui_db_password: "{{ postgresql_secrets_info.resources[0].data.OPENWEBUI_POSTGRES_PASSWORD | b64decode }}"
 
+# --- LiteLLM virtual-key Secret lookup (DISABLED — paired with litellm.yml) ---
+# When the virtual-key provisioning block in roles/k8s_dgx/tasks/litellm.yml
+# is active, the litellm role writes each generated sk-... token into a K8s
+# Secret named litellm-vkey-<alias>. Uncommenting the two tasks below pulls
+# those Secrets in and overrides the plain vars
+# (openwebui_connections_openai_keys[0], openwebui_embedding_openai_key) so
+# the Secrets become the source of truth — no copy-paste from vault needed.
+# Currently disabled: tokens come from vault vars directly.
+#
+# - name: Read litellm virtual keys for openwebui
+#   kubernetes.core.k8s_info:
+#     api_version: v1
+#     kind: Secret
+#     name: "litellm-vkey-{{ item }}"
+#     namespace: "{{ litellm_namespace }}"
+#   register: _litellm_vkeys
+#   loop:
+#     - "openwebui-chat"
+#     - "openwebui-embedding"
+#
+# - name: Override openwebui bearer tokens with litellm virtual keys
+#   set_fact:
+#     openwebui_connections_openai_keys:
+#       - "{{ _litellm_vkeys.results[0].resources[0].data.LITELLM_API_KEY | b64decode }}"
+#     openwebui_embedding_openai_key: "{{ _litellm_vkeys.results[1].resources[0].data.LITELLM_API_KEY | b64decode }}"
+#   no_log: true
+
 # --- Build dynamic OpenAI connection lists ---
 # Pipelines URL is only included when pipelines_enabled is true.
+# Keys line up positionally with URLs; pipelines uses its shared secret.
+# Bearer tokens for LiteLLM-backed connections come from
+# openwebui_connections_openai_keys (vault). Set each entry to a LiteLLM
+# virtual-key sk-... token (or the master_key for admin usage).
 
 - name: Build OpenAI connection URLs and keys
   set_fact:
     _openai_urls: "{{ openwebui_connections_openai + (pipelines_enabled | ternary([_pipelines_url], [])) }}"
-    _openai_keys: "{{ ([''] * openwebui_connections_openai | length) + (pipelines_enabled | ternary([openwebui_secret_key], [])) }}"
+    _openai_keys: "{{ openwebui_connections_openai_keys + (pipelines_enabled | ternary([openwebui_secret_key], [])) }}"
   vars:
     _pipelines_url: "http://pipelines.{{ openwebui_namespace }}.svc.cluster.local:{{ pipelines_port }}"
+  no_log: true
 
 # --- Secrets & ConfigMaps ---
 
@@ -148,7 +180,8 @@
                 "url": "{{ openwebui_embedding_ollama_url }}"
               },
               "openai": {
-                "url": "{{ openwebui_embedding_openai_url | default('') }}"
+                "url": "{{ openwebui_embedding_openai_url | default('') }}",
+                "key": "{{ openwebui_embedding_openai_key | default('') }}"
               },
               "web": {
                 "search": {

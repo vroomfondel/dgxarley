@@ -369,34 +369,20 @@
 
 
 # ============================================================================
-# Virtual Key Provisioning (OPTIONAL — DISABLED BY DEFAULT)
+# Virtual Key Provisioning (DISABLED — kept for reference)
 # ============================================================================
-# LiteLLM virtual keys live in the DB, not in config.yaml. To manage a fixed
-# set of keys via Ansible (idempotent), uncomment the block below. Keys are
-# looked up by key_alias first — if a key with that alias already exists it
-# is updated, otherwise a new one is generated. The returned sk-... token is
-# written to a per-key K8s Secret in the litellm namespace so consumer pods
-# (openwebui, pipelines, CLI users) can pull it via envFrom/volume.
+# LiteLLM virtual keys live in the DB, not in config.yaml. The tasks below
+# look up keys by key_alias — if a key with that alias already exists it is
+# reused, otherwise a new one is generated via /key/generate. The returned
+# sk-... token is written to a per-key K8s Secret in the litellm namespace so
+# consumer pods (openwebui, pipelines, CLI users) can pull it via
+# envFrom/volume.
 #
-# Define the key list in group_vars/all/vault.yml (sensitive metadata like
-# user_id/team_id may leak to logs if in public main.yml):
-#
-#   litellm_virtual_keys:
-#     - key_alias: "openwebui"
-#       user_id: "openwebui-system"
-#       max_budget: 100.0        # USD, null = unlimited
-#       budget_duration: "30d"
-#       tpm_limit: 0             # 0 = unlimited
-#       rpm_limit: 0
-#       models: []               # [] = all models in config
-#     - key_alias: "alice"
-#       user_id: "alice"
-#       max_budget: 5.0
-#       budget_duration: "30d"
-#       models: ["{{ sglang_served_model_name }}"]
-#
-# The master_key is required for these admin calls — read it back from the
-# in-cluster Secret (single source of truth, decoupled from vault variable).
+# Currently disabled — consumers pass the master_key (or a hand-provisioned
+# virtual key from vault) directly via plain variables. Uncomment the block
+# below when you want Ansible to manage the key lifecycle idempotently.
+# Define the key list as litellm_virtual_keys in group_vars/all/main.yml (or
+# vault if metadata is sensitive).
 #
 # - name: Wait for litellm /health/readiness before provisioning keys
 #   ansible.builtin.uri:
@@ -406,6 +392,7 @@
 #   until: _litellm_ready.status == 200
 #   retries: 30
 #   delay: 5
+#   when: litellm_virtual_keys | default([]) | length > 0
 #
 # - name: Read litellm master_key from in-cluster Secret
 #   kubernetes.core.k8s_info:
@@ -414,10 +401,12 @@
 #     name: litellm-env
 #     namespace: "{{ litellm_namespace }}"
 #   register: _litellm_env
+#   when: litellm_virtual_keys | default([]) | length > 0
 #
 # - name: Set litellm master_key fact
 #   ansible.builtin.set_fact:
 #     _litellm_master_key: "{{ _litellm_env.resources[0].data.LITELLM_MASTER_KEY | b64decode }}"
+#   when: litellm_virtual_keys | default([]) | length > 0
 #
 # # /key/info returns 404 if alias not found — use check-mode-ish logic via
 # # status_code: [200, 404] and branch on the response.
@@ -430,6 +419,7 @@
 #     status_code: [200, 404]
 #   loop: "{{ litellm_virtual_keys | default([]) }}"
 #   register: _litellm_existing_keys
+#   when: litellm_virtual_keys | default([]) | length > 0
 #
 # - name: Generate missing virtual keys via /key/generate
 #   ansible.builtin.uri:
@@ -450,8 +440,11 @@
 #       models: "{{ item.item.models | default(omit) }}"
 #       metadata: "{{ item.item.metadata | default(omit) }}"
 #     status_code: 200
-#   loop: "{{ _litellm_existing_keys.results }}"
-#   when: item.status == 404
+#   loop: "{{ _litellm_existing_keys.results | default([]) }}"
+#   when:
+#     - litellm_virtual_keys | default([]) | length > 0
+#     - item.status is defined
+#     - item.status == 404
 #   register: _litellm_generated_keys
 #   no_log: true   # response body contains the sk-... token
 #

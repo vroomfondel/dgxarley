@@ -30,6 +30,11 @@ localnets_ipv6:
 openwebui_secret_key: "CHANGEME_SECRET_KEY"
 openwebui_admin_email: "admin@example.com"
 openwebui_admin_password: "changeme"
+# Bearer tokens for LiteLLM-backed endpoints. Length of
+# openwebui_connections_openai_keys must match openwebui_connections_openai.
+openwebui_connections_openai_keys:
+  - "CHANGEME_LITELLM_CHAT_KEY"
+openwebui_embedding_openai_key: "CHANGEME_LITELLM_EMBED_KEY"
 
 # HuggingFace
 hf_token: "hf_CHANGEME"
@@ -102,6 +107,26 @@ litellm_master_key: "sk-changeme"
 litellm_salt_key: "changeme-salt-key"
 litellm_ui_username: "admin"
 litellm_ui_password: "changeme"
+
+# LiteLLM virtual keys — metadata only. Actual sk-... tokens are generated at
+# runtime by the /key/generate API and persisted as K8s Secrets
+# litellm-vkey-<alias>. Consumer roles read these Secrets directly; nothing
+# sensitive leaks into git.
+litellm_virtual_keys:
+  - key_alias: "openwebui-chat"
+    user_id: "openwebui-chat"
+    max_budget: null
+    budget_duration: "30d"
+    tpm_limit: 0
+    rpm_limit: 0
+    models: []
+  - key_alias: "openwebui-embedding"
+    user_id: "openwebui-embedding"
+    max_budget: null
+    budget_duration: "30d"
+    tpm_limit: 0
+    rpm_limit: 0
+    models: ["{{ ollama_embedding_model }}"]
 
 # Grafana
 grafana_admin_password: "changeme"

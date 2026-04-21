@@ -344,6 +344,9 @@ openwebui_admin_password: "changeme"
 # Switch back to "ollama" + ollama_url for direct access without LiteLLM proxy.
 openwebui_embedding_engine: "openai"
 openwebui_embedding_openai_url: "http://litellm.{{ litellm_namespace }}.svc.cluster.local:4000/v1"
+# Bearer token for the embedding endpoint — override in group_vars/all/vault.yml.
+# Use a LiteLLM virtual key (scoped to the embedding model) in production.
+openwebui_embedding_openai_key: "CHANGEME_LITELLM_EMBED_KEY"
 openwebui_embedding_ollama_url: "http://ollama-embed.ollama.svc.cluster.local:{{ ollama_port }}"
 
 openwebui_embedding_chunk_size: 20000
@@ -367,10 +370,16 @@ pipelines_filters:
 # pipeline will be deployed, but this valve will disable it
 openwebui_self_reflection_enabled: false
 
-# OpenAI-compatible connections for OpenWebUI
+# OpenAI-compatible connections for OpenWebUI.
 # Pipelines URL is appended automatically when pipelines_enabled is true.
+# openwebui_connections_openai_keys must have the same length as
+# openwebui_connections_openai (positional mapping — keys[i] is the bearer
+# token for urls[i]). Override both in group_vars/all/vault.yml when the
+# endpoint requires auth (e.g. LiteLLM).
 openwebui_connections_openai:
   - "http://sglang.{{ sglang_namespace }}.svc.cluster.local:{{ sglang_port }}/v1"
+openwebui_connections_openai_keys:
+  - "CHANGEME_LITELLM_CHAT_KEY"
 
 # QSFP IPs for NCCL bootstrap (PF mode — pod takes over host PF, so pod IP = host IP)
 qsfp_ip_spark1: "10.10.10.101"
