@@ -207,16 +207,16 @@
     api_version: v1
     kind: "{{ item.kind }}"
     name: "{{ item.name }}"
-    namespace: ollama
+    namespace: "{{ openwebui_namespace }}"
   register: _openwebui_config_resources
   loop:
     - { kind: ConfigMap, name: ollama-openwebui-config }
     - { kind: ConfigMap, name: openwebui-seed-config }
-    - { kind: Secret, name: openwebui-oauth-secret }
+    - { kind: Secret, name: openwebui-db-secret }
 
 - name: Compute config hash from configmap and secret data
   set_fact:
-    openwebui_config_hash: "{{ _openwebui_config_resources.results | map(attribute='resources') | map('first') | map(attribute='data') | map('to_json') | join('|') | hash('sha256') }}"
+    openwebui_config_hash: "{{ _openwebui_config_resources.results | map(attribute='resources') | map('first', default={}) | map(attribute='data', default={}) | map('to_json') | join('|') | hash('sha256') }}"
 
 
 - name: Deploy Open WebUI Deployment
