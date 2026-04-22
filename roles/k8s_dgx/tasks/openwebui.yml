@@ -177,12 +177,11 @@
               "docling_server_url": "{{ openwebui_docling_server_url }}",
               "template": "Use the following context as your learned knowledge, inside <context></context> XML tags.\n<context>\n    [context]\n</context>\n\nWhen answer to user:\n- If you don't know, just say that you don't know.\n- If you don't know when you are not sure, ask for clarification.\nAvoid mentioning that you obtained the information from the context.\nAnd answer according to the language of the user's question.\n\nGiven the context information, answer the query.\nQuery: [query]",
               "ollama": {
-                "url": "{{ openwebui_embedding_ollama_url }}"
+                "url": "{{ openwebui_embedding_ollama_url }}",
+                "key": ""
               },
-              "openai": {
-                "url": "{{ openwebui_embedding_openai_url | default('') }}",
-                "key": "{{ openwebui_embedding_openai_key | default('') }}"
-              },
+              "openai_api_base_url": "{{ openwebui_embedding_openai_url | default('') }}",
+              "openai_api_key": "{{ openwebui_embedding_openai_key | default('') }}",
               "web": {
                 "search": {
                   "enable": true,
