@@ -1,0 +1,284 @@
+---
+- name: Create comfyui namespace
+  kubernetes.core.k8s:
+    name: "{{ comfyui_namespace }}"
+    api_version: v1
+    kind: Namespace
+    state: present
+
+# HF token Secret — ComfyUI doesn't need it for FLUX.1-schnell (Apache-2.0,
+# ungated) but any future gated model download will. Mounted as envFrom so the
+# launch script can call huggingface-cli transparently.
+- name: Create comfyui huggingface token secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: comfyui-hf-token
+        namespace: "{{ comfyui_namespace }}"
+      type: Opaque
+      stringData:
+        HF_TOKEN: "{{ hf_token | default('') }}"
+        HUGGING_FACE_HUB_TOKEN: "{{ hf_token | default('') }}"
+
+
+# Launch script lives in a ConfigMap so we can iterate without rebuilding an
+# image. Idempotent: git clone + pip install + model download are each guarded
+# by a marker file or file-exists check, so container restarts skip the setup.
+- name: Create comfyui launch script configmap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: comfyui-launch-script
+        namespace: "{{ comfyui_namespace }}"
+      data:
+        launch.sh: |
+          #!/bin/bash
+          set -euo pipefail
+
+          DATA=/workspace
+          APP="$DATA/comfyui"
+          MODELS="$APP/models"
+
+          # --- 1. ComfyUI source ---------------------------------------------
+          if [ ! -d "$APP/.git" ]; then
+            echo "[comfyui] cloning upstream…"
+            git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git "$APP"
+          else
+            echo "[comfyui] pulling latest…"
+            git -C "$APP" pull --ff-only || echo "[comfyui] pull failed, continuing with existing checkout"
+          fi
+
+          # --- 2. Python deps ------------------------------------------------
+          cd "$APP"
+          if [ ! -f "$DATA/.pip_done" ] || [ requirements.txt -nt "$DATA/.pip_done" ]; then
+            echo "[comfyui] installing requirements…"
+            # torch already present from base image; --upgrade-strategy only-if-needed
+            # avoids reinstalling torch/torchvision and breaking Blackwell support.
+            pip install --upgrade-strategy only-if-needed -r requirements.txt
+            pip install huggingface_hub[cli]
+            touch "$DATA/.pip_done"
+          fi
+
+          # --- 3. FLUX.1-schnell single-file checkpoint ----------------------
+          mkdir -p "$MODELS/checkpoints"
+          FLUX_FILE="$MODELS/checkpoints/{{ comfyui_flux_schnell_file }}"
+          if [ -n "{{ comfyui_flux_schnell_repo }}" ] && [ ! -f "$FLUX_FILE" ]; then
+            echo "[comfyui] downloading {{ comfyui_flux_schnell_repo }}/{{ comfyui_flux_schnell_file }}…"
+            huggingface-cli download "{{ comfyui_flux_schnell_repo }}" \
+              "{{ comfyui_flux_schnell_file }}" \
+              --local-dir "$MODELS/checkpoints"
+          fi
+
+          # --- 4. Launch -----------------------------------------------------
+          echo "[comfyui] launching on 0.0.0.0:{{ comfyui_port }}"
+          exec python main.py \
+            --listen 0.0.0.0 \
+            --port {{ comfyui_port }} \
+            --output-directory "$DATA/output" \
+            --temp-directory "$DATA/temp"
+
+
+- name: Create comfyui service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      kind: Service
+      apiVersion: v1
+      metadata:
+        name: comfyui
+        namespace: "{{ comfyui_namespace }}"
+        labels:
+          app: comfyui
+      spec:
+        selector:
+          app: comfyui
+        ports:
+          - port: "{{ comfyui_port }}"
+            name: http
+            targetPort: "{{ comfyui_port }}"
+            protocol: TCP
+
+
+- name: Create comfyui deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: comfyui
+        namespace: "{{ comfyui_namespace }}"
+        labels:
+          app: comfyui
+      spec:
+        replicas: "{{ 1 if comfyui_enabled else 0 }}"
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: comfyui
+        template:
+          metadata:
+            labels:
+              app: comfyui
+          spec:
+            restartPolicy: Always
+            nodeSelector:
+              spark-id: "{{ comfyui_spark_id }}"
+            dnsConfig:
+              options:
+                - name: ndots
+                  value: "1"
+            containers:
+              - name: comfyui
+                image: "{{ comfyui_image }}"
+                imagePullPolicy: IfNotPresent
+                command: ["/bin/bash", "/scripts/launch.sh"]
+                workingDir: /workspace
+                envFrom:
+                  - secretRef:
+                      name: comfyui-hf-token
+                ports:
+                  - containerPort: "{{ comfyui_port }}"
+                    name: http
+                resources:
+                  limits:
+                    nvidia.com/gpu: "1"
+                securityContext:
+                  privileged: true
+                volumeMounts:
+                  - name: comfyui-data
+                    mountPath: /workspace
+                  - name: launch-script
+                    mountPath: /scripts
+                    readOnly: true
+            volumes:
+              - name: comfyui-data
+                hostPath:
+                  path: "{{ comfyui_hostpath_base }}"
+                  type: DirectoryOrCreate
+              - name: launch-script
+                configMap:
+                  name: comfyui-launch-script
+                  defaultMode: 0755
+
+
+- name: Create comfyui ip allowlist middleware
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: comfyui-ip-allowlist
+        namespace: "{{ comfyui_namespace }}"
+      spec:
+        ipAllowList:
+          sourceRange: "{{ traefik_internal_allowlist }}"
+
+
+- name: Create http to https redirect middleware for comfyui
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: redirect-myhttps
+        namespace: "{{ comfyui_namespace }}"
+      spec:
+        redirectScheme:
+          scheme: https
+
+
+- name: Create comfyui-tls-certificate
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: "comfyui.{{ dns_external_domain_suffix }}"
+        namespace: "{{ comfyui_namespace }}"
+      spec:
+        dnsNames:
+          - "comfyui.{{ dns_external_domain_suffix }}"
+        secretName: "comfyui.{{ dns_external_domain_suffix }}"
+        issuerRef:
+          name: letsencrypt-production
+          kind: ClusterIssuer
+
+
+- name: Create comfyui http ingressroute with redirect CRD for traefik
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: comfyui-ingress
+        namespace: "{{ comfyui_namespace }}"
+      spec:
+        entryPoints:
+          - web
+        routes:
+          - kind: Rule
+            match: "Host(`comfyui.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            services:
+              - kind: Service
+                name: comfyui
+                namespace: "{{ comfyui_namespace }}"
+                passHostHeader: true
+                port: "{{ comfyui_port }}"
+            middlewares:
+              - name: redirect-myhttps
+              - name: comfyui-ip-allowlist
+
+
+- name: Create comfyui https ingressroute
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: comfyuihttpsingress
+        namespace: "{{ comfyui_namespace }}"
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - kind: Rule
+            match: "Host(`comfyui.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            middlewares:
+              - name: comfyui-ip-allowlist
+            services:
+              - kind: Service
+                name: comfyui
+                namespace: "{{ comfyui_namespace }}"
+                passHostHeader: true
+                port: "{{ comfyui_port }}"
+        tls:
+          secretName: "comfyui.{{ dns_external_domain_suffix }}"
+
+
+- name: Register DNS A record for comfyui
+  community.general.nsupdate:
+    server: "{{ nsupdate_server }}"
+    zone: "{{ nsupdate_zone }}"
+    key_name: "{{ nsupdate_tsig_key_name }}"
+    key_secret: "{{ nsupdate_tsig_key_secret }}"
+    key_algorithm: "{{ nsupdate_tsig_algorithm }}"
+    record: "comfyui.{{ dns_external_domain_suffix }}."
+    type: A
+    ttl: "{{ nsupdate_ttl }}"
+    value: "{{ nsupdate_ingress_ip }}"
+    state: present

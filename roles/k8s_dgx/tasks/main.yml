@@ -70,6 +70,10 @@
   ansible.builtin.import_tasks: litellm.yml
   tags: litellm
 
+- name: Deploy ComfyUI image generation playground
+  ansible.builtin.import_tasks: comfyui.yml
+  tags: comfyui
+
 - name: Deploy vLLM distributed inference
   ansible.builtin.import_tasks: vllm.yml
   tags: vllm

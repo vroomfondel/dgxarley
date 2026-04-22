@@ -549,6 +549,30 @@ _sglang_extra_body_defaults: >-
      if sglang_model_profiles[sglang_model].chat_template_kwargs is defined
      else {} }}
 
+# ComfyUI — local image generation playground (FLUX.1-schnell by default).
+# Deploys to a single Spark, consumes one GPU time-slice share alongside SGLang.
+# Nothing is precompiled into the image; the container clones ComfyUI on first
+# start into hostPath and downloads the FLUX.1-schnell fp8 single-file checkpoint
+# (~17 GB, Apache-2.0, no HF gating) into models/checkpoints.
+comfyui_enabled: false
+comfyui_namespace: "comfyui"
+# NGC PyTorch image ships CUDA + cuDNN + torch with Blackwell (SM121) support
+# on ARM64. Overkill for a playground but avoids the custom-wheels rabbit hole.
+# Alternative: build a slimmer image once we know which kernels ComfyUI pulls.
+comfyui_image: "nvcr.io/nvidia/pytorch:25.09-py3"
+comfyui_port: 8188
+# Which Spark to pin ComfyUI to. spark4 is the least disruptive default (last
+# SGLang worker; during image generation only rank 3 takes a latency hit).
+comfyui_spark_id: "4"
+# hostPath root on the chosen Spark. Holds the ComfyUI checkout, venv markers,
+# model checkpoints and generated outputs. Nothing inside is managed by Ansible
+# — create/destroy happens inside the container on first launch.
+comfyui_hostpath_base: "/var/lib/k8s-data/comfyui"
+# Initial model to download. Single-file checkpoint from Comfy-Org (packs UNet,
+# CLIP, T5, VAE). Set to "" to skip model download (manual upload via UI).
+comfyui_flux_schnell_repo: "Comfy-Org/flux1-schnell"
+comfyui_flux_schnell_file: "flux1-schnell-fp8.safetensors"
+
 litellm_enabled: true
 litellm_namespace: "litellm"
 # Official BerriAI/LiteLLM image on GitHub Container Registry.
