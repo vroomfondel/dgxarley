@@ -108,7 +108,15 @@
               - name: comfyui
                 image: "{{ comfyui_image }}"
                 imagePullPolicy: IfNotPresent
-                command: ["/bin/bash", "/scripts/launch.sh"]
+                # tini als PID 1: reapt Zombies und leitet SIGTERM/SIGINT an
+                # die ganze Prozessgruppe weiter (-g). Ohne tini wäre PID 1
+                # entweder bash (das Signale nicht an exec'tes Python leitet,
+                # solange es im Vordergrund wartet) oder direkt Python (das
+                # als PID 1 standardmäßig keinen SIGTERM-Handler hat) — beides
+                # führt dazu, dass der Pod beim Rollout/Delete bis zum Ablauf
+                # der terminationGracePeriodSeconds hängt und dann per SIGKILL
+                # weggeschossen wird.
+                command: ["/usr/bin/tini", "-g", "--", "/bin/bash", "/scripts/launch.sh"]
                 workingDir: /workspace
                 envFrom:
                   - secretRef:

@@ -22,7 +22,13 @@ ARG BASE=scitrera/dgx-spark-pytorch-dev:2.10.0-v2-cu131
 FROM ${BASE}
 
 # ---- System deps -------------------------------------------------
+# tini: minimal init/PID-1. Reaps zombies and forwards SIGTERM/SIGINT to the
+# child process group. Python ignores SIGTERM by default when running as PID 1
+# (no default handler installed there), so without tini the pod hangs for the
+# full terminationGracePeriodSeconds on rollout/delete and gets SIGKILLed.
+# Invoked from the Deployment via `command: ["/usr/bin/tini", "-g", "--", ...]`.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        tini \
         git git-lfs ffmpeg libgl1 libglib2.0-0 \
         build-essential ninja-build cmake pkg-config \
         ca-certificates curl && \
@@ -35,12 +41,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #
 # MAX_JOBS=8 is the empirically safe ceiling on GB10 (128 GB unified);
 # 16 OOM-kills CUTLASS template instantiations (see feedback_build_jobs_gb10).
+# Declared as ARG so build_comfyui_image.sh can override via --build-arg
+# (e.g. BUILD_COMFYUI_BUILD_JOBS=4 for memory-pressure scenarios).
+ARG MAX_JOBS=8
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     TORCH_CUDA_ARCH_LIST="12.1" \
     CMAKE_CUDA_ARCHITECTURES=121 \
-    MAX_JOBS=8 \
+    MAX_JOBS=${MAX_JOBS} \
     NVCC_THREADS=2 \
     HF_HOME=/workspace/.cache/huggingface \
     COMFYUI_PATH=/opt/comfyui
@@ -107,6 +116,25 @@ ARG BUILD_SAGE_ATTN=1
 # us reproducible behaviour. setuptools-scm may still synthesize a
 # 0.0.33+<sha>.dXXXXXX version on top of the pinned tag — that's expected.
 #
+# IMPORTANT — arch list override:
+# The image-wide TORCH_CUDA_ARCH_LIST="12.1" gets EVERY xformers kernel
+# compiled for sm121 only. xformers names its cutlass FMHA kernels by GPU
+# *family* (e.g. `..._sm80` covers sm80-sm100, `..._sm90` covers sm90+),
+# and its runtime dispatcher rejects a kernel whose binary arch falls
+# outside the family it claims:
+#   FATAL: kernel 'fmha_cutlassF_f32_aligned_64x64_rf_sm80'
+#          is for sm80-sm100, but was built for sm121
+# Result: ComfyUI's VAE attention crashes on the very first inference.
+# Fix: build for the family arches xformers expects on this cluster — 8.0
+# for the sm80 family (which the dispatcher will then accept on sm121, as
+# sm121 falls inside the sm80-sm100 family range *intent*), and 12.1 for
+# blackwell-native kernels. We deliberately omit 9.0 / sm90 family: this
+# cluster has no Hopper hardware, sm90 binaries would just bloat the image
+# and double NVCC memory pressure during build (CUTLASS template
+# instantiation; previous attempts OOM-killed at MAX_JOBS=8 with 3 archs).
+# CMAKE_CUDA_ARCHITECTURES mirrors the same values for the few CMake-
+# driven sub-builds in xformers.
+#
 # Verify check explanation: do NOT do `from xformers import _C` — xformers'
 # `_C.so` is a torch-ops library (loaded via `torch.ops.load_library`),
 # not a regular CPython extension, so it has no `PyInit__C` symbol and
@@ -118,6 +146,8 @@ ARG BUILD_SAGE_ATTN=1
 ARG XFORMERS_REF=v0.0.32
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "${BUILD_XFORMERS}" = "1" ]; then \
+        TORCH_CUDA_ARCH_LIST="8.0;12.1" \
+        CMAKE_CUDA_ARCHITECTURES="80;121" \
         pip install --no-build-isolation -v \
             "git+https://github.com/facebookresearch/xformers.git@${XFORMERS_REF}" && \
         python3 -c "import xformers, xformers.ops as xo; \
@@ -126,10 +156,22 @@ RUN --mount=type=cache,target=/root/.cache/pip \
                     print('xformers', xformers.__version__, 'mea ok')" ; \
     fi
 
+# Same arch-list override rationale as for xformers above: SageAttention
+# names its CUDA-side .so files per arch family (`_qattn_sm80.so`,
+# `_qattn_sm89.so`, `_qattn_sm90.so`, ...). With the image-wide
+# TORCH_CUDA_ARCH_LIST="12.1" each of those would be (mis-)compiled for
+# sm121 only and the runtime would reject them on the family check just
+# like xformers does. Build for the family-native archs so the right
+# binary exists for each `_qattn_smXX` module. SageAttention currently
+# ships sm80/sm89/sm90 variants — we build the sm80 + sm89 families plus
+# sm121 native, deliberately skipping sm90: no Hopper hw on this cluster,
+# and the extra arch doubles NVCC memory pressure for no runtime benefit.
 RUN --mount=type=cache,target=/root/.cache/pip \
     if [ "${BUILD_SAGE_ATTN}" = "1" ]; then \
         git clone https://github.com/thu-ml/SageAttention.git /tmp/sage && \
         cd /tmp/sage && \
+        TORCH_CUDA_ARCH_LIST="8.0;8.9;12.1" \
+        CMAKE_CUDA_ARCHITECTURES="80;89;121" \
         pip install --no-build-isolation -v . && \
         cd / && \
         rm -rf /tmp/sage && \
@@ -172,4 +214,4 @@ LABEL org.opencontainers.image.created="${BUILDTIME}"
 
 WORKDIR /workspace
 EXPOSE 8188
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/entrypoint.sh"]

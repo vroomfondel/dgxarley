@@ -39,61 +39,102 @@ fi
 
 # --- 3b. Inpaint-Workflow-Modelle (HuggingFace, idempotent) --------
 # Zielstruktur auf spark4:$comfyui_hostpath_base → im Pod /workspace/:
-#   models/checkpoints/RealVisXL_V5.0_fp16.safetensors  (workflow.json SDXL)
+#   models/checkpoints/RealVisXL_V5.0_fp16.safetensors    (workflow.json SDXL)
 #   models/inpaint/{fooocus_inpaint_head.pth, inpaint_v26.fooocus.patch}
-#   models/unet/flux1-fill-dev-fp8.safetensors          (workflow-flux1)
-#   models/clip/{t5xxl_fp8_e4m3fn.safetensors, clip_l.safetensors}
-#   models/vae/ae.safetensors                            (FLUX VAE)
+#   models/diffusion_models/{flux1-fill-dev-fp8.safetensors,
+#                            flux1-dev-kontext_fp8_scaled.safetensors}
+#   models/text_encoders/{t5xxl_fp8_e4m3fn.safetensors, clip_l.safetensors}
+#   models/vae/ae.safetensors                              (FLUX VAE)
+#   models/clip_vision/{sigclip_vision_patch14_384.safetensors,
+#                       clip_vit_large_patch14.safetensors}
+#   models/style_models/flux1-redux-dev.safetensors        (Redux)
+#   models/xlabs_ipadapters/ip_adapter.safetensors         (IPA)
 #
-# Format je Zeile: "repo|filename|models-subdir".
-# Gitterschnitt: existiert die Zieldatei → skip.
+# Hinweis Verzeichnis-Konventionen: ComfyUI hat `models/clip/` → `text_encoders/`
+# und `models/unet/` → `diffusion_models/` umbenannt (Mitte 2024). Beide Pfade
+# werden noch unterstützt, aber die UNETLoader/DualCLIPLoader-Nodes haben den
+# neuen Pfad als Default-Suchort. Wir nutzen die neuen Namen — der Migrations-
+# Block direkt unter dieser Liste verschiebt evtl. existierende Files aus den
+# alten Ordnern, damit nichts doppelt heruntergeladen wird.
 #
-# Alle Quellen hier sind ungated — kein HF_TOKEN erforderlich.
-# `hfmaster/models-moved` ist ein Community-Mirror der gated
-# black-forest-labs-Dateien (ae.safetensors, flux1-fill-dev-fp8);
-# inoffiziell, aber praktisch damit das Deployment ohne Token-
-# Infrastruktur auskommt. Fallen die Dateien dort irgendwann weg,
-# Alternative für gated Variante:
-#   "black-forest-labs/FLUX.1-schnell|ae.safetensors|vae"
-#   "boricuapab/flux1-fill-dev-fp8|flux1-fill-dev-fp8.safetensors|unet"
-# (beide gated: auto — brauchen HF_TOKEN + einmaligen Click-Through
-# auf der jeweiligen HF-Repo-Seite im Browser).
-#
-# RealVisXL_V5.0 ersetzt das Civitai-gated `gene/juggernautXL_...`
-# aus workflow.json — ungated, Photo-Realismus, voll Fooocus-Patch-
-# kompatibel. Im Workflow muss `ckpt_name` entsprechend angepasst
-# sein: "RealVisXL_V5.0_fp16.safetensors" (ist in workflow.json +
-# workflow-manual.json bereits gesetzt).
-# Entry-Format: "repo|source_path|subdir[|rename_to]". Steht das 4. Feld,
+# Format je Zeile: "repo|source_path|subdir[|rename_to]". Steht das 4. Feld,
 # wird die heruntergeladene Datei nach dem Download auf diesen Namen
-# umbenannt (nötig z. B. für openai/clip-vit-large-patch14, das als
-# "model.safetensors" liegt, XLabs-IP-Adapter aber den Dateinamen
-# "clip_vit_large_patch14.safetensors" erwartet).
+# umbenannt.
 #
-# Plugin-Engines (XLabs Redux / IPA / Kontext) — zusätzliche Referenzbild-
-# basierte Workflows, siehe COMFYUI_INPAINT.md:
-#   • Redux  → style_models/flux1-redux-dev.safetensors +
-#              clip_vision/sigclip_vision_patch14_384.safetensors
-#   • IPA    → xlabs_ipadapters/flux-ip-adapter.safetensors +
-#              clip_vision/clip_vit_large_patch14.safetensors
-#   • Kontext → diffusion_models/flux1-kontext-dev-fp8.safetensors
-# flux1-redux-dev und flux1-kontext-dev-fp8 sind Gated bzw. Community-
-# Quants — die HF-Quellen unten sind Best-Guess-Mirrors; schlägt der
-# Download fehl, greift die WARN-Zeile und die Datei muss manuell unter
-# $MODELS/<subdir>/ abgelegt werden.
+# Alle Quellen sind ungated — kein HF_TOKEN erforderlich.
+#
+# Mirror-Auswahl:
+#   • flux1-dev-fp8     → Comfy-Org/flux1-dev (offizieller ComfyUI-Mirror,
+#     ungated, All-in-One fp8 mit UNet+CLIP+T5+VAE — über CheckpointLoaderSimple
+#     ladbar, gleiche Struktur wie flux1-schnell-fp8).
+#   • flux1-fill-dev-fp8 → hfmaster/models-moved (Comfy-Org hat NUR Flux-dev,
+#     nicht Fill; hfmaster ist Community-Bulk-Mirror, funktioniert stabil).
+#     Fallback wenn weg: boricuapab/flux1-fill-dev-fp8 (gated).
+#   • ae.safetensors    → Comfy-Org/flux1-dev (offizieller ComfyUI-Mirror,
+#     identische Datei wie BFL — Flux-VAE ist für alle Flux-Varianten gleich).
+#   • flux1-redux-dev   → Runware/FLUX.1-Redux-dev (dedizierter Mirror, ungated).
+#   • flux1-kontext-fp8 → Comfy-Org/flux1-kontext-dev_ComfyUI (offiziell, ungated).
+#   • XLabs-IPA         → flux-ip-adapter-v2 (ip_adapter.safetensors); v1-Repo-
+#     Filename `flux-ip-adapter.safetensors` existiert im main-Branch nicht mehr.
+#
+# RealVisXL_V5.0 ersetzt das Civitai-gated `gene/juggernautXL_...` aus
+# workflow.json — ungated, Photo-Realismus, voll Fooocus-Patch-kompatibel.
+# Im Workflow muss `ckpt_name` entsprechend angepasst sein:
+# "RealVisXL_V5.0_fp16.safetensors" (ist in workflow.json +
+# workflow-manual.json bereits gesetzt).
+#
+# Plugin-Engines (Redux / IPA / Kontext) — zusätzliche Referenzbild-basierte
+# Workflows, siehe COMFYUI_INPAINT.md.
+
+# Migration: alte Verzeichnis-Konventionen (clip/ → text_encoders/,
+# unet/ → diffusion_models/) und alte Dateinamen ins neue Layout verschieben,
+# damit nichts doppelt geladen wird. No-op wenn alte Pfade leer sind.
+for migration in \
+  "clip|text_encoders" \
+  "unet|diffusion_models" \
+; do
+  IFS="|" read -r old_dir new_dir <<< "$migration"
+  if [ -d "$MODELS/$old_dir" ]; then
+    mkdir -p "$MODELS/$new_dir"
+    for f in "$MODELS/$old_dir"/*; do
+      [ -e "$f" ] || continue
+      base="$(basename "$f")"
+      if [ ! -e "$MODELS/$new_dir/$base" ]; then
+        echo "[comfyui] migrate: $f → $MODELS/$new_dir/$base"
+        mv "$f" "$MODELS/$new_dir/$base"
+      fi
+    done
+    rmdir "$MODELS/$old_dir" 2>/dev/null || true
+  fi
+done
+# Migration der alten IPA- und Kontext-Dateinamen auf die neuen, die die
+# aktuellen Workflow-JSONs erwarten.
+for rename in \
+  "xlabs_ipadapters/flux-ip-adapter.safetensors|xlabs_ipadapters/ip_adapter.safetensors" \
+  "diffusion_models/flux1-kontext-dev-fp8.safetensors|diffusion_models/flux1-dev-kontext_fp8_scaled.safetensors" \
+; do
+  IFS="|" read -r old_rel new_rel <<< "$rename"
+  if [ -f "$MODELS/$old_rel" ] && [ ! -f "$MODELS/$new_rel" ]; then
+    echo "[comfyui] migrate: $MODELS/$old_rel → $MODELS/$new_rel"
+    mkdir -p "$(dirname "$MODELS/$new_rel")"
+    mv "$MODELS/$old_rel" "$MODELS/$new_rel"
+  fi
+done
+
 for entry in \
   "SG161222/RealVisXL_V5.0|RealVisXL_V5.0_fp16.safetensors|checkpoints" \
+  "Comfy-Org/flux1-dev|flux1-dev-fp8.safetensors|checkpoints" \
   "lllyasviel/fooocus_inpaint|fooocus_inpaint_head.pth|inpaint" \
   "lllyasviel/fooocus_inpaint|inpaint_v26.fooocus.patch|inpaint" \
-  "comfyanonymous/flux_text_encoders|t5xxl_fp8_e4m3fn.safetensors|clip" \
-  "comfyanonymous/flux_text_encoders|clip_l.safetensors|clip" \
-  "hfmaster/models-moved|flux/ae.safetensors|vae" \
-  "hfmaster/models-moved|flux/flux1-fill-dev-fp8.safetensors|unet" \
+  "comfyanonymous/flux_text_encoders|t5xxl_fp8_e4m3fn.safetensors|text_encoders" \
+  "comfyanonymous/flux_text_encoders|clip_l.safetensors|text_encoders" \
+  "Comfy-Org/flux1-dev|ae.safetensors|vae" \
+  "hfmaster/models-moved|flux/flux1-fill-dev-fp8.safetensors|diffusion_models" \
   "Comfy-Org/sigclip_vision_384|sigclip_vision_patch14_384.safetensors|clip_vision" \
-  "XLabs-AI/flux-ip-adapter|ip_adapter.safetensors|xlabs_ipadapters|flux-ip-adapter.safetensors" \
+  "XLabs-AI/flux-ip-adapter-v2|ip_adapter.safetensors|xlabs_ipadapters" \
   "openai/clip-vit-large-patch14|model.safetensors|clip_vision|clip_vit_large_patch14.safetensors" \
-  "hfmaster/models-moved|flux/flux1-redux-dev.safetensors|style_models" \
-  "boricuapab/flux1-kontext-dev-fp8|flux1-kontext-dev-fp8.safetensors|diffusion_models" \
+  "Runware/FLUX.1-Redux-dev|flux1-redux-dev.safetensors|style_models" \
+  "Comfy-Org/flux1-kontext-dev_ComfyUI|split_files/diffusion_models/flux1-dev-kontext_fp8_scaled.safetensors|diffusion_models" \
 ; do
   IFS="|" read -r repo fname subdir rename_to <<< "$entry"
   dest_dir="$MODELS/$subdir"

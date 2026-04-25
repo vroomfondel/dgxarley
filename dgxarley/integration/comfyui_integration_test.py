@@ -17,7 +17,7 @@ import sys
 import time
 from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 import requests
@@ -51,6 +51,43 @@ TIMEOUT: tuple[int, int] = (10, 60)
 # Deadline for the full image-generation test (upload → queue → render → poll).
 # SDXL + Fooocus inpaint on a single DGX Spark GPU takes ~30-90s in practice.
 IMAGE_GEN_DEADLINE_S: int = 300
+
+# Default prompt for the text2image tests; override via COMFYUI_PROMPT.
+DEFAULT_PROMPT: str = os.environ.get(
+    "COMFYUI_PROMPT",
+    "a photo of a red apple on a wooden table, soft daylight, highly detailed",
+)
+
+# Sampler defaults per model family.
+# RealVisXL = SDXL → klassisch viele steps, cfg ~5, dpmpp_2m+karras.
+# FLUX.1-schnell ist distilliert → 4 steps reichen, cfg=1.0 (kein CFG-Guidance,
+# der Distill-Loss ersetzt das), sampler=euler+simple. Der All-in-One fp8-
+# Checkpoint (Comfy-Org/flux1-schnell) bündelt UNet+CLIP+VAE und lädt direkt
+# über CheckpointLoaderSimple — kein separater UNETLoader-Pfad nötig.
+SDXL_SAMPLER: dict[str, Any] = {
+    "steps": 30,
+    "cfg": 5.0,
+    "sampler_name": "dpmpp_2m",
+    "scheduler": "karras",
+}
+FLUX_SCHNELL_SAMPLER: dict[str, Any] = {
+    "steps": 4,
+    "cfg": 1.0,
+    "sampler_name": "euler",
+    "scheduler": "simple",
+}
+# FLUX.1 [dev] ist guidance-distilliert (nicht timestep-distilliert wie schnell):
+# braucht ~20-25 steps, KSampler-cfg bleibt 1.0, aber die "echte" Guidance
+# läuft über den separaten FluxGuidance-Node (typisch 3.5). Negative-Prompt
+# wird ignoriert solange cfg=1.0. Same All-in-One-fp8-Format wie schnell,
+# also CheckpointLoaderSimple genügt.
+FLUX_DEV_SAMPLER: dict[str, Any] = {
+    "steps": 25,
+    "cfg": 1.0,
+    "sampler_name": "euler",
+    "scheduler": "simple",
+}
+FLUX_DEV_GUIDANCE: float = 3.5
 
 # Mirror of
 # /home/thiess/pythondev_workspace/GTBauprojekte/gtbauprojekte/gimpplugin/comfy-inpaint/workflow.json
@@ -137,6 +174,38 @@ INPAINT_WORKFLOW: dict[str, Any] = {
         "class_type": "InpaintStitchImproved",
     },
 }
+
+
+_TMP_DIR: Path = Path("/tmp")
+
+
+def _download_images_to_tmp(images: list[dict[str, Any]], test_name: str) -> list[str]:
+    """Pull every generated image off the ComfyUI ``/view`` endpoint into /tmp.
+
+    Names are prefixed with the test name so multiple workflows in one run
+    don't clobber each other. Returns the list of paths actually written.
+    """
+    saved: list[str] = []
+    for img in images:
+        filename = img.get("filename")
+        if not filename:
+            continue
+        params = {
+            "filename": filename,
+            "subfolder": img.get("subfolder", "") or "",
+            "type": img.get("type", "output") or "output",
+        }
+        try:
+            resp = requests.get(f"{COMFYUI_URL}/view", params=params, timeout=TIMEOUT)
+            resp.raise_for_status()
+        except Exception as e:
+            glogger.warning(f"  view fetch failed for {filename}: {e}")
+            continue
+        out_path = _TMP_DIR / f"comfyui-it-{test_name}-{filename}"
+        out_path.write_bytes(resp.content)
+        saved.append(str(out_path))
+        print(f"    saved {out_path} ({len(resp.content)} bytes)")
+    return saved
 
 
 def _upload_image(img: Image.Image, name: str) -> str:
@@ -244,6 +313,124 @@ def test_object_info_checkpoints() -> TestResult:
         return TestResult("object_info_checkpoints", False, time.monotonic() - t0, str(e))
 
 
+def _submit_and_wait(workflow: dict[str, Any], test_name: str, t0: float) -> TestResult:
+    """Queue a workflow, poll ``/history/<id>`` until completion, return a TestResult.
+
+    Shared submission/polling path for all generation tests (inpaint + txt2img)
+    so the queue/error-handling logic lives in exactly one place.
+    """
+    try:
+        client_id = uuid4().hex
+        resp = requests.post(
+            f"{COMFYUI_URL}/prompt",
+            json={"prompt": workflow, "client_id": client_id},
+            timeout=TIMEOUT,
+        )
+        if resp.status_code >= 400:
+            return TestResult(
+                test_name, False, time.monotonic() - t0, f"queue rejected: {resp.status_code} {resp.text[:200]}"
+            )
+        prompt_id = resp.json()["prompt_id"]
+
+        deadline = time.monotonic() + IMAGE_GEN_DEADLINE_S
+        history: dict[str, Any] | None = None
+        while time.monotonic() < deadline:
+            hist_resp = requests.get(f"{COMFYUI_URL}/history/{prompt_id}", timeout=TIMEOUT)
+            hist_resp.raise_for_status()
+            entry = hist_resp.json().get(prompt_id)
+            if entry is not None:
+                status = entry.get("status", {}) or {}
+                if status.get("status_str") == "error" or (status.get("completed") is False and status.get("messages")):
+                    for mtype, mdata in status.get("messages", []):
+                        if mtype == "execution_error":
+                            return TestResult(test_name, False, time.monotonic() - t0, f"execution_error: {mdata}")
+                if status.get("completed") or status.get("status_str") == "success":
+                    history = entry
+                    break
+            time.sleep(2)
+
+        if history is None:
+            return TestResult(test_name, False, time.monotonic() - t0, f"timeout after {IMAGE_GEN_DEADLINE_S}s")
+
+        outputs = history.get("outputs", {}) or {}
+        images: list[dict[str, Any]] = []
+        for node_out in outputs.values():
+            images.extend(node_out.get("images", []) or [])
+        ok = len(images) > 0
+        saved = _download_images_to_tmp(images, test_name)
+        if ok:
+            detail = f"prompt_id={prompt_id[:8]}, saved={saved}"
+        else:
+            detail = f"no images in outputs={list(outputs)}"
+        return TestResult(test_name, ok, time.monotonic() - t0, detail)
+    except Exception as e:
+        return TestResult(test_name, False, time.monotonic() - t0, str(e))
+
+
+def _build_text2image_workflow(
+    prompt: str,
+    ckpt_name: str,
+    *,
+    steps: int,
+    cfg: float,
+    sampler_name: str,
+    scheduler: str,
+    width: int = 1024,
+    height: int = 1024,
+    negative: str = "",
+    seed: int | None = None,
+    flux_guidance: float | None = None,
+) -> dict[str, Any]:
+    """Minimaler txt2img-Graph: CheckpointLoader → CLIP/Empty-Latent → KSampler → VAEDecode → SaveImage.
+
+    Funktioniert sowohl für SDXL-Single-File (RealVisXL) als auch für den
+    FLUX-schnell-fp8-All-in-One-Checkpoint (Comfy-Org/flux1-schnell), weil
+    beide UNet+CLIP+VAE bündeln und über CheckpointLoaderSimple geladen
+    werden. Für FLUX-schnell ist cfg=1.0 + euler/simple Pflicht (Distill-
+    Modell ohne klassisches CFG); SDXL nutzt die üblichen dpmpp_2m+karras.
+    """
+    if seed is None:
+        seed = int.from_bytes(os.urandom(4), "big")
+    workflow: dict[str, Any] = {
+        "1": {"inputs": {"ckpt_name": ckpt_name}, "class_type": "CheckpointLoaderSimple"},
+        "2": {"inputs": {"text": prompt, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+        "3": {"inputs": {"text": negative, "clip": ["1", 1]}, "class_type": "CLIPTextEncode"},
+        "4": {
+            "inputs": {"width": width, "height": height, "batch_size": 1},
+            "class_type": "EmptyLatentImage",
+        },
+        "5": {
+            "inputs": {
+                "seed": seed,
+                "steps": steps,
+                "cfg": cfg,
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
+                "denoise": 1.0,
+                "model": ["1", 0],
+                "positive": ["2", 0],
+                "negative": ["3", 0],
+                "latent_image": ["4", 0],
+            },
+            "class_type": "KSampler",
+        },
+        "6": {"inputs": {"samples": ["5", 0], "vae": ["1", 2]}, "class_type": "VAEDecode"},
+        "7": {
+            "inputs": {"filename_prefix": "comfyui-it-text2image", "images": ["6", 0]},
+            "class_type": "SaveImage",
+        },
+    }
+    if flux_guidance is not None:
+        # FLUX [dev]: distillierte Guidance separat als Conditioning-Wrapper
+        # vor dem KSampler. KSampler-cfg bleibt 1.0 (echtes CFG aus).
+        workflow["8"] = {
+            "inputs": {"guidance": flux_guidance, "conditioning": ["2", 0]},
+            "class_type": "FluxGuidance",
+        }
+        workflow["5"]["inputs"]["positive"] = ["8", 0]
+    return workflow
+
+
 def test_image_generation() -> TestResult:
     """Submit the Fooocus-inpaint workflow end-to-end and verify an output image is produced."""
     t0 = time.monotonic()
@@ -266,58 +453,44 @@ def test_image_generation() -> TestResult:
         workflow["8"]["inputs"]["image"] = uploaded_img
         workflow["9"]["inputs"]["image"] = uploaded_mask
         workflow["3"]["inputs"]["seed"] = int.from_bytes(os.urandom(4), "big")
-
-        client_id = uuid4().hex
-        resp = requests.post(
-            f"{COMFYUI_URL}/prompt",
-            json={"prompt": workflow, "client_id": client_id},
-            timeout=TIMEOUT,
-        )
-        if resp.status_code >= 400:
-            return TestResult(
-                "image_generation",
-                False,
-                time.monotonic() - t0,
-                f"queue rejected: {resp.status_code} {resp.text[:200]}",
-            )
-        prompt_id = resp.json()["prompt_id"]
-
-        deadline = time.monotonic() + IMAGE_GEN_DEADLINE_S
-        history: dict[str, Any] | None = None
-        while time.monotonic() < deadline:
-            hist_resp = requests.get(f"{COMFYUI_URL}/history/{prompt_id}", timeout=TIMEOUT)
-            hist_resp.raise_for_status()
-            hist_data = hist_resp.json()
-            entry = hist_data.get(prompt_id)
-            if entry is not None:
-                status = entry.get("status", {}) or {}
-                if status.get("status_str") == "error" or status.get("completed") is False and status.get("messages"):
-                    # completed=false + error messages → terminal failure
-                    for mtype, mdata in status.get("messages", []):
-                        if mtype == "execution_error":
-                            return TestResult(
-                                "image_generation", False, time.monotonic() - t0, f"execution_error: {mdata}"
-                            )
-                if status.get("completed") or status.get("status_str") == "success":
-                    history = entry
-                    break
-            time.sleep(2)
-
-        if history is None:
-            return TestResult(
-                "image_generation", False, time.monotonic() - t0, f"timeout after {IMAGE_GEN_DEADLINE_S}s"
-            )
-
-        outputs = history.get("outputs", {}) or {}
-        images: list[dict[str, Any]] = []
-        for node_out in outputs.values():
-            images.extend(node_out.get("images", []) or [])
-        ok = len(images) > 0
-        filenames = [i.get("filename") for i in images]
-        detail = f"prompt_id={prompt_id[:8]}, images={filenames}" if ok else f"no images in outputs={list(outputs)}"
-        return TestResult("image_generation", ok, time.monotonic() - t0, detail)
     except Exception as e:
         return TestResult("image_generation", False, time.monotonic() - t0, str(e))
+    return _submit_and_wait(workflow, "image_generation", t0)
+
+
+def test_text2image_realvisxl(prompt: str = DEFAULT_PROMPT) -> TestResult:
+    """Generate an image from ``prompt`` with RealVisXL_V5.0 (SDXL)."""
+    t0 = time.monotonic()
+    workflow = _build_text2image_workflow(
+        prompt,
+        "RealVisXL_V5.0_fp16.safetensors",
+        negative="blurry, low quality, watermark, text, bad anatomy, deformed",
+        **SDXL_SAMPLER,
+    )
+    return _submit_and_wait(workflow, "text2image_realvisxl", t0)
+
+
+def test_text2image_flux_schnell(prompt: str = DEFAULT_PROMPT) -> TestResult:
+    """Generate an image from ``prompt`` with FLUX.1-schnell (fp8 all-in-one)."""
+    t0 = time.monotonic()
+    workflow = _build_text2image_workflow(
+        prompt,
+        "flux1-schnell-fp8.safetensors",
+        **FLUX_SCHNELL_SAMPLER,
+    )
+    return _submit_and_wait(workflow, "text2image_flux_schnell", t0)
+
+
+def test_text2image_flux_dev(prompt: str = DEFAULT_PROMPT) -> TestResult:
+    """Generate an image from ``prompt`` with FLUX.1 [dev] (fp8 all-in-one)."""
+    t0 = time.monotonic()
+    workflow = _build_text2image_workflow(
+        prompt,
+        "flux1-dev-fp8.safetensors",
+        flux_guidance=FLUX_DEV_GUIDANCE,
+        **FLUX_DEV_SAMPLER,
+    )
+    return _submit_and_wait(workflow, "text2image_flux_dev", t0)
 
 
 def main() -> None:
@@ -325,12 +498,15 @@ def main() -> None:
     print_banner(module=Path(__file__).stem)
     print(f"ComfyUI integration tests — {COMFYUI_URL}\n")
 
-    tests = [
+    tests: list[Callable[[], TestResult]] = [
         test_health,
         test_system_stats,
         test_queue,
         test_object_info_checkpoints,
         test_image_generation,
+        test_text2image_realvisxl,
+        test_text2image_flux_schnell,
+        test_text2image_flux_dev,
     ]
 
     results: list[TestResult] = []

@@ -82,7 +82,7 @@ PODMAN_SSH_IDENTITY="${BUILD_COMFYUI_SSH_IDENTITY:-${HOME}/.ssh/id_podman}"
 # Parallel compile jobs on the build host. GB10 safe ceiling is 8 (16 OOM-
 # kills CUTLASS template expansion — see feedback_build_jobs_gb10). Honored
 # via the MAX_JOBS env baked into the Dockerfile plus --build-arg overrides.
-BUILD_JOBS="${BUILD_COMFYUI_BUILD_JOBS:-8}"
+BUILD_JOBS="${BUILD_COMFYUI_BUILD_JOBS:-4}"
 
 # Optional kernel builds. Both default ON and roughly double end-to-end build
 # time. Turn off for quick iterations on the ComfyUI layer itself.
