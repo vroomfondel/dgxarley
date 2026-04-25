@@ -53,7 +53,9 @@ fi
 #   models/clip_vision/{sigclip_vision_patch14_384.safetensors,
 #                       clip_vit_large_patch14.safetensors}
 #   models/style_models/flux1-redux-dev.safetensors        (Redux)
-#   models/xlabs_ipadapters/ip_adapter.safetensors         (IPA)
+#   models/xlabs/ipadapters/ip_adapter.safetensors         (IPA — Pfad
+#     muss zu x-flux-comfyui/nodes.py passen: dir_xlabs_ipadapters =
+#     models/xlabs/ipadapters; sonst ist die LoadFluxIPAdapter-Liste leer)
 #
 # Hinweis Verzeichnis-Konventionen: ComfyUI hat `models/clip/` → `text_encoders/`
 # und `models/unet/` → `diffusion_models/` umbenannt (Mitte 2024). Beide Pfade
@@ -115,7 +117,8 @@ done
 # Migration der alten IPA- und Kontext-Dateinamen auf die neuen, die die
 # aktuellen Workflow-JSONs erwarten.
 for rename in \
-  "xlabs_ipadapters/flux-ip-adapter.safetensors|xlabs_ipadapters/ip_adapter.safetensors" \
+  "xlabs_ipadapters/flux-ip-adapter.safetensors|xlabs/ipadapters/ip_adapter.safetensors" \
+  "xlabs_ipadapters/ip_adapter.safetensors|xlabs/ipadapters/ip_adapter.safetensors" \
   "diffusion_models/flux1-kontext-dev-fp8.safetensors|diffusion_models/flux1-dev-kontext_fp8_scaled.safetensors" \
 ; do
   IFS="|" read -r old_rel new_rel <<< "$rename"
@@ -136,7 +139,7 @@ for entry in \
   "Comfy-Org/flux1-dev|ae.safetensors|vae" \
   "hfmaster/models-moved|flux/flux1-fill-dev-fp8.safetensors|diffusion_models" \
   "Comfy-Org/sigclip_vision_384|sigclip_vision_patch14_384.safetensors|clip_vision" \
-  "XLabs-AI/flux-ip-adapter-v2|ip_adapter.safetensors|xlabs_ipadapters" \
+  "XLabs-AI/flux-ip-adapter-v2|ip_adapter.safetensors|xlabs/ipadapters" \
   "openai/clip-vit-large-patch14|model.safetensors|clip_vision|clip_vit_large_patch14.safetensors" \
   "Runware/FLUX.1-Redux-dev|flux1-redux-dev.safetensors|style_models" \
   "Comfy-Org/flux1-kontext-dev_ComfyUI|split_files/diffusion_models/flux1-dev-kontext_fp8_scaled.safetensors|diffusion_models" \
@@ -241,9 +244,44 @@ done
 # einzige funktionsfähige Custom-Backend.
 PY="$(command -v python3 || command -v python)"
 echo "[comfyui] launching on 0.0.0.0:{{ comfyui_port }} ($PY)"
+
+# Filter cosmetic FATAL noise from PyTorch's CUTLASS kernel selector.
+# On sm121 (Blackwell GB10), PyTorch's `aten::_efficient_attention_forward`
+# probes its kernel table and prints
+#   FATAL: kernel `fmha_cutlassF_*_sm80` is for sm80-sm100, but was built for sm121
+# for every entry that doesn't match before settling on a viable kernel
+# (typically fa2F-pt). It's not a crash — verified by the integration test
+# (8/8 pass) — but each VAE attention call emits ~30 of these lines, which
+# floods the pod log. The printf is below TORCH_CPP_LOG_LEVEL and can't be
+# silenced via env var. The message comes from a C-level `printf(...)` and
+# therefore lands on stdout (fd 1), not stderr — verified empirically:
+# triggering EFFICIENT_ATTENTION on fp32 produced 2048 lines on fd 1 and 0
+# on fd 2. Filtering only fd 2 was a no-op. We now filter both fds. Pattern
+# is narrow: only `^FATAL: kernel ` is dropped, every other FATAL/error
+# line still passes through. `--line-buffered` keeps multi-line tracebacks
+# intact. Documented in COMFYUI_SM121_PATCHES.md ("Cosmetic FATAL noise").
+exec > >(grep --line-buffered -v '^FATAL: kernel ')
+exec 2> >(grep --line-buffered -v '^FATAL: kernel ' >&2)
+
 exec "$PY" main.py \
   --listen 0.0.0.0 \
   --port {{ comfyui_port }} \
   --use-sage-attention \
+  --highvram \
   --output-directory "$DATA/output" \
   --temp-directory "$DATA/temp"
+
+# --highvram: ComfyUI hält geladene Modelle komplett im VRAM und macht
+# kein partial-offload zwischen Host und GPU. Auf der DGX Spark ist der
+# Default-Modus ("smart memory") konservativ und entscheidet on-the-fly,
+# wieviel von einem Modell ins GPU-VRAM passt; bei knappem Budget
+# resultiert das in
+#   loaded partially; 6978 MB loaded, 4371 MB offloaded
+# was für FLUX-Workflows ~3 s/iter statt ~0.5-1 s/iter bedeutet, weil
+# pro Forward-Pass Weights zwischen Host und Device gestreamt werden.
+# Mit --highvram werden Modelle voll geladen oder gar nicht — bei
+# OOM crasht der Workflow lieber, statt langsam zu werden. Auf GB10
+# unified memory + 4-fach GPU-Timeslicing bedeutet das: wenn ein
+# anderer Replica gerade viel VRAM hält, schlägt der Load fehl statt
+# in den langsamen Offload-Modus zu gehen. Falls das stört, Flag
+# entfernen oder durch --normalvram ersetzen (smart memory).

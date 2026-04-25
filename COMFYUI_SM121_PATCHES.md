@@ -342,38 +342,70 @@ All three model families (SDXL via RealVisXL, FLUX schnell, FLUX dev)
 complete their full pipeline (UNet + CLIP + VAE) and produce real
 images. No crashes, no hangs.
 
-### Cosmetic FATAL noise — expected, harmless
+### Cosmetic FATAL noise — filtered on stdout (and stderr)
 
-In the pod's stderr during a real workflow you will still see lines
-like:
+During a real workflow, PyTorch's CUTLASS kernel selector emits log
+lines like:
 
 ```
 FATAL: kernel `fmha_cutlassF_f32_aligned_64x64_rf_sm80`
        is for sm80-sm100, but was built for sm121
-FATAL: kernel `fmha_cutlassF_f32_aligned_64x64_rf_sm80` ... (xN)
+FATAL: kernel `fmha_cutlassF_f32_aligned_64x64_rf_sm80` ... (~30 per VAE call)
 ```
 
-This is **not** a crash. The lines are stderr output from PyTorch's
-CUTLASS kernel selector, which probes its kernel table and prints
-`FATAL` for each entry that doesn't match the current device before
-landing on one that does. The FATAL lines come from f32 probing
-specifically — our bf16 smoke test never triggers them because bf16
-takes a different selector path that exits early.
-
-The probes happen *inside* `aten::_efficient_attention_forward`, which
-on this image is reachable only when ComfyUI's VAE explicitly calls
-`xformers.ops.memory_efficient_attention(q, k, v)` and the dispatcher
-selects something other than our patched cutlass entry. The probe
-output is stderr-only, swallowed by neither us nor ComfyUI, and the
+This is **not** a crash. The lines come from
+`aten::_efficient_attention_forward`'s kernel-table probe loop: it
+prints `FATAL: ...` for every entry that doesn't match the current
+device before settling on a viable kernel (typically fa2F-pt). The
 final kernel runs successfully — confirmed by the 8/8 integration
-test pass.
+test pass. The bf16 smoke test in this document never triggers them
+because bf16 takes a different selector path that exits early; only
+the f32 probing path emits the spam, and ComfyUI's VAE attention
+runs in f32.
 
-If the noise becomes a UX problem, possible mitigations (none currently
-applied):
+**Important — these lines go to stdout, not stderr.** The C-level
+`printf(...)` in PyTorch's kernel registry writes to fd 1 by
+definition. Verified empirically inside the running pod by forcing
+the EFFICIENT_ATTENTION path on f32: 2048 lines on fd 1, 0 on fd 2.
+An earlier version of the filter only redirected fd 2 and was a
+no-op. We now redirect both fds in the launch script
+(`roles/k8s_dgx/templates/comfyui_launch.sh.j2`):
 
-- Redirect stderr at the entrypoint level (`exec ... 2> >(grep -v 'FATAL: kernel' >&2)`); has the side effect of buffering all stderr.
-- Set `TORCH_CPP_LOG_LEVEL=ERROR` (silences torch C++ INFO/WARN but the FATAL printf is below the log framework, so this likely won't help).
-- Patch PyTorch's source to demote the printf to TORCH_CHECK or a debug-only log. Out of scope here.
+```bash
+# Drop "FATAL: kernel ..." lines on both fds before exec
+exec  > >(grep --line-buffered -v '^FATAL: kernel ')
+exec 2> >(grep --line-buffered -v '^FATAL: kernel ' >&2)
+exec "$PY" main.py ...
+```
+
+The printf comes from C++ below `TORCH_CPP_LOG_LEVEL` and can't be
+silenced via env var, so the shell-side filter is the simplest
+working option.
+
+Trade-offs of this filter:
+
+- Each `grep` becomes a child process; when python exits, both get
+  EOF and tear down. Adds <1 ms of latency per filtered line and a
+  few KB of memory per fd.
+- `--line-buffered` keeps multi-line Python tracebacks intact —
+  they pass through unchanged because `^FATAL: kernel ` only matches
+  the literal noise lines.
+- Pattern is intentionally narrow: any FATAL not starting with
+  `FATAL: kernel ` (e.g., a real torch.distributed FATAL) still
+  reaches the log.
+- A future PyTorch change in the FATAL string format — or a switch
+  back to `fprintf(stderr, ...)` — would silently defeat the filter.
+  Re-validate after torch upgrades by running the EFFICIENT_ATTENTION
+  f32 reproducer and counting `FATAL` on each fd.
+
+Alternatives we deliberately did *not* take:
+
+- `TORCH_CPP_LOG_LEVEL=ERROR`: silences torch C++ INFO/WARN, but the
+  FATAL printf is below the log framework, so it doesn't help here.
+- Patching PyTorch's source to demote the printf: out of scope; would
+  require a full torch source rebuild.
+- LD_PRELOAD'ing a custom `write()` shim: more surgical but
+  harder to debug than a one-line shell redirect.
 
 ### Smoke test in the running pod
 
