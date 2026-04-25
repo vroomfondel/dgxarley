@@ -53,9 +53,18 @@ fi
 #   models/clip_vision/{sigclip_vision_patch14_384.safetensors,
 #                       clip_vit_large_patch14.safetensors}
 #   models/style_models/flux1-redux-dev.safetensors        (Redux)
-#   models/xlabs/ipadapters/ip_adapter.safetensors         (IPA — Pfad
-#     muss zu x-flux-comfyui/nodes.py passen: dir_xlabs_ipadapters =
-#     models/xlabs/ipadapters; sonst ist die LoadFluxIPAdapter-Liste leer)
+#   models/xlabs/ipadapters/ip_adapter.safetensors         (IPA — XLabs-Legacy,
+#     wird vom Plugin-Workflow nicht mehr benutzt; Pfad muss zu
+#     x-flux-comfyui/nodes.py passen: dir_xlabs_ipadapters =
+#     models/xlabs/ipadapters; sonst ist die LoadFluxIPAdapter-Liste leer.
+#     XLabs hat auch einen attn_mask-Bug gegen aktuelles Comfy-Core; falls
+#     dieser Custom-Node aktiv genutzt wird, layers.py:296 patchen.)
+#   models/ipadapter-flux/ip-adapter.bin                   (Shakker/InstantX
+#     IPA-Flux, Standard-Pfad fuer comfyui-ipadapter-flux)
+#   models/clip_vision/siglip-so400m-patch14-384/          (HF-Format-Dir
+#     fuer Shakker-IPA: SiglipVisionModel.from_pretrained() braucht
+#     config.json + model.safetensors + preprocessor_config.json — kein
+#     einzelnes safetensors-File ausreichend)
 #
 # Hinweis Verzeichnis-Konventionen: ComfyUI hat `models/clip/` → `text_encoders/`
 # und `models/unet/` → `diffusion_models/` umbenannt (Mitte 2024). Beide Pfade
@@ -141,6 +150,7 @@ for entry in \
   "Comfy-Org/sigclip_vision_384|sigclip_vision_patch14_384.safetensors|clip_vision" \
   "XLabs-AI/flux-ip-adapter-v2|ip_adapter.safetensors|xlabs/ipadapters" \
   "openai/clip-vit-large-patch14|model.safetensors|clip_vision|clip_vit_large_patch14.safetensors" \
+  "InstantX/FLUX.1-dev-IP-Adapter|ip-adapter.bin|ipadapter-flux" \
   "Runware/FLUX.1-Redux-dev|flux1-redux-dev.safetensors|style_models" \
   "Comfy-Org/flux1-kontext-dev_ComfyUI|split_files/diffusion_models/flux1-dev-kontext_fp8_scaled.safetensors|diffusion_models" \
 ; do
@@ -172,6 +182,24 @@ for entry in \
   fi
 done
 
+# --- 3c. SigLIP-Vision (HF-Format-Dir, kein Single-File) -----------
+# Shakker comfyui-ipadapter-flux laedt CLIP-Vision via
+#   SiglipVisionModel.from_pretrained(<dir>)
+# d. h. wir brauchen das komplette HF-Repo als Verzeichnis, nicht nur
+# eine .safetensors-Datei. Ordnername muss exakt "siglip-so400m-patch14-384"
+# sein (Shakker splittet "google/siglip-so400m-patch14-384" am "/"
+# und sucht in CLIP_VISION_DIR + last segment).
+# Idempotent: wenn config.json schon da ist, ueberspringen.
+SIGLIP_DIR="$MODELS/clip_vision/siglip-so400m-patch14-384"
+if [ ! -f "$SIGLIP_DIR/config.json" ] || [ ! -f "$SIGLIP_DIR/model.safetensors" ]; then
+  echo "[comfyui] downloading google/siglip-so400m-patch14-384 -> $SIGLIP_DIR/"
+  mkdir -p "$SIGLIP_DIR"
+  if ! hf download google/siglip-so400m-patch14-384 --local-dir "$SIGLIP_DIR" \
+      --exclude "*.msgpack" --exclude "*.h5" --exclude "*.bin"; then
+    echo "[comfyui] WARN: SigLIP-SO400M konnte nicht geladen werden — Shakker IPA-Flux funktioniert dann nicht"
+  fi
+fi
+
 # --- 4. Custom nodes for inpaint + flux-inpaint workflows ---------
 # Idempotent git clone per Custom-Node-Repo. Existiert das Zielverzeichnis
 # bereits, wird nichts getan (KEIN pull — Updates per Hand oder via
@@ -181,14 +209,22 @@ done
 # lquesada/ComfyUI-Inpaint-CropAndStitch → InpaintCropImproved,
 #   InpaintStitchImproved — die "Improved"-Varianten, die beide
 #   Workflows direkt aufrufen. NICHT in Acly's Repo enthalten.
-# XLabs-AI/x-flux-comfyui → LoadFluxIPAdapter + ApplyFluxIPAdapter für
-#   die IPA-Plugin-Engine (Referenzbild-basierte Flux-Workflows, siehe
-#   workflow-flux1-ipa.json / COMFYUI_INPAINT.md).
+# XLabs-AI/x-flux-comfyui → Legacy. NICHT mehr vom Plugin-Workflow benutzt;
+#   bleibt installiert fuer Backward-Compat (alte Workflows aus dem
+#   Browser-UI). Hat einen attn_mask-Bug gegen aktuelles Comfy-Core,
+#   Upstream tot seit 2024-10. Falls weiter genutzt: layers.py:296
+#   patchen (forward-Signatur um attn_mask=None, **kwargs erweitern).
+# Shakker-Labs/ComfyUI-IPAdapter-Flux → IPAdapterFluxLoader +
+#   ApplyIPAdapterFlux. Aktiv gepflegt (zuletzt 2025-06), Apache 2.0,
+#   Comfy-native add_object_patch ohne direktes block-Replace.
+#   Ersetzt XLabs als IPA-Engine; siehe workflow-flux1-ipa.json /
+#   COMFYUI_INPAINT.md.
 mkdir -p "$APP/custom_nodes"
 for repo in \
   https://github.com/Acly/comfyui-inpaint-nodes.git \
   https://github.com/lquesada/ComfyUI-Inpaint-CropAndStitch.git \
   https://github.com/XLabs-AI/x-flux-comfyui.git \
+  https://github.com/Shakker-Labs/ComfyUI-IPAdapter-Flux.git \
 ; do
   name="$(basename "$repo" .git)"
   dest="$APP/custom_nodes/$name"

@@ -39,6 +39,7 @@ _model_profile:
     # 0.75 with MTP: draft tokens need extra KV cache headroom.
     # 0.80 was used without MTP but OOMs with speculative enabled.
     mem_fraction_static: "0.75"
+    # mem_fraction_static: "0.70"
     attention_backend: "triton"
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 4

@@ -30,7 +30,8 @@ _model_profile:
     #   piecewise works for BF16 (no fp4_quantize fake-tensor dynamo issue)
     #   and gives +6.5% at n=8 over fixed-BS graphs.
     kv_cache_dtype: "fp8_e4m3"
-    mem_fraction_static: "0.85"
+    # mem_fraction_static: "0.85"
+    mem_fraction_static: "0.6"
     attention_backend: "triton"
     jit_max_jobs: 4
     disable_piecewise_cuda_graph: false
