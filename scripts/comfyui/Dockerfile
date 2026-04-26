@@ -134,6 +134,48 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         python3 -c "import triton; print('triton', triton.__version__)" ; \
     fi
 
+# ---- torchaudio (from source against NGC torch) ------------------
+# NGC PyTorch 26.03 (and 25.12 — both checked empirically) does NOT ship
+# torchaudio in its aarch64 wheel set. ComfyUI imports torchaudio
+# unconditionally via `comfy/ldm/lightricks/vae/audio_vae.py` (re-exported
+# through `comfy/sd.py:15`), so the pod fails to start with
+# `ModuleNotFoundError: No module named 'torchaudio'` without it.
+#
+# Stock-PyPI `torchaudio==2.11.0` does NOT solve this — it has an ABI
+# mismatch against NGC's torch (different dtype-symbol mangling) and
+# crashes at import-time with
+#   undefined symbol: torch_dtype_float4_e2m1fn_x2
+# from inside `libtorchaudio.abi3.so`. The fix is to build torchaudio
+# from source against the in-place NGC torch, same pattern as the
+# xformers / SageAttention builds below.
+#
+# Build-flag minimisation: ComfyUI only uses `torchaudio.load` and basic
+# transforms like `torchaudio.transforms.MelScale`. The sox / ffmpeg /
+# RNN-T / CTC-decoder backends aren't exercised, so we skip them — saves
+# ~5 min of build time and trims image size.
+#
+# TORCHAUDIO_REF=v2.11.0 matches NGC's torch major.minor (2.11.0a0+nv26.x).
+# If a future base bump regresses against this tag, fall back to master
+# or to a minor-bumped tag and update TORCHAUDIO_REF here.
+ARG BUILD_TORCHAUDIO=1
+ARG TORCHAUDIO_REF=v2.11.0
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "${BUILD_TORCHAUDIO}" = "1" ]; then \
+        git clone --depth 1 --branch "${TORCHAUDIO_REF}" --recurse-submodules \
+            https://github.com/pytorch/audio.git /tmp/torchaudio && \
+        cd /tmp/torchaudio && \
+        USE_CUDA=1 \
+        BUILD_SOX=0 \
+        BUILD_RNNT=0 \
+        BUILD_CTC_DECODER=0 \
+        USE_FFMPEG=0 \
+        TORCH_CUDA_ARCH_LIST="12.1" \
+        pip install --no-build-isolation -v . && \
+        cd / && \
+        rm -rf /tmp/torchaudio && \
+        python3 -c "import torchaudio; print('torchaudio', torchaudio.__version__, '— builds and loads OK')" ; \
+    fi
+
 # ---- Acceleration kernels (from source, SM_121) -----------------
 # Both are optional; ComfyUI falls back to torch SDPA without them. With
 # SageAttention especially, SDXL/FLUX throughput improves substantially.

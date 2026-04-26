@@ -124,10 +124,17 @@ PODMAN_SSH_IDENTITY="${BUILD_COMFYUI_SSH_IDENTITY:-${HOME}/.ssh/id_podman}"
 # via the MAX_JOBS env baked into the Dockerfile plus --build-arg overrides.
 BUILD_JOBS="${BUILD_COMFYUI_BUILD_JOBS:-4}"
 
-# Optional kernel builds. Both default ON and roughly double end-to-end build
-# time. Turn off for quick iterations on the ComfyUI layer itself.
+# Optional kernel builds. Default ON. xformers+sage roughly double the
+# end-to-end build time; torchaudio adds ~5-10 min. Turn any off for quick
+# iterations on the ComfyUI layer itself.
 BUILD_XFORMERS=1
 BUILD_SAGE_ATTN=1
+# torchaudio is required for ComfyUI to import (audio_vae chain via comfy/sd.py).
+# NGC PyTorch base images dropped torchaudio in their aarch64 wheels, so we
+# build it from source against the NGC torch — same pattern as xformers/sage.
+# Disable only if you're using a base image that already ships a matching
+# torchaudio (e.g. a future NGC build that re-adds it, or a non-NGC base).
+BUILD_TORCHAUDIO=1
 
 # Triton install. SageAttention hard-depends on triton, xformers uses it
 # for several backend paths. Default ON — disable only if you're sure the
@@ -172,7 +179,7 @@ usage() {
 Usage: $(basename "$0") [--base nvidia|scitrera|xomoxcc|<image>]
                         [--comfyui-ref REF]
                         [--remote-host user@host] [--podman-connection NAME]
-                        [--no-xformers] [--no-sage-attn] [--no-triton]
+                        [--no-xformers] [--no-sage-attn] [--no-torchaudio] [--no-triton]
                         [--no-local-copy] [--no-push]
                         [--k3s-distribute | --no-k3s-distribute]
                         [--registry-host IP] [--registry-port PORT]
@@ -204,6 +211,10 @@ Options:
                 omitted, derived from --remote-host (strip user@ and domain).
   --no-xformers   Skip compiling xformers from source (saves ~15 min).
   --no-sage-attn  Skip compiling SageAttention v2 from source (saves ~10 min).
+  --no-torchaudio Skip compiling torchaudio from source. Only safe if the
+                  base image already ships an ABI-compatible torchaudio —
+                  NGC's aarch64 wheels do NOT, so leaving this enabled is
+                  required for the default --base nvidia path.
   --no-triton     Skip 'pip install triton' (default: install). Only use if
                   the base image already ships triton — without it,
                   SageAttention will fail to import at runtime and xformers
@@ -279,6 +290,7 @@ while [[ $# -gt 0 ]]; do
             PODMAN_CONNECTION="${1#--podman-connection=}"; shift ;;
         --no-xformers)   BUILD_XFORMERS=0; shift ;;
         --no-sage-attn)  BUILD_SAGE_ATTN=0; shift ;;
+        --no-torchaudio) BUILD_TORCHAUDIO=0; shift ;;
         --no-triton)     INSTALL_TRITON=0; shift ;;
         --no-local-copy) NO_LOCAL_COPY=1; PUSH_IMAGE=0; shift ;;
         --no-push)       PUSH_IMAGE=0; shift ;;
@@ -511,6 +523,7 @@ run_build() {
     echo "  BUILD_JOBS         = ${BUILD_JOBS}"
     echo "  BUILD_XFORMERS     = ${BUILD_XFORMERS}"
     echo "  BUILD_SAGE_ATTN    = ${BUILD_SAGE_ATTN}"
+    echo "  BUILD_TORCHAUDIO   = ${BUILD_TORCHAUDIO}"
     echo "  INSTALL_TRITON     = ${INSTALL_TRITON}"
     echo "  BUILDTIME          = ${buildtime}"
 
@@ -523,6 +536,7 @@ run_build() {
         --build-arg "COMFYUI_REF=${COMFYUI_REF}" \
         --build-arg "BUILD_XFORMERS=${BUILD_XFORMERS}" \
         --build-arg "BUILD_SAGE_ATTN=${BUILD_SAGE_ATTN}" \
+        --build-arg "BUILD_TORCHAUDIO=${BUILD_TORCHAUDIO}" \
         --build-arg "INSTALL_TRITON=${INSTALL_TRITON}" \
         --build-arg "MAX_JOBS=${BUILD_JOBS}" \
         --build-arg "BUILDTIME=${buildtime}" \
