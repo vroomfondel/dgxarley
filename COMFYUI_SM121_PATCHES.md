@@ -340,9 +340,28 @@ deployed pod on 2026-04-25 (image BUILDTIME `2026-04-25T15:07:41Z`):
 
 All three model families (SDXL via RealVisXL, FLUX schnell, FLUX dev)
 complete their full pipeline (UNet + CLIP + VAE) and produce real
-images. No crashes, no hangs.
+images — no crashes, no hangs.
 
-### Cosmetic FATAL noise — filtered on stdout (and stderr)
+> **CAVEAT — added 2026-04-26.** The integration test above only
+> validates *workflow completion* (HTTP 200, PNG returned), **not
+> semantic correctness of the output**. On sm121 with PyTorch 2.10,
+> text-encoder forwards run through `aten::_efficient_attention_forward`
+> and silently return numerically incorrect output (norm 12–27× off
+> from the CPU reference, no NaN/Inf). The integration test does not
+> compare prompt-to-image semantics, so it passed cleanly while the
+> actual outputs were prompt-unrelated garbage. The full diagnostic
+> trail is in [`COMFYUI_PROMPT_FAIL.md`](COMFYUI_PROMPT_FAIL.md); the
+> upstream bug write-up is in
+> [`UPSTREAM_PYTORCH_SDPA_SM121.md`](UPSTREAM_PYTORCH_SDPA_SM121.md);
+> the production workaround is in
+> [`roles/k8s_dgx/templates/comfyui_launch.sh.j2`](roles/k8s_dgx/templates/comfyui_launch.sh.j2)
+> §4c (sitecustomize shim wrapping `SDClipModel.forward` with
+> `sdpa_kernel([SDPBackend.MATH])`). The xformers patches in this
+> document are still correct and necessary — they fix a different,
+> earlier-discovered class of sm121 problems — but they do not cover
+> ComfyUI's text-encoder path, which bypasses xformers entirely.
+
+### `FATAL: kernel` log noise — filtered on stdout (and stderr)
 
 During a real workflow, PyTorch's CUTLASS kernel selector emits log
 lines like:
@@ -353,15 +372,30 @@ FATAL: kernel `fmha_cutlassF_f32_aligned_64x64_rf_sm80`
 FATAL: kernel `fmha_cutlassF_f32_aligned_64x64_rf_sm80` ... (~30 per VAE call)
 ```
 
-This is **not** a crash. The lines come from
-`aten::_efficient_attention_forward`'s kernel-table probe loop: it
-prints `FATAL: ...` for every entry that doesn't match the current
-device before settling on a viable kernel (typically fa2F-pt). The
-final kernel runs successfully — confirmed by the 8/8 integration
-test pass. The bf16 smoke test in this document never triggers them
-because bf16 takes a different selector path that exits early; only
-the f32 probing path emits the spam, and ComfyUI's VAE attention
-runs in f32.
+This is **not a crash** — the dispatcher walks the kernel table and
+prints `FATAL: ...` for every entry that does not match the current
+device, then returns from the call. ComfyUI continues, the workflow
+runs to completion, a PNG is returned.
+
+> **CAVEAT — added 2026-04-26.** Earlier revisions of this section
+> called the FATAL noise "cosmetic" and asserted that the surviving
+> kernel "runs successfully — confirmed by the 8/8 integration test
+> pass." That second half was wrong: the kernel that survives the
+> probe loop on sm121 returns numerically incorrect output (verified
+> empirically — see
+> [`UPSTREAM_PYTORCH_SDPA_SM121.md`](UPSTREAM_PYTORCH_SDPA_SM121.md) for
+> the per-backend reproducer and numbers). The integration test
+> passed because it only checks workflow completion, not output
+> correctness. The FATAL lines are therefore not just log clutter —
+> they are a smoking gun that the broken EFFICIENT_ATTENTION path is
+> being entered. We continue to filter them on stdout/stderr because
+> the volume is intolerable, but a future re-audit of any sm121 image
+> should grep the *unfiltered* log for `^FATAL: kernel ` to confirm
+> that no untracked codepath is silently corrupting tensors. The
+> bf16 smoke test in this document never triggers them because bf16
+> takes a different selector path that exits early; only the f32
+> probing path emits the spam, and ComfyUI's VAE attention runs in
+> f32.
 
 **Important — these lines go to stdout, not stderr.** The C-level
 `printf(...)` in PyTorch's kernel registry writes to fd 1 by
