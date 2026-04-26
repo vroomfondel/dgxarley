@@ -371,6 +371,124 @@ for req in "$APP"/custom_nodes/*/requirements.txt; do
   fi
 done
 
+# --- 4c. SM121 SDPA shim for text encoders -------------------------
+# PyTorch 2.10's EFFICIENT_ATTENTION SDPA backend is numerically broken
+# on Blackwell GB10 / sm121: silently corrupts attention output without
+# crashing or producing NaN. CLIP-L embedding distance for two distinct
+# prompts collapses from ||A-B||=215 (CPU reference) to ~128 with
+# max|Δ|=25 at std≈1 — embeddings become near-random noise that still
+# passes NaN/inf checks. Verified empirically by running CLIPTextModel
+# on CPU vs GPU across {eager, SDPA-MATH, SDPA-EFFICIENT, SDPA-FLASH}:
+# EFFICIENT is the sole broken path; MATH and eager match CPU bit-near.
+# The "FATAL: kernel fmha_cutlassF_*_sm80" lines we filter further down
+# are emitted by exactly this kernel-table probe — on sm121 they are not
+# just cosmetic noise, they signal that the fallback kernel chosen by
+# aten::_efficient_attention_forward is the one returning garbage.
+#
+# Symptom in ComfyUI: outputs differ per prompt but bear no semantic
+# relation to the prompt text — "Prompt-Conditioning ignoriert Eingabe".
+#
+# Why our existing xformers patches (COMFYUI_SM121_PATCHES.md) do not
+# cover this: those patch xformers' own dispatcher to avoid cutlass and
+# FA3, routing xformers calls to fa2F-pt. ComfyUI's text encoders
+# bypass xformers entirely — they call optimized_attention_for_device(
+# ..., small_input=True), which hardcodes attention_pytorch in
+# comfy/ldm/modules/attention.py:762, and attention_pytorch builds on
+# F.scaled_dot_product_attention with no backend control. So even with
+# --use-sage-attention active (which only routes diffusion through Sage),
+# every text encoder forward goes through the broken SDPA path.
+#
+# Architecturally every text-encoder model in ComfyUI (CLIP-L, CLIP-G,
+# T5-XXL, Llama, Qwen, Gemma, Mistral, ByT5, …) inherits from
+# comfy.sd1_clip.SDClipModel and shares its forward(). Wrapping that
+# single forward in `with sdpa_kernel([SDPBackend.MATH])` therefore
+# fixes every encoder model with one patch — diffusion is untouched, so
+# Sage / xformers-fa2F-pt continue to drive the hot path. The CLIP
+# forward operates on a 77-token sequence; MATH backend's O(n²) cost
+# there is a few milliseconds, no measurable workflow penalty.
+#
+# Implementation: a sitecustomize.py loaded automatically by Python's
+# site.py at interpreter init, picked up via PYTHONPATH=$APP. It
+# installs a meta-path finder that fires once comfy.sd1_clip is
+# imported by ComfyUI, then patches SDClipModel.forward in place.
+# Idempotent (cls._sm121_sdpa_patched marker), no git-tracked file
+# modified, survives ComfyUI git pulls.
+echo "[comfyui] writing sm121 SDPA text-encoder shim"
+cat > "$APP/sitecustomize.py" <<'PYEOF'
+"""sm121 SDPA workaround — see comfyui_launch.sh.j2 §4c for full rationale.
+
+PyTorch 2.10's EFFICIENT_ATTENTION SDPA backend silently corrupts
+attention output on Blackwell sm121. Wrap comfy.sd1_clip.SDClipModel.forward
+(base class for every ComfyUI text encoder) with sdpa_kernel([MATH]) so the
+encoder always uses the math backend, which is correct on sm121.
+"""
+import functools
+import importlib.abc
+import importlib.machinery
+import sys
+
+
+def _wrap_sd_clip_model(module):
+    cls = getattr(module, "SDClipModel", None)
+    if cls is None or getattr(cls, "_sm121_sdpa_patched", False):
+        return
+    from torch.nn.attention import sdpa_kernel, SDPBackend
+    orig = cls.forward
+
+    @functools.wraps(orig)
+    def patched(self, *args, **kwargs):
+        with sdpa_kernel([SDPBackend.MATH]):
+            return orig(self, *args, **kwargs)
+
+    cls.forward = patched
+    cls._sm121_sdpa_patched = True
+    print(
+        "[sm121-sdpa-shim] wrapped comfy.sd1_clip.SDClipModel.forward "
+        "with SDPA-MATH (workaround for sm121 EFFICIENT_ATTENTION bug)",
+        flush=True,
+    )
+
+
+class _SM121SDPALazyPatcher(importlib.abc.MetaPathFinder):
+    target = "comfy.sd1_clip"
+
+    def find_spec(self, name, path=None, target=None):
+        if name != self.target:
+            return None
+        spec = importlib.machinery.PathFinder.find_spec(name, path)
+        if spec is None or spec.loader is None:
+            return None
+        orig_loader = spec.loader
+
+        class _PostLoadWrapper(importlib.abc.Loader):
+            def create_module(self, spec):
+                return orig_loader.create_module(spec)
+
+            def exec_module(self, module):
+                orig_loader.exec_module(module)
+                try:
+                    _wrap_sd_clip_model(module)
+                except Exception as e:
+                    print(
+                        f"[sm121-sdpa-shim] WARN: failed to patch "
+                        f"SDClipModel.forward: {type(e).__name__}: {e}",
+                        flush=True,
+                    )
+
+        spec.loader = _PostLoadWrapper()
+        return spec
+
+
+if not any(isinstance(f, _SM121SDPALazyPatcher) for f in sys.meta_path):
+    sys.meta_path.insert(0, _SM121SDPALazyPatcher())
+    print("[sm121-sdpa-shim] installed lazy meta-path patcher for comfy.sd1_clip", flush=True)
+PYEOF
+
+# Make $APP visible to Python's site.py so sitecustomize.py is auto-loaded
+# at interpreter init. Set this only for the launch — pip installs above
+# this point have already finished, so they aren't affected.
+export PYTHONPATH="$APP:${PYTHONPATH:-}"
+
 # --- 5. Launch -----------------------------------------------------
 # Debian/Ubuntu bases ship only `python3`; a `python` alias only exists
 # when the python-is-python3 package is installed. Resolve through PATH

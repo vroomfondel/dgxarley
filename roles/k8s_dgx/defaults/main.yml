@@ -555,7 +555,7 @@ _sglang_extra_body_defaults: >-
 # Nothing is precompiled into the image; the container clones ComfyUI on first
 # start into hostPath and downloads the FLUX.1-schnell fp8 single-file checkpoint
 # (~17 GB, Apache-2.0, no HF gating) into models/checkpoints.
-comfyui_enabled: false
+comfyui_enabled: true
 comfyui_namespace: "comfyui"
 # NGC PyTorch image ships CUDA + cuDNN + torch with Blackwell (SM121) support
 # on ARM64. Overkill for a playground but avoids the custom-wheels rabbit hole.
