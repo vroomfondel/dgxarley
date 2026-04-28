@@ -73,22 +73,22 @@ shape that won on Qwen3.5-397B and GLM-4.7 at EP=1). Profile keeps it disabled
 
 All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, mem_fraction_static=0.50, disable_deep_gemm=true, fp8_gemm_runner_backend=cutlass, context_length=262144, num_experts=256, enable_eplb=false` unless noted. FP8 → no FP4 sweep. `cutlass` MoE skipped (FP4-only).
 
-| #  | nccl | moe_runner   | attention | dis_cuda_graph | dis_piecewise | spec | Status  | n=1 tok/s | n=4 peak | n=8 peak |
-|----|------|--------------|-----------|----------------|---------------|------|---------|-----------|----------|----------|
-| 1  | roce | triton       | fi        | false          | true          | —    | pending | —         | —        | —        |
-| 2  | roce | triton       | fi        | true           | true          | —    | pending | —         | —        | —        |
-| 3  | roce | triton       | fi        | false          | false         | —    | pending | —         | —        | —        |
-| 4  | roce | triton       | triton    | false          | true          | —    | pending | —         | —        | —        |
-| 5  | roce | triton       | triton    | true           | true          | —    | pending | —         | —        | —        |
-| 6  | roce | triton       | triton    | false          | false         | —    | pending | —         | —        | —        |
-| 7  | roce | fi_cutlass   | fi        | false          | true          | —    | pending | —         | —        | —        |
-| 8  | roce | fi_cutlass   | fi        | true           | true          | —    | pending | —         | —        | —        |
-| 9  | roce | fi_cutlass   | fi        | false          | false         | —    | pending | —         | —        | —        |
-| 10 | roce | fi_cutlass   | triton    | false          | true          | —    | pending | —         | —        | —        |
-| 11 | roce | fi_cutlass   | triton    | true           | true          | —    | pending | —         | —        | —        |
-| 12 | roce | fi_cutlass   | triton    | false          | false         | —    | pending | —         | —        | —        |
-| 13 | roce | triton       | fi        | false          | true          | NEXTN| pending | —         | —        | —        |
-| 14 | roce | fi_cutlass   | fi        | false          | true          | NEXTN| pending | —         | —        | —        |
+| #  | nccl | moe_runner   | attention | dis_cuda_graph | dis_piecewise | spec | Status     | n=1 tok/s | n=4 peak | n=8 peak |
+|----|------|--------------|-----------|----------------|---------------|------|------------|-----------|----------|----------|
+| 1  | roce | triton       | fi        | false          | true          | —    | **STABLE** | 68.6      | 214.7    | **344.0** |
+| 2  | roce | triton       | fi        | true           | true          | —    | running    | 21.0      | 102.7    | (~207)   |
+| 3  | roce | triton       | fi        | false          | false         | —    | pending    | —         | —        | —        |
+| 4  | roce | triton       | triton    | false          | true          | —    | pending    | —         | —        | —        |
+| 5  | roce | triton       | triton    | true           | true          | —    | pending    | —         | —        | —        |
+| 6  | roce | triton       | triton    | false          | false         | —    | pending    | —         | —        | —        |
+| 7  | roce | fi_cutlass   | fi        | false          | true          | —    | pending    | —         | —        | —        |
+| 8  | roce | fi_cutlass   | fi        | true           | true          | —    | pending    | —         | —        | —        |
+| 9  | roce | fi_cutlass   | fi        | false          | false         | —    | pending    | —         | —        | —        |
+| 10 | roce | fi_cutlass   | triton    | false          | true          | —    | pending    | —         | —        | —        |
+| 11 | roce | fi_cutlass   | triton    | true           | true          | —    | pending    | —         | —        | —        |
+| 12 | roce | fi_cutlass   | triton    | false          | false         | —    | pending    | —         | —        | —        |
+| 13 | roce | triton       | fi        | false          | true          | NEXTN| pending    | —         | —        | —        |
+| 14 | roce | fi_cutlass   | fi        | false          | true          | NEXTN| pending    | —         | —        | —        |
 
 ### Column Legend
 
@@ -105,4 +105,31 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
 
 ## Results
 
-_Tests not yet run._
+Run started 2026-04-28 (`kikube/matrixtest/2026-04-28/results/sglang_nn4_tp4_ep1/qwen-3.6-35b-a3b-fp8/0.5.10/`). 1/14 complete, 1 running.
+
+### Test 1 — triton MoE, flashinfer attn, CUDA graphs on, piecewise off
+
+- **STABLE.** First successful Qwen3.6-35B-A3B-FP8 serve on the cluster.
+- n=1: **68.6 tok/s** (TTFT 1.16s — first request, includes warmup).
+- n=4: **214.7 tok/s peak** (TTFT 0.37s, ~53.7 tok/s per request).
+- n=8: **344.0 tok/s peak** (TTFT 0.41s, ~43.0 tok/s per request).
+- 8/8 successful at n=8, no failed requests; wall_time 71.4s.
+- `attention_backend: flashinfer` works here — head_dim=256 (gated-attn) is
+  inside FlashInfer's dispatch table, no `head_dim=512` problem like Gemma-4.
+- Throughput at n=8 is ~3.4× the Qwen3.5-397B-NVFP4 winner (102 tok/s) thanks
+  to the small active-param count (3B vs 17B).
+
+### Test 2 — triton MoE, flashinfer attn, eager (no CUDA graphs)
+
+- n=1: **21.0 tok/s** (TTFT **11.86s** — heavy JIT warmup without pre-captured
+  graphs, identical pattern to Gemma-4 31B Test 5).
+- n=4: **102.7 tok/s peak** (TTFT 1.14s, ~25.7 tok/s per request).
+- n=8: still running at the time of this update; head log shows aggregate
+  decode rate ~207 tok/s with 8 running requests → expected n=8 peak ≈ 200–210.
+- Eager is roughly **3× slower than Test 1 (CG on)** at n=1 (21.0 vs 68.6) and
+  ~2× slower at n=4 (102.7 vs 214.7). Expected — CUDA graphs are mandatory for
+  good throughput on this codepath.
+
+### Tests 3–14 — pending
+
+
