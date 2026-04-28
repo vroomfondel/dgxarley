@@ -1,0 +1,45 @@
+# Model profile: Qwen/Qwen3.6-27B-FP8
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+_model_profile:
+  "Qwen/Qwen3.6-27B-FP8":
+    info_url: "https://huggingface.co/Qwen/Qwen3.6-27B-FP8"
+    # 27B dense (hybrid Gated DeltaNet + Gated Attention), fine-grained FP8 (block 128).
+    # Native context 262K, extensible to ~1M via YaRN.
+    context_length: 262144
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.80"
+    attention_backend: "triton"
+    disable_deep_gemm: true
+    fp8_gemm_runner_backend: "cutlass"
+    reasoning_parser: "qwen3"
+    tool_call_parser: "qwen3_coder"
+    # supports thinking (default) and non-thinking modes; control via
+    # chat_template_kwargs={"enable_thinking": False} per-request.
+    #   thinking:        temperature=1.0  top_p=0.95  top_k=20  presence_penalty=0.0
+    #   thinking_coding: temperature=0.6  top_p=0.95  top_k=20  presence_penalty=0.0
+    #   non_thinking:    temperature=0.7  top_p=0.80  top_k=20  presence_penalty=1.5
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 20
+      presence_penalty: 0.0
+    ep_size: 1
+    tp_size: 4
+    # MTP / speculative decoding (NEXTN) — Qwen3.6 is MTP-trained.
+    # Card shows the SGLang flags only on the 35B-A3B sibling; the same NEXTN
+    # config applies here:
+    #   --speculative-algo NEXTN --speculative-num-steps 3
+    #   --speculative-eagle-topk 1 --speculative-num-draft-tokens 4
+    # Disabled pending validation; flip speculative_enabled to true to enable.
+    # speculative_enabled: true
+    # speculative_algo: NEXTN
+    # speculative_num_steps: 3
+    # speculative_eagle_topk: 1
+    # speculative_num_draft_tokens: 4
+    # operational defaults (dense → no moe_runner_backend)
+    nccl_transport: roce
+    disable_cuda_graph: false
+    disable_piecewise_cuda_graph: true
+    pp_async_batch_depth: 0
+    cuda_graph_max_bs: 8
+    speculative_enabled: false

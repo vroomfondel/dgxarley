@@ -68,6 +68,26 @@
     - nfsmount
     - k3sinstall
 
+- name: ensure nfs is unmounted and removed from /etc/fstab
+  ansible.posix.mount:
+    path: /mnt/nfs
+    state: absent
+  when:
+    - not (wantsnfsmount | default(false))
+  tags:
+    - nfsmount
+    - k3sinstall
+
+- name: ensure nfs-HF-CACHE is unmounted and removed from /etc/fstab
+  ansible.posix.mount:
+    path: /mnt/nfs-HF-CACHE
+    state: absent
+  when:
+    - not (wantsnfsmount | default(false))
+  tags:
+    - nfsmount
+    - k3sinstall
+
 #- name: ensure nfs is actually mounted to /mnt/nfs
 #  ansible.posix.mount:
 #    path: /mnt/nfs

@@ -1,0 +1,50 @@
+---
+# Model profile: Qwen/Qwen3.6-35B-A3B-FP8
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+_model_profile:
+  "Qwen/Qwen3.6-35B-A3B-FP8":
+    info_url: "https://huggingface.co/Qwen/Qwen3.6-35B-A3B-FP8"
+    # 35B/3B MoE (Gated DeltaNet hybrid), fine-grained FP8 (block 128).
+    # 256 experts, 8 routed + 1 shared activated per token. Native context 262K
+    # (extensible to ~1M via YaRN). MTP-trained — speculative decoding
+    # available via NEXTN but left disabled here pending validation.
+    context_length: 262144
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.50"
+    attention_backend: "triton"
+    disable_deep_gemm: true
+    fp8_gemm_runner_backend: "cutlass"
+    reasoning_parser: "qwen3"
+    tool_call_parser: "qwen3_coder"
+    num_experts: 256
+    enable_eplb: false
+    enable_expert_distribution_metrics: false
+    # supports thinking (default) and non-thinking modes; control via
+    # chat_template_kwargs={"enable_thinking": False} per-request.
+    #   thinking:        temperature=1.0  top_p=0.95  top_k=20  presence_penalty=1.5
+    #   thinking_coding: temperature=0.6  top_p=0.95  top_k=20  presence_penalty=0.0
+    #   non_thinking:    temperature=0.7  top_p=0.80  top_k=20  presence_penalty=1.5
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 20
+      presence_penalty: 1.5
+    ep_size: 1
+    tp_size: 4
+    # MTP / speculative decoding (NEXTN) — recommended by model card:
+    #   --speculative-algo NEXTN --speculative-num-steps 3
+    #   --speculative-eagle-topk 1 --speculative-num-draft-tokens 4
+    # Disabled pending validation; flip speculative_enabled to true to enable.
+    # speculative_enabled: true
+    # speculative_algo: NEXTN
+    # speculative_num_steps: 3
+    # speculative_eagle_topk: 1
+    # speculative_num_draft_tokens: 4
+    # operational defaults (mirror Qwen3.5-122B-A10B-FP8 sister profile)
+    nccl_transport: roce
+    moe_runner_backend: triton
+    disable_cuda_graph: false
+    disable_piecewise_cuda_graph: true
+    pp_async_batch_depth: 0
+    cuda_graph_max_bs: 8
+    speculative_enabled: false
