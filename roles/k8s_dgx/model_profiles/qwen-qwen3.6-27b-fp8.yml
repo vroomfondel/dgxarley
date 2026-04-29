@@ -23,6 +23,15 @@ _model_profile:
       top_p: 0.95
       top_k: 20
       presence_penalty: 0.0
+    # Bench-only anti-repetition overrides — the model card's thinking-mode
+    # presence_penalty=0.0 lets the <think>-stream fall into n-gram loops
+    # (chinesische Floods im 2026-04-29-Run, RepetitionGuard killt jede
+    # Anfrage). Card defaults bleiben in recommended_sampling unverändert;
+    # overrides werden nur vom integration-test-Bench gemerged.
+    sampling_overrides:
+      presence_penalty: 1.5
+      frequency_penalty: 0.5
+      min_tokens: 4
     ep_size: 1
     tp_size: 4
     # MTP / speculative decoding (NEXTN) — Qwen3.6 is MTP-trained.

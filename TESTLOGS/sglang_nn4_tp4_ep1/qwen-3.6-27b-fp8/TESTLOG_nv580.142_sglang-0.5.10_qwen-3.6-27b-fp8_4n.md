@@ -59,14 +59,20 @@ Matrix file: `kikube/matrixtest_matrices/sglang_nn4_tp4_ep1/qwen-3.6-27b-fp8/nv5
 
 All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, mem_fraction_static=0.80, disable_deep_gemm=true, fp8_gemm_runner_backend=cutlass, context_length=262144` unless noted. Dense → no MoE sweep. FP8 → no FP4 sweep.
 
-| # | nccl | attention | dis_cuda_graph | dis_piecewise | Status  | n=1 tok/s | n=4 peak | n=8 peak |
-|---|------|-----------|----------------|---------------|---------|-----------|----------|----------|
-| 1 | roce | fi        | false          | true          | pending | —         | —        | —        |
-| 2 | roce | fi        | true           | true          | pending | —         | —        | —        |
-| 3 | roce | fi        | false          | false         | pending | —         | —        | —        |
-| 4 | roce | triton    | false          | true          | pending | —         | —        | —        |
-| 5 | roce | triton    | true           | true          | pending | —         | —        | —        |
-| 6 | roce | triton    | false          | false         | pending | —         | —        | —        |
+| # | nccl | attention | dis_cuda_graph | dis_piecewise | Status               | n=1 tok/s | n=4 peak | n=8 peak |
+|---|------|-----------|----------------|---------------|----------------------|-----------|----------|----------|
+| 1 | roce | fi        | false          | true          | bench_crash†         | —         | —        | —        |
+| 2 | roce | fi        | true           | true          | bench_crash†         | —         | —        | —        |
+| 3 | roce | fi        | false          | false         | bench_crash†         | —         | —        | —        |
+| 4 | roce | triton    | false          | true          | bench_crash†         | —         | —        | —        |
+| 5 | roce | triton    | true           | true          | bench_crash†         | —         | —        | —        |
+| 6 | roce | triton    | false          | false         | aborted (re-run)     | —         | —        | —        |
+
+† All requests returned `status=repetition` — RepetitionGuard tripped on
+chinesische n-gram floods im `<think>`-Stream. Server itself was healthy
+(TTFT ~0.8s, model loads cleanly). Root cause: the model card's general
+thinking-mode default `presence_penalty=0.0` is too lenient for this
+arch. See "First run aborted" below.
 
 ### Column Legend
 
@@ -81,4 +87,39 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
 
 ## Results
 
-_Tests not yet run._
+### First run aborted (2026-04-29) — RepetitionGuard floods
+
+Initial run kicked off 2026-04-29 with profile defaults. Tests 1–5 all came
+back `bench_crash` with **every single request flagged `status=repetition`**;
+test 6 was aborted before completing. Result dir:
+`kikube/matrixtest/2026-04-29/results/sglang_nn4_tp4_ep1/qwen-3.6-27b-fp8/0.5.10/`.
+
+Diagnosis:
+- Server is healthy across all 5 cases — model loads, attention works,
+  TTFT ~0.8s on first request, CUDA-graph capture (where applicable) finishes.
+- Each request emits `output_tokens=0`, `status=repetition` — i.e. the bench
+  harness's RepetitionGuard tripped inside the `<think>` block before any
+  visible output. Logs show **chinesische n-gram floods** in the thinking
+  stream.
+- Root cause: the model card's recommended `presence_penalty=0.0` for general
+  thinking is too lenient for this hybrid Gated-DeltaNet arch on the
+  bench-prompt mix.
+
+Fix applied (profile, bench-only):
+
+```yaml
+# qwen-qwen3.6-27b-fp8.yml — recommended_sampling unchanged
+sampling_overrides:
+  presence_penalty: 1.5
+  frequency_penalty: 0.5
+  min_tokens: 4
+```
+
+`recommended_sampling` keeps the card defaults (so direct API users see the
+documented values); `sampling_overrides` is merged only by the integration-
+test bench. Same shape will also be applied to the 35B-A3B sibling for
+symmetry.
+
+### Second run — pending
+
+Re-run not yet started.
