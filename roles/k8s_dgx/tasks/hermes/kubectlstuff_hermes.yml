@@ -1,0 +1,502 @@
+---
+# Per-user Nous Hermes Agent deployment (k8s_dgx tag `hermes`).
+# Pinned to k3smaster (amd64, NFS-local). Loop key: hermes_users (vault).
+#
+# Two independent Deployments per active user:
+#   hermes-agent-<user> → official `hermes dashboard` UI (port 9119)
+#                          published as <username>.hermes-dashboard.<dns>
+#   hermes-webui-<user> → ghcr.io/nesquena/hermes-webui (port 8787)
+#                          published as <username>.hermes.<dns>
+# Both pods mount the same NFS subdir as /opt/data so sessions/skills/configs
+# are shared. They are still independent processes — each spawns its own
+# `hermes` subprocesses for chat/tools (upstream-documented limitation #681).
+#
+# Per-user gates (in hermes_users entry):
+#   dashboard_enabled (default true)  → deploy hermes-agent pod + ingress
+#   dashboard_tui     (default true)  → adds the embedded chat tab
+#   webui_enabled     (default false) → deploy hermes-webui pod + ingress
+
+- name: Filter enabled hermes users
+  ansible.builtin.set_fact:
+    _hermes_active_users: "{{ hermes_users | selectattr('enabled', 'true') | list }}"
+
+# One-shot migration cleanup for the pre-rename / pre-split layouts.
+# Safe to keep — both are idempotent absent-asserts.
+- name: Remove legacy combined Deployment (pre-split into agent + webui)
+  kubernetes.core.k8s:
+    state: absent
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ hermes_namespace }}"
+    name: "hermes-{{ item.username }}"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+
+- name: Remove legacy combined Service (pre-split into agent + webui)
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Service
+    namespace: "{{ hermes_namespace }}"
+    name: "hermes-{{ item.username }}"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+
+- name: Remove legacy per-user TLS Certificate (dotted name, pre-rename)
+  kubernetes.core.k8s:
+    state: absent
+    api_version: cert-manager.io/v1
+    kind: Certificate
+    namespace: "{{ hermes_namespace }}"
+    name: "hermes-{{ item.username }}.{{ dns_external_domain_suffix }}"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+
+- name: Remove legacy per-user TLS Certificate (combined-pod name, pre-split)
+  kubernetes.core.k8s:
+    state: absent
+    api_version: cert-manager.io/v1
+    kind: Certificate
+    namespace: "{{ hermes_namespace }}"
+    name: "hermes-{{ item.username }}-tls"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+
+- name: Remove legacy combined dashboard IngressRoute (pre-split name)
+  kubernetes.core.k8s:
+    state: absent
+    api_version: traefik.io/v1alpha1
+    kind: IngressRoute
+    namespace: "{{ hermes_namespace }}"
+    name: "hermes-{{ item.username }}-dashboard"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+
+- name: Remove legacy combined webui IngressRoute (pre-split name)
+  kubernetes.core.k8s:
+    state: absent
+    api_version: traefik.io/v1alpha1
+    kind: IngressRoute
+    namespace: "{{ hermes_namespace }}"
+    name: "hermes-{{ item.username }}-webui"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+
+- name: Remove legacy per-user DNS A record (pre-rename hostname)
+  community.general.nsupdate:
+    server: "{{ nsupdate_server }}"
+    zone: "{{ nsupdate_zone }}"
+    key_name: "{{ nsupdate_tsig_key_name }}"
+    key_secret: "{{ nsupdate_tsig_key_secret }}"
+    key_algorithm: "{{ nsupdate_tsig_algorithm }}"
+    record: "hermes-{{ item.username }}.{{ dns_external_domain_suffix }}."
+    type: A
+    state: absent
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+
+- name: Create hermes namespace
+  kubernetes.core.k8s:
+    name: "{{ hermes_namespace }}"
+    api_version: v1
+    kind: Namespace
+    state: present
+
+# === Per-user shared ConfigMaps + Secrets (used by both agent + webui pods) ===
+
+- name: Render per-user hermes config.yaml ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "hermes-config-{{ item.username }}"
+        namespace: "{{ hermes_namespace }}"
+        labels:
+          app: hermes
+          hermes-user: "{{ item.username }}"
+      data:
+        config.yaml: "{{ lookup('template', 'hermes_config.yaml.j2') }}"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+
+- name: Render per-user hermes Secret (.env + WEBUI_PASSWORD)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "hermes-env-{{ item.username }}"
+        namespace: "{{ hermes_namespace }}"
+        labels:
+          app: hermes
+          hermes-user: "{{ item.username }}"
+      type: Opaque
+      stringData:
+        ".env": "{{ lookup('template', 'hermes_env.j2') }}"
+        WEBUI_PASSWORD: "{{ item.webui_password | default(item.basicauth_password | default(item.litellm_token)) }}"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+
+- name: Create per-user hermes BasicAuth Secret (Traefik front-door auth)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "hermes-basicauth-{{ item.username }}"
+        namespace: "{{ hermes_namespace }}"
+        labels:
+          app: hermes
+          hermes-user: "{{ item.username }}"
+      type: Opaque
+      stringData:
+        users: "{{ lookup('pipe', 'htpasswd -nbB ' ~ item.username ~ ' ' ~ (item.basicauth_password | default(item.litellm_token))) }}"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+
+- name: Create per-user hermes BasicAuth Middleware
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: "hermes-basicauth-{{ item.username }}"
+        namespace: "{{ hermes_namespace }}"
+      spec:
+        basicAuth:
+          secret: "hermes-basicauth-{{ item.username }}"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+
+# === Hermes Agent (original dashboard UI) — gated ===
+
+- name: Apply per-user hermes-agent Deployment
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition: "{{ lookup('template', 'hermes_agent_deployment.yaml.j2') | from_yaml }}"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: item.dashboard_enabled | default(hermes_dashboard_enabled_default)
+
+- name: Remove hermes-agent Deployment when gate is off
+  kubernetes.core.k8s:
+    state: absent
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ hermes_namespace }}"
+    name: "hermes-agent-{{ item.username }}"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: not (item.dashboard_enabled | default(hermes_dashboard_enabled_default))
+
+- name: Apply per-user hermes-agent Service
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: "hermes-agent-{{ item.username }}"
+        namespace: "{{ hermes_namespace }}"
+        labels:
+          app: hermes
+          hermes-component: agent
+          hermes-user: "{{ item.username }}"
+      spec:
+        selector:
+          app: hermes
+          hermes-component: agent
+          hermes-user: "{{ item.username }}"
+        ports:
+          - name: dashboard
+            port: 9119
+            targetPort: 9119
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: item.dashboard_enabled | default(hermes_dashboard_enabled_default)
+
+- name: Remove hermes-agent Service when gate is off
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Service
+    namespace: "{{ hermes_namespace }}"
+    name: "hermes-agent-{{ item.username }}"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: not (item.dashboard_enabled | default(hermes_dashboard_enabled_default))
+
+- name: Apply per-user hermes-agent TLS Certificate
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: "hermes-agent-{{ item.username }}-tls"
+        namespace: "{{ hermes_namespace }}"
+      spec:
+        dnsNames:
+          - "{{ item.username }}.hermes-dashboard.{{ dns_external_domain_suffix }}"
+        secretName: "hermes-agent-{{ item.username }}-tls"
+        issuerRef:
+          name: letsencrypt-production
+          kind: ClusterIssuer
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: item.dashboard_enabled | default(hermes_dashboard_enabled_default)
+
+- name: Remove hermes-agent Certificate when gate is off
+  kubernetes.core.k8s:
+    state: absent
+    api_version: cert-manager.io/v1
+    kind: Certificate
+    namespace: "{{ hermes_namespace }}"
+    name: "hermes-agent-{{ item.username }}-tls"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: not (item.dashboard_enabled | default(hermes_dashboard_enabled_default))
+
+- name: Apply per-user hermes-agent IngressRoute (port 9119)
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: "hermes-agent-{{ item.username }}"
+        namespace: "{{ hermes_namespace }}"
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - kind: Rule
+            match: "Host(`{{ item.username }}.hermes-dashboard.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            services:
+              - kind: Service
+                name: "hermes-agent-{{ item.username }}"
+                passHostHeader: true
+                port: 9119
+            middlewares:
+              - name: "hermes-basicauth-{{ item.username }}"
+        tls:
+          secretName: "hermes-agent-{{ item.username }}-tls"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: item.dashboard_enabled | default(hermes_dashboard_enabled_default)
+
+- name: Remove hermes-agent IngressRoute when gate is off
+  kubernetes.core.k8s:
+    state: absent
+    api_version: traefik.io/v1alpha1
+    kind: IngressRoute
+    namespace: "{{ hermes_namespace }}"
+    name: "hermes-agent-{{ item.username }}"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: not (item.dashboard_enabled | default(hermes_dashboard_enabled_default))
+
+- name: Register DNS A record for hermes-agent (dashboard hostname)
+  community.general.nsupdate:
+    server: "{{ nsupdate_server }}"
+    zone: "{{ nsupdate_zone }}"
+    key_name: "{{ nsupdate_tsig_key_name }}"
+    key_secret: "{{ nsupdate_tsig_key_secret }}"
+    key_algorithm: "{{ nsupdate_tsig_algorithm }}"
+    record: "{{ item.username }}.hermes-dashboard.{{ dns_external_domain_suffix }}."
+    type: A
+    ttl: "{{ nsupdate_ttl }}"
+    value: "{{ nsupdate_ingress_ip }}"
+    state: "{{ 'present' if (item.dashboard_enabled | default(hermes_dashboard_enabled_default)) else 'absent' }}"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+
+# === Hermes WebUI (nesquena/hermes-webui) — gated ===
+
+- name: Apply per-user hermes-webui Deployment
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition: "{{ lookup('template', 'hermes_webui_deployment.yaml.j2') | from_yaml }}"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: item.webui_enabled | default(hermes_webui_enabled_default)
+
+- name: Remove hermes-webui Deployment when gate is off
+  kubernetes.core.k8s:
+    state: absent
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ hermes_namespace }}"
+    name: "hermes-webui-{{ item.username }}"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: not (item.webui_enabled | default(hermes_webui_enabled_default))
+
+- name: Apply per-user hermes-webui Service
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: "hermes-webui-{{ item.username }}"
+        namespace: "{{ hermes_namespace }}"
+        labels:
+          app: hermes
+          hermes-component: webui
+          hermes-user: "{{ item.username }}"
+      spec:
+        selector:
+          app: hermes
+          hermes-component: webui
+          hermes-user: "{{ item.username }}"
+        ports:
+          - name: webui
+            port: "{{ hermes_webui_port }}"
+            targetPort: "{{ hermes_webui_port }}"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: item.webui_enabled | default(hermes_webui_enabled_default)
+
+- name: Remove hermes-webui Service when gate is off
+  kubernetes.core.k8s:
+    state: absent
+    api_version: v1
+    kind: Service
+    namespace: "{{ hermes_namespace }}"
+    name: "hermes-webui-{{ item.username }}"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: not (item.webui_enabled | default(hermes_webui_enabled_default))
+
+- name: Apply per-user hermes-webui TLS Certificate
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: "hermes-webui-{{ item.username }}-tls"
+        namespace: "{{ hermes_namespace }}"
+      spec:
+        dnsNames:
+          - "{{ item.username }}.hermes.{{ dns_external_domain_suffix }}"
+        secretName: "hermes-webui-{{ item.username }}-tls"
+        issuerRef:
+          name: letsencrypt-production
+          kind: ClusterIssuer
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: item.webui_enabled | default(hermes_webui_enabled_default)
+
+- name: Remove hermes-webui Certificate when gate is off
+  kubernetes.core.k8s:
+    state: absent
+    api_version: cert-manager.io/v1
+    kind: Certificate
+    namespace: "{{ hermes_namespace }}"
+    name: "hermes-webui-{{ item.username }}-tls"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: not (item.webui_enabled | default(hermes_webui_enabled_default))
+
+- name: Apply per-user hermes-webui IngressRoute (port 8787)
+  # No Traefik BasicAuth middleware — the webui has its own HERMES_WEBUI_PASSWORD
+  # cookie-session auth (HMAC-signed, 30d TTL) which is enforced server-side.
+  # Doubling up with Traefik BasicAuth was just causing a redundant popup.
+  # The agent dashboard IngressRoute keeps BasicAuth because `hermes dashboard
+  # --insecure` has no auth of its own.
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: "hermes-webui-{{ item.username }}"
+        namespace: "{{ hermes_namespace }}"
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - kind: Rule
+            match: "Host(`{{ item.username }}.hermes.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            services:
+              - kind: Service
+                name: "hermes-webui-{{ item.username }}"
+                passHostHeader: true
+                port: "{{ hermes_webui_port }}"
+        tls:
+          secretName: "hermes-webui-{{ item.username }}-tls"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: item.webui_enabled | default(hermes_webui_enabled_default)
+
+- name: Remove hermes-webui IngressRoute when gate is off
+  kubernetes.core.k8s:
+    state: absent
+    api_version: traefik.io/v1alpha1
+    kind: IngressRoute
+    namespace: "{{ hermes_namespace }}"
+    name: "hermes-webui-{{ item.username }}"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: not (item.webui_enabled | default(hermes_webui_enabled_default))
+
+- name: Register DNS A record for hermes-webui hostname
+  community.general.nsupdate:
+    server: "{{ nsupdate_server }}"
+    zone: "{{ nsupdate_zone }}"
+    key_name: "{{ nsupdate_tsig_key_name }}"
+    key_secret: "{{ nsupdate_tsig_key_secret }}"
+    key_algorithm: "{{ nsupdate_tsig_algorithm }}"
+    record: "{{ item.username }}.hermes.{{ dns_external_domain_suffix }}."
+    type: A
+    ttl: "{{ nsupdate_ttl }}"
+    value: "{{ nsupdate_ingress_ip }}"
+    state: "{{ 'present' if (item.webui_enabled | default(hermes_webui_enabled_default)) else 'absent' }}"
+  loop: "{{ _hermes_active_users }}"
+  loop_control:
+    label: "{{ item.username }}"

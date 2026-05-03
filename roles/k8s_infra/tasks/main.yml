@@ -176,11 +176,3 @@
     - isk3smaster is defined
     - isk3smaster
 
-# === HERMES (per-user Nous Hermes Agents) ===
-
-- name: Deploy per-user Nous Hermes agents
-  import_tasks: hermes/kubectlstuff_hermes.yml
-  tags: hermes
-  when:
-    - isk3smaster is defined
-    - isk3smaster

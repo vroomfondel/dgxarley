@@ -112,6 +112,10 @@
     - nccl_test
     - never
 
+- name: Deploy per-user Nous Hermes agents (agent + optional webui sidecar)
+  ansible.builtin.import_tasks: hermes/kubectlstuff_hermes.yml
+  tags: hermes
+
 - name: QSFP SR-IOV NCCL all_reduce benchmark (legacy 2-node)
   ansible.builtin.import_tasks: qsfp_nccl_test.yml
   tags:

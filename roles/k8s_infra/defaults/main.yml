@@ -29,16 +29,3 @@ traefik_dashboard_password: "changeme"
 # KCEVE KVM RS232 serial device on k3smaster (USB-to-RS232 adapter)
 kceve_kvm_serial_device: "/dev/ttyACM0"
 
-# === Nous Hermes Agent (per-user deployments) ===
-# Image is multi-arch (amd64+arm64); pinned on k3smaster (amd64) — never on sparks.
-hermes_namespace: "hermes"
-hermes_image_tag: "v2026.4.30"
-# NFS-backed hostPath base on k3smaster — per-user subdirs <base>/<username>
-# are mounted as /opt/data inside the pod (subdir-only, no parent visibility).
-hermes_data_base: "/mnt/nfs/hermes"
-hermes_default_model: "Qwen/Qwen3.6-35B-A3B-FP8"
-hermes_litellm_url: "http://litellm.litellm.svc.cluster.local:4000"
-# Per-user list — real entries in group_vars/all/vault.yml.
-# Schema: { username, uid, gid, litellm_token, litellm_model (optional),
-#           basicauth_password (optional), enabled }
-hermes_users: []

@@ -1,0 +1,118 @@
+{# Per-user Hermes Agent Deployment (the official `hermes dashboard` UI).
+   Standalone pod — webui (if enabled) lives in its own deployment.
+   Both pods are pinned to k3smaster and share the same NFS subdir hostPath
+   so /opt/data (sessions/skills/configs) is identical across them.
+#}
+{%- set _dashboard_tui = item.dashboard_tui | default(hermes_dashboard_tui_default) -%}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: "hermes-agent-{{ item.username }}"
+  namespace: "{{ hermes_namespace }}"
+  labels:
+    app: hermes
+    hermes-component: agent
+    hermes-user: "{{ item.username }}"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: hermes
+      hermes-component: agent
+      hermes-user: "{{ item.username }}"
+  template:
+    metadata:
+      labels:
+        app: hermes
+        hermes-component: agent
+        hermes-user: "{{ item.username }}"
+    spec:
+      restartPolicy: Always
+      nodeSelector:
+        node-role: k3smaster
+      securityContext:
+        runAsUser: {{ item.uid }}
+        runAsGroup: {{ item.gid }}
+        fsGroup: {{ item.gid }}
+        runAsNonRoot: true
+      initContainers:
+        # hostPath DirectoryOrCreate creates 0755 root:root; reset to <uid>:<gid> 0700.
+        - name: fix-perms
+          image: busybox:1.37
+          command:
+            - sh
+            - -c
+            - "chown {{ item.uid }}:{{ item.gid }} /opt/data && chmod 0700 /opt/data"
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+          volumeMounts:
+            - name: data
+              mountPath: /opt/data
+      containers:
+        - name: hermes
+          image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes_image_tag) }}"
+          imagePullPolicy: IfNotPresent
+          # `dashboard` serves the web UI on 9119; --tui adds the embedded chat tab.
+          # --insecure is required to bind beyond 127.0.0.1; BasicAuth is enforced
+          # upstream by Traefik. `gateway run` (the docker default) is messaging-
+          # only and binds no HTTP port — do not use it here.
+          command: ["/opt/hermes/.venv/bin/hermes"]
+          args:
+            - "dashboard"
+            - "--host=0.0.0.0"
+            - "--port=9119"
+            - "--no-open"
+            - "--insecure"
+{% if _dashboard_tui %}
+            - "--tui"
+{% endif %}
+          ports:
+            - containerPort: 9119
+              name: dashboard
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "{{ item.cpu_limit | default('2') }}"
+              memory: "{{ item.memory_limit | default('2Gi') }}"
+          volumeMounts:
+            - name: data
+              mountPath: /opt/data
+            - name: config
+              mountPath: /opt/data/config.yaml
+              subPath: config.yaml
+            - name: env
+              mountPath: /opt/data/.env
+              subPath: .env
+          livenessProbe:
+            tcpSocket:
+              port: 9119
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 5
+          readinessProbe:
+            tcpSocket:
+              port: 9119
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      volumes:
+        - name: data
+          hostPath:
+            path: "{{ hermes_data_base }}/{{ item.username }}"
+            type: DirectoryOrCreate
+        - name: config
+          configMap:
+            name: "hermes-config-{{ item.username }}"
+            items:
+              - key: config.yaml
+                path: config.yaml
+        - name: env
+          secret:
+            secretName: "hermes-env-{{ item.username }}"
+            items:
+              - key: .env
+                path: .env

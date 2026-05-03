@@ -1,0 +1,154 @@
+{# Per-user Hermes WebUI Deployment (ghcr.io/nesquena/hermes-webui).
+   Runs in its own pod next to the agent pod. Both share the same NFS subdir
+   hostPath as /opt/data — sessions/skills/configs are visible to both UIs.
+   The WebUI still spawns its own `hermes` subprocesses for chat/tools (see
+   upstream limitation #681); the agent pod's running process is independent.
+#}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: "hermes-webui-{{ item.username }}"
+  namespace: "{{ hermes_namespace }}"
+  labels:
+    app: hermes
+    hermes-component: webui
+    hermes-user: "{{ item.username }}"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: hermes
+      hermes-component: webui
+      hermes-user: "{{ item.username }}"
+  template:
+    metadata:
+      labels:
+        app: hermes
+        hermes-component: webui
+        hermes-user: "{{ item.username }}"
+    spec:
+      restartPolicy: Always
+      nodeSelector:
+        node-role: k3smaster
+      # Pod-level securityContext targets the webui's image-internal user.
+      # The image's docker_init.bash entrypoint MUST start as hermeswebuitoo
+      # (UID 1025): it usermod's the hermeswebui user to WANTED_UID/WANTED_GID
+      # and re-execs itself. After that switch the actual python server runs
+      # as {{ item.uid }}/{{ item.gid }} (verified via /proc).
+      # fsGroup={{ item.gid }} is added so the bootstrap shell can read /opt/data
+      # before the switch; once switched, the server owns the dir directly.
+      securityContext:
+        runAsUser: 1025
+        runAsGroup: 1025
+        fsGroup: {{ item.gid }}
+        runAsNonRoot: true
+      initContainers:
+        # Reset NFS subdir owner so the post-switch hermeswebui user (UID
+        # {{ item.uid }}) can write. Idempotent — agent pod's fix-perms does the
+        # same thing; whichever runs first wins, the other is a no-op.
+        - name: fix-perms
+          image: busybox:1.37
+          command:
+            - sh
+            - -c
+            - "chown {{ item.uid }}:{{ item.gid }} /opt/data && chmod 0700 /opt/data"
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+          volumeMounts:
+            - name: data
+              mountPath: /opt/data
+        # Provide the hermes-agent source tree to the webui. Upstream's
+        # docker-compose.two-container.yml does the same via a named volume
+        # (`hermes-agent-src`) populated from the agent image; we replicate it
+        # with an emptyDir + initContainer copy so the webui pod is self-
+        # contained (no cross-pod volume coupling). The webui's docker_init.bash
+        # then runs `uv pip install <agent-src>[all]` against this dir.
+        - name: copy-agent-src
+          image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes_image_tag) }}"
+          command:
+            - sh
+            - -c
+            - "cp -a /opt/hermes/. /agent-src/ && chown -R {{ item.uid }}:{{ item.gid }} /agent-src"
+          securityContext:
+            runAsUser: 0
+            runAsNonRoot: false
+          volumeMounts:
+            - name: agent-src
+              mountPath: /agent-src
+      containers:
+        - name: hermes-webui
+          image: "{{ hermes_webui_image }}:{{ item.webui_image_tag | default(hermes_webui_image_tag) }}"
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: HERMES_WEBUI_HOST
+              value: "0.0.0.0"
+            - name: HERMES_WEBUI_PORT
+              value: "{{ hermes_webui_port }}"
+            - name: HERMES_HOME
+              value: "/opt/data"
+            - name: HERMES_WEBUI_AGENT_DIR
+              value: "/opt/agent-src"
+            - name: HERMES_WEBUI_STATE_DIR
+              value: "/opt/data/.webui"
+            # Auto-install hermes-agent runtime deps (dotenv, etc.) into the
+            # webui venv on first start. Without this, "run_agent" features
+            # break with ModuleNotFoundError; web UI itself still loads.
+            - name: HERMES_WEBUI_AUTO_INSTALL
+              value: "1"
+            # Branding so the user knows whose dashboard they're on. Default
+            # "Hermes (<username>)" — overridable via vault `webui_bot_name`.
+            # Shown next to every assistant message in the chat.
+            - name: HERMES_WEBUI_BOT_NAME
+              value: "{{ item.webui_bot_name | default('Hermes (' ~ item.username ~ ')') }}"
+            # Pin the default model in the model picker to our LiteLLM-backed
+            # one. Empty would let the WebUI fall back to whatever provider
+            # defaults exist (often an OpenAI model that's unavailable here, #646).
+            - name: HERMES_WEBUI_DEFAULT_MODEL
+              value: "{{ (item.litellm_model | default('')) or hermes_default_model }}"
+            - name: WANTED_UID
+              value: "{{ item.uid }}"
+            - name: WANTED_GID
+              value: "{{ item.gid }}"
+            - name: HERMES_WEBUI_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: "hermes-env-{{ item.username }}"
+                  key: WEBUI_PASSWORD
+          ports:
+            - containerPort: {{ hermes_webui_port }}
+              name: webui
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "{{ item.webui_cpu_limit | default('1') }}"
+              memory: "{{ item.webui_memory_limit | default('1Gi') }}"
+          volumeMounts:
+            - name: data
+              mountPath: /opt/data
+            - name: agent-src
+              mountPath: /opt/agent-src
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ hermes_webui_port }}
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ hermes_webui_port }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: data
+          hostPath:
+            path: "{{ hermes_data_base }}/{{ item.username }}"
+            type: DirectoryOrCreate
+        - name: agent-src
+          emptyDir: {}
