@@ -167,23 +167,23 @@ spec:
           image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes_image_tag) }}"
           imagePullPolicy: IfNotPresent
           # `dashboard` serves the web UI on 9119; --tui adds the embedded chat tab.
-          # --insecure is required to bind beyond 127.0.0.1; auth is enforced by
-          # the in-pod Caddy sidecar via cookie session. `gateway run` (the docker
-          # default) is messaging-only and binds no HTTP port — do not use it.
+          # `gateway run` (the docker default) is messaging-only and binds no
+          # HTTP port — do not use it.
           #
-          # We launch hermes via a Python wrapper that monkey-patches
-          # `hermes_cli.web_server._LOOPBACK_HOSTS` so WS endpoints (/api/ws,
-          # /api/pty, /api/events) accept connections from any client_host. The
-          # default localhost-only guard makes any reverse-proxy setup impossible.
-          # See the launcher script for the full rationale.
-          command: ["/opt/hermes/.venv/bin/python3"]
+          # Bind to 127.0.0.1 — the in-pod Caddy sidecar (also in this pod's
+          # network namespace) reverse-proxies external traffic to the same
+          # 127.0.0.1:9119, so its connections arrive with TCP source 127.0.0.1
+          # which IS in Hermes' built-in `_LOOPBACK_HOSTS` allow-list. That
+          # avoids triggering the `--insecure` requirement (which Hermes
+          # demands for non-loopback binds) and avoids the WS-upgrade rejection
+          # that hits with `--host=0.0.0.0` (where uvicorn's `ws.client.host`
+          # somehow ends up reporting the pod IP rather than 127.0.0.1).
+          command: ["/opt/hermes/.venv/bin/hermes"]
           args:
-            - "/etc/hermes-launcher/launcher.py"
             - "dashboard"
-            - "--host=0.0.0.0"
+            - "--host=127.0.0.1"
             - "--port=9119"
             - "--no-open"
-            - "--insecure"
 {% if _dashboard_tui %}
             - "--tui"
 {% endif %}
@@ -200,18 +200,26 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /opt/data
-            - name: hermes-launcher
-              mountPath: /etc/hermes-launcher
-              readOnly: true
+          # Hermes binds to 127.0.0.1 only (we route external traffic via the
+          # in-pod Caddy sidecar). kubelet tcpSocket probes hit the pod IP,
+          # which Hermes does NOT listen on, so probes have to run inside the
+          # container against loopback. Python is the only thing we can rely
+          # on in the agent image (no curl/wget).
           livenessProbe:
-            tcpSocket:
-              port: 9119
+            exec:
+              command:
+                - "/opt/hermes/.venv/bin/python3"
+                - "-c"
+                - "import socket;socket.create_connection(('127.0.0.1',9119),1).close()"
             initialDelaySeconds: 60
             periodSeconds: 30
             failureThreshold: 5
           readinessProbe:
-            tcpSocket:
-              port: 9119
+            exec:
+              command:
+                - "/opt/hermes/.venv/bin/python3"
+                - "-c"
+                - "import socket;socket.create_connection(('127.0.0.1',9119),1).close()"
             initialDelaySeconds: 15
             periodSeconds: 10
         # Caddy + caddy-security sidecar — terminates auth as an HMAC-JWT
@@ -315,10 +323,3 @@ spec:
                 path: users.json
         - name: caddy-data
           emptyDir: {}
-        - name: hermes-launcher
-          configMap:
-            name: "hermes-launcher"
-            defaultMode: 0555
-            items:
-              - key: launcher.py
-                path: launcher.py

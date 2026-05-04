@@ -109,22 +109,17 @@
     kind: Namespace
     state: present
 
-- name: Create shared hermes launcher ConfigMap (Python loopback-bypass)
-  # Single shared ConfigMap, mounted by every per-user agent pod. Disables
-  # the dashboard's localhost-only guard on /api/ws, /api/pty, /api/events
-  # so reverse-proxied (Caddy → upstream) WS upgrades are accepted.
+# Clean up the legacy "hermes-launcher" ConfigMap that we used to mount as
+# a Python wrapper that monkey-patched _LOOPBACK_HOSTS. Turned out to be
+# unnecessary: binding Hermes to 127.0.0.1 (instead of 0.0.0.0) makes Caddy
+# arrive with TCP source 127.0.0.1 — already in the built-in allow-list.
+- name: Remove legacy hermes-launcher ConfigMap (no longer needed)
   kubernetes.core.k8s:
-    state: present
-    definition:
-      apiVersion: v1
-      kind: ConfigMap
-      metadata:
-        name: "hermes-launcher"
-        namespace: "{{ hermes_namespace }}"
-        labels:
-          app: hermes
-      data:
-        launcher.py: "{{ lookup('template', 'hermes/hermes_launcher.py.j2') }}"
+    state: absent
+    api_version: v1
+    kind: ConfigMap
+    namespace: "{{ hermes_namespace }}"
+    name: "hermes-launcher"
 
 # === Per-user shared ConfigMaps + Secrets (used by both agent + webui pods) ===
 
