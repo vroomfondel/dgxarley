@@ -109,18 +109,6 @@
     kind: Namespace
     state: present
 
-# Clean up the legacy "hermes-launcher" ConfigMap that we used to mount as
-# a Python wrapper that monkey-patched _LOOPBACK_HOSTS. Turned out to be
-# unnecessary: binding Hermes to 127.0.0.1 (instead of 0.0.0.0) makes Caddy
-# arrive with TCP source 127.0.0.1 — already in the built-in allow-list.
-- name: Remove legacy hermes-launcher ConfigMap (no longer needed)
-  kubernetes.core.k8s:
-    state: absent
-    api_version: v1
-    kind: ConfigMap
-    namespace: "{{ hermes_namespace }}"
-    name: "hermes-launcher"
-
 # === Per-user shared ConfigMaps + Secrets (used by both agent + webui pods) ===
 
 - name: Render per-user hermes config.yaml ConfigMap
