@@ -1,9 +1,9 @@
 ---
 # defaults file for k3sserver
 # ~ $ curl -s https://api.github.com/repos/k3s-io/k3s/releases | jq -r '.[0].tag_name'
-# v1.35.3+k3s1
+# v1.35.4+k3s1
 
-k3s_version: "v1.35.3+k3s1"
+k3s_version: "v1.35.4+k3s1"
 k3s_node_ip: "{{ ansible_facts.default_ipv4.address }}"
 
 kubeconfig_context_name: "admin@cluster"

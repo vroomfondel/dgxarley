@@ -157,3 +157,9 @@ small (~50 MB) and the node has fast local storage.
   — open, P2, labels `comp/tui`, `area/docker`
 - Partial fix PR: [hermes-agent#19520](https://github.com/NousResearch/hermes-agent/pull/19520)
   — merged 2026-05-04, fixes Trigger 1 only; no release tag yet
+- Our Trigger 2 report (workspace-link entries) posted 2026-05-04 as
+  comment on #18800:
+  [#issuecomment-4371280956](https://github.com/NousResearch/hermes-agent/issues/18800#issuecomment-4371280956).
+  Includes the diagnostic snippet from this document and a one-line
+  patch suggestion (add `wanted[k].get("link")` to the missing-check
+  filter).
