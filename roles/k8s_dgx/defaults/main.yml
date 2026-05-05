@@ -20,7 +20,8 @@ openwebui_namespace: "openwebui"
 
 #sglang_image: "xomoxcc/dgx-spark-sglang:0.5.10-sm121"
 #sglang_image: "xomoxcc/dgx-spark-sglang:main-gemma4-sm121"
-default_sglang_image: "scitrera/dgx-spark-sglang:0.5.10"
+#default_sglang_image: "scitrera/dgx-spark-sglang:0.5.10"
+default_sglang_image: "scitrera/dgx-spark-sglang:0.5.10-20260429-dev1"
 
 sglang_nnodes: 4
 
@@ -818,9 +819,11 @@ hermes_caddy_image: "ghcr.io/authcrunch/authcrunch"
 hermes_caddy_image_tag: "latest"
 hermes_agent_proxy_port: 9118
 # Per-user defaults — overridable per entry in hermes_users.
-hermes_dashboard_enabled_default: true
+hermes_dashboard_enabled_default: false
+# enables chat-interface if set to true IF hermes_dashboard_enabled is even enabled
 hermes_dashboard_tui_default: true
-hermes_webui_enabled_default: false
+# enables webui-interface (alternative interface to native hermes dashboard)
+hermes_webui_enabled_default: true
 # Sets logging.level=DEBUG in the rendered config.yaml (otherwise INFO).
 # Affects /opt/data/logs/agent.log — kubectl logs -c log-tail <pod> tails it.
 hermes_debug_default: false
