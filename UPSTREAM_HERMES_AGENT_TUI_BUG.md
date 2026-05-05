@@ -1,6 +1,6 @@
 # NousResearch/hermes-agent Upstream Bug: Spurious npm install at every `dashboard --tui` launch breaks chat tab in non-root containers
 
-## Status (as of 2026-05-03)
+## Status (re-verified 2026-05-04)
 
 - **v2026.4.30 (v0.12.0) — BROKEN** in non-root container deployments.
   `hermes dashboard --tui` triggers an npm reinstall on every start; if
@@ -8,9 +8,11 @@
   fails with `EACCES` and the TUI chat tab is permanently broken.
 
 - **Partial upstream fix:** [PR #19520](https://github.com/NousResearch/hermes-agent/pull/19520)
-  merged 2026-05-04 — fixes Trigger 1 only (peer-flag field-diff). No
-  release tag as of 2026-05-03. Trigger 2 (workspace-link entries) is
-  **unfixed** in `main`.
+  merged 2026-05-04 — fixes Trigger 1 only (peer-flag field-diff). **No
+  tagged release contains the fix yet** (latest tag is v2026.4.30, cut
+  before the merge). Trigger 2 (workspace-link entries) is **unfixed**
+  in `main`, so even after the next release ships, the workaround in
+  this repo will still be required.
 
 - **Workaround applied** in this repo via `copy-ui-tui` initContainer in
   `roles/k8s_dgx/templates/hermes/hermes_agent_deployment.yaml.j2`. See
@@ -156,7 +158,8 @@ small (~50 MB) and the node has fast local storage.
 - Issue: [hermes-agent#18800](https://github.com/NousResearch/hermes-agent/issues/18800)
   — open, P2, labels `comp/tui`, `area/docker`
 - Partial fix PR: [hermes-agent#19520](https://github.com/NousResearch/hermes-agent/pull/19520)
-  — merged 2026-05-04, fixes Trigger 1 only; no release tag yet
+  — merged 2026-05-04, fixes Trigger 1 only; no release tag yet (latest
+  release is v2026.4.30, predates the merge — re-checked 2026-05-04)
 - Our Trigger 2 report (workspace-link entries) posted 2026-05-04 as
   comment on #18800:
   [#issuecomment-4371280956](https://github.com/NousResearch/hermes-agent/issues/18800#issuecomment-4371280956).

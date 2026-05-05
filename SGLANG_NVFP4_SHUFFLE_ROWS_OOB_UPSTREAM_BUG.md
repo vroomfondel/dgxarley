@@ -1,8 +1,13 @@
 # SGLang Upstream Bug: `cutlass_moe_fp4` `a_map` uninitialized-memory OOB under EP
 
-## Status
+## Status (re-verified 2026-05-04)
 
-**Partial progress, semantic fix invalidated.** 2026-04-11 session outcome:
+**Partial progress, semantic fix invalidated.** 2026-04-11 session outcome
+(no further investigation since; PR #20869 still stale at upstream — last
+activity 2026-03-18, re-checked 2026-05-04). The cluster-level workaround
+remains: NVFP4 MoE profiles default to `moe_runner_backend: flashinfer_cutlass`,
+which avoids `cutlass_moe_fp4` entirely (see CLAUDE.md "NVFP4 MoE runner is
+model-specific, not global"):
 
 - **Crash is fixed**: the device-side assert at `nvfp4_blockwise_moe.cuh:78`
   no longer fires — `torch.empty → torch.zeros` on `a_map`/`c_map` in
@@ -31,8 +36,8 @@ work is in progress — see "Open: semantic fix" below.
 **Unreported as a root-cause analysis** upstream, but adjacent work exists:
 
 - [PR #20869](https://github.com/sgl-project/sglang/pull/20869) ("fix(moe): support EP
-  for modelopt FP4 MoE weight processing") — **open, unmerged as of 2026-04-11**,
-  over a month after submission. Fixes the two earlier errors in the chain
+  for modelopt FP4 MoE weight processing") — **open, unmerged, stale since 2026-03-18**
+  (re-verified 2026-05-04, no review activity in 6+ weeks). Fixes the two earlier errors in the chain
   (shape mismatch on input-scales, `num_experts != num_local_experts` assertion)
   with Python-level changes to `modelopt_quant.py`, but **does not fix the
   `_shuffle_rows_torch` OOB described here**. The PR author instead sidesteps

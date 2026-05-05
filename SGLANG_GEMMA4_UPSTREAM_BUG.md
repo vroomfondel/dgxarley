@@ -1,6 +1,6 @@
 # SGLang Upstream Bug: Gemma-4 NVFP4 blocked on SM121
 
-## Status (as of 2026-04-25)
+## Status (re-verified 2026-05-05)
 
 - **BF16 variants — WORKING** on our `main-gemma4-sm121` image (SGLang main
   built post-PR-#21952). Both dense (`google/gemma-4-31B-it`) and MoE
@@ -11,9 +11,11 @@
 
 - **NVFP4 variants — STILL BLOCKED.** Both dense (`nvidia/Gemma-4-31B-IT-NVFP4`)
   and MoE (`bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4`) require four sm120/121-
-  specific upstream PRs that have all been **OPEN since 2026-04-16 with no
-  movement** (last verified 2026-04-25 via `gh pr view`). Until these merge,
-  NVFP4 Gemma-4 cannot run on our SM121 hardware.
+  specific upstream PRs. Three (#22929, #22928, #22927) remain **stale since
+  2026-04-16 with no review activity** (re-verified 2026-05-05). The fourth,
+  **#22615, was APPROVED by `kpham-sgl` on 2026-04-22** and rebased onto main
+  on 2026-04-30 (CI re-run requested) — but has not been merged yet, and the
+  three stale PRs still gate NVFP4 Gemma-4 on SM121.
 
 The original v0.5.10 blockers (Transformers fallback, dual head_dim, top_k_experts
 naming) are no longer relevant for our deployment because we build the image
@@ -119,7 +121,7 @@ which is shared across all variants.
 
 ## Upstream PRs
 
-Last `gh pr view` check: 2026-04-25.
+Last `gh pr view` check: 2026-05-05. Three SM120/121 PRs (#22929, #22928, #22927) still no movement since 2026-04-16. **#22615 was APPROVED by `kpham-sgl` on 2026-04-22** and rebased onto main 2026-04-30 (CI re-run requested) but is not yet merged.
 
 | PR | Title | Status | Merged | Relevance |
 |----|-------|--------|--------|-----------|
@@ -128,7 +130,7 @@ Last `gh pr view` check: 2026-04-25.
 | [#22929](https://github.com/sgl-project/sglang/pull/22929) | Add NVFP4 per-expert weight loading for Gemma 4 MoE | **open** | — | Per-expert → fused weight mapping for NVFP4 MoE checkpoints. **No movement since 2026-04-16.** |
 | [#22928](https://github.com/sgl-project/sglang/pull/22928) | fix(sm120): MoE GEGLU activation + FP4 block scale NaN clamp | **open** | — | GEGLU activation for `cutlass_moe_fp4()` + E4M3 NaN clamp. SM120/121 critical. **No movement since 2026-04-16.** |
 | [#22927](https://github.com/sgl-project/sglang/pull/22927) | fix(sm120): NVFP4 NaN from E4M3 scale overflow + 3D tensor shape crashes | **open** | — | Sister PR to #22928, also SM120/121-specific. Affects NVFP4 dense + MoE both. **No movement since 2026-04-16.** |
-| [#22615](https://github.com/sgl-project/sglang/pull/22615) | Fix fp8 KV cache crash with KV-shared layers in triton backend | **open** | — | fp8 kv cache + `num_kv_shared_layers > 0` (Gemma-4 has KV-shared layers). Open since 2026-04-12. |
+| [#22615](https://github.com/sgl-project/sglang/pull/22615) | Fix fp8 KV cache crash with KV-shared layers in triton backend | **open, approved** | — | fp8 kv cache + `num_kv_shared_layers > 0` (Gemma-4 has KV-shared layers). Open since 2026-04-12. **APPROVED by `kpham-sgl` 2026-04-22**, rebased onto main 2026-04-30 — awaiting merge. |
 | [#22408](https://github.com/sgl-project/sglang/pull/22408) | [CI] Adding Gemma 4 to Nightly CI | **merged** | 2026-04-17 | Adds Gemma-4 to nightly accuracy tests. Increases pressure on the open NVFP4 PRs to land cleanly but doesn't itself fix anything for us. |
 | [#23575](https://github.com/sgl-project/sglang/pull/23575) | [AMD] fused qk gemma norm kernels | **merged** | 2026-04-25 | AMD-specific perf optimization, no impact on our NVIDIA SM121 deployment. |
 
@@ -162,9 +164,10 @@ All of the following must be present:
 5. PR #22927 — NVFP4 NaN from E4M3 scale overflow + 3D tensor shape, SM120/121 (**open**)
 6. PR #22615 — fp8 kv cache with KV-shared layers (**open**, may or may not apply)
 
-The four open PRs (#22929, #22928, #22927, #22615) have all been sitting since
-2026-04-12/16 with no review activity through 2026-04-25. Until they merge
-upstream, we have three options:
+The three SM120/121-specific PRs (#22929, #22928, #22927) have been sitting
+since 2026-04-16 with no review activity through 2026-05-05. #22615 was
+APPROVED on 2026-04-22 and rebased on 2026-04-30, but has not been merged yet.
+Until they all merge upstream, we have three options:
 
 - **Wait** — most upstream-maintenance-friendly. No work for us until merge.
 - **Vendor the open PRs as our own patches** in `scripts/build_sm121_image.sh`

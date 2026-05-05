@@ -1,6 +1,6 @@
 # SGLang Upstream Bug: Qwen3.6-27B-FP8 token salad via FP8 scale bypass
 
-## Status (as of 2026-04-29)
+## Status (re-verified 2026-05-04)
 
 - **`Qwen/Qwen3.6-27B-FP8` — BROKEN** on `scitrera/dgx-spark-sglang:0.5.10`. Model
   loads and decode runs, but every request produces multilingual token salad with
