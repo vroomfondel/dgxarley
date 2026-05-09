@@ -1169,9 +1169,23 @@ def _write_result_json(
 ) -> None:
     """Write per-request results and aggregate stats to a JSON file."""
     requests_out = []
+    # Capture leading + trailing snippets of generated text so correctness
+    # regressions (e.g. word-salad / repetition loops) are visible directly
+    # in TESTRESULTS_*.json without having to dig through the bench-job log.
+    SNIPPET_HEAD = 1000
+    SNIPPET_TAIL = 500
     for s in all_stats:
         think_est = len(s.thinking) // 4 if s.thinking else 0
         content_est = len(s.output) // 4 if s.output else 0
+        full_text = (s.thinking or "") + (s.output or "")
+        if len(full_text) > SNIPPET_HEAD + SNIPPET_TAIL:
+            response_snippet = (
+                full_text[:SNIPPET_HEAD]
+                + f"\n…[truncated {len(full_text) - SNIPPET_HEAD - SNIPPET_TAIL} chars]…\n"
+                + full_text[-SNIPPET_TAIL:]
+            )
+        else:
+            response_snippet = full_text
         requests_out.append(
             {
                 "request_id": s.request_id,
@@ -1185,6 +1199,8 @@ def _write_result_json(
                 "tokens_per_sec": round(s.tokens_per_sec, 2) if s.tokens_per_sec > 0 else None,
                 "finish_reason": s.finish_reason or None,
                 "prompt": s.prompt[:120],
+                "response_snippet": response_snippet or None,
+                "response_total_chars": len(full_text) or None,
             }
         )
 
