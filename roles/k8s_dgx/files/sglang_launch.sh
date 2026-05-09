@@ -1066,4 +1066,24 @@ fi
 # Enable custom logit processors (required for per-request thinking_budget via
 # Qwen3ThinkingBudgetLogitProcessor). Safe to always enable — no-op if unused.
 args+=(--enable-custom-logit-processor)
+
+# Echo the exact launch command + relevant ENV to stdout so the head/worker
+# pod logs (and Loki) capture them verbatim. printf '%q ' produces a shell-safe,
+# copy-pasteable form (handles spaces, quotes, JSON args). Logged before exec
+# so it appears even if the server crashes during startup.
+#
+# ENV filter: SGLANG_*, NCCL_*, FLASHINFER_*, TORCH*, CUDA_*, HF_*, plus a few
+# named knobs that gate behavior at runtime (mamba/spec/JIT). Excludes generic
+# vars (PATH, HOME, K8S_*, KUBERNETES_*, POD_*) to keep output focused.
+printf '=== sglang launch ENV (filtered, secrets redacted) ===\n'
+env | grep -E '^(SGLANG_|NCCL_|FLASHINFER_|TORCH(_|INDUCTOR_)|CUDA_|HF_|GLOO_|UCX_|RDMAV_|MASTER_|RANK=|WORLD_SIZE=|LOCAL_RANK=|NODE_RANK=|NNODES=|DIST_INIT_ADDR=|MAMBA_|SPEC_V2)' \
+  | grep -vE '^(SGLANG_EXPECTED_IMAGE_PATTERN=|HF_HUB_OFFLINE_PATH=)' \
+  | sed -E 's/^([A-Z_0-9]*(TOKEN|SECRET|KEY|PASSWORD|PASS|API|CREDENTIAL)[A-Z_0-9]*)=.*/\1=***REDACTED***/' \
+  | LC_ALL=C sort
+printf '=== end sglang launch ENV ===\n'
+
+printf '=== sglang launch command (%d args) ===\n' "${#args[@]}"
+printf '%q ' "${args[@]}"
+printf '\n=== end sglang launch command ===\n'
+
 exec "${args[@]}"
