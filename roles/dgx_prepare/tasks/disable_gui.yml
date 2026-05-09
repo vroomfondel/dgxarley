@@ -128,12 +128,32 @@
 # whatever resolution UEFI/GOP set up at boot — and that is unreliable on the
 # sparks (sometimes 1920x1080, sometimes 800x600 with the same hardware).
 # With KMS enabled, nvidia-drm registers fb0 and does proper EDID detection.
+#
+# When no monitor is attached (or its EDID can't be read) nvidia-modeset falls
+# back to its internal CEA mode list — which tops out at 1024x768. The kernel
+# `video=...M@60` flag does NOT help: nvidia-modeset ignores the DRM cmdline
+# mode-selector. The reliable fix is to inject a synthetic 1920x1080 EDID via
+# drm_kms_helper.edid_firmware so the connector behaves as if a 1080p monitor
+# were attached. The blob lives in roles/dgx_prepare/files/edid_1920x1080.bin
+# (generic Linux 1920x1080@60 EDID, no vendor-specific content).
+- name: Ensure /lib/firmware/edid directory exists
+  ansible.builtin.file:
+    path: /lib/firmware/edid
+    state: directory
+    mode: "0755"
+
+- name: Install synthetic 1920x1080 EDID firmware blob
+  ansible.builtin.copy:
+    src: edid_1920x1080.bin
+    dest: /lib/firmware/edid/1920x1080.bin
+    mode: "0644"
+
 - name: Drop zz-nvidia-drm GRUB snippet (enable nvidia-drm KMS for stable console)
   ansible.builtin.copy:
     dest: /etc/default/grub.d/zz-nvidia-drm.cfg
     mode: "0644"
     content: |
-      GRUB_CMDLINE_LINUX="$GRUB_CMDLINE_LINUX nvidia-drm.modeset=1 video=HDMI-A-1:1920x1080M@60e"
+      GRUB_CMDLINE_LINUX="$GRUB_CMDLINE_LINUX nvidia-drm.modeset=1 drm.edid_firmware=HDMI-A-1:edid/1920x1080.bin"
   register: _grub_nvidia_drm_changed
   when: not _kernel_cmdline_file.stat.exists
 
