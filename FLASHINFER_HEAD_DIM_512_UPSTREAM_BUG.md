@@ -1,17 +1,20 @@
 # FlashInfer Upstream Bug: head_dim=512 not supported (Gemma-4 global attention)
 
-## Status (re-verified 2026-05-05)
+## Status (re-verified 2026-05-09)
 
-**Upstream fix merged and shipped in stable, image rebuild pending.** FlashInfer
-0.6.7.post3's FA2/FA3 attention kernels do not support `head_dim > 256`.
+**Upstream fix merged and shipped in multiple stable releases, image rebuild pending.**
+FlashInfer 0.6.7.post3's FA2/FA3 attention kernels do not support `head_dim > 256`.
 Upstream fix
 [flashinfer PR #2959](https://github.com/flashinfer-ai/flashinfer/pull/2959)
-**merged 2026-04-22**, shipped first in **v0.6.10rc1** (2026-04-30) and then
-in the **v0.6.10 stable release** (2026-05-04). Not runtime-patchable — the
-kernel dispatch table is compiled into the FlashInfer binary, so the cluster
-only benefits once the SGLang image is rebuilt against flashinfer ≥ 0.6.10.
-Current production image still pins 0.6.7.post3, so the
-`attention_backend=triton` workaround remains in effect for now.
+**merged 2026-04-22**, shipped first in **v0.6.10rc1** (2026-04-30), then in the
+**v0.6.10 stable release** (2026-05-04), **v0.6.10.post1** (2026-05-07), and
+**v0.6.11** (2026-05-09 — today). Not runtime-patchable — the kernel dispatch table
+is compiled into the FlashInfer binary, so the cluster only benefits once the
+SGLang image is rebuilt against flashinfer ≥ 0.6.10. Current production image
+still pins 0.6.7.post3, so the `attention_backend=triton` workaround remains in
+effect for now. Note: SGLang v0.5.11 itself only bumped flashinfer to 0.6.8.post1
+(per its release notes), so even that release does not by itself fix this bug —
+the SGLang image must be rebuilt with an explicit flashinfer ≥ 0.6.10 pin.
 
 ## Affected models
 
@@ -85,7 +88,7 @@ FlashInfer gains `head_dim=512` support.
 
 | Repo | PR | Title | Status |
 |------|-----|-------|--------|
-| flashinfer-ai/flashinfer | [#2959](https://github.com/flashinfer-ai/flashinfer/pull/2959) | [Fmha] Add head_dim=512 support for trtllm attention kernels | **merged** (2026-04-22, in v0.6.10rc1 / v0.6.10 stable 2026-05-04) |
+| flashinfer-ai/flashinfer | [#2959](https://github.com/flashinfer-ai/flashinfer/pull/2959) | [Fmha] Add head_dim=512 support for trtllm attention kernels | **merged** (2026-04-22, in v0.6.10rc1 / v0.6.10 / v0.6.10.post1 / v0.6.11) |
 | sgl-project/sglang | [#22079](https://github.com/sgl-project/sglang/pull/22079) | [nvidia] Gemma4 nvfp4 fix | **merged** (2026-04-10) |
 
 PR #22079 in SGLang fixed the **Triton attention** side of the `head_dim=512`

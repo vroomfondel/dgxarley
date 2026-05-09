@@ -77,14 +77,15 @@ See: `roles/k8s_dgx/tasks/ollama.yml` — ConfigMap `ollama-tls-haproxy-config`,
 
 ## Upstream Status
 
-**Still open** — re-verified 2026-05-04. No fix merged. LiteLLM has shipped
-50+ point releases since the original investigation (current stable is
-v1.83.14-stable as of 2026-05-04) but the ollama embedding path has not
-been migrated to the base handler.
+**Still open** — re-verified 2026-05-09. No fix merged. LiteLLM is now at
+**v1.83.14-stable.patch.3** (2026-05-07) with **v1.84.0-rc.1** as pre-release
+(2026-05-05) — the ollama embedding path has still not been migrated to the
+base handler; no PR addressing `ollama_aembeddings` + `ssl_verify` exists
+upstream as of today.
 
 - Related issue: [#6499](https://github.com/BerriAI/litellm/issues/6499) ("How to disable ssl verification for ollama?", closed). Maintainer acknowledged the embedding path was not migrated, but the issue was closed after only the chat path was fixed.
 - The TODO comment `[TODO]: migrate embeddings to a base handler as well.` is still present at the top of `handler.py`.
-- PR [#24704](https://github.com/BerriAI/litellm/pull/24704) (2026-03-28, **still open** as of 2026-05-04) fixes an adjacent embedding bug (model name prefix stripping) but does not address SSL/TLS.
+- PR [#24704](https://github.com/BerriAI/litellm/pull/24704) — adjacent embedding bug (model name prefix stripping). **Still open**, last activity 2026-03-28 (no movement since), does not address SSL/TLS.
 
 **Partial mitigation**: Setting `litellm.ssl_verify = False` **globally before the first embedding call** may work, because the singleton `HTTPHandler` picks up `litellm.ssl_verify` at creation time via `get_ssl_configuration()`. However, this is fragile — it depends on initialization order, and per-request `ssl_verify=false` (as used in our model config) is still silently dropped for the ollama embedding path.
 

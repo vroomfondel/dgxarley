@@ -1,6 +1,6 @@
 # SGLang Upstream Bug: Gemma-4 NVFP4 blocked on SM121
 
-## Status (re-verified 2026-05-05)
+## Status (re-verified 2026-05-09)
 
 - **BF16 variants — WORKING** on our `main-gemma4-sm121` image (SGLang main
   built post-PR-#21952). Both dense (`google/gemma-4-31B-it`) and MoE
@@ -8,28 +8,36 @@
   **180.5 tok/s @ n=8** — the fastest model on the cluster. Required:
   `attention_backend=triton` (FlashInfer crashes on `global_head_dim=512`,
   see `FLASHINFER_HEAD_DIM_512_UPSTREAM_BUG.md`).
+  Note: **SGLang v0.5.11** (released 2026-05-05) merged Gemma-4 native model
+  support (PR #21952 plus follow-ups #22079, #24048, #22842 per the v0.5.11
+  release notes), so the BF16 path is now in stable releases as well — though
+  our deployment remains on the dev1 main build until the next image bump.
 
 - **NVFP4 variants — STILL BLOCKED.** Both dense (`nvidia/Gemma-4-31B-IT-NVFP4`)
   and MoE (`bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4`) require four sm120/121-
   specific upstream PRs. Three (#22929, #22928, #22927) remain **stale since
-  2026-04-16 with no review activity** (re-verified 2026-05-05). The fourth,
+  2026-04-16 with no review activity** (re-verified 2026-05-09). The fourth,
   **#22615, was APPROVED by `kpham-sgl` on 2026-04-22** and rebased onto main
-  on 2026-04-30 (CI re-run requested) — but has not been merged yet, and the
-  three stale PRs still gate NVFP4 Gemma-4 on SM121.
+  on 2026-04-30 (CI re-run requested) — its known blocker
+  ([flashinfer #2959](https://github.com/flashinfer-ai/flashinfer/pull/2959))
+  has since been **merged and shipped** in flashinfer v0.6.10 / .post1 / 0.6.11
+  (latest: 2026-05-09), so the upstream-blocker reasoning kpham-sgl gave on
+  the PR comments no longer applies. Last activity on #22615 still 2026-04-30,
+  no merge yet. The three stale PRs continue to gate NVFP4 Gemma-4 on SM121.
 
 The original v0.5.10 blockers (Transformers fallback, dual head_dim, top_k_experts
 naming) are no longer relevant for our deployment because we build the image
-from SGLang main, not from the v0.5.10 release. The remaining issues are
-NVFP4-MoE-on-SM121-specific.
+from SGLang main, not from the v0.5.10 release — and they are also fixed in
+v0.5.11 as noted above. The remaining issues are NVFP4-MoE-on-SM121-specific.
 
 ## Affected models
 
-| Model | Type | Quantization | Current status (main-gemma4-sm121 image) |
-|-------|------|-------------|----------------------------|
-| `google/gemma-4-26B-A4B-it` | MoE (128 experts, 26B/3.8B active) | BF16 | **STABLE ★** — 39.8 / 114.6 / **180.5** tok/s (n=1/4/8) |
-| `google/gemma-4-31B-it` | Dense (30.7B) | BF16 | **STABLE ★** — 10.6 / 36.8 / **70.6** tok/s (n=1/4/8) |
-| `bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4` | MoE (128 experts, 26B/3.8B active) | NVFP4 | **blocked** — `modelopt_quant.py` crash, needs PRs #22929 + #22928 + #22927 |
-| `nvidia/Gemma-4-31B-IT-NVFP4` | Dense (30.7B) | NVFP4 | **untested** — expected to need PR #22928 + #22927 (dense path skips per-expert loading, but the FP4-on-SM121 NaN/scale issues still apply) |
+| Model                                         | Type                               | Quantization | Current status (main-gemma4-sm121 image)                                                                                                    |
+|-----------------------------------------------|------------------------------------|--------------|---------------------------------------------------------------------------------------------------------------------------------------------|
+| `google/gemma-4-26B-A4B-it`                   | MoE (128 experts, 26B/3.8B active) | BF16         | **STABLE ★** — 39.8 / 114.6 / **180.5** tok/s (n=1/4/8)                                                                                     |
+| `google/gemma-4-31B-it`                       | Dense (30.7B)                      | BF16         | **STABLE ★** — 10.6 / 36.8 / **70.6** tok/s (n=1/4/8)                                                                                       |
+| `bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4` | MoE (128 experts, 26B/3.8B active) | NVFP4        | **blocked** — `modelopt_quant.py` crash, needs PRs #22929 + #22928 + #22927                                                                 |
+| `nvidia/Gemma-4-31B-IT-NVFP4`                 | Dense (30.7B)                      | NVFP4        | **untested** — expected to need PR #22928 + #22927 (dense path skips per-expert loading, but the FP4-on-SM121 NaN/scale issues still apply) |
 
 All use `Gemma4ForConditionalGeneration` as architecture. The BF16 variants
 get a native SGLang model class via PR #21952 (merged 2026-04-07). The NVFP4
@@ -121,7 +129,7 @@ which is shared across all variants.
 
 ## Upstream PRs
 
-Last `gh pr view` check: 2026-05-05. Three SM120/121 PRs (#22929, #22928, #22927) still no movement since 2026-04-16. **#22615 was APPROVED by `kpham-sgl` on 2026-04-22** and rebased onto main 2026-04-30 (CI re-run requested) but is not yet merged.
+Last `gh pr view` check: 2026-05-09. Three SM120/121 PRs (#22929, #22928, #22927) still no movement since 2026-04-16. **#22615 was APPROVED by `kpham-sgl` on 2026-04-22** and rebased onto main 2026-04-30 (CI re-run requested) but is not yet merged. Its previous flashinfer-side blocker ([flashinfer #2959](https://github.com/flashinfer-ai/flashinfer/pull/2959)) shipped in flashinfer v0.6.10–v0.6.11 and is no longer a gating dependency.
 
 | PR | Title | Status | Merged | Relevance |
 |----|-------|--------|--------|-----------|

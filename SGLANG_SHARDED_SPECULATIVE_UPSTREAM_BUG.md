@@ -2,7 +2,16 @@
 
 ## Status
 
-**Unreported** as of 2026-04-29 (re-verified: GitHub search for "sharded_state speculative" / "speculative_draft_load_format sharded" in `sgl-project/sglang` returns no issues or PRs). Bug exists in SGLang v0.5.9, v0.5.10rc0, v0.5.10, and v0.5.10.post1 (latest release; no new SGLang release since 2026-04-09).
+**Unreported** as of 2026-05-09 (re-verified: GitHub search for "sharded_state
+speculative" / "speculative_draft_load_format sharded" in `sgl-project/sglang`
+still returns no issues or PRs). Bug exists in SGLang v0.5.9, v0.5.10rc0, v0.5.10,
+v0.5.10.post1, and **v0.5.11** (released 2026-05-05). The relevant code in v0.5.11
+(`scheduler.py:669–675`) still only overrides `load_format` when
+`speculative_draft_load_format` is explicitly set, leaving the draft model with
+inherited `sharded_state` whenever the user doesn't pass the override flag — same
+failure mode as in 0.5.10. The workaround in `sglang_launch.sh` (force
+`--speculative-draft-load-format auto` when main `load_format=sharded_state`) is
+therefore still required on v0.5.11 / dev1 images.
 
 - File: `sglang/srt/managers/scheduler.py`, method `maybe_init_draft_worker()`
 - Root cause in: `sglang/srt/managers/tp_worker.py`, method `_init_model_config()`

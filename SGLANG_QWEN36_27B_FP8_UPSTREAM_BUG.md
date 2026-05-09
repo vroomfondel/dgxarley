@@ -1,6 +1,6 @@
 # SGLang Upstream Bug: Qwen3.6-27B-FP8 token salad via FP8 scale bypass
 
-## Status (re-verified 2026-05-04)
+## Status (re-verified 2026-05-09)
 
 - **`Qwen/Qwen3.6-27B-FP8` — BROKEN** on `scitrera/dgx-spark-sglang:0.5.10`. Model
   loads and decode runs, but every request produces multilingual token salad with
@@ -8,12 +8,20 @@
   collision in `is_layer_skipped()` silently bypasses FP8 dequantization scaling for
   the fused gate-up projection, yielding garbage logits.
 
-- **Runtime patch applied** in `roles/k8s_dgx/files/sglang_launch.sh` (commit
-  `4323fce`). Status: **pending validation** on next deployment of
-  `Qwen/Qwen3.6-27B-FP8`.
+- **Fix shipped upstream:** PR #23467 (commit `4323fce`) merged to main 2026-04-22.
+  Verified ancestor of:
+  - **SGLang v0.5.11** (released 2026-05-05) — fix is in this release.
+  - Our **dev1 image** `scitrera/dgx-spark-sglang:0.5.10-20260429-dev1` and
+    `xomoxcc/dgx-spark-sglang:0.5.10-20260429-gemma4-sm121-dev1`, both pinned to
+    SGLang main commit `2bbd30a` (2026-04-29) — fix is already in the image, the
+    runtime monkey-patch in `sglang_launch.sh` therefore becomes a no-op (idempotent
+    sentinel: `def _module_path_match` already present).
+  - **NOT in** v0.5.10, v0.5.10.post1, or v0.5.10rc0 — those still need the runtime
+    patch.
 
-The upstream fix is in SGLang `main` (merged 2026-04-22, PR #23467), 592+ commits
-ahead of `v0.5.10`. It is NOT in `v0.5.10`, `v0.5.10.post1`, or `v0.5.10rc0`.
+- **Runtime patch in** `roles/k8s_dgx/files/sglang_launch.sh` is left in place as
+  defense-in-depth: it auto-skips on dev1 / v0.5.11 images (sentinel match) and
+  remains active on the older v0.5.10 / v0.5.10.post1 images.
 
 ## Affected models
 
@@ -150,8 +158,10 @@ quant patches in that file. Three separate replace calls correspond to the three
 diff hunks. Idempotency sentinel: `def _module_path_match` — the patch skips itself
 if that function definition is already present in `utils.py`.
 
-**Status:** Applied as runtime patch in `sglang_launch.sh`; pending validation on
-next deployment of `Qwen/Qwen3.6-27B-FP8`.
+**Status:** No longer needed on v0.5.11 / dev1-based images (PR #23467 is in the
+image itself). The patch's sentinel check (`def _module_path_match` already in
+`utils.py`) makes it a no-op there. Still active on legacy v0.5.10 / v0.5.10.post1
+images.
 
 ## References
 

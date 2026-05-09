@@ -13,7 +13,7 @@ chain is lazily triggered on the first `fp4_quantize()` call, and if that
 first call is inside a traced forward, the build-time filesystem/subprocess
 operations blow up dynamo.
 
-## Status (re-verified 2026-05-04)
+## Status (re-verified 2026-05-09)
 
 **Patch 1 shipped and stable. Patch 2 still unresolved — see
 "Update 2026-04-15 evening" below; no further work on it since.

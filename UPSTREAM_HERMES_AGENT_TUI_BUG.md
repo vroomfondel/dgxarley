@@ -1,22 +1,42 @@
 # NousResearch/hermes-agent Upstream Bug: Spurious npm install at every `dashboard --tui` launch breaks chat tab in non-root containers
 
-## Status (re-verified 2026-05-04)
+## Status (re-verified 2026-05-09)
 
 - **v2026.4.30 (v0.12.0) — BROKEN** in non-root container deployments.
   `hermes dashboard --tui` triggers an npm reinstall on every start; if
   `node_modules` is root-owned (as in the upstream image), the reinstall
   fails with `EACCES` and the TUI chat tab is permanently broken.
 
-- **Partial upstream fix:** [PR #19520](https://github.com/NousResearch/hermes-agent/pull/19520)
-  merged 2026-05-04 — fixes Trigger 1 only (peer-flag field-diff). **No
-  tagged release contains the fix yet** (latest tag is v2026.4.30, cut
-  before the merge). Trigger 2 (workspace-link entries) is **unfixed**
-  in `main`, so even after the next release ships, the workaround in
-  this repo will still be required.
+- **Partial upstream fix (logic):** [PR #19520](https://github.com/NousResearch/hermes-agent/pull/19520)
+  merged 2026-05-04 — fixes Trigger 1 only (peer-flag field-diff).
+  Trigger 2 (workspace-link entries) is **unfixed** in `main`, so the
+  spurious reinstall still fires every start.
+
+- **Partial upstream fix (image):** [PR #21267](https://github.com/NousResearch/hermes-agent/pull/21267)
+  merged 2026-05-07 (issue [#18800](https://github.com/NousResearch/hermes-agent/issues/18800)
+  closed via this PR; salvages [#19303](https://github.com/NousResearch/hermes-agent/pull/19303)).
+  `chown`s `/opt/hermes/ui-tui` and `/opt/hermes/node_modules` to
+  `hermes:hermes` (UID 10000) at image build time so the spurious
+  reinstall can write through. **Helps Docker-compose users running as
+  the image's baked-in `hermes` user (UID 10000)**; does **not** help
+  our deployment (see next section).
+
+- **First tagged release with both fixes: v2026.5.7 / v0.13.0** ("The Tenacity
+  Release"), published 2026-05-07T16:23 UTC — about 3 h after PR #21267 merged
+  (2026-05-07T13:17 UTC) and 3 days after PR #19520 (2026-05-04). Both fixes are
+  in this tag. **Our deployment still requires the workaround** because (a) the
+  build-time `chown` from #21267 doesn't propagate through our `usermod`-based
+  UID remap (see "Why PR #21267 Alone …" below), and (b) Trigger 2 (workspace-link
+  entries) is still unfixed in `main` — #19520 only closes Trigger 1. Re-check
+  on next image bump regardless.
 
 - **Workaround applied** in this repo via `copy-ui-tui` initContainer in
   `roles/k8s_dgx/templates/hermes/hermes_agent_deployment.yaml.j2`. See
-  Workaround section below.
+  Workaround section below. Workaround stays mandatory until **both**
+  the logic fix (Trigger 2) ships **and** we drop the per-user UID
+  remap, OR upstream extends the build-time `chown` to cover arbitrary
+  runtime UIDs (e.g. world-writable `node_modules`, or entrypoint-time
+  `chown -R` of `/opt/hermes/ui-tui`).
 
 ## Affected Versions
 
@@ -97,9 +117,37 @@ entries. PR #19520 does not address this — workspace-aware filtering is absent
   access → the spurious refresh completes in ~1–2 s with no error.
 - **`docker run` as root** (default): same — root owns everything in the image,
   no EACCES.
-- The failure requires the combination of **non-root container UID** +
-  **image-baked `node_modules` owned by root** — standard in hardened K8s
-  deployments (e.g. `runAsUser: 1000`, no `supplementalGroups: 0`).
+- **Docker-compose with the baked `hermes` user (UID 10000)**: PR
+  #21267 shipped in v2026.5.7 (2026-05-07), so the build-time
+  `chown hermes:hermes` now matches the runtime UID → `npm install` succeeds
+  on that release and later.
+- The failure still bites whenever the runtime UID does **not** equal
+  numeric 10000 — typical in hardened K8s deployments and any setup
+  that remaps the in-container user to a host-owned UID
+  (e.g. `runAsUser: 1000`, NFS subPath ownership, our `usermod`-based
+  entrypoint).
+
+## Why PR #21267 Alone Does Not Fix Our Deployment
+
+PR #21267 sets ownership of `/opt/hermes/ui-tui` and
+`/opt/hermes/node_modules` to `hermes:hermes` at build time. The image's
+entrypoint then `usermod`s the `hermes` user from UID 10000 to
+`HERMES_UID/HERMES_GID` (per-user value from `hermes_users` vault). The
+build-time `chown` is **resolved to numeric UID 10000** at layer
+creation, so after `usermod` the files are still numerically owned by
+10000 while our process runs as the per-user UID → EACCES persists.
+
+Concretely: a deployment with `hermes_users[*].uid = 1001` keeps hitting
+the same `npm ERR! code EACCES` on `rename(2)`, because the build-time
+`chown` does not propagate through the entrypoint's UID remap.
+
+The `copy-ui-tui` initContainer in this repo is therefore still
+required after #21267 lands. Removing it would only be safe if upstream
+either (a) extends the entrypoint to `chown -R "$HERMES_UID:$HERMES_GID"
+/opt/hermes/ui-tui /opt/hermes/node_modules` after `usermod`, or (b)
+makes those trees world-writable, or (c) ships the Trigger 2 logic fix
+so `_tui_need_npm_install()` stops returning `True` spuriously and the
+reinstall never fires.
 
 ## Why PR #19520 Alone Does Not Fix Our Deployment
 
@@ -156,13 +204,37 @@ small (~50 MB) and the node has fast local storage.
 ## Tracking
 
 - Issue: [hermes-agent#18800](https://github.com/NousResearch/hermes-agent/issues/18800)
-  — open, P2, labels `comp/tui`, `area/docker`
-- Partial fix PR: [hermes-agent#19520](https://github.com/NousResearch/hermes-agent/pull/19520)
-  — merged 2026-05-04, fixes Trigger 1 only; no release tag yet (latest
-  release is v2026.4.30, predates the merge — re-checked 2026-05-04)
+  — **closed** 2026-05-07 as completed via PR #21267. Note: only the
+  image-permission symptom is resolved; the underlying logic bug
+  (Trigger 2) remains and the issue was closed without addressing it.
+- Logic fix PR (Trigger 1 only): [hermes-agent#19520](https://github.com/NousResearch/hermes-agent/pull/19520)
+  — merged 2026-05-04. Trigger 2 still unfixed in `main`.
+- Image-permission fix PR: [hermes-agent#21267](https://github.com/NousResearch/hermes-agent/pull/21267)
+  — merged 2026-05-07; salvages original PR
+  [#19303](https://github.com/NousResearch/hermes-agent/pull/19303).
+  Adds `chown -R hermes:hermes /opt/hermes/ui-tui /opt/hermes/node_modules`
+  to the Dockerfile. Validated with `tests/tools/test_dockerfile_node_modules_perms.py`.
+- First release containing both fixes: **v2026.5.7 / v0.13.0** (2026-05-07,
+  "The Tenacity Release"). Re-checked 2026-05-09.
 - Our Trigger 2 report (workspace-link entries) posted 2026-05-04 as
   comment on #18800:
   [#issuecomment-4371280956](https://github.com/NousResearch/hermes-agent/issues/18800#issuecomment-4371280956).
   Includes the diagnostic snippet from this document and a one-line
   patch suggestion (add `wanted[k].get("link")` to the missing-check
-  filter).
+  filter). Since #18800 is now closed, this report should be re-filed
+  as a fresh issue if upstream is to act on Trigger 2.
+
+## Action Items on Next Image Bump
+
+1. Pull the new image tag once published; verify `_tui_need_npm_install()`
+   still returns `True` (it will, until Trigger 2 is fixed).
+2. Confirm `/opt/hermes/ui-tui` is owned by numeric UID 10000 inside
+   the new image (PR #21267 effect).
+3. Re-run a per-user pod with `hermes_users[*].uid != 10000` and the
+   `copy-ui-tui` initContainer **disabled**, expect EACCES → confirm
+   workaround still required, re-enable initContainer.
+4. If upstream additionally adds an entrypoint-level chown of
+   `/opt/hermes/ui-tui` to `$HERMES_UID:$HERMES_GID`, re-test without
+   the initContainer; if green, drop the workaround and update this doc.
+5. Open a fresh upstream issue referencing this document if Trigger 2
+   is still unfixed at that point (since #18800 has been closed).

@@ -3,8 +3,8 @@
 **Filing target:** [scitrera/cuda-containers](https://github.com/scitrera/cuda-containers) — build-tooling for `scitrera/dgx-spark-pytorch-dev:2.10.0-v2-cu131`.
 **Suggested issue title:** *PyTorch SDPA `EFFICIENT_ATTENTION` backend silently returns numerically incorrect output on sm121 in `dgx-spark-pytorch-dev:2.10.0-v2-cu131` (works correctly in NGC PyTorch 25.12 with same major version)*
 **Severity:** silent correctness — no NaN, no Inf, no exception, no warning. Output magnitude is 12–27× off from a CPU reference.
-**Status:** observed and isolated to the scitrera build pipeline — same
-defect reproduced byte-identically in both
+**Status (re-verified 2026-05-09):** observed and isolated to the scitrera build
+pipeline — same defect reproduced byte-identically in both
 `scitrera/dgx-spark-pytorch-dev:2.10.0-v2-cu131` and our own rebuild
 `xomoxcc/dgx-spark-pytorch-dev:2.11.0-v1-cu132` (built from scitrera's
 recipe). Production deploy resolved by switching the ComfyUI image

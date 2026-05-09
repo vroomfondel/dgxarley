@@ -21,7 +21,9 @@ openwebui_namespace: "openwebui"
 #default_sglang_image: "scitrera/dgx-spark-sglang:0.5.10"
 # default_sglang_image: "xomoxcc/dgx-spark-sglang:0.5.10-20260429-sm121-dev1"
 # default_sglang_image: "xomoxcc/dgx-spark-sglang:0.5.10-20260429-gemma4-sm121-dev1"
-default_sglang_image: "scitrera/dgx-spark-sglang:0.5.10-20260429-dev1"
+# default_sglang_image: "scitrera/dgx-spark-sglang:0.5.10-20260429-dev1"
+
+default_sglang_image: "scitrera/dgx-spark-sglang:0.5.11"
 
 sglang_nnodes: 4
 
@@ -83,7 +85,7 @@ sglang_model: "Qwen/Qwen3.6-35B-A3B-FP8"
 #sglang_model: "google/gemma-4-31B-it"        # 30.7B dense, multimodal, 256K ctx
 #sglang_model: "google/gemma-4-26B-A4B-it"    # 26B/3.8B-active MoE, multimodal, 256K ctx
 
-sglang_image: "scitrera/dgx-spark-sglang:0.5.10"
+sglang_image: "{{ sglang_model_profiles[sglang_model].sglang_image | default(default_sglang_image) }}"
 
 sglang_context_length: "{{ sglang_model_profiles[sglang_model].context_length }}"
 sglang_kv_cache_dtype: "{{ sglang_model_profiles[sglang_model].kv_cache_dtype }}"
