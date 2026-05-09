@@ -1,0 +1,49 @@
+#
+# Custom recipe: scitrera/dgx-spark-sglang dev1 cut + SM121 sgl-kernel patch.
+#
+# Tracks scitrera's `0.5.10-20260429-dev1` (built 2026-04-29 from SGLang main
+# at commit 2bbd30a27a23) — i.e. v0.5.10 + 832 main-branch commits including
+# PRs #22128 (PCG + speculative), #22836 (EAGLE3/DFLASH aux capture before
+# graph init), #22458 (NCCL AllGather hang), #23062 (Qwen3.5 FP8 per-tensor
+# load crash), #22312 (Qwen3.5-27B GDN accuracy regression), #22515 + #22642
+# (DP/EP NCCL memory + comm-path), #21952 (Gemma 4).
+#
+# Delta from scitrera's official dev1 image: same SGLang commit, but with our
+# six SM121 sgl-kernel patches applied (see CUTLASS_NVFP4_SM121_PRD.md). Built
+# from xomoxcc/dgx-spark-pytorch-dev:2.11.0-v1-cu132 instead of scitrera's
+# (same recipe, our namespace).
+#
+# See SGLANG_v0.5.10-20260429-dev1_VERSION_CHANGES.md for the full delta.
+#
+DOCKERFILE=Dockerfile.sglang-nightly
+TARGET=runtime
+
+# Upstream scitrera/cuda-containers sglang-0.5.10.recipe references
+# scitrera/dgx-spark-pytorch-dev:2.11.0-v1-cu132, which scitrera committed
+# a recipe for on 2026-04-08 but never built+published to Docker Hub (their
+# main-dir recipes are built manually by the maintainer, no CI; the 2.11
+# recipe additionally depends on an unreleased NCCL fork from zyang-dev).
+#
+# To avoid the ~45% perf regression of the 2.10 fallback (see
+# reference_sm121_build_base_regression memory: torch 2.10/cuda 13.1 vs
+# torch 2.11/cuda 13.2 in nvcc codegen + cuBLAS/cuDNN), we build the 2.11
+# base image ourselves via scripts/build_pytorch_base_image.sh and tag it
+# under our namespace. That build consumes the same recipe but with NCCL
+# version resolved to 2.29.7-1 (from zyang-dev/nccl dgxspark-3node-ring
+# makefiles/version.mk).
+#
+# Prerequisite: run scripts/build_pytorch_base_image.sh BEFORE
+# build_sm121_image.sh on the build host. The result is kept in spark4's
+# local podman store — not pushed to Docker Hub — so the sglang build
+# finds it by name without a pull attempt.
+BASE_IMAGE=xomoxcc/dgx-spark-pytorch-dev:2.11.0-v1-cu132
+
+FLASHINFER_VERSION=0.6.8.post1
+TRANSFORMERS_VERSION=5.6.0
+
+# SGLANG_VERSION empty so setuptools-scm derives the version from git history;
+# SGLANG_REF is no longer a tag.
+SGLANG_VERSION=
+SGLANG_REF="2bbd30a27a236421b4dd0782ee31d15897e8c043"
+
+IMAGE_TAG=xomoxcc/dgx-spark-sglang:0.5.10-20260429-sm121-dev1

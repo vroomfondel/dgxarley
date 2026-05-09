@@ -1,0 +1,42 @@
+#
+# Custom recipe: SGLang main (dev1 cut) + Gemma-4 NVFP4 patches.
+#
+# Based on sglang-sm121-dev1.recipe but pins the same dev1 main-branch
+# commit (2bbd30a27a23, 2026-04-29) — picks up the full 832-commit window
+# (PCG + speculative, EAGLE3/DFLASH aux capture, NCCL hang fixes, Qwen3.5
+# FP8/GDN regressions, DP/EP comm path) on top of the existing Gemma-4
+# stack (PR #21952 native support, PR #22079 NVFP4 fix — both already in
+# v0.5.10 lineage).
+#
+# Two additional patches are applied on top (not yet merged upstream — re-
+# verified open as of 2026-05-04):
+#   - sglang-gemma4-nvfp4-expert-loading.patch (PR #22929) — per-expert
+#     NVFP4 weight loading for Gemma-4 MoE
+#   - sglang-gemma4-geglu-nan-clamp.patch (PR #22928) — GEGLU activation
+#     for cutlass_moe_fp4 + FP4 block scale NaN clamp on SM120/121
+#
+# Drift risk: PR #22929 / #22928 last touched upstream 2026-04-16; the new
+# pin is 13 days later, so the patches MAY no longer apply cleanly to the
+# rebased SGLang source. The in-container `patch --dry-run` step inside
+# Dockerfile.sglang-nightly will fail fast if so. Recovery: re-export via
+# `gh pr diff 22929 / 22928` or rebase manually against 2bbd30a.
+#
+# See SGLANG_GEMMA4_UPSTREAM_BUG.md for the full root cause analysis,
+# SGLANG_v0.5.10-20260429-dev1_VERSION_CHANGES.md for the dev1 delta.
+#
+DOCKERFILE=Dockerfile.sglang-nightly
+TARGET=runtime
+
+BASE_IMAGE=xomoxcc/dgx-spark-pytorch-dev:2.11.0-v1-cu132
+
+FLASHINFER_VERSION=0.6.8.post1
+TRANSFORMERS_VERSION=5.6.0
+
+# Pin to the dev1 cut on SGLang main (2026-04-29 23:53 UTC) — the same
+# commit underlying scitrera/dgx-spark-sglang:0.5.10-20260429-dev1.
+# SGLANG_VERSION is left empty so setuptools-scm derives the version
+# from the git history.
+SGLANG_VERSION=
+SGLANG_REF="2bbd30a27a236421b4dd0782ee31d15897e8c043"
+
+IMAGE_TAG=xomoxcc/dgx-spark-sglang:0.5.10-20260429-gemma4-sm121-dev1

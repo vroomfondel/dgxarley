@@ -74,27 +74,40 @@ CUDA_CONTAINERS_DIR="${BUILD_SM121_CC_DIR:-${HOME}/pythondev_workspace/cuda-cont
 # so that re-applying the patch stack is idempotent and drift in the working
 # tree from previous runs is discarded.
 BRANCH_NAME="sm121"
-# Two recipe variants live in scripts/patches/. They differ only in whether
-# the two unmerged Gemma-4-NVFP4 source patches (PRs #22929/#22928) are also
-# applied to the SGLang Python source — the underlying SGLang ref and every
-# other build option are identical between them.
+# Recipe variants live in scripts/patches/. They differ only in (a) which
+# SGLang source ref they pin and (b) whether the two unmerged Gemma-4-NVFP4
+# source patches (PRs #22929/#22928) are also applied — the underlying
+# build steps and SM121 sgl-kernel patches are identical.
 #
-#   sglang-0.5.11-sm121.recipe         — SGLang v0.5.11 + our six SM121 sgl-kernel
-#                                        patches. No Gemma-4 source patches.
+# Current set (v0.5.11 line — DEFAULT):
+#   sglang-0.5.11-sm121.recipe         — SGLang v0.5.11 + six SM121 sgl-kernel
+#                                        patches + flashinfer 0.6.11 bump.
 #                                        Tag: xomoxcc/dgx-spark-sglang:0.5.11-sm121
-#
-#   sglang-0.5.11-gemma4-sm121.recipe  — same base + Gemma-4 NVFP4 source patches
+#   sglang-0.5.11-gemma4-sm121.recipe  — same + Gemma-4 NVFP4 source patches
 #                                        (PRs #22929/#22928) stacked on top.
-#                                        Required for Gemma-4-NVFP4 on SM121.
 #                                        Tag: xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121
 #
+# Legacy set (0.5.10-dev1 line — kept for rollback / A/B comparison):
+#   sglang-sm121-dev1.recipe           — SGLang main commit 2bbd30a (2026-04-29,
+#                                        832 commits past v0.5.10) + same six
+#                                        SM121 sgl-kernel patches + flashinfer
+#                                        0.6.8.post1.
+#                                        Tag: xomoxcc/dgx-spark-sglang:0.5.10-20260429-sm121-dev1
+#   sglang-gemma4-sm121-dev1.recipe    — same + Gemma-4 NVFP4 patches.
+#                                        Tag: xomoxcc/dgx-spark-sglang:0.5.10-20260429-gemma4-sm121-dev1
+#
 # apply_patches() gates the Gemma-4 source patches and the gemma4 Dockerfile
-# patch by `RECIPE_NAME == *gemma4*`, so toggling the two lines below is the
-# only switch needed.
-RECIPE_NAME="sglang-0.5.11-gemma4-sm121"
-IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121"
-#RECIPE_NAME="sglang-0.5.11-sm121"
-#IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.11-sm121"
+# patch by `RECIPE_NAME == *gemma4*`, so any of the four can be selected by
+# toggling the two lines below.
+#RECIPE_NAME="sglang-0.5.11-gemma4-sm121"
+#IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121"
+RECIPE_NAME="sglang-0.5.11-sm121"
+IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.11-sm121"
+
+#RECIPE_NAME="sglang-gemma4-sm121-dev1"
+#IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.10-20260429-gemma4-sm121-dev1"
+#RECIPE_NAME="sglang-sm121-dev1"
+#IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.10-20260429-sm121-dev1"
 
 # Remote build host (spark4, arm64). Uses a registered podman connection
 # with a dedicated unencrypted SSH key. The connection name is derived from
