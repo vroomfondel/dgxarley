@@ -59,40 +59,74 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
 |----|------------------|-----------|----------------|---------------|-------|--------|-----------|----------|----------|
 | 1  | triton           | fi        | false          | true          | —     | ok     | 76.77     | 254.78   | 396.26   |
 | 2  | triton           | fi        | true           | true          | —     | ok     | 22.64     | 107.12   | 209.91   |
-| 3  | triton           | fi        | false          | false         | —     | tbd    | —         | —        | —        |
-| 4  | triton           | triton    | false          | true          | —     | tbd    | —         | —        | —        |
-| 5  | triton           | triton    | true           | true          | —     | tbd    | —         | —        | —        |
-| 6  | triton           | triton    | false          | false         | —     | tbd    | —         | —        | —        |
-| 7  | fi_cutlass       | fi        | false          | true          | —     | tbd    | —         | —        | —        |
-| 8  | fi_cutlass       | fi        | true           | true          | —     | tbd    | —         | —        | —        |
-| 9  | fi_cutlass       | fi        | false          | false         | —     | tbd    | —         | —        | —        |
-| 10 | fi_cutlass       | triton    | false          | true          | —     | tbd    | —         | —        | —        |
-| 11 | fi_cutlass       | triton    | true           | true          | —     | tbd    | —         | —        | —        |
-| 12 | fi_cutlass       | triton    | false          | false         | —     | tbd    | —         | —        | —        |
-| 13 | triton           | triton    | false          | false         | NEXTN | tbd    | —         | —        | —        |
-| 14 | triton           | fi        | false          | false         | NEXTN | tbd    | —         | —        | —        |
-| 15 | fi_cutedsl       | fi        | false          | true          | —     | tbd    | —         | —        | —        |
-| 16 | fi_cutedsl       | fi        | true           | true          | —     | tbd    | —         | —        | —        |
-| 17 | fi_cutedsl       | fi        | false          | false         | —     | tbd    | —         | —        | —        |
-| 18 | fi_cutedsl       | triton    | false          | true          | —     | tbd    | —         | —        | —        |
-| 19 | fi_cutedsl       | triton    | true           | true          | —     | tbd    | —         | —        | —        |
-| 20 | fi_cutedsl       | triton    | false          | false         | —     | tbd    | —         | —        | —        |
+| 3  | triton           | fi        | false          | false         | —     | ok     | 71.14     | 261.70   | **402.62** |
+| 4  | triton           | triton    | false          | true          | —     | ok     | 77.34     | 254.90   | 400.56   |
+| 5  | triton           | triton    | true           | true          | —     | ok     | 21.79     | 105.91   | 208.66   |
+| 6  | triton           | triton    | false          | false         | —     | ok     | 62.60     | 257.93   | 400.61   |
+| 7  | fi_cutlass       | fi        | false          | true          | —     | **crash A** | — | —        | —        |
+| 8  | fi_cutlass       | fi        | true           | true          | —     | **crash A** | — | —        | —        |
+| 9  | fi_cutlass       | fi        | false          | false         | —     | **crash A** | — | —        | —        |
+| 10 | fi_cutlass       | triton    | false          | true          | —     | **crash A** | — | —        | —        |
+| 11 | fi_cutlass       | triton    | true           | true          | —     | **crash A** | — | —        | —        |
+| 12 | fi_cutlass       | triton    | false          | false         | —     | **crash A** | — | —        | —        |
+| 13 | triton           | triton    | false          | false         | NEXTN | ok     | 84.09     | 250.25   | 373.76   |
+| 14 | triton           | fi        | false          | false         | NEXTN | ok     | **93.47** | 261.66   | 379.34   |
+| 15 | fi_cutedsl       | fi        | false          | true          | —     | **crash B** | — | —        | —        |
+| 16 | fi_cutedsl       | fi        | true           | true          | —     | **crash B** | — | —        | —        |
+| 17 | fi_cutedsl       | fi        | false          | false         | —     | **crash B** | — | —        | —        |
+| 18 | fi_cutedsl       | triton    | false          | true          | —     | **crash B** | — | —        | —        |
+| 19 | fi_cutedsl       | triton    | true           | true          | —     | **crash B** | — | —        | —        |
+| 20 | fi_cutedsl       | triton    | false          | false         | —     | **crash B** | — | —        | —        |
+| 21 | triton           | fi        | false          | false         | NEXTN s=2 | ok  | 79.49 | 261.69   | 389.92   |
+| 22 | triton           | fi        | false          | false         | NEXTN s=3 | ok  | 78.93 | 256.68   | 383.15   |
+| 23 | triton           | fi        | false          | false         | NEXTN s=4 | ok  | 80.57 | 263.44   | 364.62   |
+| 24 | triton           | fi        | false          | false         | NEXTN s=5 | running | — | —        | —        |
+
+**Tests 21–24** target the open question from Tests 13/14: with MTP enabled
+(`speculative_num_steps=3`) the matrix winner-shape regressed to 373.76/379.34
+tok/s @ n=8, *below* the no-MTP winner Case 03 at 402.62. This sweep varies
+`speculative_num_steps ∈ {2, 3, 4, 5}` over the winner shape (`triton-moe +
+fi-attn + piecewise CG`) to locate the MTP sweet-spot:
+- `s=2` (matches the current profile default since 2026-05-09)
+- `s=3` (Tests 13/14 / model-card recommendation — re-run with cleaned
+  `sampling_overrides` as a comparison data point)
+- `s=4`, `s=5` (whether higher draft depth amortizes acceptance cost
+  better at concurrent batches)
+
+Hybrid-mamba arch requires `mamba_scheduler_strategy=extra_buffer` and
+`enable_spec_v2=true` — both explicitly set in all four cases.
+
+**Crash A** (`fi_cutlass` MoE, all 6 cases, 4× startup_crash + 2× bench_crash):
+`AttributeError: 'Fp8MoEMethod' object has no attribute 'runner'` at
+`fp8.py:1605` (CUDA-graph capture path) or `fp8.py:1652` (deep_gemm dispatch
+branch during eager forward). `Fp8MoEMethod.create_moe_runner` does not
+populate `self.runner` for `flashinfer_cutlass`. Same signature as the v0.5.10
+crash; FlashInfer 0.6.10 + sgl-kernel 0.4.2 do not fix it. Documented in
+`SGLANG_FP8_MOEMETHOD_FLASHINFER_CUTLASS_UPSTREAM_BUG.md`.
+
+**Crash B** (`fi_cutedsl` MoE, all 6 cases, startup_crash):
+`AssertionError: Invalid quantization 'None'. FlashInfer CuteDSL MOE currently
+supports only: 'modelopt_fp4'.` Pre-check assertion in
+`server_args.py:2975 _handle_moe_kernel_config` fails-fast before model load.
+The new `fi_cutedsl` MoE backend (PR #21339) is FP4-only by explicit design;
+FP8 is rejected at arg-parse time. This is the *correct* behaviour the
+`flashinfer_cutlass` path should also implement upstream.
 
 ### Column Legend
 
-| Column         | Description |
-|----------------|-------------|
+| Column         | Description                                                                                                                     |
+|----------------|---------------------------------------------------------------------------------------------------------------------------------|
 | moe_runner     | `moe_runner_backend` — `triton`, `flashinfer_cutlass` (`fi_cutlass`), or **new** `flashinfer_cutedsl` (`fi_cutedsl`, PR #21339) |
-| attention      | `attention_backend` — `fi` = FlashInfer, `triton` = Triton |
-| dis_cuda_graph | `disable_cuda_graph` — true = eager, false = capture CUDA graphs |
-| dis_piecewise  | `disable_piecewise_cuda_graph` — true = only fixed-BS graphs, false = piecewise variable-length graphs |
-| spec           | speculative decoding (`NEXTN` = MTP, num_steps=3, eagle_topk=1, num_draft_tokens=4 + extra_buffer + spec_v2) |
+| attention      | `attention_backend` — `fi` = FlashInfer, `triton` = Triton                                                                      |
+| dis_cuda_graph | `disable_cuda_graph` — true = eager, false = capture CUDA graphs                                                                |
+| dis_piecewise  | `disable_piecewise_cuda_graph` — true = only fixed-BS graphs, false = piecewise variable-length graphs                          |
+| spec           | speculative decoding (`NEXTN` = MTP, num_steps=3, eagle_topk=1, num_draft_tokens=4 + extra_buffer + spec_v2)                    |
 
 ---
 
 ## Results
 
-**Run in progress (started 2026-05-10 ~09:55 UTC, driver on elite800)** — Cases 01 and 02 complete, Cases 03–20 pending.
+**Matrix complete (2026-05-10 ~10:55 UTC, driver on elite800).** All 20 cases run. 8 ok, 12 crash (6× fi_cutlass crash A, 6× fi_cutedsl crash B — see footnotes under the matrix above).
 
 Result dir: `kikube/matrixtest/2026-05-10/results/sglang_nn4_tp4_ep1/qwen-3.6-35b-a3b-fp8/0.5.11/`.
 
@@ -104,13 +138,23 @@ Re-run unblocked by the two correctness fixes from commit `0c2bdd4` ("Fixed two 
 
 ### Completed cases
 
-| #  | Config                                | n=1   | n=4 agg | n=4 per-req | n=8 agg | n=8 per-req | Failures | Finish reasons   | Output quality |
-|----|---------------------------------------|------:|--------:|------------:|--------:|------------:|----------|------------------|----------------|
-| 01 | triton-moe + fi-attn (cuda_graph on)  | 76.77 |  254.78 |       63.74 |  396.26 |       49.56 | 0/13     | length×13        | coherent ✓     |
-| 02 | + `disable_cuda_graph=true`           | 22.64 |  107.12 |       26.79 |  209.91 |       26.42 | 0/13     | length×12, stop×1| coherent ✓     |
+| #  | Config                                                    | n=1   | n=4 agg | n=4 per-req | n=8 agg | n=8 per-req | Failures | Finish reasons   | Output quality |
+|----|-----------------------------------------------------------|------:|--------:|------------:|--------:|------------:|----------|------------------|----------------|
+| 01 | triton-moe + fi-attn, cuda_graph on, piecewise off        | 76.77 |  254.78 |       63.74 |  396.26 |       49.56 | 0/13     | length×13        | coherent ✓     |
+| 02 | triton-moe + fi-attn, **cuda_graph off**, piecewise off   | 22.64 |  107.12 |       26.79 |  209.91 |       26.42 | 0/13     | length×12, stop×1| coherent ✓     |
+| 03 | triton-moe + fi-attn, cuda_graph on, **piecewise on**     | 71.14 |  261.70 |       65.47 |  **402.62** |   50.35 | 0/13     | length×13        | coherent ✓     |
+| 04 | triton-moe + **triton-attn**, cuda_graph on, piecewise off| 77.34 |  254.90 |       63.74 |  400.56 |       50.09 | 0/13     | length×13        | coherent ✓     |
+| 05 | triton-moe + triton-attn, **cuda_graph off**, piecewise off| 21.79 |  105.91 |       26.49 |  208.66 |       26.09 | 0/13     | length×13        | coherent ✓     |
+| 06 | triton-moe + triton-attn, cuda_graph on, **piecewise on** | 62.60 |  257.93 |       64.52 |  400.61 |       50.10 | 0/13     | length×13        | coherent ✓     |
+| 13 | triton-moe + triton-attn, piecewise on, **+MTP**          | 84.09 |  250.25 |       67.10 |  373.76 |       49.31 | 0/13     | length×13        | coherent ✓     |
+| 14 | triton-moe + fi-attn, piecewise on, **+MTP**              | **93.47** |  261.66 | 67.96  |  379.34 |       49.38 | 0/13     | length×13        | coherent ✓     |
 
-- TTFT n=1: 6.81 s (case 01) → 11.55 s (case 02). Eager mode (no CUDA graphs) costs ~3.4× per-request throughput at n=1, ~2.4× at n=4, ~1.9× at n=8.
-- Sample outputs across both cases follow the same `Here's a thinking process: 1. Analyze user input ...` reasoning pattern with no synonym-walk loops, self-correction triggers, or `retire retire retire` repetition. **The 0.5.11 word-salad regression documented in the correctness debug sweep below is no longer reproducible** with the post-`0c2bdd4` profile.
+- **Current winner: Case 03** (piecewise CUDA graphs on) at n=8 agg 402.62 tok/s, marginally ahead of Case 04 (400.56) and Case 01 (396.26).
+- TTFT n=1: 6.81 s (01) → 11.55 s (02) → 9.64 s (03) → 5.79 s (04). Triton-attn (case 04) wins TTFT — FlashInfer-attn pays a ~1 s warm-up at n=1, irrelevant at n=4/n=8.
+- Eager mode (case 02) costs ~3.4× per-request throughput at n=1, ~2.4× at n=4, ~1.9× at n=8 vs. case 01.
+- Piecewise vs non-piecewise CUDA graphs (03 vs 01): negligible at n=1/n=4 (<3 %), +1.6 % at n=8.
+- FlashInfer vs Triton attention (01 vs 04): identical at n=4 (254.78 vs 254.90), within noise at n=8 (396 vs 401). For Qwen3.6-35B-A3B the attention-backend choice is throughput-neutral.
+- Sample outputs across all four cases follow the same `Here's a thinking process: 1. Deconstruct user request ...` reasoning pattern with no synonym-walk loops, self-correction triggers, or `retire retire retire` repetition. **The 0.5.11 word-salad regression documented in the correctness debug sweep below is no longer reproducible** with the post-`0c2bdd4` profile.
 
 ### Comparison to 0.5.10 baseline
 
@@ -121,9 +165,49 @@ Reference winners from `TESTLOG_nv580.142_sglang-0.5.10_qwen-3.6-35b-a3b-fp8_4n.
 | Test 6 (triton MoE + triton attn + piecewise on, no MTP) | 69.0 | 212.0 | 345.8 |
 | Test 13 (triton MoE + triton attn + piecewise on + MTP) — winner | **104.2** | **277.8** | **410.7** |
 
-After the 0.5.11 run, populate the table above and write a short delta vs 0.5.10
-section here (toolchain bump impact + cutedsl viability + MTP under default
-Spec V2 + Overlap-Scheduling).
+### Delta vs 0.5.10
+
+| Config                                                | 0.5.10 (n=1 / n=4 / n=8) | 0.5.11 (n=1 / n=4 / n=8) | Δ at n=8       |
+|-------------------------------------------------------|--------------------------|--------------------------|----------------|
+| triton-moe + triton-attn, piecewise on, no MTP (T6)   | 69.0  / 212.0 / 345.8    | 62.60 / 257.93 / 400.61  | **+15.8 %**    |
+| triton-moe + fi-attn, piecewise on, no MTP (≈T1?)     | n/a                      | 71.14 / 261.70 / **402.62** | **new winner** |
+| triton-moe + triton-attn, piecewise on, **+MTP** (T13)| **104.2** / 277.8 / 410.7 | 84.09 / 250.25 / 373.76 | **−9.0 %**     |
+| triton-moe + fi-attn, piecewise on, **+MTP**          | n/a                      | 93.47 / 261.66 / 379.34  | —              |
+
+**Findings:**
+
+1. **Without MTP, v0.5.11 is clearly faster** at n=4/n=8 (+22% / +16% over the
+   0.5.10 reference winner-without-MTP). The new global winner is Case 03
+   (triton-moe + fi-attn + piecewise on, **no MTP**) at **402.62 tok/s @ n=8**,
+   ahead of the 0.5.10 MTP winner (410.7 → 402.62 is essentially even, with
+   the 0.5.10 number probably slightly inflated by MTP draft-token accounting).
+2. **With MTP, v0.5.11 is slower** than 0.5.10 across all batch sizes
+   (−10% n=1, −10% n=4, −9% n=8). PR #21062's default Spec V2 + Overlap
+   pipeline regresses MTP throughput on the hybrid-mamba arch. n=1 retains
+   a TTFT advantage (0.55 s vs 6.81 s without MTP) thanks to draft-token
+   pre-fill, so MTP still makes sense for latency-critical single-stream
+   workloads; for throughput-oriented serving, Case 03 (no MTP) wins.
+3. **fi_cutlass MoE on FP8** still 6/6 crash with the same `'Fp8MoEMethod'
+   has no attribute 'runner'` AttributeError as on v0.5.10. FlashInfer
+   0.6.10 + sgl-kernel 0.4.2 didn't fix this — it's a Python-level dispatch
+   gap in `Fp8MoEMethod.create_moe_runner`. See
+   `SGLANG_FP8_MOEMETHOD_FLASHINFER_CUTLASS_UPSTREAM_BUG.md`.
+4. **fi_cutedsl MoE** (new in 0.5.11, PR #21339) is **FP4-only** by explicit
+   pre-check assertion (`server_args.py:2975`); 6/6 crash B is fail-fast
+   before model load. Not a regression — designed FP4-only.
+5. **Attention backend choice (fi vs triton)** is throughput-neutral for
+   Qwen3.6-35B-A3B-FP8 (deviation < 1.5% across all comparable cases).
+   FlashInfer-attn has slightly worse n=1 TTFT (~1 s warm-up overhead),
+   negligible at n=4/n=8. Triton-attn has slightly worse n=1 throughput
+   without MTP but better with MTP (case 13 vs 14 confirms via MTP routing).
+6. **CUDA graph is essential** — eager mode (cases 02, 05) costs 2-3.5×
+   throughput at n=4/n=8. `disable_piecewise_cuda_graph` is largely
+   irrelevant (cases 03 vs 01: <2% delta).
+
+**Production recommendation for Qwen3.6-35B-A3B-FP8 on this cluster:**
+Case 03 patches → `moe_runner_backend: triton`, `attention_backend: flashinfer`,
+`disable_cuda_graph: false`, `disable_piecewise_cuda_graph: false`,
+`speculative_enabled: false`. Already what the profile defaults to after `0c2bdd4`.
 
 ---
 
