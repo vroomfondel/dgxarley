@@ -55,32 +55,32 @@ backend (PR #21339) added in Tests 15–20. See `SGLANG_v0.5.11_VERSION_CHANGES.
 
 All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, mem_fraction_static=0.50, disable_deep_gemm=true, fp8_gemm_runner_backend=cutlass, context_length=262144, num_experts=256, enable_eplb=false` unless noted. FP8 → no FP4 sweep. `cutlass` MoE skipped (FP4-only).
 
-| #  | moe_runner       | attention | dis_cuda_graph | dis_piecewise | spec  | Status | n=1 tok/s | n=4 peak | n=8 peak |
-|----|------------------|-----------|----------------|---------------|-------|--------|-----------|----------|----------|
-| 1  | triton           | fi        | false          | true          | —     | ok     | 76.77     | 254.78   | 396.26   |
-| 2  | triton           | fi        | true           | true          | —     | ok     | 22.64     | 107.12   | 209.91   |
-| 3  | triton           | fi        | false          | false         | —     | ok     | 71.14     | 261.70   | **402.62** |
-| 4  | triton           | triton    | false          | true          | —     | ok     | 77.34     | 254.90   | 400.56   |
-| 5  | triton           | triton    | true           | true          | —     | ok     | 21.79     | 105.91   | 208.66   |
-| 6  | triton           | triton    | false          | false         | —     | ok     | 62.60     | 257.93   | 400.61   |
-| 7  | fi_cutlass       | fi        | false          | true          | —     | **crash A** | — | —        | —        |
-| 8  | fi_cutlass       | fi        | true           | true          | —     | **crash A** | — | —        | —        |
-| 9  | fi_cutlass       | fi        | false          | false         | —     | **crash A** | — | —        | —        |
-| 10 | fi_cutlass       | triton    | false          | true          | —     | **crash A** | — | —        | —        |
-| 11 | fi_cutlass       | triton    | true           | true          | —     | **crash A** | — | —        | —        |
-| 12 | fi_cutlass       | triton    | false          | false         | —     | **crash A** | — | —        | —        |
-| 13 | triton           | triton    | false          | false         | NEXTN | ok     | 84.09     | 250.25   | 373.76   |
-| 14 | triton           | fi        | false          | false         | NEXTN | ok     | **93.47** | 261.66   | 379.34   |
-| 15 | fi_cutedsl       | fi        | false          | true          | —     | **crash B** | — | —        | —        |
-| 16 | fi_cutedsl       | fi        | true           | true          | —     | **crash B** | — | —        | —        |
-| 17 | fi_cutedsl       | fi        | false          | false         | —     | **crash B** | — | —        | —        |
-| 18 | fi_cutedsl       | triton    | false          | true          | —     | **crash B** | — | —        | —        |
-| 19 | fi_cutedsl       | triton    | true           | true          | —     | **crash B** | — | —        | —        |
-| 20 | fi_cutedsl       | triton    | false          | false         | —     | **crash B** | — | —        | —        |
-| 21 | triton           | fi        | false          | false         | NEXTN s=2 | ok  | 79.49 | 261.69   | 389.92   |
-| 22 | triton           | fi        | false          | false         | NEXTN s=3 | ok  | 78.93 | 256.68   | 383.15   |
-| 23 | triton           | fi        | false          | false         | NEXTN s=4 | ok  | **80.57** | **263.44** | 364.62 |
-| 24 | triton           | fi        | false          | false         | NEXTN s=5 | ok  | 57.67 | 221.55   | 339.21   |
+| #  | moe_runner | attention | dis_cuda_graph | dis_piecewise | spec      | Status      | n=1 tok/s | n=4 peak   | n=8 peak   |
+|----|------------|-----------|----------------|---------------|-----------|-------------|-----------|------------|------------|
+| 1  | triton     | fi        | false          | true          | —         | ok          | 76.77     | 254.78     | 396.26     |
+| 2  | triton     | fi        | true           | true          | —         | ok          | 22.64     | 107.12     | 209.91     |
+| 3  | triton     | fi        | false          | false         | —         | ok          | 71.14     | 261.70     | **402.62** |
+| 4  | triton     | triton    | false          | true          | —         | ok          | 77.34     | 254.90     | 400.56     |
+| 5  | triton     | triton    | true           | true          | —         | ok          | 21.79     | 105.91     | 208.66     |
+| 6  | triton     | triton    | false          | false         | —         | ok          | 62.60     | 257.93     | 400.61     |
+| 7  | fi_cutlass | fi        | false          | true          | —         | **crash A** | —         | —          | —          |
+| 8  | fi_cutlass | fi        | true           | true          | —         | **crash A** | —         | —          | —          |
+| 9  | fi_cutlass | fi        | false          | false         | —         | **crash A** | —         | —          | —          |
+| 10 | fi_cutlass | triton    | false          | true          | —         | **crash A** | —         | —          | —          |
+| 11 | fi_cutlass | triton    | true           | true          | —         | **crash A** | —         | —          | —          |
+| 12 | fi_cutlass | triton    | false          | false         | —         | **crash A** | —         | —          | —          |
+| 13 | triton     | triton    | false          | false         | NEXTN     | ok          | 84.09     | 250.25     | 373.76     |
+| 14 | triton     | fi        | false          | false         | NEXTN     | ok          | **93.47** | 261.66     | 379.34     |
+| 15 | fi_cutedsl | fi        | false          | true          | —         | **crash B** | —         | —          | —          |
+| 16 | fi_cutedsl | fi        | true           | true          | —         | **crash B** | —         | —          | —          |
+| 17 | fi_cutedsl | fi        | false          | false         | —         | **crash B** | —         | —          | —          |
+| 18 | fi_cutedsl | triton    | false          | true          | —         | **crash B** | —         | —          | —          |
+| 19 | fi_cutedsl | triton    | true           | true          | —         | **crash B** | —         | —          | —          |
+| 20 | fi_cutedsl | triton    | false          | false         | —         | **crash B** | —         | —          | —          |
+| 21 | triton     | fi        | false          | false         | NEXTN s=2 | ok          | 79.49     | 261.69     | 389.92     |
+| 22 | triton     | fi        | false          | false         | NEXTN s=3 | ok          | 78.93     | 256.68     | 383.15     |
+| 23 | triton     | fi        | false          | false         | NEXTN s=4 | ok          | **80.57** | **263.44** | 364.62     |
+| 24 | triton     | fi        | false          | false         | NEXTN s=5 | ok          | 57.67     | 221.55     | 339.21     |
 
 **Tests 21–24** target the open question from Tests 13/14: with MTP enabled
 (`speculative_num_steps=3`) the matrix winner-shape regressed to 373.76/379.34
@@ -160,9 +160,9 @@ Re-run unblocked by the two correctness fixes from commit `0c2bdd4` ("Fixed two 
 
 Reference winners from `TESTLOG_nv580.142_sglang-0.5.10_qwen-3.6-35b-a3b-fp8_4n.md`:
 
-| Config | n=1 | n=4 | n=8 |
-|--------|----:|----:|----:|
-| Test 6 (triton MoE + triton attn + piecewise on, no MTP) | 69.0 | 212.0 | 345.8 |
+| Config                                                           |       n=1 |       n=4 |       n=8 |
+|------------------------------------------------------------------|----------:|----------:|----------:|
+| Test 6 (triton MoE + triton attn + piecewise on, no MTP)         |      69.0 |     212.0 |     345.8 |
 | Test 13 (triton MoE + triton attn + piecewise on + MTP) — winner | **104.2** | **277.8** | **410.7** |
 
 ### Delta vs 0.5.10
