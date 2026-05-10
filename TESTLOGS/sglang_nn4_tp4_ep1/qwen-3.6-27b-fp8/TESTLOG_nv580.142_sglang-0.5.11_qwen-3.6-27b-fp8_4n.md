@@ -59,17 +59,17 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
 
 | # | attention | dis_piecewise | num_steps | drafts | topk | Status   | n=1 tok/s | n=4 peak | n=8 peak   |
 |---|-----------|---------------|-----------|--------|------|----------|-----------|----------|------------|
-| 7 | fi        | true          | 3         | 4      | 1    | ok       | 43.14     | 144.60   | **257.73** |
-| 8 | triton    | true          | 3         | 4      | 1    | running† | 45.36     | 143.69   | tbd        |
+| 7 | fi        | true          | 3         | 4      | 1    | ok  | 43.14     | 144.60   | **257.73** |
+| 8 | triton    | true          | 3         | 4      | 1    | ok† | 45.36     | 143.69   | 242.70     |
 
-† Case 08 n=1 finished with `stop` (model emitted EOS) — single request so the 45.36 tok/s reflects natural early termination, not a kill. n=4 was 4/4 length. n=8 still pending.
+† Case 08 n=1 finished with `stop` (model emitted EOS naturally). n=4/n=8 both 4/4 / 8/8 length, coherent. Compared to 0.5.10 (Test 8 = 36.6 / 152.6 / 239.4): n=1 +24 %, n=4 −5.8 %, n=8 +1.4 % — basically tied at n=8.
 
 ### Block C: winner-shape `speculative_num_steps` sweep (fi + CG on + piecewise off + MTP), Tests 9–12
 
 | #  | num_steps | drafts | topk | Status | n=1 tok/s | n=4 peak | n=8 peak |
 |----|-----------|--------|------|--------|-----------|----------|----------|
-| 9  | 2         | 4      | 1    | tbd    | —         | —        | —        |
-| 10 | 3         | 4      | 1    | tbd    | —         | —        | —        |
+| 9  | 2         | 4      | 1    | ok      | 41.17     | 148.91   | 253.76   |
+| 10 | 3         | 4      | 1    | running | 45.68     | tbd      | tbd      |
 | 11 | 4         | 4      | 1    | tbd    | —         | —        | —        |
 | 12 | 5         | 4      | 1    | tbd    | —         | —        | —        |
 
@@ -143,6 +143,11 @@ Result dir: `kikube/matrixtest/2026-05-10/results/sglang_nn4_tp4_ep1/qwen-3.6-27
 | ~13:38      | 07   | 8 | **257.73** | 8/8 length, coherent. **+52 % vs Case 03 non-MTP winner @ n=8**                         |
 | ~13:40      | 08   | 1 |      45.36 | TTFT 0.79 s, **finish=stop** (natural EOS, single request), coherent                    |
 | ~13:43      | 08   | 4 |     143.69 | TTFT 1.27 s, 4/4 length, coherent. Tracking Case 07 (144.60) within noise               |
+| ~13:46      | 08   | 8 |     242.70 | 8/8 length, coherent. Case 07 (fi-MTP) wins by 6.2 % at n=8 (257.73 vs 242.70)          |
+| ~13:48      | 09   | 1 |      41.17 | TTFT 0.67 s, length, coherent. num_steps=2 — slightly behind Case 07 at n=1 (43.14)     |
+| ~13:49      | 09   | 4 |     148.91 | 4/4 length. `"thinking thinking sequence"` stutter visible at n=4 — bounded             |
+| ~13:53      | 09   | 8 |     253.76 | 8/8 length, coherent. num_steps=2 within 1.5 % of Case 07 (s=3) at n=8                  |
+| ~13:55      | 10   | 1 |      45.68 | TTFT 4.83 s, length, coherent. num_steps=3 re-run — n=1 +5.9 % vs Case 07 (43.14)       |
 
 ### Block A (no-MTP) summary vs 0.5.10
 
