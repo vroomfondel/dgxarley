@@ -138,16 +138,16 @@ Re-run unblocked by the two correctness fixes from commit `0c2bdd4` ("Fixed two 
 
 ### Completed cases
 
-| #  | Config                                                    | n=1   | n=4 agg | n=4 per-req | n=8 agg | n=8 per-req | Failures | Finish reasons   | Output quality |
-|----|-----------------------------------------------------------|------:|--------:|------------:|--------:|------------:|----------|------------------|----------------|
-| 01 | triton-moe + fi-attn, cuda_graph on, piecewise off        | 76.77 |  254.78 |       63.74 |  396.26 |       49.56 | 0/13     | length×13        | coherent ✓     |
-| 02 | triton-moe + fi-attn, **cuda_graph off**, piecewise off   | 22.64 |  107.12 |       26.79 |  209.91 |       26.42 | 0/13     | length×12, stop×1| coherent ✓     |
-| 03 | triton-moe + fi-attn, cuda_graph on, **piecewise on**     | 71.14 |  261.70 |       65.47 |  **402.62** |   50.35 | 0/13     | length×13        | coherent ✓     |
-| 04 | triton-moe + **triton-attn**, cuda_graph on, piecewise off| 77.34 |  254.90 |       63.74 |  400.56 |       50.09 | 0/13     | length×13        | coherent ✓     |
-| 05 | triton-moe + triton-attn, **cuda_graph off**, piecewise off| 21.79 |  105.91 |       26.49 |  208.66 |       26.09 | 0/13     | length×13        | coherent ✓     |
-| 06 | triton-moe + triton-attn, cuda_graph on, **piecewise on** | 62.60 |  257.93 |       64.52 |  400.61 |       50.10 | 0/13     | length×13        | coherent ✓     |
-| 13 | triton-moe + triton-attn, piecewise on, **+MTP**          | 84.09 |  250.25 |       67.10 |  373.76 |       49.31 | 0/13     | length×13        | coherent ✓     |
-| 14 | triton-moe + fi-attn, piecewise on, **+MTP**              | **93.47** |  261.66 | 67.96  |  379.34 |       49.38 | 0/13     | length×13        | coherent ✓     |
+| #  | Config                                                      |       n=1 | n=4 agg | n=4 per-req |    n=8 agg | n=8 per-req | Failures | Finish reasons    | Output quality |
+|----|-------------------------------------------------------------|----------:|--------:|------------:|-----------:|------------:|----------|-------------------|----------------|
+| 01 | triton-moe + fi-attn, cuda_graph on, piecewise off          |     76.77 |  254.78 |       63.74 |     396.26 |       49.56 | 0/13     | length×13         | coherent ✓     |
+| 02 | triton-moe + fi-attn, **cuda_graph off**, piecewise off     |     22.64 |  107.12 |       26.79 |     209.91 |       26.42 | 0/13     | length×12, stop×1 | coherent ✓     |
+| 03 | triton-moe + fi-attn, cuda_graph on, **piecewise on**       |     71.14 |  261.70 |       65.47 | **402.62** |       50.35 | 0/13     | length×13         | coherent ✓     |
+| 04 | triton-moe + **triton-attn**, cuda_graph on, piecewise off  |     77.34 |  254.90 |       63.74 |     400.56 |       50.09 | 0/13     | length×13         | coherent ✓     |
+| 05 | triton-moe + triton-attn, **cuda_graph off**, piecewise off |     21.79 |  105.91 |       26.49 |     208.66 |       26.09 | 0/13     | length×13         | coherent ✓     |
+| 06 | triton-moe + triton-attn, cuda_graph on, **piecewise on**   |     62.60 |  257.93 |       64.52 |     400.61 |       50.10 | 0/13     | length×13         | coherent ✓     |
+| 13 | triton-moe + triton-attn, piecewise on, **+MTP**            |     84.09 |  250.25 |       67.10 |     373.76 |       49.31 | 0/13     | length×13         | coherent ✓     |
+| 14 | triton-moe + fi-attn, piecewise on, **+MTP**                | **93.47** |  261.66 |       67.96 |     379.34 |       49.38 | 0/13     | length×13         | coherent ✓     |
 
 - **Current winner: Case 03** (piecewise CUDA graphs on) at n=8 agg 402.62 tok/s, marginally ahead of Case 04 (400.56) and Case 01 (396.26).
 - TTFT n=1: 6.81 s (01) → 11.55 s (02) → 9.64 s (03) → 5.79 s (04). Triton-attn (case 04) wins TTFT — FlashInfer-attn pays a ~1 s warm-up at n=1, irrelevant at n=4/n=8.
@@ -167,12 +167,12 @@ Reference winners from `TESTLOG_nv580.142_sglang-0.5.10_qwen-3.6-35b-a3b-fp8_4n.
 
 ### Delta vs 0.5.10
 
-| Config                                                | 0.5.10 (n=1 / n=4 / n=8) | 0.5.11 (n=1 / n=4 / n=8) | Δ at n=8       |
-|-------------------------------------------------------|--------------------------|--------------------------|----------------|
-| triton-moe + triton-attn, piecewise on, no MTP (T6)   | 69.0  / 212.0 / 345.8    | 62.60 / 257.93 / 400.61  | **+15.8 %**    |
-| triton-moe + fi-attn, piecewise on, no MTP (≈T1?)     | n/a                      | 71.14 / 261.70 / **402.62** | **new winner** |
-| triton-moe + triton-attn, piecewise on, **+MTP** (T13)| **104.2** / 277.8 / 410.7 | 84.09 / 250.25 / 373.76 | **−9.0 %**     |
-| triton-moe + fi-attn, piecewise on, **+MTP**          | n/a                      | 93.47 / 261.66 / 379.34  | —              |
+| Config                                                 | 0.5.10 (n=1 / n=4 / n=8)  | 0.5.11 (n=1 / n=4 / n=8)    | Δ at n=8       |
+|--------------------------------------------------------|---------------------------|-----------------------------|----------------|
+| triton-moe + triton-attn, piecewise on, no MTP (T6)    | 69.0  / 212.0 / 345.8     | 62.60 / 257.93 / 400.61     | **+15.8 %**    |
+| triton-moe + fi-attn, piecewise on, no MTP (≈T1?)      | n/a                       | 71.14 / 261.70 / **402.62** | **new winner** |
+| triton-moe + triton-attn, piecewise on, **+MTP** (T13) | **104.2** / 277.8 / 410.7 | 84.09 / 250.25 / 373.76     | **−9.0 %**     |
+| triton-moe + fi-attn, piecewise on, **+MTP**           | n/a                       | 93.47 / 261.66 / 379.34     | —              |
 
 **Findings:**
 
