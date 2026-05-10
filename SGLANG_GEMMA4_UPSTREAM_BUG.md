@@ -1,29 +1,34 @@
 # SGLang Upstream Bug: Gemma-4 NVFP4 blocked on SM121
 
-## Status (re-verified 2026-05-09)
+## Status (re-verified 2026-05-10)
 
-- **BF16 variants — WORKING** on our `main-gemma4-sm121` image (SGLang main
-  built post-PR-#21952). Both dense (`google/gemma-4-31B-it`) and MoE
-  (`google/gemma-4-26B-A4B-it`) deploy and serve, with the MoE producing
-  **180.5 tok/s @ n=8** — the fastest model on the cluster. Required:
-  `attention_backend=triton` (FlashInfer crashes on `global_head_dim=512`,
-  see `FLASHINFER_HEAD_DIM_512_UPSTREAM_BUG.md`).
+- **BF16 variants — WORKING** on our **`xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121`**
+  image (SGLang **v0.5.11** + SM121 sgl-kernel patches + flashinfer 0.6.11 +
+  the two locally vendored Gemma-4 NVFP4 source patches). Both dense
+  (`google/gemma-4-31B-it`) and MoE (`google/gemma-4-26B-A4B-it`) deploy and
+  serve, with the MoE producing **180.5 tok/s @ n=8** — the fastest model on
+  the cluster. Required: `attention_backend=triton` (the FlashInfer
+  `global_head_dim=512` blocker is now technically resolved by flashinfer 0.6.11
+  in this image, see `FLASHINFER_HEAD_DIM_512_UPSTREAM_BUG.md`, but the
+  triton-backend numbers above are what we currently bench against).
   Note: **SGLang v0.5.11** (released 2026-05-05) merged Gemma-4 native model
   support (PR #21952 plus follow-ups #22079, #24048, #22842 per the v0.5.11
-  release notes), so the BF16 path is now in stable releases as well — though
-  our deployment remains on the dev1 main build until the next image bump.
+  release notes), so the BF16 path is now in stable releases. Our `0.5.11-gemma4-sm121`
+  recipe is built on top of v0.5.11 — the older dev1 / `main-gemma4-sm121`
+  images are no longer needed for BF16 variants and are kept for rollback only.
 
 - **NVFP4 variants — STILL BLOCKED.** Both dense (`nvidia/Gemma-4-31B-IT-NVFP4`)
   and MoE (`bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4`) require four sm120/121-
   specific upstream PRs. Three (#22929, #22928, #22927) remain **stale since
-  2026-04-16 with no review activity** (re-verified 2026-05-09). The fourth,
+  2026-04-16 with no review activity** (re-verified 2026-05-10). The fourth,
   **#22615, was APPROVED by `kpham-sgl` on 2026-04-22** and rebased onto main
   on 2026-04-30 (CI re-run requested) — its known blocker
   ([flashinfer #2959](https://github.com/flashinfer-ai/flashinfer/pull/2959))
-  has since been **merged and shipped** in flashinfer v0.6.10 / .post1 / 0.6.11
-  (latest: 2026-05-09), so the upstream-blocker reasoning kpham-sgl gave on
-  the PR comments no longer applies. Last activity on #22615 still 2026-04-30,
-  no merge yet. The three stale PRs continue to gate NVFP4 Gemma-4 on SM121.
+  has since been **merged and shipped** in flashinfer v0.6.10 / .post1 / 0.6.11,
+  so the upstream-blocker reasoning kpham-sgl gave on the PR comments no
+  longer applies. **Re-checked 2026-05-10 via `gh pr view 22615`: state still
+  OPEN, last update 2026-04-30T01:16:18Z, mergeable=UNKNOWN, no merge.** The
+  three stale PRs continue to gate NVFP4 Gemma-4 on SM121.
 
 The original v0.5.10 blockers (Transformers fallback, dual head_dim, top_k_experts
 naming) are no longer relevant for our deployment because we build the image
@@ -32,7 +37,7 @@ v0.5.11 as noted above. The remaining issues are NVFP4-MoE-on-SM121-specific.
 
 ## Affected models
 
-| Model                                         | Type                               | Quantization | Current status (main-gemma4-sm121 image)                                                                                                    |
+| Model                                         | Type                               | Quantization | Current status (`0.5.11-gemma4-sm121` image)                                                                                                |
 |-----------------------------------------------|------------------------------------|--------------|---------------------------------------------------------------------------------------------------------------------------------------------|
 | `google/gemma-4-26B-A4B-it`                   | MoE (128 experts, 26B/3.8B active) | BF16         | **STABLE ★** — 39.8 / 114.6 / **180.5** tok/s (n=1/4/8)                                                                                     |
 | `google/gemma-4-31B-it`                       | Dense (30.7B)                      | BF16         | **STABLE ★** — 10.6 / 36.8 / **70.6** tok/s (n=1/4/8)                                                                                       |
@@ -146,11 +151,11 @@ Last `gh pr view` check: 2026-05-09. Three SM120/121 PRs (#22929, #22928, #22927
 
 ### BF16 variants (google/gemma-4-*) — DONE
 
-Minimum was PR #21952 (native Gemma-4). Already merged into main and baked
-into our `xomoxcc/dgx-spark-sglang:main-gemma4-sm121` image. Both
-`google/gemma-4-31B-it` (dense) and `google/gemma-4-26B-A4B-it` (MoE) deploy
-and serve. The model profiles in `roles/k8s_dgx/model_profiles/` are pinned
-to the working configuration:
+Minimum was PR #21952 (native Gemma-4). Now in stable SGLang **v0.5.11**, baked
+into our `xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121` image (which is what
+the BF16 profiles point at). Both `google/gemma-4-31B-it` (dense) and
+`google/gemma-4-26B-A4B-it` (MoE) deploy and serve. The model profiles in
+`roles/k8s_dgx/model_profiles/` are pinned to the working configuration:
 
 - `attention_backend: triton` (mandatory — FlashInfer crashes on `head_dim=512`)
 - `kv_cache_dtype: fp8_e4m3`

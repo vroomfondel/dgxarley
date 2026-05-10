@@ -1,7 +1,7 @@
 # Hybrid-Mamba Word-Scramble Investigation — Qwen3.6-35B-A3B-FP8 on SGLang v0.5.10/v0.5.11
 
-**Status (2026-05-09 22:18): RESOLVED.** Two distinct correctness bugs identified
-AND fixed:
+**Status (2026-05-10 09:40): FULLY RESOLVED on both versions.** Two distinct
+correctness bugs identified AND fixed:
 
 - **Bug A** (`is_layer_skipped` substring) → runtime patch in `sglang_launch.sh`
   (idempotent on both v0.5.10 and v0.5.11).
@@ -9,20 +9,29 @@ AND fixed:
   `presence_penalty=1.5 + frequency_penalty=0.5 + min_tokens=4` block in the
   model profile.
 
-Verified clean reproduction on v0.5.10 + patch + no overrides: Test 00 baseline
-delivers **66.09 / 255.79 / 394.28 tok/s @ n=1/4/8, 0 fails, 100% coherent
-output, 0 word-salad markers** — better than the original 0.5.10 winner
-(68.6 / 214.7 / 344.1). v0.5.11 expected to behave the same (next experiment).
+**Verified on the full 6-case correctness-debug matrix on BOTH v0.5.10 and v0.5.11.**
+12/12 cases run clean (0 fails, 0 word-salad markers, 100% coherent output).
+v0.5.11 is on average **slightly faster** than v0.5.10 (+9% n=1 baseline).
+Best-of-matrix is `triton-attn` baseline at **88–90 tok/s @ n=1**, +33% vs
+fi-attn — confirming the original 0.5.10 TESTLOG Test 6 "STABLE ★" winner.
 
-The "hybrid-mamba multi-request race" hypothesis explored earlier in this
-document was **wrong**: the bug was not concurrency, not the mamba scheduler,
-not overlap-scheduling, not the attention backend. It was a simple over-
-aggressive sampling-penalty stack that drove the Logit-Distribution onto
-low-frequency synonyms during long decodes. That looked like "cross-request
-state mixing" because longer multi-request batches had more accumulated
-penalty mass per request. Correlation, not causation. Lesson: try the cheapest
-disqualifier first (Experiment 2 in the original TODO list) before chasing
-deep-stack hypotheses.
+The earlier "hybrid-mamba multi-request race" / "0.5.11-regression" hypothesis
+was **completely wrong**. The bug was not concurrency, not the mamba
+scheduler, not overlap-scheduling, not the attention backend, and not
+v0.5.11-specific. It was a simple over-aggressive sampling-penalty stack that
+drove the logit distribution onto low-frequency synonyms during long decodes.
+That looked like "cross-request state mixing" because longer multi-request
+batches had more accumulated penalty mass per request. It looked like a
+"v0.5.11 regression" because the original 0.5.10 winner-bench ran with
+`recommended_sampling` only, while later benches added `sampling_overrides` on
+top — implicitly comparing apples to oranges. Correlation, not causation.
+
+**Production recommendation: v0.5.11 is fine as default.** The earlier "pin
+to v0.5.10" advice is no longer necessary; v0.5.11 with the runtime patch (which
+is a no-op there since #23467 is upstream) and the cleaned model profile
+delivers throughput parity-or-better with v0.5.10 plus the v0.5.11 feature set
+(native Gemma 4, Qwen3.6, GLM-5.1, FlashInferCuteDslMoE backend, FA3 community
+kernels, etc.).
 
 ---
 
@@ -143,14 +152,33 @@ observed.
 `roles/k8s_dgx/model_profiles/qwen-qwen3.6-35b-a3b-fp8.yml`. Done at
 2026-05-09 22:00.
 
-**Verification (2026-05-09 22:14):** Test 00 baseline_reproducer on v0.5.10
-with the `is_layer_skipped` patch and no `sampling_overrides`:
-- n=1: 66.09 tok/s, finish=length (long but coherent reasoning)
-- n=4: **255.79** tok/s (+18% vs 217.05 with overrides)
-- n=8: **394.28** tok/s (+13% vs 347.49 with overrides), 0/8 fails
-- Output verified manually for one full thinking block: structured
-  OOP-vs-FP technical reasoning, clean section hierarchy, accurate code
-  examples, **zero word-salad markers, zero self-correction triggers**.
+**Verification (full 6-case matrix on both v0.5.10 and v0.5.11, 2026-05-10 09:40):**
+
+|  Case | overlap | mamba        | attn       |    v0.5.10 n=1 |    n=4 |    n=8 |    v0.5.11 n=1 |    n=4 |    n=8 | Word-salad |
+|------:|---------|--------------|------------|---------------:|-------:|-------:|---------------:|-------:|-------:|-----------:|
+|    00 | on      | extra_buffer | fi         |          66.09 | 255.79 | 394.28 |          72.37 | 261.39 | 393.44 |          0 |
+|    01 | off     | extra_buffer | fi         |          62.83 | 213.78 | 332.34 |          69.14 | 214.57 | 347.44 |          0 |
+|    02 | on      | ""           | fi         |          67.55 | 190.44 | 337.86 |          66.18 | 214.02 | 341.78 |          0 |
+|    03 | off     | ""           | fi         |          69.23 | 215.50 | 336.25 |          62.06 | 215.77 | 342.12 |          0 |
+| **04**| on      | extra_buffer | **triton** |      **88.11** | 255.88 | 398.23 |      **89.76** | 255.58 | 399.97 |          0 |
+|    05 | off     | extra_buffer | triton     |          69.05 | 208.49 | 334.42 |          64.05 | 211.20 | 345.30 |          0 |
+
+12/12 cases: 0 fails, 0 repetition-kills, 0 word-salad markers, all
+`finish_reason=length=3072` (long-but-coherent thinking). Output spot-checked
+manually on Test 00 (OOP vs FP teaching) and Test 04 (triton-attn at n=1) —
+both pristine.
+
+**Surprise findings:**
+- **Test 04 (triton-attn at n=1) is the absolute throughput winner** on both
+  versions: 88.11 / 89.76 tok/s vs ~66/72 with fi-attn → **+33% n=1**. n=4
+  and n=8 are within run-to-run noise. This matches the original 0.5.10
+  TESTLOG Test 6 "STABLE ★" winner shape. The model profile already has
+  `attention_backend: triton`, so no change needed.
+- **v0.5.11 ≥ v0.5.10 across the matrix.** Test 00 baseline n=1 is +9% on
+  v0.5.11 (72.37 vs 66.09), n=4 +2%, n=8 within noise. No regression.
+- **`mamba_scheduler_strategy=""` (no_buffer)** has a small n=1 advantage on
+  v0.5.10 (67.55 vs 66.09) but loses on n=4 (190 vs 256). Not worth flipping
+  for multi-request workloads.
 
 **Status: closed.** Penalty stack should NEVER have been added to the
 production profile — the model card's `recommended_sampling`
@@ -159,15 +187,21 @@ its own; the additional `frequency_penalty=0.5` + `min_tokens=4` were
 bench-harness anti-repetition workarounds that made the underlying
 "thinking phase rambles" problem dramatically worse instead of better.
 
-### Bug C — Hypothetical hybrid-mamba multi-request race (NOT REAL)
+### Bug C — Hypothetical hybrid-mamba multi-request race (FALSIFIED)
 
 The diagnostic matrix initially suggested a hybrid-mamba concurrency race
 because all six cases (varying overlap, mamba scheduler, attention backend)
 showed word-salad at n≥4. After Bug B was identified as the actual driver,
-re-running with `sampling_overrides` removed produced fully coherent output
-across all batch sizes. The matrix evidence retroactively reads as: every
-case had the penalty stack active, every case rambled, switching unrelated
-knobs had no effect.
+re-running the **full 6-case matrix on both v0.5.10 and v0.5.11** with
+`sampling_overrides` removed produced fully coherent output across all batch
+sizes (12/12 cases clean, 0 word-salad markers, 0 fails).
+
+Specifically, the previously "smoking-gun" observation that
+**Test 04 (triton-attn) on v0.5.11 produced word-salad even at n=1
+single-request** (which seemed to rule out concurrency-only explanations)
+was a Bug B artifact. With overrides removed, Test 04 on v0.5.11 delivers
+89.76 tok/s @ n=1 with pristine output — and is in fact the matrix winner
+for n=1 throughput on both versions.
 
 The earlier subagent investigation produced three root-cause candidates
 (`packed_modules_mapping`, sgl-kernel 0.4.2 toolchain, sampler state mixing).
@@ -177,14 +211,9 @@ It is not "cross-request state mixing in the custom logit processor"; it is
 preference, regardless of concurrency." The custom logit processor default
 flip in v0.5.11 was a red herring — the penalty handling itself is stable.
 
-Tests 04/05 on v0.5.11 (which showed word-salad even at n=1 single-request)
-also fit Bug B: at the bench's 3072-token output cap, even a single request
-accumulates enough penalty mass to drift into synonym territory; n=1 just
-gets there a bit later than n=8 because the per-request decode length is the
-same but the wall-time is longer.
-
-**Action:** none. Bug B fix subsumes Bug C. Skip the BF16 / sgl-kernel /
-27B-sibling experiments — they are unnecessary now.
+**Action:** none. Bug B fix subsumes Bug C entirely. The BF16 / sgl-kernel-pin /
+27B-sibling / packed_modules_mapping experiments listed in the original TODO
+list are all unnecessary.
 
 After Bug A is mitigated, a residual word-salad pattern remains: 1–2 explicit
 synonym-walks + several self-correction triggers per test case, plus 50–80% of
@@ -374,19 +403,22 @@ mid-stream-correct.
 - [x] **Bug A patch restored** in `roles/k8s_dgx/files/sglang_launch.sh`.
 - [x] **`sampling_overrides` removed** from
   `roles/k8s_dgx/model_profiles/qwen-qwen3.6-35b-a3b-fp8.yml`.
-- [ ] **Re-run a clean MTP bench on v0.5.10** with the restored Test-13-
-  winner profile (now back at `speculative_num_steps: 3`, no overrides) to
-  confirm the original 104.2 / 277.8 / 410.7 tok/s @ n=1/4/8 numbers. The
-  no-MTP baseline already exceeds the original (66 / 256 / 394).
-- [ ] **Re-run the v0.5.11 baseline** with no `sampling_overrides` to confirm
-  that v0.5.11 also produces coherent output once the penalty driver is
-  removed. If yes (expected): v0.5.11 is fully usable for Qwen3.6-35B-FP8
-  and the "pin to 0.5.10" recommendation is no longer necessary.
-- [ ] **Audit other model profiles** for similar bench-only `sampling_overrides`
-  blocks that pile penalty mass on top of `recommended_sampling`. If any other
-  profile has the same kind of `presence_penalty + frequency_penalty + min_tokens`
-  stack, it likely has a quieter version of the same drift problem on long
-  decodes.
+- [x] **Re-run v0.5.11 correctness-debug matrix without overrides** —
+  12/12 clean, 0 fails, throughput parity-or-better than v0.5.10.
+  v0.5.11 confirmed usable as default.
+- [ ] **Re-run a clean MTP bench on v0.5.{10,11}** with the restored
+  Test-13-winner profile (`speculative_enabled: true`,
+  `speculative_num_steps: 3`, `mamba_scheduler_strategy: extra_buffer`,
+  `enable_spec_v2: true`, no overrides) to confirm the original
+  104.2 / 277.8 / 410.7 tok/s @ n=1/4/8 numbers. Expected to match or
+  exceed since the no-MTP baseline already exceeds the original
+  (88 / 256 / 398 with triton-attn vs 68.6 / 214.7 / 344.1 original).
+- [ ] **Audit other model profiles** for similar bench-only
+  `sampling_overrides` blocks that pile penalty mass on top of
+  `recommended_sampling`. Specifically check `qwen-qwen3.6-27b-fp8.yml`
+  (the comment in the 35B profile mentions "symmetric to the 27B sibling"),
+  and any other profile that copied the `frequency_penalty + min_tokens`
+  pattern. Same drift problem expected on long decodes.
 
 ### Operational lessons
 

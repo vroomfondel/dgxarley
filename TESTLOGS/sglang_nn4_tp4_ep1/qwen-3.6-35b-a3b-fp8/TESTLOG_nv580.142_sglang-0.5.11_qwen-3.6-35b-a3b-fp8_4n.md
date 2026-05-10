@@ -57,8 +57,8 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
 
 | #  | moe_runner       | attention | dis_cuda_graph | dis_piecewise | spec  | Status | n=1 tok/s | n=4 peak | n=8 peak |
 |----|------------------|-----------|----------------|---------------|-------|--------|-----------|----------|----------|
-| 1  | triton           | fi        | false          | true          | —     | tbd    | —         | —        | —        |
-| 2  | triton           | fi        | true           | true          | —     | tbd    | —         | —        | —        |
+| 1  | triton           | fi        | false          | true          | —     | ok     | 76.77     | 254.78   | 396.26   |
+| 2  | triton           | fi        | true           | true          | —     | ok     | 22.64     | 107.12   | 209.91   |
 | 3  | triton           | fi        | false          | false         | —     | tbd    | —         | —        | —        |
 | 4  | triton           | triton    | false          | true          | —     | tbd    | —         | —        | —        |
 | 5  | triton           | triton    | true           | true          | —     | tbd    | —         | —        | —        |
@@ -92,9 +92,25 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
 
 ## Results
 
-**Run pending** — fill in after matrix execution.
+**Run in progress (started 2026-05-10 ~09:55 UTC, driver on elite800)** — Cases 01 and 02 complete, Cases 03–20 pending.
 
-Result dir: `kikube/matrixtest/<DATE>/results/sglang_nn4_tp4_ep1/qwen-3.6-35b-a3b-fp8/0.5.11/`.
+Result dir: `kikube/matrixtest/2026-05-10/results/sglang_nn4_tp4_ep1/qwen-3.6-35b-a3b-fp8/0.5.11/`.
+
+Image: `scitrera/dgx-spark-sglang:0.5.11` (vanilla upstream, **not** the `xomoxcc/...sm121` build that produced the word-salad reproducer in the correctness debug sweep below).
+
+Re-run unblocked by the two correctness fixes from commit `0c2bdd4` ("Fixed two correctness bugs in Qwen3.6-35B-A3B-FP8 on SGLang v0.5.10/v0.5.11"):
+- **Bug A:** `is_layer_skipped` substring match in the FP8 quantizer
+- **Bug B:** aggressive `sampling_overrides` in the model profile (now `{}` as in the matrix above)
+
+### Completed cases
+
+| #  | Config                                | n=1   | n=4 agg | n=4 per-req | n=8 agg | n=8 per-req | Failures | Finish reasons   | Output quality |
+|----|---------------------------------------|------:|--------:|------------:|--------:|------------:|----------|------------------|----------------|
+| 01 | triton-moe + fi-attn (cuda_graph on)  | 76.77 |  254.78 |       63.74 |  396.26 |       49.56 | 0/13     | length×13        | coherent ✓     |
+| 02 | + `disable_cuda_graph=true`           | 22.64 |  107.12 |       26.79 |  209.91 |       26.42 | 0/13     | length×12, stop×1| coherent ✓     |
+
+- TTFT n=1: 6.81 s (case 01) → 11.55 s (case 02). Eager mode (no CUDA graphs) costs ~3.4× per-request throughput at n=1, ~2.4× at n=4, ~1.9× at n=8.
+- Sample outputs across both cases follow the same `Here's a thinking process: 1. Analyze user input ...` reasoning pattern with no synonym-walk loops, self-correction triggers, or `retire retire retire` repetition. **The 0.5.11 word-salad regression documented in the correctness debug sweep below is no longer reproducible** with the post-`0c2bdd4` profile.
 
 ### Comparison to 0.5.10 baseline
 
@@ -111,9 +127,10 @@ Spec V2 + Overlap-Scheduling).
 
 ---
 
-## Correctness Debug Sweep — Word-Salad Regression in v0.5.11
+## Correctness Debug Sweep — Word-Salad Regression in v0.5.11 (HISTORICAL)
 
-**Status: complete as of 2026-05-09 19:35 (all 6 cases done, regression confirmed but root cause not isolated)**
+**Status: complete as of 2026-05-09 19:35 (all 6 cases done, regression confirmed but root cause not isolated).**
+**Resolved 2026-05-10 by commit `0c2bdd4` — see "Completed cases" above; the word-salad reproducer no longer triggers on `scitrera/dgx-spark-sglang:0.5.11` once Bug A (`is_layer_skipped` substring) and Bug B (aggressive `sampling_overrides`) are fixed.**
 
 Matrix: `kikube/matrixtest_matrices/sglang_nn4_tp4_ep1/qwen-3.6-35b-a3b-fp8/nv580.142_sglang-0.5.11_qwen-3.6-35b-a3b-fp8_correctness-debug_n4_ep1.yaml`
 

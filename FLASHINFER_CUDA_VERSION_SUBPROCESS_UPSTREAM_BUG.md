@@ -13,13 +13,18 @@ chain is lazily triggered on the first `fp4_quantize()` call, and if that
 first call is inside a traced forward, the build-time filesystem/subprocess
 operations blow up dynamo.
 
-## Status (re-verified 2026-05-09)
+## Status (re-verified 2026-05-10)
 
-**Patch 1 shipped and stable. Patch 2 still unresolved — see
-"Update 2026-04-15 evening" below; no further work on it since.
-On-disk `sglang_launch.sh` still carries the broken `allow_in_graph`
-revision 4 (which the same section explicitly flags as "strictly worse
-than a no-op"). No upstream issue filed yet.** 2026-04-15 morning session outcome:
+**Patch 1 shipped and stable. Patch 2 superseded by config decision —
+"option 2" from the 2026-04-15 evening update was adopted: all NVFP4
+model profiles in `roles/k8s_dgx/model_profiles/*.yml` now carry
+`disable_piecewise_cuda_graph: true`, so dynamo never enters
+`fp4_quantize` and the entire failure family no longer reaches the
+hot path. The on-disk `PATCH_FI_FP4_ALLOW_EOF` block in
+`sglang_launch.sh` (revision 4 = `allow_in_graph`) is now dead code:
+it cannot do harm because piecewise capture is off, but it serves no
+purpose either. Removal is pending a small cleanup commit.
+No upstream issue filed yet.** 2026-04-15 morning session outcome:
 
 - **Issue 1 root cause**: `flashinfer.jit.cpp_ext.get_cuda_version()` calls
   `subprocess.check_output([nvcc, "--version"])` on its first invocation (it's
@@ -568,7 +573,7 @@ gives an unambiguous "which revision produced which error" timeline per pod.
    fix would solve this cleanly for everyone; neither is in any open PR as of
    2026-04-15.
 
-### Decision pending
+### Decision (taken 2026-04-15 evening, deployed by 2026-05-10)
 
 Given that non-piecewise `fi_cudnn` variants were already known to work and
 that the custom-op shape formulas depend on flashinfer internals that are not
@@ -577,17 +582,24 @@ the default for NVFP4 model profiles in `roles/k8s_dgx/model_profiles/*.yml`
 and move on. Option 1 stays as a future task if piecewise numbers are ever
 needed for these models specifically.
 
-No changes made to model profiles yet — waiting for explicit go-ahead before
-touching deployment configuration (per standing feedback).
+**Status 2026-05-10:** option 2 is in effect. `disable_piecewise_cuda_graph: true`
+is set in every NVFP4 profile (glm-4.7-nvfp4, glm-5-nvfp4, qwen3-235b-nvfp4,
+qwen3.5-397b-a17b-nvfp4, gemma-4-31b-it-nvfp4, gemma-4-26b-a4b-it-nvfp4,
+minimax-m2.5-nvfp4) and in the FP8 profiles that share the dynamo-trace
+sensitivity (qwen3.6-27b-fp8, qwen3.6-35b-a3b-fp8, qwen3.5-122b-a10b-fp8).
+Verifiable via `grep -l disable_piecewise_cuda_graph roles/k8s_dgx/model_profiles/*.yml`.
 
 ### What to do with the current `sglang_launch.sh` patch
 
-The `allow_in_graph` revision currently in `sglang_launch.sh` is strictly
-worse than a no-op: it papers over failures 2a and 2b but introduces 2d. Once
-option 2 is chosen, the whole `PATCH_FI_FP4_*` block can be deleted — with
-piecewise off, dynamo never enters `fp4_quantize` in the first place, so none
-of the tracing issues matter. Patch 1 (`get_cuda_version` subprocess bypass)
-stays — it's independent and still needed.
+The `allow_in_graph` revision currently in `sglang_launch.sh`
+(`PATCH_FI_FP4_ALLOW_EOF`, lines ~315–375) is strictly worse than a no-op:
+it papers over failures 2a and 2b but introduces 2d. With option 2 now
+deployed cluster-wide, the whole `PATCH_FI_FP4_*` block is unreachable
+(piecewise off → dynamo never enters `fp4_quantize`) and should be deleted
+in a cleanup commit. Patch 1 (`get_cuda_version` subprocess bypass,
+`PATCH_FI_CUDA_VER_EOF`) stays — it's independent of piecewise and still
+needed because some non-piecewise paths can also call `get_cuda_version`
+inside dynamo traces under specific configurations.
 
 ### Files changed in this update cycle
 

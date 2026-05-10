@@ -1,4 +1,4 @@
-.PHONY: tests help install lint isort tcheck commit-checks prepare gitleaks pypibuild pypipush
+.PHONY: tests help install lint isort tcheck commit-checks prepare gitleaks pypibuild pypipush update-dockerhub-readmes
 SHELL := /usr/bin/bash
 .ONESHELL:
 
@@ -15,6 +15,7 @@ help:
 	@printf "\ngitleaks\n\tscan repo for leaked secrets\n"
 	@printf "\npypibuild\n\tbuild package for pypi\n"
 	@printf "\npypipush\n\tpush package to pypi\n"
+	@printf "\nupdate-dockerhub-readmes\n\tpush DOCKERHUB_OVERVIEW_*.md to the matching Docker Hub repo descriptions\n"
 
 install: .venv
 
@@ -73,3 +74,41 @@ dist/.touchfile_push: dist/dgxarley-$(VERSION).tar.gz dist/dgxarley-$(VERSION)-p
 	@touch dist/.touchfile_push
 
 pypipush: dist/.touchfile_push
+
+# DOCKERHUB_OVERVIEW_<image>.md → xomoxcc/<image>
+# Short description (`description`) is taken from a `<!-- short: ... -->` HTML
+# comment on the first line of the file (capped at 100 chars by Docker Hub).
+# Long description (`full_description`) is the file content verbatim.
+DOCKERHUB_NAMESPACE := xomoxcc
+DOCKERHUB_OVERVIEW_FILES := $(wildcard DOCKERHUB_OVERVIEW_*.md)
+
+update-dockerhub-readmes:
+	@if [ -z "$(DOCKERHUB_OVERVIEW_FILES)" ]; then \
+	  echo "No DOCKERHUB_OVERVIEW_*.md files found at repo root"; exit 1; \
+	fi
+	@AUTH=$$(jq -r '.auths["https://index.docker.io/v1/"].auth' ~/.docker/config.json | base64 -d) && \
+	USERNAME=$$(echo "$$AUTH" | cut -d: -f1) && \
+	PASSWORD=$$(echo "$$AUTH" | cut -d: -f2-) && \
+	echo "Login as: $$USERNAME" && \
+	TOKEN=$$(curl -sS -X POST https://hub.docker.com/v2/users/login/ \
+	  -H "Content-Type: application/json" \
+	  -d '{"username":"'"$$USERNAME"'","password":"'"$$PASSWORD"'"}' \
+	  | jq -r .token) && \
+	if [ -z "$$TOKEN" ] || [ "$$TOKEN" = "null" ]; then \
+	  echo "Login failed"; exit 1; \
+	fi && \
+	for FILE in $(DOCKERHUB_OVERVIEW_FILES); do \
+	  IMAGE=$${FILE#DOCKERHUB_OVERVIEW_}; \
+	  IMAGE=$${IMAGE%.md}; \
+	  REPO="$(DOCKERHUB_NAMESPACE)/$$IMAGE"; \
+	  SHORT=$$(sed -n 's/^<!--[[:space:]]*short:[[:space:]]*\(.*\)[[:space:]]*-->.*/\1/p' "$$FILE" | head -1 | sed 's/[[:space:]]*$$//'); \
+	  if [ -z "$$SHORT" ]; then \
+	    echo "  -> ERROR: no '<!-- short: ... -->' line on first line of $$FILE"; continue; \
+	  fi; \
+	  echo "Updating $$REPO from $$FILE (short=$${#SHORT} chars, long=$$(wc -c < $$FILE) chars)..."; \
+	  curl -sS -X PATCH "https://hub.docker.com/v2/repositories/$$REPO/" \
+	    -H "Authorization: Bearer $$TOKEN" \
+	    -H "Content-Type: application/json" \
+	    -d "$$(jq -n --arg desc "$$SHORT" --rawfile full "$$FILE" '{description: $$desc, full_description: $$full}')" \
+	    | jq -r '"  -> short=\"\(.description)\"  long=\(.full_description|length) chars  updated=\(.last_updated)"'; \
+	done

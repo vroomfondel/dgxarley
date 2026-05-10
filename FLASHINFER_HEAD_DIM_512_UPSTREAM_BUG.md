@@ -1,20 +1,42 @@
 # FlashInfer Upstream Bug: head_dim=512 not supported (Gemma-4 global attention)
 
-## Status (re-verified 2026-05-09)
+## Status (re-verified 2026-05-10)
 
-**Upstream fix merged and shipped in multiple stable releases, image rebuild pending.**
+**Upstream fix merged and shipped; our SM121 image rebuild is done and the
+Gemma-4 production profiles already point at it. Bug effectively gone for our
+deployment.**
 FlashInfer 0.6.7.post3's FA2/FA3 attention kernels do not support `head_dim > 256`.
 Upstream fix
 [flashinfer PR #2959](https://github.com/flashinfer-ai/flashinfer/pull/2959)
 **merged 2026-04-22**, shipped first in **v0.6.10rc1** (2026-04-30), then in the
 **v0.6.10 stable release** (2026-05-04), **v0.6.10.post1** (2026-05-07), and
-**v0.6.11** (2026-05-09 — today). Not runtime-patchable — the kernel dispatch table
-is compiled into the FlashInfer binary, so the cluster only benefits once the
-SGLang image is rebuilt against flashinfer ≥ 0.6.10. Current production image
-still pins 0.6.7.post3, so the `attention_backend=triton` workaround remains in
-effect for now. Note: SGLang v0.5.11 itself only bumped flashinfer to 0.6.8.post1
-(per its release notes), so even that release does not by itself fix this bug —
-the SGLang image must be rebuilt with an explicit flashinfer ≥ 0.6.10 pin.
+**v0.6.11** (2026-05-09). Not runtime-patchable — the kernel dispatch table
+is compiled into the FlashInfer binary, so the bug can only be closed by a
+rebuild against flashinfer ≥ 0.6.10.
+
+**Image situation today:**
+- `xomoxcc/dgx-spark-sglang:0.5.11-sm121` and
+  `xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121` — pin
+  **`FLASHINFER_VERSION=0.6.11`** in their recipes
+  (`scripts/patches/sglang-0.5.11-sm121.recipe:60`,
+  `scripts/patches/sglang-0.5.11-gemma4-sm121.recipe:48`). Bug fixed.
+- All four Gemma-4 model profiles
+  (`google-gemma-4-26b-a4b-it.yml`, `google-gemma-4-31b-it.yml`,
+  `bg-digitalservices-gemma-4-26b-a4b-it-nvfp4.yml`,
+  `nvidia-gemma-4-31b-it-nvfp4.yml`) already pin
+  `sglang_image: xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121` —
+  i.e. the `head_dim=512` fix is in production for Gemma-4.
+- Stock SGLang **v0.5.11** (`scitrera/dgx-spark-sglang:0.5.11`) only bumps
+  flashinfer to 0.6.8.post1 — still affected. Not used for Gemma-4 profiles.
+- Legacy dev1 recipes (`sglang-sm121-dev1.recipe`,
+  `sglang-gemma4-sm121-dev1.recipe`) still pin 0.6.8.post1 — still affected,
+  kept for rollback only.
+
+**`attention_backend: triton` is still set on all Gemma-4 profiles** —
+intentional, because the BF16 throughput numbers in
+`SGLANG_GEMMA4_UPSTREAM_BUG.md` were measured with triton attention, and a
+switch to flashinfer attention has not yet been benchmarked on SM121.
+Switching is now technically unblocked but pending an A/B run.
 
 ## Affected models
 
@@ -96,15 +118,16 @@ problem (PTX register exhaustion on SM100a/GB200). The companion FlashInfer
 attention fix (PR #2959) merged on 2026-04-22 and is in v0.6.10rc1+ (stable
 release v0.6.10 was tagged 2026-05-04).
 
-Our `main-gemma4-sm121` image includes PR #22079 (pinned to its merge commit)
-but still uses FlashInfer 0.6.7.post3, which **predates** PR #2959. Therefore,
-on the currently deployed image:
-- `attention_backend=triton` works (PR #22079 fix active)
-- `attention_backend=flashinfer` crashes (PR #2959 not yet present in the
-  pinned flashinfer wheel)
-
-A rebuild against flashinfer ≥ 0.6.10 should make `attention_backend=flashinfer`
-viable for Gemma-4 — needs verification on SM121.
+Our **`xomoxcc/dgx-spark-sglang:0.5.11-(gemma4-)sm121`** image (current
+production for Gemma-4 profiles) pins **flashinfer 0.6.11**, which contains
+PR #2959. The legacy `main-gemma4-sm121` and dev1 images still pin
+flashinfer 0.6.7.post3 / 0.6.8.post1 and remain affected; they're kept only
+for rollback. Therefore on the currently deployed Gemma-4 image:
+- `attention_backend=triton` works (PR #22079 fix active) — this is what
+  the profiles use today.
+- `attention_backend=flashinfer` is now **technically viable** (PR #2959
+  present in the pinned flashinfer wheel) — pending A/B benchmark on SM121
+  to decide whether to switch.
 
 ## Relationship to other bugs
 
