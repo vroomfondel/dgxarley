@@ -79,8 +79,8 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
 | 20 | fi_cutedsl       | triton    | false          | false         | —     | **crash B** | — | —        | —        |
 | 21 | triton           | fi        | false          | false         | NEXTN s=2 | ok  | 79.49 | 261.69   | 389.92   |
 | 22 | triton           | fi        | false          | false         | NEXTN s=3 | ok  | 78.93 | 256.68   | 383.15   |
-| 23 | triton           | fi        | false          | false         | NEXTN s=4 | ok  | 80.57 | 263.44   | 364.62   |
-| 24 | triton           | fi        | false          | false         | NEXTN s=5 | running | — | —        | —        |
+| 23 | triton           | fi        | false          | false         | NEXTN s=4 | ok  | **80.57** | **263.44** | 364.62 |
+| 24 | triton           | fi        | false          | false         | NEXTN s=5 | ok  | 57.67 | 221.55   | 339.21   |
 
 **Tests 21–24** target the open question from Tests 13/14: with MTP enabled
 (`speculative_num_steps=3`) the matrix winner-shape regressed to 373.76/379.34
@@ -208,6 +208,46 @@ Reference winners from `TESTLOG_nv580.142_sglang-0.5.10_qwen-3.6-35b-a3b-fp8_4n.
 Case 03 patches → `moe_runner_backend: triton`, `attention_backend: flashinfer`,
 `disable_cuda_graph: false`, `disable_piecewise_cuda_graph: false`,
 `speculative_enabled: false`. Already what the profile defaults to after `0c2bdd4`.
+
+### MTP `speculative_num_steps` sweep (Tests 21–24)
+
+Targeted sweep over the winner-shape (Case 03 = triton-moe + fi-attn +
+piecewise CG) with MTP enabled at four draft depths. All cases use
+`speculative_eagle_topk=1, speculative_num_draft_tokens=4,
+mamba_scheduler_strategy=extra_buffer, enable_spec_v2=true,
+sampling_overrides={}` (i.e. cleaned up post-`0c2bdd4`).
+
+| #  | num_steps                           |       n=1 |        n=4 |        n=8 |
+|----|-------------------------------------|----------:|-----------:|-----------:|
+| 03 | none (no MTP)                       |     71.14 |     261.70 | **402.62** |
+| 21 | 2                                   |     79.49 |     261.69 |     389.92 |
+| 22 | 3                                   |     78.93 |     256.68 |     383.15 |
+| 23 | 4                                   | **80.57** | **263.44** |     364.62 |
+| 24 | 5                                   |     57.67 |     221.55 |     339.21 |
+| 14 | 3 (T13/14 reference, ran 08:19 UTC) |     93.47 |     261.66 |     379.34 |
+
+**Findings:**
+
+1. **n=8 throughput falls monotonically with `num_steps`** — every MTP
+   depth tested is worse than no MTP. Case 03 beats every Tests 21–24
+   point at n=8 by ≥3 %. There is **no MTP sweet-spot for throughput**
+   on the hybrid-mamba arch under v0.5.11.
+2. **n=1 plateau at s=2..4** (~79-81 tok/s); **s=5 collapses** to
+   57.67 (-28 %). Beyond s=4 the draft compute per rejected token
+   eats the prefetch gain. Acceptance rate drops faster than draft
+   depth reduces step count.
+3. **n=4: s=4 marginally best** (263.44, +0.7 % vs no-MTP).
+   Difference is within run-to-run noise; not actionable.
+4. **Run-to-run variance at n=1 is significant.** Case 14 (s=3, ran
+   2026-05-10 08:19 UTC) and Case 22 (s=3, ran 11:55 UTC, identical
+   patches) differ by 18 % at n=1 (93.47 vs 78.93). Single-request
+   bench is dominated by the specific prompt's MTP acceptance pattern;
+   n=4/n=8 are stable across re-runs (n=4: 261.66 vs 256.68, n=8:
+   379.34 vs 383.15 — within 1.7 % each).
+5. **Production recommendation unchanged:** Case 03 (no MTP) for
+   throughput-oriented serving. If single-stream latency matters more
+   than aggregate throughput, set `speculative_num_steps: 4` (s=2 is
+   marginally worse, s=5 is explicitly counter-productive).
 
 ---
 

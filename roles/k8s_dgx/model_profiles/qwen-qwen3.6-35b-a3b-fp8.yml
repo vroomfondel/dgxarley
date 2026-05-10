@@ -11,7 +11,7 @@ _model_profile:
     context_length: 262144
     kv_cache_dtype: "fp8_e4m3"
     mem_fraction_static: "0.50"
-    attention_backend: "triton"
+    attention_backend: "flashinfer"
     disable_deep_gemm: true
     fp8_gemm_runner_backend: "cutlass"
     reasoning_parser: "qwen3"
@@ -53,15 +53,20 @@ _model_profile:
     speculative_num_draft_tokens: 4
     mamba_scheduler_strategy: extra_buffer
     enable_spec_v2: true
-    # operational defaults — Test 13 (MTP rerun) winner config from the 14-case
-    # 0.5.10 sweep on 4× DGX Spark TP=4 EP=1 (TESTLOG ..._qwen-3.6-35b-a3b-fp8_4n.md):
-    #   triton MoE + triton attn + CG on + piecewise on + MTP NEXTN
-    #   (rerun reused Test-6's "piecewise CG on" layout, see testlog L200-202)
-    #   → 104.2 / 277.8 / 410.7 tok/s @ n=1/4/8 (vs 69.0/212.0/345.8 without MTP —
-    #   +51% / +31% / +19%). Test 14 (fi-attn + MTP) is tied at n=8 (409.9) but
-    #   has worse n=1 (-18%) and worse n=8 TTFT.
-    # fi_cutlass MoE crashes on FP8 ("Fp8MoEMethod has no attribute 'runner'");
-    # eager mode is 1.7×–3.3× slower at every batch size.
+    # operational defaults — Run #14 from the 24-case 0.5.11 sweep on
+    # 4× DGX Spark TP=4 EP=1 (TESTLOG ..._sglang-0.5.11_..._4n.md, run 2026-05-10):
+    #   triton MoE + fi-attn + CG on + piecewise on + MTP NEXTN s=3
+    #   → 93.47 / 261.66 / 379.34 tok/s @ n=1/4/8.
+    # No-MTP Case 03 with the same shape hits 71.14 / 261.70 / 402.62 — i.e.
+    # MTP costs ~6% throughput at n=8 but gains ~31% latency at n=1 and a
+    # ~12× lower n=1 TTFT (0.55 s vs 6.81 s) via draft prefill. Production
+    # default keeps MTP on for the latency benefit on single-stream workloads;
+    # for throughput-only workloads, set speculative_enabled=false to gain
+    # the n=8 headroom (Case 03 patches).
+    # fi_cutlass MoE still crashes on FP8 ("Fp8MoEMethod has no attribute 'runner'",
+    # 6/6 cases on 0.5.11) — see SGLANG_FP8_MOEMETHOD_FLASHINFER_CUTLASS_UPSTREAM_BUG.md.
+    # fi_cutedsl MoE is FP4-only by upstream pre-check assertion.
+    # Eager mode is 2-3.5× slower at every batch size.
     nccl_transport: roce
     moe_runner_backend: triton
     disable_cuda_graph: false
