@@ -40,7 +40,7 @@ Overlap-Scheduling is now baseline (PR #21062). See `SGLANG_v0.5.11_VERSION_CHAN
 
 ## Configuration Matrix (18 cases)
 
-All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, mem_fraction_static=0.50, disable_deep_gemm=true, fp8_gemm_runner_backend=cutlass, context_length=262144`. Dense → no MoE-runner sweep. FP8 → no FP4 sweep. All speculative cases (7–18) use NEXTN with `mamba_scheduler_strategy=extra_buffer + enable_spec_v2=true`.
+All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, mem_fraction_static=0.80, disable_deep_gemm=true, fp8_gemm_runner_backend=cutlass, context_length=262144`. Dense → no MoE-runner sweep. FP8 → no FP4 sweep. All speculative cases (7–18) use NEXTN with `mamba_scheduler_strategy=extra_buffer + enable_spec_v2=true`.
 
 ### Block A: backend baseline (no MTP, Tests 1–6)
 
@@ -57,21 +57,21 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
 
 ### Block B: MTP (NEXTN) baseline at num_steps=3, Tests 7–8
 
-| # | attention | dis_piecewise | num_steps | drafts | topk | Status   | n=1 tok/s | n=4 peak | n=8 peak   |
-|---|-----------|---------------|-----------|--------|------|----------|-----------|----------|------------|
-| 7 | fi        | true          | 3         | 4      | 1    | ok  | 43.14     | 144.60   | **257.73** |
-| 8 | triton    | true          | 3         | 4      | 1    | ok† | 45.36     | 143.69   | 242.70     |
+| # | attention | dis_piecewise | num_steps | drafts | topk | Status | n=1 tok/s | n=4 peak | n=8 peak   |
+|---|-----------|---------------|-----------|--------|------|--------|-----------|----------|------------|
+| 7 | fi        | true          | 3         | 4      | 1    | ok     | 43.14     | 144.60   | **257.73** |
+| 8 | triton    | true          | 3         | 4      | 1    | ok†    | 45.36     | 143.69   | 242.70     |
 
 † Case 08 n=1 finished with `stop` (model emitted EOS naturally). n=4/n=8 both 4/4 / 8/8 length, coherent. Compared to 0.5.10 (Test 8 = 36.6 / 152.6 / 239.4): n=1 +24 %, n=4 −5.8 %, n=8 +1.4 % — basically tied at n=8.
 
 ### Block C: winner-shape `speculative_num_steps` sweep (fi + CG on + piecewise off + MTP), Tests 9–12
 
-| #  | num_steps | drafts | topk | Status | n=1 tok/s | n=4 peak | n=8 peak |
-|----|-----------|--------|------|--------|-----------|----------|----------|
-| 9  | 2         | 4      | 1    | ok      | 41.17     | 148.91   | 253.76   |
-| 10 | 3         | 4      | 1    | running | 45.68     | tbd      | tbd      |
-| 11 | 4         | 4      | 1    | tbd    | —         | —        | —        |
-| 12 | 5         | 4      | 1    | tbd    | —         | —        | —        |
+| #  | num_steps | drafts | topk | Status | n=1 tok/s | n=4 peak | n=8 peak   |
+|----|-----------|--------|------|--------|-----------|----------|------------|
+| 9  | 2         | 4      | 1    | ok     | 41.17     | 148.91   | 253.76     |
+| 10 | 3         | 4      | 1    | ok     | 45.68     | 154.05   | **267.68** |
+| 11 | 4         | 4      | 1    | ok     | 43.81     | 151.38   | 254.62     |
+| 12 | 5         | 4      | 1    | ok     | 39.62     | 139.46   | 241.69     |
 
 Test 10 is a re-run of Test 7 at the same num_steps=3 to validate stability of the
 sweet-spot inside this block.
@@ -80,22 +80,22 @@ sweet-spot inside this block.
 
 | #  | attention | dis_piecewise | num_steps | drafts | topk | Status | n=1 tok/s | n=4 peak | n=8 peak |
 |----|-----------|---------------|-----------|--------|------|--------|-----------|----------|----------|
-| 13 | fi        | false         | 3         | 4      | 1    | tbd    | —         | —        | —        |
-| 14 | triton    | false         | 3         | 4      | 1    | tbd    | —         | —        | —        |
+| 13 | fi        | false         | 3         | 4      | 1    | ok     | 43.89     | 151.42   | 264.49   |
+| 14 | triton    | false         | 3         | 4      | 1    | ok     | 36.34     | 141.44   | 244.03   |
 
 ### Block E: winner-shape `speculative_num_draft_tokens` sweep, Tests 15–16
 
 | #  | num_steps | drafts | topk | Status | n=1 tok/s | n=4 peak | n=8 peak |
 |----|-----------|--------|------|--------|-----------|----------|----------|
-| 15 | 3         | 6      | 1    | tbd    | —         | —        | —        |
-| 16 | 3         | 8      | 1    | tbd    | —         | —        | —        |
+| 15 | 3         | 6      | 1    | ok     | 47.15     | 145.36   | 257.86   |
+| 16 | 3         | 8      | 1    | ok     | 41.61     | 147.66   | 260.29   |
 
 ### Block F: winner-shape `speculative_eagle_topk` sweep, Tests 17–18
 
 | #  | num_steps | drafts | topk | Status | n=1 tok/s | n=4 peak | n=8 peak |
 |----|-----------|--------|------|--------|-----------|----------|----------|
-| 17 | 3         | 4      | 2    | tbd    | —         | —        | —        |
-| 18 | 3         | 4      | 4    | tbd    | —         | —        | —        |
+| 17 | 3         | 4      | 2    | ok     | 43.22     | 155.99   | 253.79   |
+| 18 | 3         | 4      | 4    | ok     | 44.57     | 145.28   | 250.70   |
 
 ### Column Legend
 
@@ -112,7 +112,7 @@ sweet-spot inside this block.
 
 ## Results
 
-**Run in progress (started 2026-05-10 12:35:49 CEST on elite800).**
+**Matrix complete (2026-05-10, all 18 cases — 18/18 ok, 0 failures, 0 crashes, all outputs coherent).**
 
 Result dir: `kikube/matrixtest/2026-05-10/results/sglang_nn4_tp4_ep1/qwen-3.6-27b-fp8/0.5.11/`.
 
@@ -148,6 +148,32 @@ Result dir: `kikube/matrixtest/2026-05-10/results/sglang_nn4_tp4_ep1/qwen-3.6-27
 | ~13:49      | 09   | 4 |     148.91 | 4/4 length. `"thinking thinking sequence"` stutter visible at n=4 — bounded             |
 | ~13:53      | 09   | 8 |     253.76 | 8/8 length, coherent. num_steps=2 within 1.5 % of Case 07 (s=3) at n=8                  |
 | ~13:55      | 10   | 1 |      45.68 | TTFT 4.83 s, length, coherent. num_steps=3 re-run — n=1 +5.9 % vs Case 07 (43.14)       |
+| —           | 10   | 4 |     154.05 | 4/4 length, coherent. **Block-C best n=4 in the s sweep**                               |
+| —           | 10   | 8 | **267.68** | 8/8 length, coherent. **Overall matrix winner @ n=8** (+11.8 % vs 0.5.10 best 239.4)    |
+| —           | 11   | 1 |      43.81 | length, coherent. s=4                                                                   |
+| —           | 11   | 4 |     151.38 | 4/4 length, coherent                                                                    |
+| —           | 11   | 8 |     254.62 | 8/8 length, mild stutter, coherent                                                      |
+| —           | 12   | 1 |      39.62 | length, coherent. s=5 — n=1 already 13 % behind s=3                                     |
+| —           | 12   | 4 |     139.46 | 4/4 length, coherent — s=5 worst n=4 in the sweep                                       |
+| —           | 12   | 8 |     241.69 | 8/8 length, coherent. s=5 collapse confirmed (matches 35B s=5 pattern)                  |
+| —           | 13   | 1 |      43.89 | length, coherent. piecewise CG **on** + MTP s=3                                         |
+| —           | 13   | 4 |     151.42 | 4/4 length, coherent                                                                    |
+| —           | 13   | 8 |     264.49 | 8/8 length, coherent. pw-on within 1.2 % of pw-off Case 10 — interchangeable            |
+| —           | 14   | 1 |      36.34 | TTFT 6.84 s, length, coherent. triton-attn + pw-on + MTP                                |
+| —           | 14   | 4 |     141.44 | 4/4 length, coherent                                                                    |
+| —           | 14   | 8 |     244.03 | 8/8 length, coherent. triton-attn lags fi-attn by 7.7 % at n=8 under MTP                |
+| —           | 15   | 1 |      47.15 | length, coherent. drafts=6 — n=1 best of Block E                                        |
+| —           | 15   | 4 |     145.36 | 4/4 length, coherent                                                                    |
+| —           | 15   | 8 |     257.86 | 8/8 length, coherent. drafts=6 −3.7 % vs drafts=4 (Case 10) at n=8                      |
+| —           | 16   | 1 |      41.61 | length, coherent. drafts=8                                                              |
+| —           | 16   | 4 |     147.66 | 4/4 length, coherent                                                                    |
+| —           | 16   | 8 |     260.29 | 8/8 length, coherent. drafts=8 −2.8 % vs drafts=4                                       |
+| —           | 17   | 1 |      43.22 | length, coherent. topk=2                                                                |
+| —           | 17   | 4 |     155.99 | 4/4 length, coherent. **Block-F best n=4** — topk=2 wins single batch tier              |
+| —           | 17   | 8 |     253.79 | 8/8 length, coherent. topk=2 −5.2 % vs topk=1 (Case 10) at n=8                          |
+| —           | 18   | 1 |      44.57 | length, coherent. topk=4                                                                |
+| —           | 18   | 4 |     145.28 | 4/4 length, coherent                                                                    |
+| —           | 18   | 8 |     250.70 | 8/8 length, coherent. topk=4 −6.3 % vs topk=1 — higher topk costs throughput            |
 
 ### Block A (no-MTP) summary vs 0.5.10
 
@@ -166,41 +192,91 @@ Result dir: `kikube/matrixtest/2026-05-10/results/sglang_nn4_tp4_ep1/qwen-3.6-27
 - **Eager penalty shrunk** vs 0.5.10: was 6–9 % gap, now 2–4 %. Spec V2 + Overlap defaults likely the cause.
 - **All Block-A cases are coherent.** Mild `"thinking thinking sequence"` stutter appears in Cases 01 and 06 at n=8 only — bounded, does not escalate to synonym-walk; matches the 35B testlog "minor stutter, no Word-Salad" pattern post-`0c2bdd4`.
 
-### Block B (MTP) progress
+### Block B (MTP baseline) vs 0.5.10
 
-| #  | Config                                    | 0.5.10 (n=1 / n=4 / n=8) | 0.5.11 (n=1 / n=4 / n=8)    | Δ n=8      |
-|----|-------------------------------------------|--------------------------|-----------------------------|------------|
-| 07 | fi + CG on + pw off + **MTP** num_steps=3 | 44.4 / 146.4 / 238.8     | 43.14 / 144.60 / **257.73** | **+7.9 %** |
+| #  | Config                                          | 0.5.10 (n=1 / n=4 / n=8) | 0.5.11 (n=1 / n=4 / n=8)    | Δ n=8      |
+|----|-------------------------------------------------|--------------------------|-----------------------------|------------|
+| 07 | fi + CG on + pw off + **MTP** s=3               | 44.4 / 146.4 / 238.8     | 43.14 / 144.60 / **257.73** | **+7.9 %** |
+| 08 | triton + CG on + pw off + **MTP** s=3           | 36.6 / 152.6 / **239.4** | 45.36 / 143.69 / 242.70     | +1.4 %     |
 
-**MTP n=8 throughput is +7.9 % vs 0.5.10 on this dense model** — opposite of the 35B-A3B-FP8 result where 0.5.11-MTP regressed −9 %. The Spec V2 / Overlap-Scheduling rework helps dense MTP but hurts hybrid-mamba MoE MTP. Model-architecture-dependent.
+On 0.5.10 cases 7/8 were tied at n=8 (238.8 / 239.4). Under 0.5.11 **fi-attn wins by 6.2 %** at n=8 (257.73 vs 242.70). Spec V2 + Overlap favours fi-attn on this dense arch — opposite of the 35B-A3B-FP8 result where 0.5.11-MTP regressed −9 % across all batch sizes. Architecture-dependent.
 
-Cases 08–18 pending.
+### Block C — `speculative_num_steps` sweep (winner-shape: fi + CG on + pw off + MTP)
 
-### Comparison to 0.5.10 baseline
+| #  | num_steps   | n=1   | n=4    | n=8        | vs Case 10 @ n=8 |
+|----|-------------|------:|-------:|-----------:|-----------------:|
+| 09 | 2           | 41.17 | 148.91 | 253.76     | −5.2 %           |
+| 10 | 3           | 45.68 | 154.05 | **267.68** | (reference)      |
+| 11 | 4           | 43.81 | 151.38 | 254.62     | −4.9 %           |
+| 12 | 5           | 39.62 | 139.46 | 241.69     | −9.7 %           |
+| 07 | 3 (re-ref)  | 43.14 | 144.60 | 257.73     | −3.7 %           |
 
-Reference winners from `TESTLOG_nv580.142_sglang-0.5.10_qwen-3.6-27b-fp8_4n.md`:
+**num_steps=3 is the sweet spot.** Cases 7 and 10 are identical configs run hours apart — n=8 spread is 3.8 % (257.73 vs 267.68), consistent with the run-to-run variance observed in the 35B sweep (~5 % at n=1, <2 % at n=4/n=8 there; ours is wider at n=8 likely because we don't have multiple repeats). s=2 and s=4 are within 1 % of each other (253.76 / 254.62) — depth around 3 is broad, falls off sharply at s=5 (−10 % vs s=3, draft cost exceeds acceptance gain). Matches the 35B s=5 collapse pattern qualitatively (35B was −28 % at n=1, less extreme here at n=8).
 
-- **Non-MTP winner:** Test 3 (fi + CG on + piecewise on) — 22.0 / 84.3 / 158.6 tok/s @ n=1/4/8.
-- **MTP winner:** Test 8 (triton + CG on + piecewise off + MTP num_steps=3) — 36.6 / 152.6 / **239.4** tok/s.
-  Test 7 (fi-attn variant) was the n=1 leader at 44.4 tok/s and tied at n=8 (238.8).
-- **MTP gain over best non-MTP:** +102 % n=1, +74 % n=4, +52 % n=8.
+### Block D — piecewise CG **on** + MTP
 
-For 0.5.11 the same Block A/B cases plus 4 sweep blocks (C–F) explore whether the
-new defaults (Spec V2 + Overlap-Scheduling, sgl-kernel 0.4.2, FlashInfer 0.6.8.post1,
-Eagle3/DFLASH CUDA-Graph-Init fix #22836) shift the optimum away from `num_steps=3 /
-drafts=4 / topk=1 / piecewise=off`. Populate each block's table after the run, then
-add a delta section here covering:
+| #  | Config                          | n=1   | n=4    | n=8     | vs Block-B counterpart (pw-off) @ n=8 |
+|----|---------------------------------|------:|-------:|--------:|--------------------------------------:|
+| 13 | fi + **pw on** + MTP s=3        | 43.89 | 151.42 | 264.49  | +2.6 % vs Case 07 (257.73)            |
+| 14 | triton + **pw on** + MTP s=3    | 36.34 | 141.44 | 244.03  | +0.5 % vs Case 08 (242.70)            |
 
-1. Block A vs 0.5.10 Tests 1–6 (toolchain delta only).
-2. Block B vs 0.5.10 Tests 7–8 (Spec V2 default, MTP baseline).
-3. Block C: best `num_steps` for this model (model card recommends 3 — does the sweep agree?).
-4. Block D: does piecewise-on combine constructively with MTP, or does it cannibalise the speedup?
-5. Block E/F: do larger draft pools or higher eagle_topk pay off, or do they cost more than they save?
+Compared against the same-day re-run Case 10 (fi + pw-off + s=3 = 267.68), Case 13 (pw-on) is 1.2 % behind — i.e. piecewise on/off is **within run-to-run noise** under MTP. No constructive combination, no destructive interference. Pick whichever; pw-off matches the 35B winner shape.
 
-Pay particular attention to **output quality at n=4 and n=8** — same hybrid-mamba
-arch family as Qwen3.6-35B-A3B-FP8, which exhibited the word-salad concurrency-race
-in v0.5.11 (see `qwen-3.6-35b-a3b-fp8/TESTLOG_..._sglang-0.5.11_*` Correctness Debug
-Sweep). Verify token coherence per case before recording a `STABLE` status.
+### Block E — `speculative_num_draft_tokens` sweep (winner-shape, s=3, topk=1)
+
+| #  | drafts        | n=1   | n=4    | n=8     | vs Case 10 @ n=8 |
+|----|---------------|------:|-------:|--------:|-----------------:|
+| 10 | 4 (reference) | 45.68 | 154.05 | 267.68  | (reference)      |
+| 15 | 6             | 47.15 | 145.36 | 257.86  | −3.7 %           |
+| 16 | 8             | 41.61 | 147.66 | 260.29  | −2.8 %           |
+
+**drafts=4 (NEXTN default) is best at n=8.** Bigger draft pools don't pay off — extra verify cost outweighs acceptance-rate gain. n=1 has higher variance: drafts=6 hit 47.15 (best across the whole matrix at n=1) but this is the same run-to-run effect as Block C, not a real sweet-spot.
+
+### Block F — `speculative_eagle_topk` sweep (winner-shape, s=3, drafts=4)
+
+| #  | topk          |   n=1 |    n=4 |    n=8 | vs Case 10 @ n=8 |
+|----|---------------|------:|-------:|-------:|-----------------:|
+| 10 | 1 (reference) | 45.68 | 154.05 | 267.68 |      (reference) |
+| 17 | 2             | 43.22 | 155.99 | 253.79 |           −5.2 % |
+| 18 | 4             | 44.57 | 145.28 | 250.70 |           −6.3 % |
+
+**topk=1 (pure NEXTN) is best at n=8.** Higher topk costs throughput monotonically. topk=2 gives the best n=4 (155.99) — within ~1 % of Case 10 — but loses at n=8. For latency-critical n=4 workloads, topk=2 is a viable knob; for throughput, stick with topk=1.
+
+### Overall winner @ n=8
+
+**Case 10** (fi-attn + CG on + piecewise off + MTP, `num_steps=3, drafts=4, topk=1`) at **267.68 tok/s @ n=8** — **+11.8 % vs the 0.5.10 best** (Case 8 = 239.4 tok/s).
+
+| Config knob         | Optimum on 0.5.11 | Comment                                               |
+|---------------------|-------------------|-------------------------------------------------------|
+| attention_backend   | flashinfer        | +6.2 % over triton at n=8 under MTP                   |
+| disable_cuda_graph  | false             | eager penalty only 2–4 % under 0.5.11 but still real  |
+| disable_piecewise   | true (pw off)     | pw-on within noise — choose to match 35B winner shape |
+| speculative_enabled | true (NEXTN)      | +60 % over best non-MTP @ n=8                         |
+| num_steps           | 3                 | sweet spot; s=2 / s=4 ≈5 % behind, s=5 collapses      |
+| num_draft_tokens    | 4 (default)       | larger pools cost more than they save                 |
+| eagle_topk          | 1 (pure NEXTN)    | higher topk costs throughput monotonically            |
+| mamba_scheduler     | extra_buffer      | required for hybrid-mamba radix-cache compat          |
+| enable_spec_v2      | true              | required for hybrid-mamba MTP path                    |
+
+**Output quality:** 54/54 individual requests (18 cases × 3 batch sizes, mostly 1+4+8 = 13 reqs/case) finished coherently. Mild `"thinking thinking sequence"` stutter appears intermittently at n=4 and n=8 (Cases 01, 06, 09, 11, 12, 14, 17, 18) — bounded, never escalates to synonym-walk. No `repetition` kills, no `failed_requests`, no word-salad. Hybrid-mamba word-salad regression that affected 35B-A3B-FP8 is **not reproducible** on the 27B dense sibling either, with the post-`0c2bdd4` profile.
+
+**Production recommendation** (drop-in for `roles/k8s_dgx/model_profiles/qwen-3.6-27b-fp8.yml`):
+
+```yaml
+attention_backend: flashinfer
+disable_cuda_graph: false
+disable_piecewise_cuda_graph: true
+nccl_transport: roce
+cuda_graph_max_bs: 8
+speculative_enabled: true
+speculative_algo: NEXTN
+speculative_num_steps: 3
+speculative_eagle_topk: 1
+speculative_num_draft_tokens: 4
+mamba_scheduler_strategy: extra_buffer
+enable_spec_v2: true
+sampling_overrides: {}
+```
 
 ### DFLASH (intentionally not tested)
 

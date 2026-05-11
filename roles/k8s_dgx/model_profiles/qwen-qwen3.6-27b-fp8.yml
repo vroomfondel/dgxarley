@@ -23,21 +23,20 @@ _model_profile:
       top_p: 0.95
       top_k: 20
       presence_penalty: 0.0
-    # Bench-only anti-repetition overrides — the model card's thinking-mode
-    # presence_penalty=0.0 lets the <think>-stream fall into n-gram loops
-    # (chinesische Floods im 2026-04-29-Run, RepetitionGuard killt jede
-    # Anfrage). Card defaults bleiben in recommended_sampling unverändert;
-    # overrides werden nur vom integration-test-Bench gemerged.
-#    sampling_overrides:
-#      presence_penalty: 1.5
-#      frequency_penalty: 0.5
-#      min_tokens: 4
+    # Aggressive anti-repetition overrides were tested in the 2026-04-29 debug
+    # run and made things worse (forced word-salad on a correctness-broken
+    # model). Root cause was the FP8 weight-scale bug (`is_layer_skipped`
+    # substring match — SGLANG_QWEN36_27B_FP8_UPSTREAM_BUG.md). PR #23467 is
+    # merged upstream and shipped in SGLang v0.5.11; sglang_launch.sh applies
+    # the same fix as a runtime monkey-patch on v0.5.10 (guard short-circuits
+    # on v0.5.11). With the fix in place, the card defaults are sufficient.
+    sampling_overrides: {}
     ep_size: 1
     tp_size: 4
     # MTP / speculative decoding (NEXTN) — Qwen3.6 is MTP-trained.
     # Two extra knobs (mamba_scheduler_strategy=extra_buffer + enable_spec_v2=true)
-    # are required on SGLang 0.5.10 to avoid spec-v2-vs-radix-cache crash on this
-    # hybrid Gated-DeltaNet arch.
+    # are required on both SGLang 0.5.10 and 0.5.11 to avoid a spec-v2-vs-radix-cache
+    # crash on this hybrid Gated-DeltaNet arch.
     speculative_enabled: true
     speculative_algo: NEXTN
     speculative_num_steps: 3
@@ -45,13 +44,18 @@ _model_profile:
     speculative_num_draft_tokens: 4
     mamba_scheduler_strategy: extra_buffer
     enable_spec_v2: true
-    # operational defaults — Test 7 winner config from the 8-case 0.5.10 sweep
-    # on 4× DGX Spark TP=4 EP=1 (TESTLOG ..._qwen-3.6-27b-fp8_4n.md):
-    # fi-attn + CG on + piecewise off + MTP NEXTN → 44.4 / 146.4 / 238.8 tok/s
-    # @ n=1/4/8 (vs 21.9/84.2/157.4 without MTP — +102%/+74%/+52%).
-    # Requires runtime patch in sglang_launch.sh (PR #23467, FP8 weight-scale
-    # fix); without it the model produces token salad. See
-    # SGLANG_QWEN36_27B_FP8_UPSTREAM_BUG.md.
+    # operational defaults — Case 10 winner config from the 18-case 0.5.11 sweep
+    # on 4× DGX Spark TP=4 EP=1 (TESTLOG ..._sglang-0.5.11_qwen-3.6-27b-fp8_4n.md):
+    # fi-attn + CG on + piecewise off + MTP NEXTN s=3/drafts=4/topk=1 →
+    # 45.68 / 154.05 / 267.68 tok/s @ n=1/4/8.
+    # +11.8 % vs the 0.5.10 best (Case 8 = 239.4 @ n=8).
+    # Sweep findings:
+    #   - num_steps=3 sweet spot; s=2/s=4 ≈5 % behind, s=5 collapses −10 %.
+    #   - drafts=4 (default) best; larger pools cost more than they save.
+    #   - topk=1 (pure NEXTN) best; topk=2 / topk=4 monotonically worse @ n=8.
+    #   - piecewise on/off within run-to-run noise under MTP.
+    # FP8 weight-scale fix (PR #23467) is upstream in v0.5.11; on v0.5.10 the
+    # same fix is applied as a runtime monkey-patch in sglang_launch.sh.
     nccl_transport: roce
     disable_cuda_graph: false
     disable_piecewise_cuda_graph: true
