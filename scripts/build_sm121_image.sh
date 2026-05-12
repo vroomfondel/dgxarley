@@ -398,6 +398,8 @@ preflight() {
         sgl-kernel-skip-sm90-target.patch
         sgl-kernel-skip-flashmla.patch
         dockerfile-sm121.patch
+        dockerfile-gemma4-mtp.patch
+        sglang-gemma4-mtp-pr24436.patch
         build-image-sh-podman.patch
         "${RECIPE_NAME}.recipe"
     )
@@ -668,19 +670,25 @@ apply_patches() {
     # patch files in the non-gemma4 variant would have no effect but would
     # bloat the build context unnecessarily.
     mkdir -p container-build/patches
-    local sgl_kernel_patches=(
+    # Source patches always copied (applied unconditionally in every build).
+    # Includes sgl-kernel patches (CMakeLists / JIT header edits, gated at
+    # build time by APPLY_SGL_KERNEL_* build-args) and the Gemma-4 MTP
+    # cherry-pick of upstream PR #24436 (inert until --speculative-algorithm
+    # FROZEN_KV_MTP or a gemma4_assistant drafter is loaded).
+    local always_source_patches=(
         sgl-kernel-sm121.patch
         sgl-kernel-sm121-debug.patch
         sgl-kernel-arch-prune.patch
         sgl-kernel-disable-fa3.patch
         sgl-kernel-skip-sm90-target.patch
         sgl-kernel-skip-flashmla.patch
+        sglang-gemma4-mtp-pr24436.patch
     )
     local gemma4_source_patches=(
         sglang-gemma4-nvfp4-expert-loading.patch
         sglang-gemma4-geglu-nan-clamp.patch
     )
-    local patches_to_copy=( "${sgl_kernel_patches[@]}" )
+    local patches_to_copy=( "${always_source_patches[@]}" )
     if (( apply_gemma4_patches )); then
         patches_to_copy+=( "${gemma4_source_patches[@]}" )
     fi
@@ -701,6 +709,19 @@ apply_patches() {
     grep -q 'patches/sgl-kernel-sm121.patch' container-build/Dockerfile.sglang-nightly \
         || die "Dockerfile patch verification failed"
     echo "Dockerfile patched"
+
+    # 2a. Gemma-4 MTP (PR #24436) Dockerfile patch — applied unconditionally.
+    #     Adds a COPY + RUN step that cherry-picks upstream PR #24436 into
+    #     the SGLang source before `uv pip install ./python`. Inert for
+    #     non-Gemma-4 workloads (the new files only activate when
+    #     --speculative-algorithm FROZEN_KV_MTP or a Gemma-4 drafter is loaded).
+    echo "Applying dockerfile-gemma4-mtp.patch..."
+    patch --dry-run -p1 < "${PATCHES_DIR}/dockerfile-gemma4-mtp.patch" \
+        || die "Gemma-4 MTP Dockerfile patch dry-run failed — upstream Dockerfile drifted; regenerate dockerfile-gemma4-mtp.patch"
+    patch -p1 < "${PATCHES_DIR}/dockerfile-gemma4-mtp.patch"
+    grep -q 'sglang-gemma4-mtp-pr24436.patch' container-build/Dockerfile.sglang-nightly \
+        || die "Gemma-4 MTP Dockerfile patch verification failed"
+    echo "Gemma-4 MTP Dockerfile patched"
 
     # 2b. Gemma-4 NVFP4 Dockerfile patch — only for the gemma4 recipe variant.
     #     Adds COPY + apply steps for PR #22929 (per-expert weight loading) and

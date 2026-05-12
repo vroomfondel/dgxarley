@@ -1,0 +1,70 @@
+Gemma-4 MTP (frozen-KV) patch for container-build/Dockerfile.sglang-nightly.
+
+Cherry-picks upstream SGLang PR #24436 ("Gemma 4 — Adding MTP support"),
+merged into `main` on 2026-05-07 — two days AFTER the v0.5.11 release tag.
+Without this patch SGLang v0.5.11 has no MTP drafter for Gemma-4: it
+promotes `--speculative-algorithm NEXTN` to EAGLE and tries to load the
+`google/gemma-4-{26B-A4B,31B}-it-assistant` checkpoints through the
+generic Transformers bridge, which then fails with
+  ValueError: Unrecognized configuration class
+    <...Gemma4AssistantConfig> for this kind of AutoModel: AutoModel.
+or, after working around that, with
+  ValueError: No module or parameter named 'model.language_model'
+    in TransformersMultiModalForCausalLM.
+
+PR #24436 adds:
+  - new SGLang-native `Gemma4AssistantForCausalLM` (models/gemma4_mtp.py),
+    bypassing the Transformers bridge entirely.
+  - `FROZEN_KV_MTP` speculative algorithm + dedicated worker
+    (speculative/frozen_kv_mtp_*.py — 5 new files).
+  - auto-promote of `--speculative-algorithm NEXTN`/`EAGLE` →
+    `FROZEN_KV_MTP` when the drafter's config.architectures contains
+    `Gemma4AssistantForCausalLM` (server_args.py).
+  - `gemma4_assistant` model_type alias for `gemma4` SWA remap
+    (utils/hf_transformers/config.py).
+  - `get_embed_and_head()` for both gemma4_causal and gemma4_mm so the
+    new MTP worker can share the target's embed/head weights.
+
+Total surface: 11 files changed, 6 NEW (1849 LoC), 5 MODIFIED (~110 LoC).
+The patch is upstream-merged → no maintenance debt; it disappears
+naturally on the next SGLang version bump (v0.5.12+).
+
+Applies cleanly against v0.5.11 with only small hunk offsets
+(verified by `patch --dry-run -p1`). Applied UNCONDITIONALLY (no
+*gemma4*-only gate) because the new files are inert until
+`--speculative-algorithm FROZEN_KV_MTP` or a Gemma-4 drafter is loaded;
+the modifications to spec_info.py / server_args.py only add new branches
+to existing dispatchers. Safe for non-Gemma-4 workloads.
+
+Anchor choice: this Dockerfile patch uses the three `# Install sglang
+package` comment lines + the `RUN --mount=... uv pip install` line as
+context. Those four lines are introduced by dockerfile-sm121.patch and
+are unique in the Dockerfile. The optional dockerfile-gemma4-nvfp4.patch
+inserts above the same block but uses the upstream `fi` ← boundary as
+its anchor (lines well above us). Therefore the two patches never
+contend for the same anchor and can be applied in either order.
+
+Apply to: container-build/Dockerfile.sglang-nightly AFTER
+dockerfile-sm121.patch.
+
+--- a/container-build/Dockerfile.sglang-nightly
++++ b/container-build/Dockerfile.sglang-nightly
+@@ -281,6 +281,18 @@
+ # Install sglang package (no deps, no build isolation since base has torch).
+ # Moved here from its original early-stage location so the installed
+ # dist-packages picks up the patched nvfp4_blockwise_moe.cuh above.
++# (Cherry-pick of upstream PR #24436 below adds Gemma-4 MTP support, also
++#  picked up by the same `uv pip install ./python`.)
++COPY patches/sglang-gemma4-mtp-pr24436.patch /tmp/sglang-gemma4-mtp-pr24436.patch
++RUN set -e; cd /data/sglang && \
++    echo "=== Applying sglang-gemma4-mtp-pr24436.patch (upstream PR #24436) ===" && \
++    patch --dry-run -p1 < /tmp/sglang-gemma4-mtp-pr24436.patch && \
++    patch -p1 < /tmp/sglang-gemma4-mtp-pr24436.patch && \
++    test -f python/sglang/srt/models/gemma4_mtp.py && \
++    test -f python/sglang/srt/speculative/frozen_kv_mtp_worker.py && \
++    grep -q 'FROZEN_KV_MTP' python/sglang/srt/speculative/spec_info.py && \
++    echo 'Gemma-4 MTP (PR #24436) cherry-pick applied successfully'
++
+ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
+     uv pip install --no-build-isolation --no-deps ./python
+
