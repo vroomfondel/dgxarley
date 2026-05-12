@@ -924,7 +924,7 @@ else
   echo "MiniMax NEXTN patch: not needed or already applied, skipping"
 fi
 
-# Patch transformers AutoModel mapping for Gemma-4 *-assistant MTP drafter.
+# Install sitecustomize.py to register Gemma-4 *-assistant MTP drafter with AutoModel.
 #
 # SGLang v0.5.11 promotes NEXTN→EAGLE internally and loads the draft model via
 # `sglang/srt/models/transformers.py:613` → `AutoModel.from_config(...)`.
@@ -933,39 +933,93 @@ fi
 # `MODEL_FOR_CAUSAL_LM_MAPPING`, not for the base `MODEL_MAPPING` — so the call
 # fails with:
 #   ValueError: Unrecognized configuration class
-#     <class 'transformers.models.gemma4_assistant.configuration_gemma4_assistant.Gemma4AssistantConfig'>
-#     for this kind of AutoModel: AutoModel.
+#     <...Gemma4AssistantConfig> for this kind of AutoModel: AutoModel.
 #
-# Fix: register the CausalLM class into AutoModel's mapping at runtime.
+# An inline `AutoModel.register(...)` call before `sglang.launch_server` does
+# NOT survive: SGLang spawns TP / draft workers as fresh Python processes, and
+# `register()` mutates only in-memory state of the calling process. Therefore
+# we install a `sitecustomize.py` into dist-packages — Python's `site.py`
+# auto-imports it at the START of every process (including spawned children),
+# so the registration runs in main + every TP worker + every draft worker.
 #
 # STOP-GAP ONLY: the real upstream fix is SGLang PR #24436 (merged 2026-05-07,
 # i.e. AFTER the v0.5.11 tag), which adds a dedicated `FROZEN_KV_MTP` worker
 # implementing Gemma-4's frozen-KV / recurrent-hidden-state MTP protocol. Until
 # that PR is cherry-picked into the image, the drafter runs through the EAGLE
-# worker — loading succeeds but speculative correctness is unverified. Use the
-# resulting outputs with caution and validate against non-MTP baseline.
-if [ "$SGLANG_SPECULATIVE_ENABLED" = "true" ]; then
-  python3 << 'PATCH_GEMMA4_ASSISTANT_AUTOMODEL_EOF'
+# worker — loading succeeds but speculative correctness is unverified.
+SITECUSTOMIZE_PATH=/usr/local/lib/python3.12/dist-packages/sitecustomize.py
+if [ ! -f "$SITECUSTOMIZE_PATH" ] || ! grep -q '# kikube: gemma4_assistant AutoModel patch v2' "$SITECUSTOMIZE_PATH" 2>/dev/null; then
+  cat > "$SITECUSTOMIZE_PATH" <<'SITECUSTOMIZE_EOF'
+# kikube: gemma4_assistant AutoModel patch v2
+# Registers Gemma4AssistantForCausalLM with transformers.AutoModel so SGLang's
+# draft-worker `AutoModel.from_config(config)` call succeeds. Runs at every
+# Python process startup via site.py auto-import.
+# Loud-on-error: any failure during registration is reported on stderr so it
+# shows up in the pod log instead of silently leaving the mapping unchanged.
+import sys as _sys
+_KIKUBE_SC_TAG = "[kikube-sc]"
+def _kikube_log(msg):
+    try:
+        _sys.stderr.write(f"{_KIKUBE_SC_TAG} {msg}\n")
+        _sys.stderr.flush()
+    except Exception:
+        pass
+
 try:
-    from transformers.models.auto.modeling_auto import MODEL_MAPPING_NAMES
-    if "gemma4_assistant" in MODEL_MAPPING_NAMES:
-        print("Gemma4Assistant AutoModel: already registered, skipping")
+    from transformers import AutoModel  # noqa: E402
+    from transformers.models.gemma4_assistant.configuration_gemma4_assistant import (  # noqa: E402
+        Gemma4AssistantConfig,
+    )
+    from transformers.models.gemma4_assistant.modeling_gemma4_assistant import (  # noqa: E402
+        Gemma4AssistantForCausalLM,
+    )
+    AutoModel.register(Gemma4AssistantConfig, Gemma4AssistantForCausalLM, exist_ok=True)
+    _in_extra = Gemma4AssistantConfig in AutoModel._model_mapping._extra_content
+    _kikube_log(
+        f"registered Gemma4AssistantForCausalLM with AutoModel "
+        f"(in _extra_content={_in_extra}, pid={_sys.argv[0] if _sys.argv else '?'})"
+    )
+except ModuleNotFoundError as _e:
+    # Only the transformers/gemma4_assistant modules are expected to be
+    # potentially missing on this image; anything else is a real bug worth
+    # reporting. Stay silent for the "transformers not installed at all" case
+    # to avoid polluting non-SGLang python invocations.
+    if "transformers" in str(_e):
+        pass
     else:
-        from transformers import AutoModel
-        from transformers.models.gemma4_assistant.configuration_gemma4_assistant import (
-            Gemma4AssistantConfig,
-        )
-        from transformers.models.gemma4_assistant.modeling_gemma4_assistant import (
-            Gemma4AssistantForCausalLM,
-        )
-        AutoModel.register(Gemma4AssistantConfig, Gemma4AssistantForCausalLM, exist_ok=True)
-        print("Patched transformers: registered Gemma4AssistantForCausalLM with AutoModel")
-except ModuleNotFoundError as e:
-    # transformers <5.8.0 — class does not exist yet. Image needs TRANSFORMERS_VERSION>=5.8.0.
-    print(f"Gemma4Assistant AutoModel: module missing ({e}); needs transformers>=5.8.0")
+        _kikube_log(f"ModuleNotFoundError: {_e}")
+except Exception as _e:
+    _kikube_log(f"{type(_e).__name__}: {_e}")
+SITECUSTOMIZE_EOF
+  echo "Installed $SITECUSTOMIZE_PATH (gemma4_assistant AutoModel patch v2)"
+else
+  echo "$SITECUSTOMIZE_PATH already contains gemma4_assistant patch v2, skipping"
+fi
+
+# Verbose smoke-test in a fresh child process: prove that (a) site.py finds
+# sitecustomize.py at all, (b) the registration code path completes, and (c)
+# the registered class is visible in the mapping afterwards.
+if [ "$SGLANG_SPECULATIVE_ENABLED" = "true" ]; then
+  python3 - <<'SMOKE_EOF' 2>&1 || echo "sitecustomize smoke-test crashed (non-fatal)"
+import importlib.util, sys
+spec = importlib.util.find_spec("sitecustomize")
+print(f"sitecustomize smoke: find_spec={spec}")
+if spec is not None:
+    print(f"sitecustomize smoke: origin={spec.origin}")
+try:
+    from transformers import AutoModel
+    from transformers.models.gemma4_assistant.configuration_gemma4_assistant import Gemma4AssistantConfig
+    extra = AutoModel._model_mapping._extra_content
+    print(f"sitecustomize smoke: type(_extra_content)={type(extra).__name__}")
+    in_extra = Gemma4AssistantConfig in extra
+    print(f"sitecustomize smoke: Gemma4AssistantConfig in _extra_content = {in_extra}")
+    # Also probe via the from_config dispatch directly:
+    cfg = Gemma4AssistantConfig()
+    cls = AutoModel._model_mapping.get(type(cfg), None)
+    print(f"sitecustomize smoke: _model_mapping.get(Gemma4AssistantConfig) = {cls}")
 except Exception as e:
-    print(f"Gemma4Assistant AutoModel patch failed: {e!r}")
-PATCH_GEMMA4_ASSISTANT_AUTOMODEL_EOF
+    print(f"sitecustomize smoke: probe failed: {type(e).__name__}: {e}")
+SMOKE_EOF
 fi
 
 args=(
