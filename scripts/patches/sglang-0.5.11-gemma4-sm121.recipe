@@ -46,7 +46,16 @@ BASE_IMAGE=xomoxcc/dgx-spark-pytorch-dev:2.11.0-v1-cu132
 # as a defensive default. After this image is validated, we can flip them to
 # `flashinfer` for the throughput gain — separate change, separate testlog.
 FLASHINFER_VERSION=0.6.11
-TRANSFORMERS_VERSION=5.6.0
+# transformers 5.8.0 is pinned (above v0.5.11's tested 5.7.x) so that the
+# Gemma-4 *-assistant drafter checkpoints (released 2026-05-05, 4-layer
+# auxiliary models for `google/gemma-4-{26B-A4B,31B}-it-assistant`) load
+# correctly. Without this bump the drafter's config (Gemma-4 architecture
+# subclass used for NEXTN/MTP speculative decoding) is unknown to the
+# `transformers` `AutoConfig` registry and the SGLang head exits with
+# `ValueError: Unrecognized configuration class ... gemma4_assistant`
+# during drafter weight-loading. We need the drafter for MTP on Gemma-4
+# (matrix tests 7–11 / 19–23 in the gemma-4-{31b-it,26b-a4b-it} sweeps).
+TRANSFORMERS_VERSION=5.8.0
 
 # Pinned to the v0.5.11 release tag (commit 612785ffdcaf, 2026-05-05).
 # SGLANG_VERSION is set so setuptools-scm produces a clean "0.5.11" version
