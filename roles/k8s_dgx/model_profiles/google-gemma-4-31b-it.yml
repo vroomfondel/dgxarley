@@ -1,3 +1,4 @@
+---
 # Model profile: google/gemma-4-31B-it
 # Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
 _model_profile:
