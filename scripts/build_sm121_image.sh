@@ -99,10 +99,10 @@ BRANCH_NAME="sm121"
 # apply_patches() gates the Gemma-4 source patches and the gemma4 Dockerfile
 # patch by `RECIPE_NAME == *gemma4*`, so any of the four can be selected by
 # toggling the two lines below.
-#RECIPE_NAME="sglang-0.5.11-gemma4-sm121"
-#IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121"
-RECIPE_NAME="sglang-0.5.11-sm121"
-IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.11-sm121"
+RECIPE_NAME="sglang-0.5.11-gemma4-sm121"
+IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121"
+#RECIPE_NAME="sglang-0.5.11-sm121"
+#IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.11-sm121"
 
 #RECIPE_NAME="sglang-gemma4-sm121-dev1"
 #IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.10-20260429-gemma4-sm121-dev1"
