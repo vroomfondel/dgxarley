@@ -89,17 +89,21 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
 
 ### MTP speculative-decoding sweep (Tests 19–23)
 
-Drafter: `google/gemma-4-26B-A4B-it-assistant` (4-layer auxiliary checkpoint, released 2026-05-05, Apache-2.0). NEXTN code-path via `--speculative-draft-model-path`; drafter shares the target's KV cache. Winner-shape fixed to **Case 06** (triton-MoE + triton-attn + CG on + piecewise on — chosen as MTP base over Case 12's `fi_cutlass`-MoE despite the latter's 2.5 % edge, because cookbook-validated MTP path is `triton`-MoE). Only `speculative_num_steps` varies. Cookbook defaults: `num_steps=5, num_draft_tokens=6, eagle_topk=1`. `enable_spec_v2: true`.
+Drafter: `google/gemma-4-26B-A4B-it-assistant` (4-layer auxiliary checkpoint, released 2026-05-05, Apache-2.0). Winner-shape fixed to **Case 06** (triton-MoE + triton-attn + CG on + piecewise on — chosen as MTP base over Case 12's `fi_cutlass`-MoE despite the latter's 2.5 % edge, because cookbook-validated MTP path is `triton`-MoE). Only `speculative_num_steps` varies. `enable_spec_v2: true`.
 
 CAVEAT (from matrix preamble): SGLang cookbook recommends `--tp 2` for the 26B-A4B + MTP combo on H200 (141 GB). We run 4-node TP=4 (Spark) — different topology, expected to fit (mem_fraction=0.85 leaves >2 GB/GPU headroom for the drafter shard). Reduce `mem_fraction_static` in a follow-up if OOMs.
 
+**Image rebuild required** — v0.5.11 release does NOT include Gemma-4 MTP support; the stock NEXTN/EAGLE worker crashes with `ValueError: No module or parameter named 'model.language_model'` when loading `Gemma4AssistantForCausalLM` (observed on the 31B-it sibling on 2026-05-12). Cherry-picked **upstream PR #24436** ("Gemma 4 — Adding MTP support") into `xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121` (`scripts/patches/sglang-gemma4-mtp-pr24436.patch` + `dockerfile-gemma4-mtp.patch`). PR adds `Gemma4AssistantForCausalLM` model + `FROZEN_KV_MTP` speculative algorithm (recurrent hidden-state draft loop, frozen target KV). Runtime auto-promotes `--speculative-algorithm NEXTN → FROZEN_KV_MTP` once the drafter is detected; overlap-scheduling is forcibly disabled on this path (spec v2 not yet supported).
+
+**`speculative_num_draft_tokens` manual sweep** — SGLang requires `num_draft_tokens ≥ num_steps + 1`. The cookbook's fixed `6` only matches `num_steps=5`; for `num_steps ∈ {2,3,4,6}` we bumped per case (autoadjust didn't fire). Table reflects the actually-configured values.
+
 | #  | moe    | attn   | CG / pw | spec_num_steps | spec_draft_tokens | eagle_topk | Status      | n=1 tok/s | n=4 peak | n=8 peak |
 |----|--------|--------|---------|---------------:|------------------:|-----------:|-------------|----------:|---------:|---------:|
-| 19 | triton | triton | on / on | 2              | 6                 | 1          | **pending** | —         | —        | —        |
-| 20 | triton | triton | on / on | 3              | 6                 | 1          | **pending** | —         | —        | —        |
-| 21 | triton | triton | on / on | 4              | 6                 | 1          | **pending** | —         | —        | —        |
+| 19 | triton | triton | on / on | 2              | 3                 | 1          | **pending** | —         | —        | —        |
+| 20 | triton | triton | on / on | 3              | 4                 | 1          | **pending** | —         | —        | —        |
+| 21 | triton | triton | on / on | 4              | 5                 | 1          | **pending** | —         | —        | —        |
 | 22 | triton | triton | on / on | 5              | 6                 | 1          | **pending** | —         | —        | —        |
-| 23 | triton | triton | on / on | 6              | 6                 | 1          | **pending** | —         | —        | —        |
+| 23 | triton | triton | on / on | 6              | 7                 | 1          | **pending** | —         | —        | —        |
 
 ---
 
@@ -183,7 +187,7 @@ From `TESTLOG_nv580.142_sglang-0.5.10_gemma-4-26b-a4b-it_4n.md`:
 
 The MTP cases mirror the Case 06 shape (triton-MoE + triton-attn + CG on + piecewise on) — the cookbook-validated path. Only `speculative_num_steps ∈ {2, 3, 4, 5, 6}` varies; cookbook default is `num_steps=5`.
 
-**Expectation.** 26B-A4B at n=1 is **40.48 tok/s** on 0.5.11 (Case 06 baseline) — fast for a 26 B model because only 3.8 B params are active per token (MoE). Per-token compute is already low, so MTP gains may be **smaller than on the 31B-it dense sibling** (which sat at 10.49 tok/s n=1 — much more compute-bound). At n=8 the target reaches 208 tok/s; MTP's draft-verify overhead competes with naked batched decode, so the n=8 row may regress vs the 208.50 baseline. Sweet-spot hypothesis: small win at n=1, breakeven at n=4, neutral-to-loss at n=8.
+**Expectation (revised after 31B-it Test 07 result, 2026-05-13).** The dense 31B-it sibling's Test 07 (`num_steps=2`) showed a *much larger* MTP win than initially predicted: n=1 +98 % (10.49 → 20.83), n=4 +76 % (44.06 → 77.67), accept_rate ~0.68 median. So MTP under FROZEN_KV_MTP is materially better than naked NEXTN/EAGLE would be on Gemma-4. The 26B-A4B is MoE (3.8 B active) and starts much higher at n=1 (**40.48 tok/s** baseline) — per-token compute is already low, so the absolute headroom for MTP is smaller. Revised hypothesis: solid n=1 win (target 55–65 tok/s if accept rate matches the 31B's 0.7), shrinking gain at n=4, breakeven-to-loss at n=8 where the target is already at 208 tok/s and verify-batch decode is saturated.
 
 Quality-watch items once results land:
 - **Drafter + MoE expert routing**: the auxiliary checkpoint is dense (4 layers) but the target is MoE — verify the assistant's outputs map cleanly to target tokens (no quality degradation from routing mismatch on rejected drafts).

@@ -48,15 +48,21 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
 
 ### MTP speculative-decoding sweep (Tests 7–11)
 
-Drafter: `google/gemma-4-31B-it-assistant` (4-layer auxiliary checkpoint, released 2026-05-05, Apache-2.0). Driven through SGLang's NEXTN code-path via `--speculative-draft-model-path`; drafter shares the target's KV cache. Winner-shape fixed to **Case 06** (triton-attn + CG on + piecewise on); only `speculative_num_steps` varies. Cookbook defaults: `num_steps=5, num_draft_tokens=6, eagle_topk=1, attention_backend=triton` (mandatory for Gemma-4 anyway). Sweet-spot search ±2 around the cookbook default. `enable_spec_v2: true`. Drafter auto-appended to `HF_PRELOAD_MODELS` by dgxarley when `speculative_enabled=true` + `speculative_draft_model_path` set.
+Drafter: `google/gemma-4-31B-it-assistant` (4-layer auxiliary checkpoint, released 2026-05-05, Apache-2.0). Winner-shape fixed to **Case 06** (triton-attn + CG on + piecewise on); only `speculative_num_steps` varies. `enable_spec_v2: true`. Drafter auto-appended to `HF_PRELOAD_MODELS` by dgxarley when `speculative_enabled=true` + `speculative_draft_model_path` set.
+
+**Image rebuild required** — the v0.5.11 release tag does NOT include Gemma-4 MTP support yet. SGLang's stock NEXTN/EAGLE worker loads the drafter via `AutoModel.from_config(...)` and then attempts a `model.language_model` weight surgery that does not exist on `Gemma4AssistantForCausalLM` (crashes with `ValueError: No module or parameter named 'model.language_model' in TransformersMultiModalForCausalLM` — observed during a first 2026-05-12 run; cf. failure result dir `kikube/matrixtest/2026-05-12/.../mtp_steps-2/TESTRESULTS_*_FAILED.json`). The proper fix is **upstream PR #24436 ("Gemma 4 — Adding MTP support")**, which adds a dedicated `Gemma4AssistantForCausalLM` model and the new `FROZEN_KV_MTP` speculative algorithm (recurrent hidden-state draft loop with frozen KV cache from the target). Merged 2026-05-07, AFTER the v0.5.11 tag. Cherry-picked into our image as `scripts/patches/sglang-gemma4-mtp-pr24436.patch` + `dockerfile-gemma4-mtp.patch`; build switched back to the `xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121` recipe (PR #24436 patch is gated on `*gemma4*` recipe variants). The prior `sitecustomize.py` AutoModel-register stop-gap in `sglang_launch.sh` was removed once the PR landed in the image — it could only paper over the registration miss, not the `model.language_model` surgery.
+
+At runtime SGLang detects `Gemma4AssistantForCausalLM` as drafter and **auto-promotes `--speculative-algorithm NEXTN` → `FROZEN_KV_MTP`** (log line: `Detected Gemma4AssistantForCausalLM draft; promoting --speculative-algorithm NEXTN to FROZEN_KV_MTP`). Overlap-scheduling is forcibly disabled in this path (`Overlap scheduler is disabled when using Frozen-KV MTP speculative decoding (spec v2 is not supported yet)`).
+
+**`speculative_num_draft_tokens` manual sweep** — SGLang requires `num_draft_tokens ≥ num_steps + 1` (each step contributes one draft token plus the final accepted-token slot). The cookbook's fixed `num_draft_tokens=6` only matches `num_steps=5`; for `num_steps ∈ {2,3,4,6}` we had to bump it per case (autoadjust didn't fire). The table reflects the actually-launched values.
 
 | #  | attn   | CG / pw | spec_num_steps | spec_draft_tokens | eagle_topk | Status      | n=1 tok/s | n=4 peak | n=8 peak |
 |----|--------|---------|---------------:|------------------:|-----------:|-------------|----------:|---------:|---------:|
-| 7  | triton | on / on | 2              | 6                 | 1          | **pending** | —         | —        | —        |
-| 8  | triton | on / on | 3              | 6                 | 1          | **pending** | —         | —        | —        |
-| 9  | triton | on / on | 4              | 6                 | 1          | **pending** | —         | —        | —        |
+| 7  | triton | on / on | 2              | 3                 | 1          | ok          | **20.83** | **77.67**| —        |
+| 8  | triton | on / on | 3              | 4                 | 1          | **pending** | —         | —        | —        |
+| 9  | triton | on / on | 4              | 5                 | 1          | **pending** | —         | —        | —        |
 | 10 | triton | on / on | 5              | 6                 | 1          | **pending** | —         | —        | —        |
-| 11 | triton | on / on | 6              | 6                 | 1          | **pending** | —         | —        | —        |
+| 11 | triton | on / on | 6              | 7                 | 1          | **pending** | —         | —        | —        |
 
 **fi-attn (Cases 1–3) — 3× startup_crash, same FlashInfer dispatch-table miss as on 0.5.10.** The Gemma-4 head_dim=256 + RoPE=64 prefill kernel still hits `FlashInfer Internal Error: Invalid configuration : NUM_MMA_Q=1 NUM_MMA_D_QK=32 NUM_MMA_D_VO=32 NUM_MMA_KV=1 NUM_WARPS_Q=1 NUM_WARPS_KV=4` from `prefill.cuh:2978`. FlashInfer 0.6.8.post1 + sgl-kernel 0.4.2 did not fix the dispatch-table gap. Even Case 02 (eager, no CUDA graph) crashes — the assert fires at the first decode call, not during graph capture. **Workaround: triton-attn (the profile default), as on 0.5.10.**
 
@@ -66,7 +72,7 @@ All triton-attn cases finish with `stop` × N (Gemma is concise; ~1.2 k tokens v
 
 ## Results
 
-**Baseline matrix complete (2026-05-11, 6/6 cases run: 3 ok, 3 startup_crash). MTP sweep (Tests 7–11) pending.**
+**Baseline matrix complete (2026-05-11, 6/6 cases run: 3 ok, 3 startup_crash). MTP sweep partial (2026-05-13, 1/5 cases ok; Tests 8–11 pending).**
 
 Result dir: `kikube/matrixtest/2026-05-11/results/sglang_nn4_tp4_ep1/gemma-4-31b-it/0.5.11/`.
 
@@ -99,13 +105,40 @@ n=1 is essentially flat across versions (~10 tok/s — single-stream is compute-
 
 ---
 
-## MTP sweep (Tests 7–11) — pending
+## MTP sweep (Tests 7–11) — partial (1/5 cases done)
 
 The MTP cases mirror the Case 06 winner shape (triton-attn + CG on + piecewise on) and only vary `speculative_num_steps ∈ {2, 3, 4, 5, 6}`. Cookbook default is `num_steps=5`; we sweep ±2.
 
-**Expectation.** MTP helps most when the target model is decode-bound (large per-token cost relative to the drafter step). The 31B dense BF16 at n=1 is **10.49 tok/s** — heavy compute per token, ideal MTP territory at low concurrency. At n=8 the target is already at 85.34 tok/s and CG-piecewise is doing most of the work; expected MTP delta there is smaller (or negative if drafter overhead eats batch headroom). Sweet-spot hypothesis: `num_steps=3–5` for n=1, lower or off for n=8.
+### Test 07 (`num_steps=2`, `num_draft_tokens=3`) — ok, 2026-05-13
 
-Quality-watch items once results land:
-- **Drafter KV-share**: the 4-layer assistant shares the target's KV cache — verify no `mem_fraction_static=0.60` headroom blow-up. If OOM, drop to 0.55 in a follow-up.
-- **Token-acceptance rate** (in SGLang's `/metrics` or stdout): if `<60%` at any step count, the drafter isn't pulling its weight on this workload.
-- **Output coherence**: speculative decoding must be lossless on the verify path — re-apply the same word-salad / triple-word grep + tail-eyeball as baseline.
+Result dir: `kikube/matrixtest/2026-05-13/results/sglang_nn4_tp4_ep1/gemma-4-31b-it/0.5.11/nv580.142_sglang-0.5.11_gemma-4-31b-it_4n_1pp_4tp_ep1_07_triton-attn_piecewise_mtp_steps-2/`.
+
+| n | peak (sum tok/s) | avg per-req tok/s | wall (s) | tokens out | finish |
+|--:|-----------------:|------------------:|---------:|-----------:|--------|
+| 1 | **20.83**        | 20.83             | 59.3     | 1 235      | stop   |
+| 4 | **77.67**        | 19.42 avg / 19.75 p50 | 82.95 | 5 441    | stop ×4|
+
+**Big MTP wins** vs Case 06 baseline (10.49 / 44.06):
+- n=1: **+98 %** (20.83 vs 10.49) — single-stream nearly doubles, exactly the decode-bound territory MTP exists for.
+- n=4: **+76 %** (77.67 vs 44.06) — gains persist into low-concurrency batched serving.
+
+n=8 not in this run; needs follow-up to see whether the gain compresses once the target is closer to compute saturation.
+
+**Drafter acceptance** (from `decode batch` log lines):
+- n=1 steady-state: `accept len ∈ [2.15, 2.62]` out of `num_steps=2` (so `accept_rate ≈ 0.57–0.81`, median ~0.68). Drafter actually clears the bar on this prompt mix.
+- n=4 steady-state: `accept len ∈ [2.23, 2.44]`, `accept_rate ≈ 0.61–0.72`, median ~0.68. No degradation with batching.
+
+**FROZEN_KV_MTP path engaged** — head log shows the auto-promotion and `Capture Frozen-KV MTP draft cuda graph begin/end` lines. The PR #24436 cherry-pick is working as intended.
+
+Output quality: 5/5 requests finished with `stop` (natural EOS), output tokens 1153–1554 (median ~1380), well below the 3072 cap. Pattern same as the baseline runs.
+
+### Tests 08–11 — pending
+
+The remaining four step counts (3, 4, 5, 6) have not been launched yet. Expectation given Test 07's profile:
+- Acceptance length should scale roughly with `num_steps` but the **acceptance rate** typically tails off past ~3–4 steps as draft uncertainty compounds. Sweet spot is probably `num_steps ∈ {3, 4}` if Test 07's ~0.7 acceptance rate at 2 steps holds.
+- Throughput gain at n=4/n=8 likely peaks then plateaus or regresses — once verify-batch decode is saturated, the drafter step's own latency stops being free.
+
+### Quality-watch items (carry-forward for Tests 08–11)
+- Drafter KV-share: 4-layer assistant shares the target's KV cache — `mem_fraction_static=0.60` headroom held fine in Test 07. If a higher-step case OOMs, drop to 0.55.
+- Acceptance rate: <60 % at any step count = drafter not earning its keep on this workload.
+- Output coherence: re-apply word-salad / triple-word grep + tail-eyeball — verify path must be lossless.
