@@ -19,8 +19,9 @@ _model_profile:
     # Gemma4 backend path, sliding+full attention hybrid, and proportional RoPE
     # may have edge cases on SM121 that need testing before production use.
     # MTP via google/gemma-4-31B-it-assistant (4-layer drafter, released
-    # 2026-05-05) → SGLang FROZEN_KV_MTP path (PR #24436, cherry-picked into
-    # the 0.5.11-gemma4-sm121 image). No public EAGLE3 draft exists for Gemma 4.
+    # 2026-05-05) → SGLang FROZEN_KV_MTP path (PR #24436 cherry-pick is in
+    # `always_source_patches` of build_sm121_image.sh, so both 0.5.11-sm121
+    # and 0.5.11-gemma4-sm121 carry it). No public EAGLE3 draft for Gemma 4.
     nccl_transport: "roce"
     tp_size: 4  # num_kv_heads=16 → 4 per GPU
     context_length: 262144  # 256K native
@@ -38,8 +39,11 @@ _model_profile:
     #
     # MTP requirements:
     # - Image must carry the PR #24436 cherry-pick (sglang-gemma4-mtp-pr24436.patch)
-    #   → 0.5.11-gemma4-sm121 only; 0.5.11-sm121 plain crashes the drafter
-    #   weight-load with "No module or parameter named 'model.language_model'".
+    #   — both 0.5.11-sm121 and 0.5.11-gemma4-sm121 do (always_source_patches
+    #   in build_sm121_image.sh). For dense BF16 Gemma-4 the lean 0.5.11-sm121
+    #   is mandatory: 0.5.11-gemma4-sm121 ships PR #22929 which iterates
+    #   range(num_experts) on weight-load → TypeError on dense (num_experts=None).
+    #   Gating the loop fixed it; the lean image avoids the patch entirely.
     # - speculative_algo: NEXTN is auto-promoted to FROZEN_KV_MTP at runtime.
     # - enable_spec_v2 is auto-disabled by FROZEN_KV_MTP at runtime.
     # - num_draft_tokens MUST equal num_steps + 1 (autoadjust does not fire).
@@ -73,4 +77,4 @@ _model_profile:
     speculative_eagle_topk: 1
     enable_spec_v2: true  # auto-disabled by FROZEN_KV_MTP at runtime
     # sglang_image: "xomoxcc/dgx-spark-sglang:main-gemma4-sm121"
-    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121"
+    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.11-sm121"

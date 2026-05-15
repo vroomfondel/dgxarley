@@ -20,8 +20,9 @@ _model_profile:
     # SGLang day-one support per Google/LMSYS blog. Still new — Gemma4 MoE
     # path hasn't been stress-tested on SM121, may need tuning.
     # MTP via google/gemma-4-26B-A4B-it-assistant (4-layer drafter, released
-    # 2026-05-05) → SGLang FROZEN_KV_MTP path (PR #24436, cherry-picked into
-    # the 0.5.11-gemma4-sm121 image). No public EAGLE3 draft exists for Gemma 4.
+    # 2026-05-05) → SGLang FROZEN_KV_MTP path (PR #24436 cherry-pick is in
+    # `always_source_patches` of build_sm121_image.sh, so both 0.5.11-sm121
+    # and 0.5.11-gemma4-sm121 carry it). No public EAGLE3 draft for Gemma 4.
     nccl_transport: "roce"
     tp_size: 4  # num_kv_heads=8 → 2 per GPU
     context_length: 262144
@@ -41,7 +42,12 @@ _model_profile:
     # num_steps=2 + num_draft_tokens=3 for +14% n=1; the n=8 trade-off is ~−5%.
     #
     # MTP requirements (same as 31B-it):
-    # - Image must carry the PR #24436 cherry-pick → 0.5.11-gemma4-sm121 only.
+    # - Image must carry the PR #24436 cherry-pick — both 0.5.11-sm121 and
+    #   0.5.11-gemma4-sm121 do (always_source_patches in build_sm121_image.sh).
+    #   The lean 0.5.11-sm121 is preferred: the gemma4-sm121 NVFP4 source
+    #   patches (PRs #22929/#22928) target NVFP4 checkpoints and add no value
+    #   to BF16 workloads — and the v1 of #22929 crashed dense Gemma-4 at
+    #   load with 'range(num_experts) TypeError: NoneType' (gated since v2).
     # - speculative_algo: NEXTN auto-promoted to FROZEN_KV_MTP at runtime.
     # - enable_spec_v2 auto-disabled by FROZEN_KV_MTP at runtime.
     # - num_draft_tokens MUST equal num_steps + 1 (autoadjust does not fire).
@@ -75,6 +81,7 @@ _model_profile:
     speculative_eagle_topk: 1
     enable_spec_v2: true  # auto-disabled by FROZEN_KV_MTP at runtime
     # sglang_image: "xomoxcc/dgx-spark-sglang:main-gemma4-sm121"
-    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121"
+    # sglang_image: "xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121"
+    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.11-sm121"
 
 

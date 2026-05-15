@@ -2,7 +2,7 @@ diff --git a/python/sglang/srt/models/gemma4_causal.py b/python/sglang/srt/model
 index 544406119243..ad3717f6353f 100644
 --- a/python/sglang/srt/models/gemma4_causal.py
 +++ b/python/sglang/srt/models/gemma4_causal.py
-@@ -905,6 +905,27 @@ def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+@@ -905,6 +905,30 @@ def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
          ]
          num_experts = self.config.num_experts
  
@@ -10,27 +10,30 @@ index 544406119243..ad3717f6353f 100644
 +        # NVFP4 checkpoints store per-expert tensors:
 +        #   moe.experts.{id}.{gate_proj,up_proj,down_proj}.{weight,weight_scale,...}
 +        # SGLang expects fused format: moe.experts.w13_{suffix} / w2_{suffix}
++        # Skipped for dense Gemma-4 variants (num_experts=None on e.g.
++        # google/gemma-4-31B-it) so range(num_experts) doesn't TypeError.
 +        nvfp4_expert_params_mapping = []
-+        for expert_id in range(num_experts):
-+            for shard_id, weight_name in [
-+                ("w1", "gate_proj"),
-+                ("w2", "down_proj"),
-+                ("w3", "up_proj"),
-+            ]:
-+                param_prefix = (
-+                    "experts.w13_"
-+                    if shard_id in ("w1", "w3")
-+                    else "experts.w2_"
-+                )
-+                ckpt_prefix = f"experts.{expert_id}.{weight_name}."
-+                nvfp4_expert_params_mapping.append(
-+                    (param_prefix, ckpt_prefix, expert_id, shard_id)
-+                )
++        if num_experts:
++            for expert_id in range(num_experts):
++                for shard_id, weight_name in [
++                    ("w1", "gate_proj"),
++                    ("w2", "down_proj"),
++                    ("w3", "up_proj"),
++                ]:
++                    param_prefix = (
++                        "experts.w13_"
++                        if shard_id in ("w1", "w3")
++                        else "experts.w2_"
++                    )
++                    ckpt_prefix = f"experts.{expert_id}.{weight_name}."
++                    nvfp4_expert_params_mapping.append(
++                        (param_prefix, ckpt_prefix, expert_id, shard_id)
++                    )
 +
          k_eq_v_layers = self._get_k_eq_v_layers()
  
          params_dict = dict(self.named_parameters())
-@@ -936,9 +957,34 @@ def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+@@ -936,9 +960,34 @@ def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
                  and int(m.group(1)) in k_eq_v_layers
              )
  
@@ -70,7 +73,7 @@ diff --git a/python/sglang/srt/models/gemma4_mm.py b/python/sglang/srt/models/ge
 index 4618129fab7a..360038f54103 100644
 --- a/python/sglang/srt/models/gemma4_mm.py
 +++ b/python/sglang/srt/models/gemma4_mm.py
-@@ -721,6 +721,27 @@ def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+@@ -721,6 +721,30 @@ def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
              ("experts.w2_weight", "experts.down_proj", ("w2",)),
          ]
  
@@ -78,27 +81,30 @@ index 4618129fab7a..360038f54103 100644
 +        # NVFP4 checkpoints store per-expert tensors:
 +        #   moe.experts.{id}.{gate_proj,up_proj,down_proj}.{weight,weight_scale,...}
 +        # SGLang expects fused format: moe.experts.w13_{suffix} / w2_{suffix}
++        # Skipped for dense Gemma-4 variants (num_experts=None on e.g.
++        # google/gemma-4-31B-it) so range(num_experts) doesn't TypeError.
 +        nvfp4_expert_params_mapping = []
-+        for expert_id in range(num_experts):
-+            for shard_id, weight_name in [
-+                ("w1", "gate_proj"),
-+                ("w2", "down_proj"),
-+                ("w3", "up_proj"),
-+            ]:
-+                param_prefix = (
-+                    "experts.w13_"
-+                    if shard_id in ("w1", "w3")
-+                    else "experts.w2_"
-+                )
-+                ckpt_prefix = f"experts.{expert_id}.{weight_name}."
-+                nvfp4_expert_params_mapping.append(
-+                    (param_prefix, ckpt_prefix, expert_id, shard_id)
-+                )
++        if num_experts:
++            for expert_id in range(num_experts):
++                for shard_id, weight_name in [
++                    ("w1", "gate_proj"),
++                    ("w2", "down_proj"),
++                    ("w3", "up_proj"),
++                ]:
++                    param_prefix = (
++                        "experts.w13_"
++                        if shard_id in ("w1", "w3")
++                        else "experts.w2_"
++                    )
++                    ckpt_prefix = f"experts.{expert_id}.{weight_name}."
++                    nvfp4_expert_params_mapping.append(
++                        (param_prefix, ckpt_prefix, expert_id, shard_id)
++                    )
 +
          params_dict = dict(self.named_parameters())
          params_dict.update(dict(self.named_buffers()))
          non_persistent_buffers: Set[str] = set()
-@@ -767,9 +788,34 @@ def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+@@ -767,9 +791,34 @@ def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
                  and int(m.group(1)) in k_eq_v_layers
              )
  
