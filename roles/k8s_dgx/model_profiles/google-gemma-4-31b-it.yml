@@ -18,18 +18,38 @@ _model_profile:
     # SGLang has day-one Gemma 4 support (per Google/LMSYS blog). Still new —
     # Gemma4 backend path, sliding+full attention hybrid, and proportional RoPE
     # may have edge cases on SM121 that need testing before production use.
-    # No MTP heads → no NEXTN. No public EAGLE3 draft exists for Gemma 4 yet.
+    # MTP via google/gemma-4-31B-it-assistant (4-layer drafter, released
+    # 2026-05-05) → SGLang FROZEN_KV_MTP path (PR #24436, cherry-picked into
+    # the 0.5.11-gemma4-sm121 image). No public EAGLE3 draft exists for Gemma 4.
     nccl_transport: "roce"
     tp_size: 4  # num_kv_heads=16 → 4 per GPU
     context_length: 262144  # 256K native
     quantization: ""  # native BF16
     trust_remote_code: false  # official Google model, no custom code
-    # Winner config (Test 6, 2026-04-17):
-    #   triton attn + piecewise → 10.6 / 36.8 / 70.6 tok/s (n=1/n=4/n=8)
-    #   attention_backend=triton is mandatory: FlashInfer crashes on
+    # Winner config: Test 09 of the v0.5.11 MTP sweep (2026-05-13)
+    #   triton attn + piecewise CG + FROZEN_KV_MTP (num_steps=4) →
+    #   22.09 / 86.24 / 153.24 tok/s (n=1/n=4/n=8) = +110% / +96% / +80% vs
+    #   non-MTP baseline (10.49 / 44.06 / 85.34). Sweep peak at n=8.
+    # See TESTLOGS/sglang_nn4_tp4_ep1/gemma-4-31b-it/TESTLOG_nv580.142_sglang-0.5.11_gemma-4-31b-it_4n.md
+    # for the full MTP sweep (num_steps ∈ {2..6}) — n=8 peaks at steps=4,
+    # n=1/n=4 keep climbing through steps=6 (26.68 / 91.41 at steps=6).
+    # If the deployment is single-stream (chat/agent), bump to num_steps=6 +
+    # num_draft_tokens=7 for +14% n=1; the n=8 trade-off is ~−5%.
+    #
+    # MTP requirements:
+    # - Image must carry the PR #24436 cherry-pick (sglang-gemma4-mtp-pr24436.patch)
+    #   → 0.5.11-gemma4-sm121 only; 0.5.11-sm121 plain crashes the drafter
+    #   weight-load with "No module or parameter named 'model.language_model'".
+    # - speculative_algo: NEXTN is auto-promoted to FROZEN_KV_MTP at runtime.
+    # - enable_spec_v2 is auto-disabled by FROZEN_KV_MTP at runtime.
+    # - num_draft_tokens MUST equal num_steps + 1 (autoadjust does not fire).
+    # - attention_backend=triton is mandatory: FlashInfer crashes on
     #   global_head_dim=512 (see FLASHINFER_HEAD_DIM_512_UPSTREAM_BUG.md).
-    #   piecewise works for BF16 (no fp4_quantize fake-tensor dynamo issue)
-    #   and gives +6.5% at n=8 over fixed-BS graphs.
+    # - Drafter google/gemma-4-31B-it-assistant: per-pod model-download
+    #   initContainer auto-appends speculative_draft_model_path to
+    #   HF_PRELOAD_MODELS when speculative_enabled=true (tasks/sglang.yml).
+    #   Also pre-staged cluster-wide via the hf_preload Job entry in
+    #   defaults/main.yml (saves the per-pod download — optimization only).
     kv_cache_dtype: "fp8_e4m3"
     # mem_fraction_static: "0.85"
     mem_fraction_static: "0.6"
@@ -45,6 +65,12 @@ _model_profile:
       temperature: 1.0
       top_p: 0.95
       top_k: 64
-    speculative_enabled: false
+    speculative_enabled: true
+    speculative_algo: "NEXTN"  # auto-promoted to FROZEN_KV_MTP at runtime
+    speculative_draft_model_path: "google/gemma-4-31B-it-assistant"
+    speculative_num_steps: 4
+    speculative_num_draft_tokens: 5  # = num_steps + 1
+    speculative_eagle_topk: 1
+    enable_spec_v2: true  # auto-disabled by FROZEN_KV_MTP at runtime
     # sglang_image: "xomoxcc/dgx-spark-sglang:main-gemma4-sm121"
     sglang_image: "xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121"

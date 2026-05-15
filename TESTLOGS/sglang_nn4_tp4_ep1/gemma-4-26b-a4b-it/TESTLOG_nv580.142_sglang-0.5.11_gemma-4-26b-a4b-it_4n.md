@@ -97,13 +97,13 @@ CAVEAT (from matrix preamble): SGLang cookbook recommends `--tp 2` for the 26B-A
 
 **`speculative_num_draft_tokens` manual sweep** — SGLang requires `num_draft_tokens ≥ num_steps + 1`. The cookbook's fixed `6` only matches `num_steps=5`; for `num_steps ∈ {2,3,4,6}` we bumped per case (autoadjust didn't fire). Table reflects the actually-configured values.
 
-| #  | moe    | attn   | CG / pw | spec_num_steps | spec_draft_tokens | eagle_topk | Status      | n=1 tok/s | n=4 peak | n=8 peak |
-|----|--------|--------|---------|---------------:|------------------:|-----------:|-------------|----------:|---------:|---------:|
-| 19 | triton | triton | on / on | 2              | 3                 | 1          | **pending** | —         | —        | —        |
-| 20 | triton | triton | on / on | 3              | 4                 | 1          | **pending** | —         | —        | —        |
-| 21 | triton | triton | on / on | 4              | 5                 | 1          | **pending** | —         | —        | —        |
-| 22 | triton | triton | on / on | 5              | 6                 | 1          | **pending** | —         | —        | —        |
-| 23 | triton | triton | on / on | 6              | 7                 | 1          | **pending** | —         | —        | —        |
+| #  | moe    | attn   | CG / pw | spec_num_steps | spec_draft_tokens | eagle_topk | Status | n=1 tok/s | n=4 peak  | n=8 peak    |
+|----|--------|--------|---------|---------------:|------------------:|-----------:|--------|----------:|----------:|------------:|
+| 19 | triton | triton | on / on | 2              | 3                 | 1          | ok     | **56.94 ★**| 159.99   | 250.49      |
+| 20 | triton | triton | on / on | 3              | 4                 | 1          | ok     | 50.08     | **161.38 ★**| **263.16 ★**|
+| 21 | triton | triton | on / on | 4              | 5                 | 1          | ok     | 47.26     | 154.94    | 256.36      |
+| 22 | triton | triton | on / on | 5              | 6                 | 1          | ok     | 46.09     | 146.86    | 248.51      |
+| 23 | triton | triton | on / on | 6              | 7                 | 1          | ok     | 48.87     | 147.49    | 245.67      |
 
 ---
 
@@ -120,7 +120,7 @@ CAVEAT (from matrix preamble): SGLang cookbook recommends `--tp 2` for the 26B-A
 
 ## Results
 
-**Baseline complete (started 2026-05-11 22:36 CEST, finished early morning 2026-05-12 — 18/18 baseline cases run: 6 ok, 12 crash). MTP sweep (Tests 19–23) pending.**
+**Matrix complete (baseline 2026-05-11/12, MTP sweep + baseline re-run 2026-05-15 — 23/23 cases run: 11 ok, 12 crash). Baseline reproduces; MTP delivers another +26 % on top of the prior cluster max.**
 
 Result dir: `kikube/matrixtest/2026-05-11/results/sglang_nn4_tp4_ep1/gemma-4-26b-a4b-it/0.5.11/`.
 
@@ -154,7 +154,7 @@ Result dir: `kikube/matrixtest/2026-05-11/results/sglang_nn4_tp4_ep1/gemma-4-26b
 - **Tails eyeballed** for Case 12 n=8 (winner): all 8 requests end in clean concluding sentences (tables, summaries, calls-to-action — same shape as the 31B-it sibling).
 - Gemma-4 dense-attn VLM is unaffected by the v0.5.11 hybrid-mamba word-salad concurrency-race — confirmed.
 
-### Production recommendation
+### Production recommendation (superseded by MTP — see below)
 
 ```yaml
 moe_runner_backend: flashinfer_cutlass   # +5 tok/s vs triton @ winner shape n=8
@@ -165,7 +165,7 @@ nccl_transport: roce
 cuda_graph_max_bs: 8
 ```
 
-Triton MoE (Cases 4–6) is essentially equivalent and is the current profile default — switching to `flashinfer_cutlass` would buy ~2.5 % n=8 with no quality difference. Optional.
+Triton MoE (Cases 4–6) is essentially equivalent and is the current profile default — switching to `flashinfer_cutlass` would buy ~2.5 % n=8 with no quality difference. Optional. **For the actual production setting now in use, see the MTP sweep section below — MTP delivers another +26 % at n=8 over this baseline.**
 
 ### 0.5.10 baseline (reference)
 
@@ -183,15 +183,56 @@ From `TESTLOG_nv580.142_sglang-0.5.10_gemma-4-26b-a4b-it_4n.md`:
 
 ---
 
-## MTP sweep (Tests 19–23) — pending
+## MTP sweep (Tests 19–23) — complete (5/5 ok), 2026-05-15
 
-The MTP cases mirror the Case 06 shape (triton-MoE + triton-attn + CG on + piecewise on) — the cookbook-validated path. Only `speculative_num_steps ∈ {2, 3, 4, 5, 6}` varies; cookbook default is `num_steps=5`.
+Result dir: `kikube/matrixtest/2026-05-15/results/sglang_nn4_tp4_ep1/gemma-4-26b-a4b-it/0.5.11/`. The non-MTP baselines (Cases 4–6, 10–12) were re-run on 2026-05-15 alongside the MTP sweep and reproduce within ~5 tok/s at n=8 (Case 06: 208.31 vs prior 208.50; Case 12: 208.71 vs prior 213.72). Crashes A (fi-attn) and B (fi_cutedsl) reproduce exactly.
 
-**Expectation (revised after 31B-it Test 07 result, 2026-05-13).** The dense 31B-it sibling's Test 07 (`num_steps=2`) showed a *much larger* MTP win than initially predicted: n=1 +98 % (10.49 → 20.83), n=4 +76 % (44.06 → 77.67), accept_rate ~0.68 median. So MTP under FROZEN_KV_MTP is materially better than naked NEXTN/EAGLE would be on Gemma-4. The 26B-A4B is MoE (3.8 B active) and starts much higher at n=1 (**40.48 tok/s** baseline) — per-token compute is already low, so the absolute headroom for MTP is smaller. Revised hypothesis: solid n=1 win (target 55–65 tok/s if accept rate matches the 31B's 0.7), shrinking gain at n=4, breakeven-to-loss at n=8 where the target is already at 208 tok/s and verify-batch decode is saturated.
+| spec_num_steps | num_draft | n=1   | Δ baseline⁰ | n=4    | Δ baseline⁰ | n=8     | Δ baseline⁰ | mean accept_len | mean accept_rate |
+|---------------:|----------:|------:|------------:|-------:|------------:|--------:|------------:|----------------:|-----------------:|
+| baseline (Case 06, re-run) | — | 32.39 | —      | 132.67 | —           | 208.31  | —           | —               | —                |
+| 2              | 3         | **56.94 ★** | **+76 %** | 159.99 | +21 %  | 250.49  | +20 %       | 2.38 / 2        | 0.69             |
+| 3              | 4         | 50.08 | +55 %       | **161.38 ★** | **+22 %** | **263.16 ★** | **+26 %** | 2.65 / 3 | 0.55             |
+| 4              | 5         | 47.26 | +46 %       | 154.94 | +17 %       | 256.36  | +23 %       | 2.81 / 4        | 0.45             |
+| 5              | 6         | 46.09 | +42 %       | 146.86 | +11 %       | 248.51  | +19 %       | 2.97 / 5        | 0.40             |
+| 6              | 7         | 48.87 | +51 %       | 147.49 | +11 %       | 245.67  | +18 %       | 3.22 / 6        | 0.37             |
 
-Quality-watch items once results land:
-- **Drafter + MoE expert routing**: the auxiliary checkpoint is dense (4 layers) but the target is MoE — verify the assistant's outputs map cleanly to target tokens (no quality degradation from routing mismatch on rejected drafts).
-- **mem_fraction=0.85 + drafter shard**: 26B target uses ~13 GB/GPU, drafter adds ~4 GB / TP=4 = ~1 GB/GPU; should fit with headroom. Watch for OOM in startup logs.
-- **Token-acceptance rate**: small drafters on MoE targets historically accept poorly (~40 %) — if so, MTP is a loss here regardless of `num_steps`.
-- **Output coherence**: re-apply baseline word-salad / triple-word grep + tail-eyeball.
+⁰ Baseline = Case 06 re-run on 2026-05-15 (32.39 / 132.67 / 208.31). The original 2026-05-12 baseline numbers (40.48 / 132.00 / 208.50) only differ at n=1 (single-stream is noisy on this model: Case 04 also dropped 40.57 → 37.20). At n=4 / n=8 the deltas are within run-to-run noise.
+
+### Findings (26B-A4B-it MTP)
+
+1. **All 5 MTP cases run; FROZEN_KV_MTP works on the MoE Gemma-4 too.** No OOMs (mem_fraction=0.85 held), no quality regressions (output stop ratio + token distribution match baseline).
+2. **Sweet spots are different per concurrency level:**
+   - **n=1: `num_steps=2` wins (56.94 tok/s, +76 %).** More steps = lower per-step accept rate compounds, eats the gain.
+   - **n=4: `num_steps=3` wins (161.38 tok/s, +22 %).**
+   - **n=8: `num_steps=3` wins (263.16 tok/s, +26 %).** New all-time cluster throughput record (vs the prior 213.72 fi_cutlass winner; +49 tok/s = +23 % standalone).
+3. **Sweet-spot shifts vs the 31B-it dense sibling**: 31B-it n=8 peaked at `num_steps=4` (153.24, +80 % over its baseline 85.34). 26B-A4B peaks at `num_steps=3` and the absolute % gain is smaller (+26 % vs +80 %). Two reasons: (a) MoE is already cheap per token, less decode-bound, less MTP headroom; (b) verify-batch overhead competes harder against the dense MoE forward pass.
+4. **Acceptance-rate decay is steeper on MoE than dense**: 31B-it dropped 0.68 → 0.50 across steps=2..6; 26B-A4B drops 0.69 → 0.37 across the same range. Drafter is a dense 4-layer model — when the target's MoE picks an expert the drafter never trained against, rejection rises faster. Net throughput still wins because absolute accept_len keeps growing (2.38 → 3.22), but past `num_steps=3` the verify cost dominates.
+
+### Quality verified (26B-A4B-it MTP)
+
+- 65 successful requests across the 5 MTP cases × {n=1, n=4, n=8}.
+- 0 finish=length, all natural EOS.
+- Output-token distribution within the same band as the baseline runs (~900–1900, median ~1400).
+- No word-salad / triple-word patterns; tails of the n=8 winner (Test 20) eyeballed clean.
+
+### Production recommendation (current default — applied to model profile)
+
+```yaml
+moe_runner_backend: triton                                # cookbook-validated MTP path
+attention_backend: triton                                 # fi-attn crashes (head_dim=256+RoPE=64 dispatch miss)
+disable_cuda_graph: false
+disable_piecewise_cuda_graph: false
+nccl_transport: roce
+cuda_graph_max_bs: 8
+
+speculative_enabled: true
+speculative_algo: NEXTN                                   # auto-promoted to FROZEN_KV_MTP at runtime
+speculative_draft_model_path: google/gemma-4-26B-A4B-it-assistant
+speculative_num_steps: 3                                  # n=8 sweet spot (263.16 tok/s, +26 %)
+speculative_num_draft_tokens: 4                           # = num_steps + 1 (autoadjust doesn't fire)
+speculative_eagle_topk: 1
+enable_spec_v2: true                                      # auto-disabled by FROZEN_KV_MTP at runtime
+```
+
+For single-stream / agent workloads, switch to `num_steps=2` + `num_draft_tokens=3` (56.94 tok/s n=1 vs 50.08 — +14 %). The n=8 trade-off is ~−5 % (250 vs 263).
 

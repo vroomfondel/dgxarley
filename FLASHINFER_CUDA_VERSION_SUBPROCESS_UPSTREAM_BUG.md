@@ -13,7 +13,7 @@ chain is lazily triggered on the first `fp4_quantize()` call, and if that
 first call is inside a traced forward, the build-time filesystem/subprocess
 operations blow up dynamo.
 
-## Status (re-verified 2026-05-10)
+## Status (re-verified 2026-05-15)
 
 **Patch 1 shipped and stable. Patch 2 superseded by config decision —
 "option 2" from the 2026-04-15 evening update was adopted: all NVFP4
@@ -23,8 +23,14 @@ model profiles in `roles/k8s_dgx/model_profiles/*.yml` now carry
 hot path. The on-disk `PATCH_FI_FP4_ALLOW_EOF` block in
 `sglang_launch.sh` (revision 4 = `allow_in_graph`) is now dead code:
 it cannot do harm because piecewise capture is off, but it serves no
-purpose either. Removal is pending a small cleanup commit.
-No upstream issue filed yet.** 2026-04-15 morning session outcome:
+purpose either. Removal is still pending a small cleanup commit
+(unchanged since 2026-05-10 — flagged here as an outstanding action
+item). No upstream issue filed yet. FlashInfer has since shipped
+v0.6.11.post1 (2026-05-13) and v0.6.11.post2 (2026-05-14); both still
+contain the unchanged `get_cuda_version()` → `subprocess` lookup and
+the unchanged `JitSpec.build_and_load() → is_aot → stat` chain, so
+the structural bug is still present in current upstream — our runtime
+patches remain required on every image that pins flashinfer.** 2026-04-15 morning session outcome:
 
 - **Issue 1 root cause**: `flashinfer.jit.cpp_ext.get_cuda_version()` calls
   `subprocess.check_output([nvcc, "--version"])` on its first invocation (it's

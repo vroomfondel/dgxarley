@@ -1,10 +1,16 @@
 # FlashInfer Upstream Bug: head_dim=512 not supported (Gemma-4 global attention)
 
-## Status (re-verified 2026-05-12 — bug RE-OPENED on a different code path)
+## Status (re-verified 2026-05-15 — bug RE-OPENED on a different code path)
 
 **PR #2959 is necessary but NOT sufficient. The `head_dim=512` dispatch gap
-persists in FlashInfer 0.6.11 for a specific MMA-tile configuration that
-Gemma-4's global-attention layers actually use on SM121.** The bug was
+persists in FlashInfer 0.6.11 / 0.6.11.post1 / 0.6.11.post2 for a specific
+MMA-tile configuration that Gemma-4's global-attention layers actually use
+on SM121.** FlashInfer shipped two post-releases since the original
+discovery — v0.6.11.post1 on 2026-05-13 and v0.6.11.post2 on 2026-05-14 —
+neither contains a fix for the missing dispatch tuple; their release notes
+mention no `head_dim`, `prefill.cuh`, or Gemma-4 changes. Upstream issue
+[#3297](https://github.com/flashinfer-ai/flashinfer/issues/3297) remains
+**OPEN** with no maintainer reply. The bug was
 prematurely marked "fixed" in the 2026-05-10 status; a fresh
 `gemma-4-26b-a4b-it` BF16 matrix sweep on 2026-05-11 (image
 `xomoxcc/dgx-spark-sglang:0.5.11-sm121`, flashinfer 0.6.11) shows that
