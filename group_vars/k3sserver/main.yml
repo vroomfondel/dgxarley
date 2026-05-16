@@ -17,8 +17,8 @@ nfs_hf_cache_share_path: "/HF-CACHE"
 cluster_cidr: "10.68.0.0/16"
 service_cidr: "10.69.0.0/16"
 
-# K3s Version
-k3s_version: "v1.35.4+k3s1"
+# K3s Version -> check role defaults
+# k3s_version: "v1.36.0+k3s1"
 
 # DNS
 dns_external_domain_suffix: "dgx.example.com"

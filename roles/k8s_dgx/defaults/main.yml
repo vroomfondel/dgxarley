@@ -39,7 +39,8 @@ sglang_nnodes: 4
 
 # sglang_model: "nvidia/Qwen3.5-397B-A17B-NVFP4"
 # sglang_model: "google/gemma-4-26B-A4B-it"
-sglang_model: "google/gemma-4-31B-it"
+sglang_model: "Qwen/Qwen3.6-35B-A3B-FP8"
+#sglang_model: "google/gemma-4-31B-it"
 # sglang_model: "nvidia/Qwen3-235B-A22B-NVFP4"
 # sglang_model: "zai-org/GLM-4.7-FP8"
 
