@@ -83,10 +83,12 @@
               disabled: false
             - name: wolframalpha
               disabled: true
-            # disabled (broken/captcha)
+            # disabled (broken/captcha/403)
             - name: duckduckgo
               disabled: true
             - name: yep
+              disabled: true
+            - name: karmasearch
               disabled: true
 
 
