@@ -62,13 +62,15 @@ spec:
           command:
             - sh
             - -c
-            - "chown {{ item.uid }}:{{ item.gid }} /opt/data && chmod 0700 /opt/data"
+            - "chown {{ item.uid }}:{{ item.gid }} /opt/data /workspace && chmod 0700 /opt/data /workspace"
           securityContext:
             runAsUser: 0
             runAsNonRoot: false
           volumeMounts:
             - name: data
               mountPath: /opt/data
+            - name: files
+              mountPath: /workspace
         # Strategic merge of ops-managed keys into /opt/data/config.yaml +
         # /opt/data/.env. We can NOT mount them as subPath of a ConfigMap/Secret
         # directly — that makes them bind-mounts, and Hermes'
@@ -248,6 +250,8 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /opt/data
+            - name: files
+              mountPath: /workspace
             # Writable copy of /opt/hermes/ui-tui (image layer is root-owned;
             # see copy-ui-tui initContainer rationale).
             - name: ui-tui
@@ -354,6 +358,12 @@ spec:
         - name: data
           hostPath:
             path: "{{ hermes_data_base }}/{{ item.username }}"
+            type: DirectoryOrCreate
+        # User-managed input/output shelf, mounted at /workspace. Same per-user
+        # NFS subdir isolation as the data volume.
+        - name: files
+          hostPath:
+            path: "{{ hermes_files_base }}/{{ item.username }}"
             type: DirectoryOrCreate
         - name: seed-config
           configMap:

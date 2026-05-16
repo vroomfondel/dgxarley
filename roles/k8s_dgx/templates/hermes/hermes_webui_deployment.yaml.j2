@@ -79,13 +79,15 @@ spec:
           command:
             - sh
             - -c
-            - "chown {{ item.uid }}:{{ item.gid }} /opt/data && chmod 0700 /opt/data"
+            - "chown {{ item.uid }}:{{ item.gid }} /opt/data /workspace && chmod 0700 /opt/data /workspace"
           securityContext:
             runAsUser: 0
             runAsNonRoot: false
           volumeMounts:
             - name: data
               mountPath: /opt/data
+            - name: files
+              mountPath: /workspace
         # Strategic merge of ops-managed keys into /opt/data/config.yaml +
         # /opt/data/.env. Mirrors hermes-agent pod's merge-config initContainer
         # — needed because the webui spawns its own `hermes` subprocesses which
@@ -219,6 +221,8 @@ spec:
               mountPath: /opt/data
             - name: agent-src
               mountPath: /opt/agent-src
+            - name: files
+              mountPath: /workspace
           livenessProbe:
             httpGet:
               path: /health
@@ -236,6 +240,12 @@ spec:
         - name: data
           hostPath:
             path: "{{ hermes_data_base }}/{{ item.username }}"
+            type: DirectoryOrCreate
+        # User-managed input/output shelf, mounted at /workspace. Same per-user
+        # NFS subdir isolation as the data volume.
+        - name: files
+          hostPath:
+            path: "{{ hermes_files_base }}/{{ item.username }}"
             type: DirectoryOrCreate
         - name: agent-src
           emptyDir: {}
