@@ -30,9 +30,10 @@ Each is opt-out via empty-string env var:
                                                        processed mail stays in
                                                        INBOX with \\Seen)
   EMAIL_SENT_FOLDER        default "Sent"            ("" disables IMAP APPEND)
-  EMAIL_PROCESS_EXISTING   default "0"               ("1" = process all UNSEEN
-                                                       INBOX UIDs on startup,
-                                                       not just new ones)
+  EMAIL_PROCESS_EXISTING   default "1"               ("0" = mark all existing
+                                                       UNSEEN INBOX UIDs as seen
+                                                       on startup and only
+                                                       process truly new ones)
 
 When this file is bumped, the upstream source must be re-downloaded and the
 five patch sections re-applied:
@@ -323,7 +324,7 @@ class EmailAdapter(BasePlatformAdapter):
         self._working_folder = os.environ.get("EMAIL_WORKING_FOLDER", "Hermes_Working")
         self._done_folder = os.environ.get("EMAIL_DONE_FOLDER", "Hermes_Done")
         self._sent_folder = os.environ.get("EMAIL_SENT_FOLDER", "Sent")
-        self._process_existing = os.environ.get("EMAIL_PROCESS_EXISTING", "0").strip().lower() in (
+        self._process_existing = os.environ.get("EMAIL_PROCESS_EXISTING", "1").strip().lower() in (
             "1",
             "true",
             "yes",

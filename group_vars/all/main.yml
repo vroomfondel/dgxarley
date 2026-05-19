@@ -219,6 +219,12 @@ hermes_users:
       allowed_users:                   # sender whitelist
         - "owner@example.com"
       skip_attachments: false          # true → strip attachments before LLM
+      # Folder-lifecycle knobs (local patch over upstream gateway/platforms/email.py).
+      # Empty string "" opts out of the respective stage. Defaults shown below.
+      working_folder: "Hermes_Working" # INBOX→Working at fetch; "" → skip, INBOX→Done directly
+      done_folder: "Hermes_Done"       # final destination after handle_message(); "" → no moves
+      sent_folder: "Sent"              # IMAP APPEND target for outbound replies; "" → SMTP-only
+      process_existing: true           # true (default) → process pre-existing UNSEEN INBOX backlog on start
       cpu_limit: "500m"                # sidecar caps; defaults 500m / 512Mi
       memory_limit: "512Mi"
     enabled: false

@@ -23,5 +23,5 @@ EMAIL_ALLOWED_USERS={{ email.allowed_users | join(',') if email.allowed_users is
 EMAIL_WORKING_FOLDER={{ email.working_folder if email.working_folder is defined else 'Hermes_Working' }}
 EMAIL_DONE_FOLDER={{ email.done_folder if email.done_folder is defined else 'Hermes_Done' }}
 EMAIL_SENT_FOLDER={{ email.sent_folder if email.sent_folder is defined else 'Sent' }}
-EMAIL_PROCESS_EXISTING={{ '1' if email.process_existing | default(false) else '0' }}
+EMAIL_PROCESS_EXISTING={{ '1' if email.process_existing | default(true) else '0' }}
 {% endif %}
