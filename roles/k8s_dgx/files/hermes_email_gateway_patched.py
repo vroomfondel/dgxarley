@@ -36,14 +36,16 @@ Each is opt-out via empty-string env var:
                                                        process truly new ones)
 
 When this file is bumped, the upstream source must be re-downloaded and the
-five patch sections re-applied:
+patch sections re-applied:
 
   [PATCH-1] module docstring (this block)
   [PATCH-2] __init__: new self._* attributes
-  [PATCH-3] new helpers: _ensure_folder, _imap_move, _finalize_message,
-            _append_to_sent
-  [PATCH-4] connect(): conditional pre-fill + folder ensure
-  [PATCH-5] _fetch_new_messages(): INBOX→Working MOVE per UID
+  [PATCH-3] new helpers: _open_imap (port-based SSL/STARTTLS), _ensure_folder,
+            _imap_move, _finalize_message, _append_to_sent
+  [PATCH-4] connect(): conditional pre-fill + folder ensure + route through
+            _open_imap so 143/STARTTLS endpoints work
+  [PATCH-5] _fetch_new_messages(): route through _open_imap + INBOX→Working
+            MOVE per UID
   [PATCH-6] _dispatch_message(): finalize MOVE after handle_message returns
   [PATCH-7] _send_email{,_with_attachment,_with_attachments}(): APPEND to Sent
 ------------------------------------------------------------------------------
@@ -379,9 +381,22 @@ class EmailAdapter(BasePlatformAdapter):
     # [PATCH-3] IMAP folder-lifecycle helpers (dgxarley patch).
     # ------------------------------------------------------------------
 
-    def _open_imap(self) -> imaplib.IMAP4_SSL:
-        """Open an authenticated IMAP4_SSL connection (caller logout()s)."""
-        imap = imaplib.IMAP4_SSL(self._imap_host, self._imap_port, timeout=30)
+    def _open_imap(self) -> imaplib.IMAP4:
+        """Open an authenticated IMAP connection (caller logout()s).
+
+        Port-based auto-detect: 993 → implicit SSL (``IMAP4_SSL``); any other
+        port → plain ``IMAP4`` + ``STARTTLS`` upgrade. The STARTTLS branch is
+        required for Dovecot/Postfix-style setups that only expose 143
+        (Submission with mandatory TLS upgrade) — upstream uses ``IMAP4_SSL``
+        unconditionally, which fails on those servers with
+        ``[SSL: RECORD_LAYER_FAILURE]`` because the server greets in plaintext
+        before any TLS handshake.
+        """
+        if self._imap_port == 993:
+            imap: imaplib.IMAP4 = imaplib.IMAP4_SSL(self._imap_host, self._imap_port, timeout=30)
+        else:
+            imap = imaplib.IMAP4(self._imap_host, self._imap_port, timeout=30)
+            imap.starttls(ssl_context=ssl.create_default_context())
         imap.login(self._address, self._password)
         _send_imap_id(imap)
         return imap
@@ -551,10 +566,10 @@ class EmailAdapter(BasePlatformAdapter):
     async def connect(self) -> bool:
         """Connect to the IMAP server and start polling for new messages."""
         try:
-            # Test IMAP connection
-            imap = imaplib.IMAP4_SSL(self._imap_host, self._imap_port, timeout=30)
-            imap.login(self._address, self._password)
-            _send_imap_id(imap)
+            # Test IMAP connection — uses port-based SSL/STARTTLS auto-detect
+            # so Dovecot-style 143-with-STARTTLS endpoints work alongside the
+            # 993-implicit-SSL providers upstream targets exclusively.
+            imap = self._open_imap()
 
             # [PATCH-4] Ensure our managed folders exist before any MOVE
             # touches them. CREATE is idempotent (NO on "already exists"),
@@ -638,10 +653,8 @@ class EmailAdapter(BasePlatformAdapter):
         """Fetch new (unseen) messages from IMAP. Runs in executor thread."""
         results = []
         try:
-            imap = imaplib.IMAP4_SSL(self._imap_host, self._imap_port, timeout=30)
+            imap = self._open_imap()
             try:
-                imap.login(self._address, self._password)
-                _send_imap_id(imap)
                 imap.select("INBOX")
 
                 status, data = imap.uid("search", None, "UNSEEN")
