@@ -18,4 +18,10 @@ EMAIL_ALLOW_ALL_USERS={{ 'true' if email.allow_all_users else 'false' }}
 {% if email.allowed_users is defined %}
 EMAIL_ALLOWED_USERS={{ email.allowed_users | join(',') if email.allowed_users is iterable and email.allowed_users is not string else email.allowed_users }}
 {% endif %}
+{# dgxarley local-patch env vars (see roles/k8s_dgx/files/hermes_email_gateway_patched.py).
+   `is defined` so the user can override with "" to opt out of a stage. #}
+EMAIL_WORKING_FOLDER={{ email.working_folder if email.working_folder is defined else 'Hermes_Working' }}
+EMAIL_DONE_FOLDER={{ email.done_folder if email.done_folder is defined else 'Hermes_Done' }}
+EMAIL_SENT_FOLDER={{ email.sent_folder if email.sent_folder is defined else 'Sent' }}
+EMAIL_PROCESS_EXISTING={{ '1' if email.process_existing | default(false) else '0' }}
 {% endif %}

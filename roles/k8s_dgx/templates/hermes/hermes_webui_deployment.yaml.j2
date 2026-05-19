@@ -51,8 +51,13 @@ spec:
         # (e.g. flipping `hermes_debug` or rotating the litellm token).
         # Same shared ConfigMap/Secret as the agent pod — both initContainers
         # need to re-merge into /opt/data on update.
-        checksum/config: "{{ lookup('template', 'hermes/hermes_config.yaml.j2') | hash('sha256') }}"
-        checksum/env:    "{{ lookup('template', 'hermes/hermes_env.j2')         | hash('sha256') }}"
+        checksum/config:      "{{ lookup('template', 'hermes/hermes_config.yaml.j2') | hash('sha256') }}"
+        checksum/env:         "{{ lookup('template', 'hermes/hermes_env.j2')         | hash('sha256') }}"
+{% if _email_enabled %}
+        # Auto-roll when the gateway/platforms/email.py patch changes —
+        # subPath ConfigMap mounts don't surface updates without a pod restart.
+        checksum/email-patch: "{{ lookup('file', 'hermes_email_gateway_patched.py') | hash('sha256') }}"
+{% endif %}
     spec:
       restartPolicy: Always
       nodeSelector:
@@ -281,6 +286,19 @@ spec:
               mountPath: /opt/data
             - name: files
               mountPath: /workspace
+            # dgxarley local patch — overlays the upstream gateway/platforms/
+            # email.py with the version under
+            # roles/k8s_dgx/files/hermes_email_gateway_patched.py.  Adds
+            # Working/Done folder lifecycle, IMAP APPEND to Sent, and the
+            # EMAIL_PROCESS_EXISTING knob (see file's PATCH header).
+            # subPath gives us a single-file bind mount — the rest of
+            # /opt/hermes (venv, ui-tui, hooks, etc.) stays untouched from
+            # the image. Pin: file content must match the upstream source
+            # of hermes_image_tag; re-sync on image bump.
+            - name: hermes-email-patch
+              mountPath: /opt/hermes/gateway/platforms/email.py
+              subPath: email.py
+              readOnly: true
 {% endif %}
       volumes:
         - name: data
@@ -301,3 +319,11 @@ spec:
         - name: seed-secret
           secret:
             secretName: "hermes-env-{{ item.username }}"
+{% if _email_enabled %}
+        - name: hermes-email-patch
+          configMap:
+            name: hermes-email-patch
+            items:
+              - key: email.py
+                path: email.py
+{% endif %}

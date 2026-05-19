@@ -120,6 +120,7 @@ exclude = '''(?x)(
     \.venv
     | venv
     | \.pyi$
+    | ^roles/k8s_dgx/files/hermes_email_gateway_patched\.py$
     )'''
 
 [[tool.mypy.overrides]]

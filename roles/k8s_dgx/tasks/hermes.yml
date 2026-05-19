@@ -109,6 +109,27 @@
     kind: Namespace
     state: present
 
+# === Cluster-wide patch ConfigMap (subPath-overlaid onto the agent image) ===
+# Local fix for upstream gateway/platforms/email.py — adds Working/Done folder
+# lifecycle, IMAP APPEND to Sent, and EMAIL_PROCESS_EXISTING. File is pinned to
+# the upstream source tree of hermes_image_tag (currently v2026.5.16); bump
+# both together (re-fetch upstream email.py, re-apply [PATCH-N] sections).
+# Only the hermes-email sidecar consumes it (subPath mount in the webui pod).
+
+- name: Render hermes email-gateway patch ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: hermes-email-patch
+        namespace: "{{ hermes_namespace }}"
+        labels:
+          app: hermes
+      data:
+        email.py: "{{ lookup('file', 'hermes_email_gateway_patched.py') }}"
+
 # === Per-user shared ConfigMaps + Secrets (used by both agent + webui pods) ===
 
 - name: Render per-user hermes config.yaml ConfigMap
