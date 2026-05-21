@@ -48,14 +48,14 @@ or allow running larger models at current context lengths.
 
 ## Framework Integration Status
 
-As of 2026-05-10 — **vLLM merged TurboQuant on 2026-04-15** (PR #38479). llama.cpp merged the rotation baseline back in April. **SGLang is the laggard**: still no merge, but a fresh rewrite (#23135, last touched 2026-05-08) claims 93–105 % decode throughput vs bf16 on H200 with full CUDA-graph support — directly addressing the perf + capture blockers that killed the older PRs.
+As of 2026-05-21 — **vLLM merged TurboQuant on 2026-04-15** (PR #38479), shipping in v0.21.0 (2026-05-15) with a follow-up perf fix (PR #40941, shared dequant buffers, merged 2026-04-27). **But:** several crash-level bugs are open against the v0.21.0 implementation (see vLLM section below) — the merge is real, production-readiness for non-vanilla configs is not. llama.cpp merged the rotation baseline back in April; CPU TBQ types (#21089) still open with renewed activity (2026-05-17, NexusQuant asymmetric-K/V analysis). **SGLang is still the laggard**: no merge in v0.5.11 (2026-05-05) or v0.5.12 (2026-05-16). PR #23135 (fused Triton rewrite, last touched 2026-05-13) remains the most credible path; PR #22048 was revived 2026-05-19 with community H200 testing on Gemma-4-31B.
 
 ### SGLang
 
 | PR                                                           | Title                                                                                       | Status                                                                                                                                  |
 |--------------------------------------------------------------|---------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
-| [#23135](https://github.com/sgl-project/sglang/pull/23135)   | [KVCache] TurboQuant: fused Triton KV cache compression (3.88x, 93–105 % decode throughput) | **Currently most active**, opened 2026-04-18, last touched 2026-05-08. Rewrite addressing perf + CUDA-graph blockers of all earlier PRs |
-| [#22048](https://github.com/sgl-project/sglang/pull/22048)   | feat(quantization): add TurboQuant KV cache quantization (arXiv:2504.19874)                 | **Stalled**, opened 2026-04-03, last touched 2026-04-15. Was the "watch closely" PR previously — has gone quiet                         |
+| [#23135](https://github.com/sgl-project/sglang/pull/23135)   | [KVCache] TurboQuant: fused Triton KV cache compression (3.88x, 93–105 % decode throughput) | **Currently most active**, opened 2026-04-18, last touched 2026-05-13. Rewrite addressing perf + CUDA-graph blockers of all earlier PRs. New issue surfaced 2026-04-26: MLA-incompatible (forced `decode_attention_backend=triton` breaks MLA models; `_maybe_fuse_tq_output_rotation` needs MLA guard) |
+| [#22048](https://github.com/sgl-project/sglang/pull/22048)   | feat(quantization): add TurboQuant KV cache quantization (arXiv:2504.19874)                 | **Revived 2026-05-19** after stalling at 2026-04-15. Community testing on H200 (TP=2, Gemma-4-31B) reports `--kv-cache-dtype turboquant` working; new bug found: TTFT explosion with HiCache at >90 % KV-fill. Author (@YanGaev2) responding actively                         |
 | [#21419](https://github.com/sgl-project/sglang/pull/21419)   | Add TurboQuant KV cache compression (3-4 bit, ICLR 2026)                                    | Open, last touched 2026-04-29 (light activity). No maintainer approval                                                                  |
 | [#21617](https://github.com/sgl-project/sglang/pull/21617)   | feat(kv-cache): Add TurboQuant KV cache quantization (WIP)                                  | **Dead**, no activity since 2026-04-03. Qwen3 IndexError bug                                                                            |
 | [#23133](https://github.com/sgl-project/sglang/pull/23133)   | [KVCache] TurboQuant v2: fused Triton KV cache compression                                  | Closed 2026-04-18 — superseded by #23135 (same author, branch reset)                                                                    |
@@ -100,13 +100,39 @@ cache. #23135 has not yet been benchmarked on GPQA but reports MMLU/GSM8K parity
 ### vLLM
 
 **vLLM merged TurboQuant on 2026-04-15** — PR [#38479](https://github.com/vllm-project/vllm/pull/38479)
-("[Attention Backend] TurboQuant: 2-bit KV cache compression with 4x capacity"). Available in any
-vLLM build cut after that date — verify which `vllm` tag the `scitrera/dgx-spark-vllm` image is
-based on before assuming availability.
+("[Attention Backend] TurboQuant: 2-bit KV cache compression with 4x capacity"). A follow-up perf
+fix (PR #40941, shared dequant buffers, eliminates `float16_copy`) merged 2026-04-27 and shipped
+in **v0.21.0 (2026-05-15)**. Verify the `scitrera/dgx-spark-vllm` image base contains v0.21.0+ before
+relying on the optimized path.
 
-| PR                                                          | Title                                                                       | Status                                                              |
+**Production-readiness caveat (re-verified 2026-05-21):** despite the merge, TurboQuant in v0.21.0
+has multiple **crash-level bugs open** that affect exactly the model classes we run:
+
+- [#40124](https://github.com/vllm-project/vllm/issues/40124) — TQ + Hybrid MoE (Qwen3.6-35B-A3B) broken on Ampere (SM 80–86), 13-patch proposal
+- [#41403](https://github.com/vllm-project/vllm/issues/41403) — TQ + Gemma-4 multimodal: 5-blocker stack
+- [#41413](https://github.com/vllm-project/vllm/issues/41413) — TQ fails on non-power-of-2 `head_dim`
+- [#41726](https://github.com/vllm-project/vllm/issues/41726) — TQ crashes on large chunked-continuation prefill with Hybrid-Attention (Qwen3.5-9B)
+- [#42808](https://github.com/vllm-project/vllm/issues/42808) — TQ + MTP speculative decoding workspace-assertion
+- [#42215](https://github.com/vllm-project/vllm/issues/42215) — `[Bugfix][V1][TurboQuant] Warm up decode kernels` (OPEN — listed as mandatory by tracking issue #40069)
+- [#40798](https://github.com/vllm-project/vllm/issues/40798) — Share decode scratch workspace across layers (OPEN — also mandatory per #40069)
+- [#40069](https://github.com/vllm-project/vllm/issues/40069) — central tracking issue: says outright that TurboQuant "does not work without" #40798 and #42215
+
+For our cluster (NVFP4 MoE on SM121/GB10), every one of these is in the danger zone. Hybrid-MoE,
+Gemma-4 multimodal, and MTP spec-decode are all production paths we use or want to use. Treat
+vLLM TQ as **experimental** until those issues close.
+
+| PR / Issue                                                  | Title                                                                       | Status                                                              |
 |-------------------------------------------------------------|-----------------------------------------------------------------------------|---------------------------------------------------------------------|
 | [#38479](https://github.com/vllm-project/vllm/pull/38479)   | [Attention Backend] TurboQuant: 2-bit KV cache compression with 4x capacity | **MERGED 2026-04-15**                                               |
+| [#40941](https://github.com/vllm-project/vllm/pull/40941)   | TurboQuant shared dequant buffers (perf fix)                                | **MERGED 2026-04-27**, shipped in v0.21.0                           |
+| [#40069](https://github.com/vllm-project/vllm/issues/40069) | Tracking issue: TQ housekeeping (FA3/FA4, Hybrid-Attn, MLA)                 | OPEN — lists #40798 and #42215 as prerequisites                     |
+| [#42215](https://github.com/vllm-project/vllm/issues/42215) | Warm up decode kernels                                                      | OPEN — mandatory bugfix                                             |
+| [#40798](https://github.com/vllm-project/vllm/issues/40798) | Share decode scratch workspace across layers                                | OPEN — mandatory bugfix                                             |
+| [#40124](https://github.com/vllm-project/vllm/issues/40124) | TQ + Hybrid MoE broken on Ampere                                            | OPEN (2026-05-20)                                                   |
+| [#41403](https://github.com/vllm-project/vllm/issues/41403) | TQ + Gemma-4 multimodal 5-blocker stack                                     | OPEN (2026-05-13)                                                   |
+| [#41413](https://github.com/vllm-project/vllm/issues/41413) | TQ fails on non-pow-2 head_dim                                              | OPEN (2026-05-19)                                                   |
+| [#41726](https://github.com/vllm-project/vllm/issues/41726) | TQ crash on chunked prefill + Hybrid-Attention                              | OPEN (2026-05-17)                                                   |
+| [#42808](https://github.com/vllm-project/vllm/issues/42808) | TQ + MTP spec-decode workspace assertion                                    | OPEN (2026-05-20)                                                   |
 | [#38280](https://github.com/vllm-project/vllm/pull/38280)   | [Quantization] Add TurboQuant dynamic KV cache compression                  | Closed 2026-04-06 — author out of bandwidth, preserved as reference |
 | [#38662](https://github.com/vllm-project/vllm/pull/38662)   | [Kernel] TurboQuant KV cache (PolarQuant + QJL)                             | Closed 2026-04-07 in favor of #38479                                |
 | [#39008](https://github.com/vllm-project/vllm/pull/39008)   | [Quant] Add TurboQuant 4-bit (tq4) KV cache quantization                    | Closed 2026-04-05, short-lived                                      |
@@ -114,7 +140,7 @@ based on before assuming availability.
 | [#38273](https://github.com/vllm-project/vllm/pull/38273)   | Turbo Quant (docs/ROCm)                                                     | Open, low-quality stub                                              |
 | [#38171](https://github.com/vllm-project/vllm/issues/38171) | Feature request / RFC                                                       | Open, kept as discussion forum                                      |
 
-Usage: `--kv-cache-dtype turboquant`
+Usage: `--kv-cache-dtype turboquant` (works on vanilla configs; expect breakage on MoE/multimodal/MTP/spec-decode in v0.21.0)
 
 Key findings from community ablations on issue #38171:
 - `tq3` (2-bit MSE + FP8 values) matches FP16 quality on Qwen3
@@ -135,8 +161,10 @@ Community fork [mitkox/vllm-turboquant](https://github.com/mitkox/vllm-turboquan
 
 **Open:**
 - [PR #21089](https://github.com/ggml-org/llama.cpp/pull/21089) — CPU TurboQuant KV cache types
-  (`TBQ3_0` / `TBQ4_0`). CPU-only, awaiting review. Last touched 2026-04-25. TBQ4_0: 4.06 bits/elem
-  (3.94x compression), PPL nearly identical to q4_0. TBQ3_0: 3.06 bits/elem (5.22x compression).
+  (`TBQ3_0` / `TBQ4_0`). CPU-only, awaiting review. Active again 2026-05-17 with NexusQuant
+  cross-reference (#21591) — discussion of asymmetric K/V quantization, softmax error floor at
+  ~3-bit K, per-head fp16 masking of bottom 2 % KV heads. TBQ4_0: 4.06 bits/elem (3.94x
+  compression), PPL nearly identical to q4_0. TBQ3_0: 3.06 bits/elem (5.22x compression).
   CUDA/ROCm planned as follow-up.
 
 **Closed (AI policy):** 9 TurboQuant PRs rejected for AI-generated code policy violations. The volume
@@ -147,27 +175,32 @@ of vibe-coded submissions prompted Gerganov to merge the rotation baseline (#210
 ### HuggingFace
 
 - No official `transformers` PR yet
-- Third-party drop-in: `pip install turboquant` v0.2.0 ([back2matching/turboquant](https://github.com/back2matching/turboquant), updated 2026-04-02)
+- Third-party drop-in: `pip install turboquant` v0.2.0 — but [back2matching/turboquant](https://github.com/back2matching/turboquant) GitHub is at **v0.3.1** (tagged 2026-04-16, last commit 2026-04-21: transformers 5.x cache-API backward-compat shims). PyPI still serves v0.2.0; install from GitHub for the latest
 - 7 models tagged `turboquant` on HuggingFace Hub (community uploads, Qwen3 variants)
 - Google has **not released official code** yet (expected Q2 2026)
 
 ## What To Do
 
-1. **vLLM has it — try it there first.** PR #38479 is merged. Confirm the `scitrera/dgx-spark-vllm`
-   image base contains the merge (vLLM cut after 2026-04-15) or rebuild against current `main`. The
-   tag `vllm` deploys vLLM in this cluster as a SGLang alternative (`k8s_dgx.yml --tags vllm`); a
-   one-off TurboQuant test there is the fastest path to actual numbers on GB10. **Caveat for SM121:**
-   the merged backend was developed and validated on H100/H200 (Hopper) — Ampere/Ada need
+1. **vLLM has it — try it there first, but expect breakage.** PR #38479 is merged and v0.21.0
+   (2026-05-15) ships the shared-dequant-buffer perf fix (#40941). Confirm the
+   `scitrera/dgx-spark-vllm` image base is v0.21.0+ or rebuild against current `main`. **Read the
+   vLLM section above first** — there are multiple open crash-level bugs that hit exactly our
+   workloads (Hybrid MoE, Gemma-4 multimodal, MTP spec-decode, Ampere). For a one-off TurboQuant
+   smoke test, stick to vanilla configs (single-modal, no spec-decode, power-of-2 head_dim). **SM121
+   caveat:** the merged backend was developed and validated on H100/H200 (Hopper) — Ampere/Ada need
    `fp8e4b15` instead of `fp8e4nv` per community ablations on issue #38171, and SM121 specifics
    are unknown. Expect to debug.
 2. **Watch SGLang PR #23135** — currently the most credible SGLang path. Architectural rewrite with
    no dequant staging buffer, full CUDA graph support, claimed 93–105 % decode throughput vs bf16
    on H200. Key open questions before adopting: (a) does it survive review and merge, (b) does the
    "Triton-backend-only" constraint hurt us on SM121 (FlashInfer is normally faster on this cluster),
-   (c) does prefill performance hold up at our typical batch sizes. Check tracking issue #23134
-   for activity.
-3. **SGLang PR #22048 has stalled** — was the lead candidate in the previous version of this doc;
-   no commits since 2026-04-15. Don't bet on it unless activity resumes.
+   (c) does prefill performance hold up at our typical batch sizes, (d) **MLA incompatibility**
+   surfaced 2026-04-26 (forced `decode_attention_backend=triton` breaks MLA) — must be fixed before
+   merge or we lose MLA models. Check tracking issue #23134 for activity.
+3. **SGLang PR #22048 revived 2026-05-19** — was previously stalled but is back: community testing
+   on H200 with TP=2 Gemma-4-31B confirms `--kv-cache-dtype turboquant` works, author responding
+   actively. New bug found: TTFT explodes with HiCache at >90 % KV-fill. If we can wait for the
+   HiCache fix, this might land before #23135.
 4. **Older SGLang PRs (#21419, #21617) remain dead.** #21617 hasn't moved since 2026-04-03; #21419
    has light activity but no maintainer engagement.
 5. **llama.cpp rotation is usable now** — PR #21038 merged 2026-04-01, existing KV cache types
@@ -193,7 +226,7 @@ of vibe-coded submissions prompted Gerganov to merge the rotation baseline (#210
 | `auto` (bf16) | 16   | 1x (baseline) | Perfect    | None      | Yes                                                                   |
 | `fp8_e4m3`    | 8    | 2x            | Negligible | Minimal   | Yes (current)                                                         |
 | `fp8_e5m2`    | 8    | 2x            | Negligible | Minimal   | Yes                                                                   |
-| `turboquant`  | 3-4  | 4-5x          | <2.5% PPL  | ~18% TTFT | **vLLM: yes (merged 2026-04-15); SGLang: no (PR #23135 most active)** |
+| `turboquant`  | 3-4  | 4-5x          | <2.5% PPL  | ~18% TTFT | **vLLM: yes in v0.21.0 (merged 2026-04-15), but crash bugs open for MoE/multimodal/MTP; SGLang: no (PR #23135 most active, #22048 revived 2026-05-19)** |
 
 ## References
 
