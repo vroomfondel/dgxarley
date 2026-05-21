@@ -82,6 +82,19 @@ sglang_speculative_draft_model_path: "{{ sglang_model_profiles[sglang_model].spe
 # Empty string (default) = inherit target quantization (SGLang's default).
 sglang_speculative_draft_model_quantization: "{{ sglang_model_profiles[sglang_model].speculative_draft_model_quantization | default('') }}"
 
+# Adaptive Spec V2 (SGLang ≥0.5.12, PR #23336). Dynamically retunes draft
+# parameters (num_steps, num_draft_tokens) at runtime based on observed
+# acceptance rate and batch pressure. Strictly requires speculative_algo in
+# {EAGLE, EAGLE3} AND speculative_eagle_topk=1 — SGLang silently disables
+# adaptive mode for NEXTN or topk>1 (adaptive_unsupported_reason() in
+# srt/speculative/adaptive_spec_params.py). Empty string => flag omitted.
+sglang_speculative_adaptive: "{{ sglang_model_profiles[sglang_model].speculative_adaptive | default(false) }}"
+# Optional inline dict of adaptive-mode tuning knobs (min/max steps, accept
+# thresholds, …). Rendered to /tmp/speculative_adaptive_config.json at pod
+# startup and passed via --speculative-adaptive-config <path>. Empty dict
+# (default) => flag omitted, SGLang defaults apply.
+sglang_speculative_adaptive_config: "{{ sglang_model_profiles[sglang_model].speculative_adaptive_config | default({}) }}"
+
 # Mamba scheduler strategy — required for hybrid-attention models (Qwen3.5 MoE)
 # when speculative decoding is enabled. "extra_buffer" enables radix cache
 # compatibility with MTP. Empty string = SGLang default (no_buffer).
@@ -143,6 +156,27 @@ sglang_disable_flashinfer_cutlass_moe_fp4_allgather: "{{ sglang_model_profiles[s
 # (e.g. Qwen3.6-35B-A3B-FP8 word-salad output observed on 0.5.11 — seen even
 # with speculative_algorithm=None, suggesting the scheduler races independently).
 sglang_disable_overlap_schedule: "{{ sglang_model_profiles[sglang_model].disable_overlap_schedule | default(false) }}"
+
+# JIT Custom All-Reduce — explicit OFF on both 0.5.11 and 0.5.12.
+#
+# SGLang 0.5.11 ships JIT Custom All-Reduce as opt-in (env var
+# SGLANG_USE_JIT_ALL_REDUCE). SGLang 0.5.12 makes it the default and renames
+# the env var (PR #24297, #24363) to SGLANG_OPT_USE_CUSTOM_ALL_REDUCE_V2 —
+# so on a vanilla 0.5.12 image the collective path silently differs from
+# 0.5.11, breaking apples-to-apples A/B comparisons against our existing
+# 0.5.11 TESTLOG baselines.
+#
+# We set BOTH env vars in the head + worker pods. Each SGLang version reads
+# the one it knows and ignores the other:
+#   true  → JIT V2 on both versions (force V2 on 0.5.11 — opt-in path)
+#   false → legacy all-reduce on both versions (opt-out V2 on 0.5.12)
+#
+# Default: false. Reasons (see TODO_0.5.12.md):
+#   1. Matches the implicit 0.5.11 default our existing baselines were measured on.
+#   2. JIT V2 on SM121 is untested for us — defensive.
+# Flip to true once 0.5.12 is otherwise validated and we want to quantify
+# the V2 collective speedup in isolation.
+sglang_jit_allreduce: "{{ sglang_model_profiles[sglang_model].jit_allreduce | default(false) }}"
 
 # Served model name for the OpenAI-compatible API. When load_format is
 # sharded_state, the model path becomes the shard directory — this overrides

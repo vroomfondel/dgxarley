@@ -1009,6 +1009,21 @@ if [ "$SGLANG_SPECULATIVE_ENABLED" = "true" ]; then
       args+=(--speculative-draft-model-path "$SGLANG_MODEL")
     fi
   fi
+  # Adaptive Spec V2 (SGLang ≥0.5.12, PR #23336). Dynamically retunes
+  # num_steps / num_draft_tokens at runtime. Only meaningful with
+  # EAGLE/EAGLE3 + speculative_eagle_topk=1 — SGLang silently disables
+  # otherwise (adaptive_unsupported_reason() in
+  # srt/speculative/adaptive_spec_params.py). NEXTN is NOT supported.
+  if [ "$SGLANG_SPECULATIVE_ADAPTIVE" = "true" ]; then
+    args+=(--speculative-adaptive)
+    if [ -n "$SGLANG_SPECULATIVE_ADAPTIVE_CONFIG_JSON" ] \
+        && [ "$SGLANG_SPECULATIVE_ADAPTIVE_CONFIG_JSON" != "{}" ] \
+        && [ "$SGLANG_SPECULATIVE_ADAPTIVE_CONFIG_JSON" != "null" ]; then
+      printf '%s' "$SGLANG_SPECULATIVE_ADAPTIVE_CONFIG_JSON" \
+        > /tmp/speculative_adaptive_config.json
+      args+=(--speculative-adaptive-config /tmp/speculative_adaptive_config.json)
+    fi
+  fi
 fi
 if [ -n "$SGLANG_MAMBA_SCHEDULER_STRATEGY" ]; then
   args+=(--mamba-scheduler-strategy "$SGLANG_MAMBA_SCHEDULER_STRATEGY")

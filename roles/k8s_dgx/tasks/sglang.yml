@@ -63,6 +63,8 @@
         SGLANG_SPECULATIVE_NUM_DRAFT_TOKENS: "{{ sglang_speculative_num_draft_tokens | string }}"
         SGLANG_SPECULATIVE_DRAFT_MODEL_PATH: "{{ sglang_speculative_draft_model_path }}"
         SGLANG_SPECULATIVE_DRAFT_MODEL_QUANTIZATION: "{{ sglang_speculative_draft_model_quantization }}"
+        SGLANG_SPECULATIVE_ADAPTIVE: "{{ sglang_speculative_adaptive | string | lower }}"
+        SGLANG_SPECULATIVE_ADAPTIVE_CONFIG_JSON: "{{ sglang_speculative_adaptive_config | to_json }}"
         SGLANG_MAMBA_SCHEDULER_STRATEGY: "{{ sglang_mamba_scheduler_strategy }}"
         SGLANG_ENABLE_SPEC_V2: "{{ '1' if (sglang_enable_spec_v2 | bool) else '' }}"
         SGLANG_DIST_TIMEOUT: "{{ sglang_dist_timeout | string }}"
@@ -346,6 +348,14 @@
                     value: "{{ sglang_port | string }}"
                   - name: HF_TOKEN
                     value: "{{ hf_token }}"
+                  # Both names set explicitly so the collective path is identical
+                  # on 0.5.11 (reads SGLANG_USE_JIT_ALL_REDUCE) and 0.5.12 (reads
+                  # SGLANG_OPT_USE_CUSTOM_ALL_REDUCE_V2). See sglang_jit_allreduce
+                  # default for rationale.
+                  - name: SGLANG_USE_JIT_ALL_REDUCE
+                    value: "{{ '1' if (sglang_jit_allreduce | bool) else '0' }}"
+                  - name: SGLANG_OPT_USE_CUSTOM_ALL_REDUCE_V2
+                    value: "{{ '1' if (sglang_jit_allreduce | bool) else '0' }}"
                 resources:
                   limits:
                     nvidia.com/gpu: "1"
@@ -501,6 +511,14 @@
                     value: "{{ sglang_internal_port | string }}"
                   - name: HF_TOKEN
                     value: "{{ hf_token }}"
+                  # Both names set explicitly so the collective path is identical
+                  # on 0.5.11 (reads SGLANG_USE_JIT_ALL_REDUCE) and 0.5.12 (reads
+                  # SGLANG_OPT_USE_CUSTOM_ALL_REDUCE_V2). See sglang_jit_allreduce
+                  # default for rationale.
+                  - name: SGLANG_USE_JIT_ALL_REDUCE
+                    value: "{{ '1' if (sglang_jit_allreduce | bool) else '0' }}"
+                  - name: SGLANG_OPT_USE_CUSTOM_ALL_REDUCE_V2
+                    value: "{{ '1' if (sglang_jit_allreduce | bool) else '0' }}"
                 resources:
                   limits:
                     nvidia.com/gpu: "1"
