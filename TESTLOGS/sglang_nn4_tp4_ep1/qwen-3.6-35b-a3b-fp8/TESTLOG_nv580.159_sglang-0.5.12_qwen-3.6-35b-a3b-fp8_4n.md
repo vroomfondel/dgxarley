@@ -62,8 +62,8 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
 
 | #  | moe_runner | attention | dis_cuda_graph | dis_piecewise | spec      | Status      | n=1 tok/s | n=4 peak | n=8 peak |
 |----|------------|-----------|----------------|---------------|-----------|-------------|-----------|----------|----------|
-| 1  | triton     | fi        | false          | true          | —         | pending     | —         | —        | —        |
-| 2  | triton     | fi        | true           | true          | —         | pending     | —         | —        | —        |
+| 1  | triton     | fi        | false          | true          | —         | ok          | 64.15     | 265.36   | 406.44   |
+| 2  | triton     | fi        | true           | true          | —         | ok          | 21.45     | 105.65   | 198.09   |
 | 3  | triton     | fi        | false          | false         | —         | pending     | —         | —        | —        |
 | 4  | triton     | triton    | false          | true          | —         | pending     | —         | —        | —        |
 | 5  | triton     | triton    | true           | true          | —         | pending     | —         | —        | —        |
@@ -101,14 +101,34 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
 
 ## Results
 
-**Matrix run pending.**
+**Matrix run in progress (started 2026-05-21 17:59 UTC+2).** 2/24 cases completed.
 
-Mandatory check for every `ok` case (see `feedback_output_quality_evidence` memory):
-1. pattern-grep for word-salad triggers (`retire retire`, `masterpiece masterpiece`, `STOP THIS LOOPING`, `Self-Correction`)
-2. token-distribution check (Type-Token-Ratio)
-3. tail-eyeball of the last ~200 tokens per sample
+Output-quality check per `ok` case (see `feedback_output_quality_evidence` memory):
+1. pattern-grep for word-salad triggers (`retire retire`, `masterpiece masterpiece`, `STOP THIS LOOPING`, runs of `(\w+){3,}` repetition). `Self-Correction` removed from the trigger list after a false positive on a regular Qwen3.6-thinking reasoning marker (`*Self-Correction/Verification during output gen prep:*`).
+2. token-distribution check (Type-Token-Ratio, reported as `ttr_min` across requests).
+3. tail-eyeball of the last ~200 tokens per sample.
 
-Only then is `coherent ✓` a valid entry in the matrix above.
+### Completed cases
+
+| #  | Config                                                      |   n=1 | n=4 agg | n=4 per-req |  n=8 agg | n=8 per-req | Failures | Finish reasons         | n=8 TTR min | Output quality |
+|----|-------------------------------------------------------------|------:|--------:|------------:|---------:|------------:|----------|------------------------|------------:|----------------|
+| 01 | triton-moe + fi-attn, cuda_graph on, piecewise off          | 64.15 |  265.17 |       66.34 |   406.29 |       50.81 | 0/13     | length×13              |       0.650 | coherent ✓     |
+| 02 | triton-moe + fi-attn, **cuda_graph off**, piecewise off     | 21.45 |  104.87 |       26.41 |   198.05 |       24.76 | 0/13     | length×12, stop×1      |       0.592 | coherent ✓     |
+
+### Δ vs 0.5.11 baseline (driver 580.142)
+
+| #  | 0.5.11 (n=1 / n=4 / n=8) | 0.5.12 (n=1 / n=4 / n=8)    | Δ n=1        | Δ n=4        | Δ n=8        |
+|----|--------------------------|-----------------------------|-------------:|-------------:|-------------:|
+| 01 | 76.77 / 254.78 / 396.26  | **64.15 / 265.36 / 406.44** | **−16.4 %**  | **+4.2 %**   | **+2.6 %**   |
+| 02 | 22.64 / 107.12 / 209.91  | **21.45 / 105.65 / 198.09** | **−5.3 %**   | **−1.4 %**   | **−5.6 %**   |
+
+### Findings so far (preliminary, 2/24)
+
+1. **Test 01 n=8 +2.6 %** — within the predicted "+2…5 %" range from `SGLANG_OPT_FP8_WO_A_GEMM` default-on (#25181) + fused SiLU+clamp+FP8 quant (#24897). No AllReduce-default-flip leakage suspected (our `sglang_jit_allreduce=false` override is doing its job).
+2. **Test 01 n=1 −16.4 %, TTFT 11.38 s vs 6.81 s on 0.5.11** — almost 2× higher TTFT. Strong indicator of **cold-cache effect** at matrix start: FlashInfer JIT autotune cache + Triton kernel cache empty on the very first request after pod spinup. To verify, compare with later same-shape cases (Tests 03, 04, 06) once they land — if their n=1 is also depressed, this is a real 0.5.12 regression; if they recover to ~76 tok/s, the n=1 hit is cache-warmup.
+3. **Test 02 (eager) n=8 −5.6 %** — eager-mode regression. With CUDA graphs disabled, the new default `SGLANG_OPT_FP8_WO_A_GEMM` path does NOT compensate for whatever Python-side overhead grew between 0.5.11 and 0.5.12. n=4 is within noise (−1.4 %); n=8 is mildly worse. Eager mode is a diagnostic config, not production — acceptable.
+4. **Output quality clean on both cases.** TTR_min ≥ 0.59 across all 26 sampled requests, no word-salad triggers. The Qwen3.6-thinking "Self-Correction/Verification" marker in coherent reasoning traces is **not** the bug from the 0.5.11 word-salad regression — that was synonym-walk loops + `retire retire retire` collapse, which is absent here.
+5. **`mamba_usage: 0.02`** consistently in head decode logs — no hybrid-mamba KV-pool pressure at this context length and n=8.
 
 ---
 
