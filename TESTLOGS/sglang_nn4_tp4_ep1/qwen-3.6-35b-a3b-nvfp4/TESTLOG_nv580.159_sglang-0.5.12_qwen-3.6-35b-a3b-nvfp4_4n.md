@@ -69,13 +69,13 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
 
 ### Block A — triton MoE (FP8-validated reliable baseline) — Tests 01–12
 
-| #  | moe_runner | attention | fp4_gemm     | dis_cuda_graph | dis_piecewise | Status | n=1 tok/s | n=4 peak | n=8 peak |
-|----|------------|-----------|--------------|----------------|---------------|--------|-----------|----------|----------|
-| 01 | triton     | fi        | fi_cutlass   | false          | true          | TBD    | —         | —        | —        |
-| 02 | triton     | fi        | fi_cutlass   | true           | true          | TBD    | —         | —        | —        |
-| 03 | triton     | fi        | fi_cutlass   | false          | false         | TBD    | —         | —        | —        |
-| 04 | triton     | triton    | fi_cutlass   | false          | true          | TBD    | —         | —        | —        |
-| 05 | triton     | triton    | fi_cutlass   | true           | true          | TBD    | —         | —        | —        |
+| #  | moe_runner | attention | fp4_gemm     | dis_cuda_graph | dis_piecewise | Status     | n=1 tok/s | n=4 peak | n=8 peak   |
+|----|------------|-----------|--------------|----------------|---------------|------------|-----------|----------|------------|
+| 01 | triton     | fi        | fi_cutlass   | false          | true          | ok         | 71.89     | 245.49   | 407.25     |
+| 02 | triton     | fi        | fi_cutlass   | true           | true          | ok         | 15.07     | 84.94    | 169.44     |
+| 03 | triton     | fi        | fi_cutlass   | false          | false         | ok⁺        | 75.43     | 244.98   | 353.06     |
+| 04 | triton     | triton    | fi_cutlass   | false          | true          | ok         | 61.13     | 245.13   | 404.19     |
+| 05 | triton     | triton    | fi_cutlass   | true           | true          | **in-prog**| —         | —        | —          |
 | 06 | triton     | triton    | fi_cutlass   | false          | false         | TBD    | —         | —        | —        |
 | 07 | triton     | fi        | fi_cudnn     | false          | true          | TBD    | —         | —        | —        |
 | 08 | triton     | fi        | fi_cudnn     | true           | true          | TBD    | —         | —        | —        |
@@ -166,9 +166,26 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
 
 ## Results
 
-**Matrix run pending.** 48 cases planned. Status `TBD` placeholders to be filled per case.
+**Matrix run in progress (started 2026-05-22 ~17:22 UTC+2).** 48 cases planned. 4 cases complete (Tests 01–04), Test 05 in flight. The remaining 43 cases still `TBD`.
 
-(Run via `kikube-bench matrix matrixtest_matrices/sglang_nn4_tp4_ep1/qwen-3.6-35b-a3b-nvfp4/nv580.159_sglang-0.5.12_qwen-3.6-35b-a3b-nvfp4_n4_ep1.yaml`.)
+### Completed cases so far
+
+| #  | Config                                              | n=1 tok/s | n=4 peak | n=8 peak | n=8 avg/req | n=8 ok | Finish reasons      | n=8 TTR_min | Output      |
+|----|-----------------------------------------------------|----------:|---------:|---------:|------------:|--------|---------------------|------------:|-------------|
+| 01 | triton-moe + fi-attn + fi_cutlass-fp4, CG on        |     71.89 |   245.49 |   407.25 |       50.91 | 8/8    | length×8            |       0.691 | clean ✓     |
+| 02 | …+ **cuda_graph off**                               |     15.07 |    84.94 |   169.44 |       21.18 | 8/8    | length×8            |       0.643 | clean ✓     |
+| 03 | …+ **piecewise**                                    |     75.43 |   244.98 |   353.06 |       50.44 | 7/8    | length×6, stop×1    |       0.609 | **flag** ⚠  |
+| 04 | triton-moe + **triton-attn** + fi_cutlass-fp4, CG on|     61.13 |   245.13 |   404.19 |       50.52 | 8/8    | length×8            |       0.642 | clean ✓     |
+
+### Preliminary observations
+
+1. **Test 01 n=8 peak 407.25 vs FP8-0.5.12 Test 01 peak 406.44**: NVFP4 essentially ties FP8 with the triton MoE runner — **no speedup despite ~3× smaller weights**. Consistent with the FP8 model already being compute-bound on the dense triton MoE path on GB10; the FP4 tensor-core MMA is not exercised when the MoE runner is `triton` (only the `fp4_gemm_backend` for the GEMM, not the MoE kernel). Real NVFP4 upside should land in Blocks B (`fi_cutlass`) and C (`cutlass`).
+2. **Test 02 eager mode regression: 169.44 peak vs FP8-0.5.12 Test 02 198.09 → −14.5 %**. NVFP4 eager is slower than FP8 eager — the FP4 dequant overhead on the per-step Python path costs more than the tensor-core saves. Eager-mode is rarely the production choice on this model anyway, but worth noting as a baseline data point.
+3. **Test 03 piecewise CG: throughput NOT regressed — 1/8 repetition-abort is a counting artifact.** Raw peak 353.06 vs Test 01's 407.25 looks like a −13 % regression, but the 7 successful requests each landed at 50.43–50.45 tok/s (tight cluster, same as Test 01's 50.91). Had `req 4` completed normally, sum would be ~8 × 50.43 = **~403** tok/s — essentially tying Test 01 (407.25). The piecewise-CG path runs the same speed as full-CG on NVFP4. What's real is the **1/8 repetition-abort on req 4** (Monty-Hall prompt): bench framework killed the request at TTFT with `status: repetition`. Visible head/tail of the response is clean (a legitimate enumeration table that may have fooled the naïve repetition detector), but the truncated middle 2.2 kchar is opaque. Plus **`req 2` finish_reason = stop** (the other Block A no-MTP cases finish length×8). Open question: real output-quality regression on the piecewise path, or bench-detector false-positive on a degenerate-looking table? Watch Tests 06/09/12 (other piecewise variants) — if any of them replicate the repetition flag, it's a real piecewise-CG NVFP4 quality issue.
+4. **Output quality otherwise clean.** Tests 01/02 TTR_min ≥ 0.64, no word-salad pattern hits in the visible response text. The `0c2bdd4` profile fix (`is_layer_skipped` substring + `sampling_overrides={}`) is applied; nothing in the visible output suggests it's failing on NVFP4.
+5. **n=8 throughput-vs-FP8 comparison will be a per-block discussion**, not a single number. Block A here suggests "matches FP8 in the best case (Test 01) and regresses on the variants" — Blocks B/C are where the FP4 tensor-core paths actually kick in.
+
+(Will continue to fill the matrix as cases complete. Re-run via `kikube-bench matrix matrixtest_matrices/sglang_nn4_tp4_ep1/qwen-3.6-35b-a3b-nvfp4/nv580.159_sglang-0.5.12_qwen-3.6-35b-a3b-nvfp4_n4_ep1.yaml`.)
 
 ---
 
