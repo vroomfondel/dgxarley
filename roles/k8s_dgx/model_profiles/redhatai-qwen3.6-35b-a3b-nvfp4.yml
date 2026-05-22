@@ -22,7 +22,15 @@ _model_profile:
     # MTP-trained — NEXTN speculative decoding active.
     # Hybrid-mamba arch: SGLang classifies this under its mamba scheduler path.
     context_length: 262144
-    quantization: "modelopt_fp4"
+    # RedHatAI uses compressed-tensors with format=nvfp4-pack-quantized
+    # (verified via HF config.json: quantization_config.quant_method).
+    # SGLang's `modelopt_fp4` would error out with:
+    #   ValueError: Quantization method specified in the model config
+    #   (compressed-tensors) does not match the quantization method
+    #   specified in the `quantization` argument (modelopt_fp4).
+    # nvidia/Qwen3.5-397B-A17B-NVFP4 (modelopt_fp4) is a different
+    # packaging — do not copy that knob to RedHat repackages.
+    quantization: "compressed-tensors"
     trust_remote_code: true
     kv_cache_dtype: "fp8_e4m3"
     # 0.75 with MTP: draft tokens need extra KV-cache headroom.
