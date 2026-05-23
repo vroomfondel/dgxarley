@@ -138,3 +138,6 @@
   when:
     - isnfsmaster is defined
     - isnfsmaster == true
+  tags:
+    - installbasicpackages
+    - nfs_server

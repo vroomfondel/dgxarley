@@ -34,6 +34,73 @@
     - nfsmount
     - k3sinstall
 
+# Stale-source detection + forced unmount BEFORE the (re-)mount tasks below.
+# `ansible.posix.mount` with `state: mounted` updates fstab when src changes,
+# but does NOT unmount and remount the active mount — so a host that was
+# previously mounting from an OLD nfsmasterip would silently keep using the
+# old server (until reboot). To make `nfsmasterip` flips actually take effect,
+# we read the current SOURCE via `findmnt` and unmount if the IP no longer
+# matches what we're about to set. `findmnt` is run with `failed_when: false`
+# so a not-mounted path is a no-op (empty stdout → mismatch check below
+# short-circuits via `length > 0`).
+- name: detect current /mnt/nfs source (if any)
+  ansible.builtin.command:
+    cmd: findmnt -n -o SOURCE /mnt/nfs
+  register: _current_nfs_src
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - nfsmasterip is defined
+    - wantsnfsmount | default(false)
+    - nfs_share_path is defined
+  tags:
+    - nfsmount
+    - k3sinstall
+
+- name: unmount /mnt/nfs if source no longer matches nfsmasterip
+  ansible.posix.mount:
+    path: /mnt/nfs
+    state: unmounted
+  when:
+    - nfsmasterip is defined
+    - wantsnfsmount | default(false)
+    - nfs_share_path is defined
+    - _current_nfs_src.stdout | default('') | length > 0
+    - (nfsmasterip ~ ':') not in _current_nfs_src.stdout
+  tags:
+    - nfsmount
+    - k3sinstall
+
+- name: detect current /mnt/nfs-HF-CACHE source (if any)
+  ansible.builtin.command:
+    cmd: findmnt -n -o SOURCE /mnt/nfs-HF-CACHE
+  register: _current_hf_src
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - nfsmasterip is defined
+    - wantsnfsmount | default(false)
+    - nfs_hf_cache_share_path is defined
+  tags:
+    - nfsmount
+    - k3sinstall
+
+- name: unmount /mnt/nfs-HF-CACHE if source no longer matches nfsmasterip
+  ansible.posix.mount:
+    path: /mnt/nfs-HF-CACHE
+    state: unmounted
+  when:
+    - nfsmasterip is defined
+    - wantsnfsmount | default(false)
+    - nfs_hf_cache_share_path is defined
+    - _current_hf_src.stdout | default('') | length > 0
+    - (nfsmasterip ~ ':') not in _current_hf_src.stdout
+  tags:
+    - nfsmount
+    - k3sinstall
+
 - name: ensure nfs is mounted in /etc/fstab
   ansible.posix.mount:
     path: /mnt/nfs
@@ -68,9 +135,25 @@
     - nfsmount
     - k3sinstall
 
-- name: ensure nfs is unmounted and removed from /etc/fstab
+# Cleanup is split into unmount + fstab-line-removal (no rmdir) because
+# /mnt/nfs may double as the local NFS-server export-root on the master,
+# and contain bind-mounts (e.g. HF-CACHE, k3shared) as sub-paths. Using
+# `state: absent` would try to rmdir the directory and fail with ENOTEMPTY
+# on a master that has already been migrated to local exports.
+- name: ensure old nfs client mount is unmounted (no rmdir — dir may host local bind-mounts)
   ansible.posix.mount:
     path: /mnt/nfs
+    state: unmounted
+  when:
+    - not (wantsnfsmount | default(false))
+  tags:
+    - nfsmount
+    - k3sinstall
+
+- name: ensure old nfs client fstab entry is removed
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: '^[^#].*\s/mnt/nfs\s+nfs'
     state: absent
   when:
     - not (wantsnfsmount | default(false))
@@ -78,6 +161,9 @@
     - nfsmount
     - k3sinstall
 
+# /mnt/nfs-HF-CACHE is a legacy standalone mountpoint (separate from the
+# main /mnt/nfs tree). Full removal incl. rmdir is fine here — no bind-mounts
+# nested inside.
 - name: ensure nfs-HF-CACHE is unmounted and removed from /etc/fstab
   ansible.posix.mount:
     path: /mnt/nfs-HF-CACHE
