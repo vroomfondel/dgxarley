@@ -75,7 +75,7 @@ Includes the `fi_cutedsl × fi_cudnn-fp4` cross (previously cut as "too experime
 | 05 | fi_cutedsl  | fi        | fi_cutlass   | false          | false         | **crash A** | —   | —   | —   |
 | 06 | fi_cutedsl  | triton    | fi_cutlass   | false          | false         | **crash A** | —   | —   | —   |
 | 07 | fi_cutedsl  | fi        | fi_cudnn     | false          | false         | **crash A** | —   | —   | —   |
-| 08 | fi_cutedsl  | triton    | fi_cudnn     | false          | false         | TBD         | —   | —   | —   |
+| 08 | fi_cutedsl  | triton    | fi_cudnn     | false          | false         | **crash A** | —   | —   | —   |
 
 ### Block D — fi_trtllm MoE × cuDNN-FP4 — Tests 09–10
 
@@ -83,8 +83,8 @@ The trtllm × cuDNN-FP4 cross was previously cut on the assumption that TRT-LLM 
 
 | #  | moe_runner | attention | fp4_gemm  | dis_cuda_graph | dis_piecewise | Status | n=1 | n=4 | n=8 |
 |----|------------|-----------|-----------|----------------|---------------|--------|-----|-----|-----|
-| 09 | fi_trtllm  | fi        | fi_cudnn  | false          | false         | TBD    | —   | —   | —   |
-| 10 | fi_trtllm  | triton    | fi_cudnn  | false          | false         | TBD    | —   | —   | —   |
+| 09 | fi_trtllm  | fi        | fi_cudnn  | false          | false         | **crash C** | —   | —   | —   |
+| 10 | fi_trtllm  | triton    | fi_cudnn  | false          | false         | **crash C** | —   | —   | —   |
 
 ### Block E — cutlass-direct MoE anchor (modelopt-native) — Test 11
 
@@ -92,7 +92,7 @@ Single case as direct A/B against RedHatAI Block C cutlass-direct (which routed 
 
 | #  | moe_runner | attention | fp4_gemm     | dis_cuda_graph | dis_piecewise | Status | n=1 | n=4 | n=8 |
 |----|------------|-----------|--------------|----------------|---------------|--------|-----|-----|-----|
-| 11 | cutlass    | triton    | fi_cutlass   | false          | true          | TBD    | —   | —   | —   |
+| 11 | cutlass    | triton    | fi_cutlass   | false          | true          | **crash B** | — | — | — |
 
 ### Block F — MTP NEXTN on hypothesized winner shape — Tests 12–13
 
@@ -100,8 +100,8 @@ Anchors on the cutlass-direct + triton-attn + fi_cutlass-fp4 + CG on shape (Bloc
 
 | #  | moe_runner | attention | fp4_gemm     | dis_cuda_graph | dis_piecewise | spec      | Status | n=1 | n=4 | n=8 |
 |----|------------|-----------|--------------|----------------|---------------|-----------|--------|-----|-----|-----|
-| 12 | cutlass    | triton    | fi_cutlass   | false          | true          | NEXTN s=2 | TBD    | —   | —   | —   |
-| 13 | cutlass    | triton    | fi_cutlass   | false          | true          | NEXTN s=3 | TBD    | —   | —   | —   |
+| 12 | cutlass    | triton    | fi_cutlass   | false          | true          | NEXTN s=2 | **crash B** | — | — | — |
+| 13 | cutlass    | triton    | fi_cutlass   | false          | true          | NEXTN s=3 | **crash B** | — | — | — |
 
 ### Column Legend
 
@@ -117,12 +117,14 @@ Anchors on the cutlass-direct + triton-attn + fi_cutlass-fp4 + CG on shape (Bloc
 ### Crash Legend
 
 - **crash A** (fi_cutedsl-JIT-architecture): `RuntimeError: No supported CUDA architectures found for major versions [10].` at `flashinfer/compilation_context.py:95` during `gen_moe_utils_module()`. FlashInfer Cute-DSL JIT asks for SM major version 10 (Blackwell-Datacenter family: sm_100/sm_103/sm_103a) and finds nothing — GB10 is **SM 12.1** (Blackwell-Consumer). Same architecture-level mismatch class as fi_trtllm's `sm100f` kernel (see RedHatAI sister testlog Block F). Not config-fixable from YAML; needs an upstream Cute-DSL codepath for SM121.
+- **crash B** (modelopt-cutlass-not-implemented): `NotImplementedError: Unsupported runner backend: MoeRunnerBackend.CUTLASS` at `sglang/srt/layers/moe/moe_runner/runner.py:66`, called from `modelopt_quant.py:2014 create_moe_runner`. SGLang's modelopt MoE path does NOT implement `cutlass`-direct in its `MoeRunner` dispatch — `triton`, `flashinfer_cutlass`, `flashinfer_cutedsl`, `flashinfer_trtllm` are wired up, `cutlass` is missing. **This is an SGLang code-coverage gap, not hardware-related**: under `compressed-tensors` the dispatcher hack at `compressed_tensors_w4a4_nvfp4_moe.py:apply_weights` short-circuited `MoeRunner` entirely and routed straight to `cutlass_moe_fp4`, so `cutlass`-direct worked. Under modelopt there is no such short-circuit. Affects Tests 11, 12, 13 — kills the entire MTP / Block-F sweep on modelopt.
+- **crash C** (fi_trtllm-sm100f-kernel): `RuntimeError: Error in function 'run' at /workspace/csrc/trtllm_batched_gemm_runner.cu:278: Error occurred when running GEMM! Kernel: bmm_E2m1_..._sm100f`. trtllm GEMM kernel selector picks an `sm100f`-suffixed Blackwell-Datacenter kernel with no SM121 fallback — same root cause as RedHatAI Block F (Tests 49–54). Tests 09/10 are the cuDNN-FP4 cross-product variant; the cuDNN-vs-fi_cutlass FP4 GEMM choice is irrelevant when trtllm itself can't dispatch.
 
 ---
 
-## Results (in flight)
+## Results
 
-**Matrix run in progress (started 2026-05-23).** 13 cases planned. 7 cases attempted so far (Tests 01–07), Test 08 next. 4 ok, 3 crashed (all fi_cutedsl).
+**Matrix run complete (2026-05-23).** 13/13 cases attempted. **4 ok (Tests 01–04), 9 crash (Tests 05–13).**
 
 ### Completed `ok` cases
 
@@ -133,20 +135,38 @@ Anchors on the cutlass-direct + triton-attn + fi_cutlass-fp4 + CG on shape (Bloc
 | 03 | fi_cutlass-moe + fi-attn + fi_cutlass-fp4 + piecewise   |     67.98 |   248.43 |   405.04 |       50.63 | 8/8    | length×8       |       0.695 | clean ✓ |
 | 04 | fi_cutlass-moe + triton-attn + fi_cutlass-fp4 + piecewise |   63.10 |   248.64 |   406.68 |       50.84 | 8/8    | length×8       |       0.645 | clean ✓ |
 
-### Preliminary findings
+### Crash summary
 
-1. **Real `fi_cutlass` MoE kernel runs cleanly on modelopt** — Tests 03/04 are the first non-aliased fi_cutlass MoE data points on this model. The path that crashed 12/12 on RedHatAI's pre-check whitelist (`Invalid quantization 'compressed-tensors'. FlashInfer Cutlass MOE supports only modelopt_fp4...`) now passes the check and runs end-to-end. **n=8 peak 405–407 vs Block A's 389–395 → fi_cutlass-MoE is ~3 % faster than triton-MoE on modelopt at this scale.** Modest but consistent across both `fi-attn` and `triton-attn` pairings.
-2. **`fi_cutedsl` MoE doesn't compile on GB10** — Tests 05/06/07 all startup_crash at the FlashInfer Cute-DSL JIT step with `RuntimeError: No supported CUDA architectures found for major versions [10].` The Cute-DSL compilation context requests SM major 10 (Blackwell-Datacenter) and there's no fallback to SM121. **Architecture-level mismatch**, same class of failure as `fi_trtllm`'s `sm100f` kernel from the RedHatAI Block F findings. This makes the modelopt-vs-compressed-tensors distinction irrelevant for fi_cutedsl on this hardware — the path is unusable until upstream adds an SM121 codepath.
-3. **Block A (real triton MoE) ≈ RedHatAI Block A** — modelopt-triton 394.85 (Test 01) vs RedHatAI-aliased-to-cutlass-fp4 ~395-407 (Tests 01/04/06). The "real triton vs cutlass_moe_fp4-dispatched-as-triton" split that the matrix design tried to expose comes out as ≈ tie at this concurrency. Either the dispatcher hack on RedHatAI was already routing to the same kernel, or the two kernels run at very similar speed on this MoE topology.
-4. **Block B (real fi_cutlass) > Block A (triton)** by ~3 % — but both are well below the RedHatAI Test 45 winner of 438.07 (triton-MoE + fi-attn + piecewise CG + MTP s=2). The question is whether Block F MTP cases on cutlass-direct can match or exceed Test 45 — that's the open data point.
-5. **Output quality clean** across the 4 ok cases — TTR_min 0.641–0.733, all 8/8 length, no salad triggers. The `mmangkad` modelopt-packed weights produce coherent text at the same quality level as the RedHatAI variant.
+| Block | Cases | Status | Root cause |
+|-------|-------|--------|------------|
+| C (fi_cutedsl MoE × FP4-GEMM sweep) | 05–08 | **4/4 crash A** | Cute-DSL JIT asks for sm major 10 (Blackwell-DC), GB10 is SM 12.1 |
+| D (fi_trtllm × cuDNN-FP4) | 09–10 | **2/2 crash C** | trtllm GEMM picks `sm100f` (Blackwell-DC), no SM121 fallback. cuDNN-vs-fi_cutlass FP4 GEMM choice is moot — trtllm itself can't dispatch |
+| E (cutlass-direct anchor) | 11 | **crash B** | `NotImplementedError: Unsupported runner backend: MoeRunnerBackend.CUTLASS` in `modelopt_quant.py:2014 → moe_runner/runner.py:66` — SGLang code gap on modelopt path |
+| F (cutlass-direct + MTP s=2/3) | 12–13 | **2/2 crash B** | Same as Test 11. Kills the entire MTP sweep on modelopt — no MTP datapoint available |
 
-### Pending hypotheses (Tests 08–13)
+### Findings
 
-- **Test 08 (fi_cutedsl + triton-attn + cuDNN-FP4)**: Expect crash A (same as 05–07) — the JIT failure is on `fi_cutedsl` itself, the cuDNN-FP4 GEMM never gets reached.
-- **Tests 09–10 (fi_trtllm × cuDNN-FP4)**: Expect crash class similar to RedHatAI Block F (`sm100f` kernel mismatch) — trtllm has the same architecture-level issue as Cute-DSL. cuDNN-FP4 vs fi_cutlass-FP4 GEMM is irrelevant if trtllm itself can't dispatch to GB10.
-- **Test 11 (cutlass-direct anchor)**: Should run cleanly (RedHatAI Block C cutlass-direct already worked on the compressed-tensors variant); throughput likely in the 395–407 ballpark — similar to Blocks A/B.
-- **Tests 12–13 (cutlass-direct + MTP s=2/3)**: The interesting cases. **If MTP s=2 on cutlass-direct + triton-attn + CG-on > 438.07 → new cluster champion + reason to switch model + profile to mmangkad/modelopt.** If ≈ 438 → cosmetic win, RedHatAI Test 45 stays the active production profile. If < 438 → modelopt offers nothing new at this scale, keep the active RedHatAI-based profile.
+1. **Real `fi_cutlass` MoE kernel runs cleanly on modelopt — first such datapoint** (Tests 03/04). The path that crashed 12/12 on RedHatAI's pre-check whitelist (`Invalid quantization 'compressed-tensors'. FlashInfer Cutlass MOE supports only modelopt_fp4...`) now passes the check and runs end-to-end. **n=8 peak 405–407 → ~3 % faster than Block A (triton-MoE) at 389–395 tok/s**, consistent across both `fi-attn` and `triton-attn` pairings. Modest but real — and a kernel that simply could not be measured on the compressed-tensors path at all.
+2. **`fi_cutedsl` MoE is dead on GB10 regardless of model packaging.** Cute-DSL's compilation context queries SM major 10 (Blackwell-Datacenter sm_100/103) and finds nothing → `RuntimeError: No supported CUDA architectures found for major versions [10].` 4/4 crash on modelopt, 6/6 crash on compressed-tensors (RedHatAI Block D). **Architecture-level mismatch** — needs an upstream SM121 codepath in `flashinfer/compilation_context.py` and `cute_dsl/moe_utils.py`. The Cute-DSL × cuDNN-FP4 cross (the previously-cut "too experimental" combination) was tested here for the first time — same crash, same fault, the cuDNN-FP4 choice never matters because fi_cutedsl can't even JIT.
+3. **`fi_trtllm` × cuDNN-FP4 cross**: also dead — Tests 09/10 hit the same `sm100f` kernel mismatch as RedHatAI Block F. **The FP4-GEMM backend choice is irrelevant** when trtllm itself can't dispatch on this hardware, confirming the original matrix-design assumption that this cross would be a no-op.
+4. **`cutlass`-direct MoE is unusable on the modelopt code path** — `NotImplementedError: Unsupported runner backend: MoeRunnerBackend.CUTLASS` at `sglang/srt/layers/moe/moe_runner/runner.py:66`. This is a **pure SGLang code-coverage gap**, not a hardware issue: under `compressed-tensors` the dispatcher hack at `compressed_tensors_w4a4_nvfp4_moe.py:apply_weights` short-circuits `MoeRunner` and routes directly to `cutlass_moe_fp4` — that's why RedHatAI Block C worked. Under modelopt that short-circuit doesn't exist; the `MoeRunner.__init__` `if/elif` chain handles `triton`, `flashinfer_cutlass`, `flashinfer_cutedsl`, `flashinfer_trtllm`, and falls through to `NotImplementedError` for `cutlass`. **Kills Tests 11/12/13 — there is no MTP datapoint on modelopt at all.**
+5. **Best mmangkad/modelopt n=8 peak: Test 04 at 406.68 tok/s** (fi_cutlass-MoE + triton-attn + fi_cutlass-fp4 + piecewise CG). Compared to the active production champion RedHatAI Test 45 at 438.07 (triton-MoE + fi-attn + piecewise CG + **MTP s=2**) → **−7.1 %**. The Δ is not "modelopt is slower"; it's "modelopt couldn't run any MTP case". No-MTP-vs-no-MTP comparison: Test 04 (406.68) ≈ RedHatAI Test 01 (407.25) ≈ RedHatAI Test 06 (403.03). At parity, in other words.
+6. **Output quality clean** across the 4 ok cases. TTR_min 0.641–0.733, all 8/8 `length`, no salad triggers. modelopt-packed `mmangkad` produces text at the same quality level as RedHatAI/compressed-tensors.
+
+### Verdict
+
+**Modelopt offers nothing usable that compressed-tensors doesn't.** Of the four MoE backends the modelopt path was supposed to unlock as "real, non-aliased kernels":
+
+| MoE backend  | Modelopt | compressed-tensors | Comment |
+|--------------|----------|--------------------|----------|
+| `triton`       | works    | works (aliased)    | same speed |
+| `fi_cutlass`   | works (NEW) | crashes pre-check | +3 % vs triton on modelopt — net win is small |
+| `fi_cutedsl`   | broken (sm10 JIT) | broken (sm10 JIT) | architecture-level, packaging-agnostic |
+| `cutlass`-direct | broken (code gap) | works via dispatcher hack | the critical loss — kills MTP cutlass-direct exploration |
+
+And critically, modelopt **loses access to MTP** on `cutlass`-direct (the shape we wanted to test) because of the code gap. The MTP win on RedHatAI Test 45 (438.07) used `triton`-MoE — and on modelopt that triton path delivers ~394 vs RedHatAI's ~407, so even with MTP added on top, modelopt would likely land around 420, still below Test 45.
+
+**Production profile stays on RedHatAI Test 45 shape.** `redhatai-qwen3.6-35b-a3b-nvfp4.yml` remains the right choice. The mmangkad matrix did its complementary-coverage job: it tells us the modelopt path is a dead end for further throughput exploration on this model + this hardware.
 
 (Re-run via `kikube-bench matrix matrixtest_matrices/sglang_nn4_tp4_ep1/qwen-3.6-35b-a3b-nvfp4-mmangkad/nv580.159_sglang-0.5.12_qwen-3.6-35b-a3b-nvfp4-mmangkad_n4_ep1.yaml`.)
 
