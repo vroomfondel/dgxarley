@@ -79,6 +79,16 @@ spec:
 {% endif %}
     spec:
       restartPolicy: Always
+      # Cross-container gateway-liveness fix (#1879 in nesquena/hermes-webui):
+      # WebUI's `api/agent_health.py` first calls `os.kill(pid, 0)` on the PID
+      # written to `gateway_state.json` by the hermes-email sidecar. Without a
+      # shared PID namespace that always fails (PID lives in the other
+      # container) and the dashboard falls back to a 120 s freshness check on
+      # the state file — which v2026.5.x agent only updates on platform
+      # lifecycle changes, so it goes stale within minutes and the UI shows
+      # "Gateway not configured". Sharing the PID namespace makes the PID
+      # check succeed directly. Side effect: pause-container becomes PID 1.
+      shareProcessNamespace: true
       nodeSelector:
         node-role: k3smaster
       # Pod-level securityContext: the webui image's hermeswebui_init.bash
