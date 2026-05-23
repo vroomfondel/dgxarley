@@ -140,11 +140,28 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
 | 47 | triton     | fi        | fi_cutlass   | false          | false         | NEXTN s=4 | ok          | 81.62 | 245.36 | 366.38     |
 | 48 | triton     | fi        | fi_cutlass   | false          | false         | NEXTN s=5 | ok          | 71.97 | 230.53 | 350.36     |
 
+### Block F — flashinfer_trtllm MoE (added post-initial-sweep) — Tests 49–54
+
+| #  | moe_runner | attention | fp4_gemm     | dis_cuda_graph | dis_piecewise | Status      | n=1 tok/s | n=4 peak | n=8 peak |
+|----|------------|-----------|--------------|----------------|---------------|-------------|-----------|----------|----------|
+| 49 | fi_trtllm  | fi        | fi_cutlass   | false          | true          | **crash S** | — | — | — |
+| 50 | fi_trtllm  | fi        | fi_cutlass   | true           | true          | **crash S** | — | — | — |
+| 51 | fi_trtllm  | fi        | fi_cutlass   | false          | false         | **crash S** | — | — | — |
+| 52 | fi_trtllm  | triton    | fi_cutlass   | false          | true          | **crash S** | — | — | — |
+| 53 | fi_trtllm  | triton    | fi_cutlass   | true           | true          | **crash S** | — | — | — |
+| 54 | fi_trtllm  | triton    | fi_cutlass   | false          | false         | **crash S** | — | — | — |
+
+### Block G — cuDNN-FP4 GEMM re-test (cuDNN-rebuilt image) — Test 55
+
+| #  | moe_runner | attention | fp4_gemm  | dis_cuda_graph | dis_piecewise | spec      | Status | n=1 tok/s | n=4 peak | n=8 peak |
+|----|------------|-----------|-----------|----------------|---------------|-----------|--------|-----------|----------|----------|
+| 55 | triton     | fi        | fi_cudnn  | false          | false         | NEXTN s=2 | ok     | 81.52     | 262.45   | 393.40   |
+
 ### Column Legend
 
 | Column         | Description                                                                                                                    |
 |----------------|--------------------------------------------------------------------------------------------------------------------------------|
-| moe_runner     | `moe_runner_backend` — `triton`, `flashinfer_cutlass` (`fi_cutlass`), `cutlass` (direct), `flashinfer_cutedsl` (`fi_cutedsl`)  |
+| moe_runner     | `moe_runner_backend` — `triton`, `flashinfer_cutlass` (`fi_cutlass`), `cutlass` (direct), `flashinfer_cutedsl` (`fi_cutedsl`), `flashinfer_trtllm` (`fi_trtllm`) |
 | attention      | `attention_backend` — `fi` = FlashInfer, `triton` = Triton                                                                     |
 | fp4_gemm       | `fp4_gemm_backend` — `fi_cutlass` = `flashinfer_cutlass`, `fi_cudnn` = `flashinfer_cudnn`                                      |
 | dis_cuda_graph | `disable_cuda_graph` — true = eager, false = capture CUDA graphs                                                               |
@@ -166,7 +183,7 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
 
 ## Results
 
-**Matrix run complete (2026-05-22 ~17:22 → ~21:30 UTC+2, ~4 h).** 48/48 cases attempted. **17 ok, 30 crashed/timeout, 1 ok-with-quality-flag**.
+**Matrix run complete (2026-05-22 ~17:22 → 2026-05-23 ~00:30 UTC+2, two phases).** Originally 48 cases (Tests 01–48); matrix YAML extended on 2026-05-22 evening with Block F (fi_trtllm MoE, 6 cases) + Block G (cuDNN-FP4 GEMM re-test on rebuilt image, 1 case) → **55 cases attempted total**, **18 ok**, **36 crashed/timeout**, **1 ok-with-quality-flag**.
 
 ### Crash legend
 
@@ -208,13 +225,14 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
 
 ### Crash summary
 
-| Block | Cases | Status |
-|-------|-------|--------|
-| A (triton-MoE) × `fi_cudnn` FP4 GEMM | 07–12 | **6/6 crash** (4× S, 2× B) |
-| B (`fi_cutlass`-MoE), both FP4 GEMMs | 13–24 | **12/12 crash** (all S) |
-| C (cutlass-direct MoE), `fi_cutlass` FP4 GEMM | 25 | timeout (head not ready in 900s) |
-| C (cutlass-direct MoE) × `fi_cudnn` FP4 GEMM | 31–36 | **6/6 crash** (4× S, 2× B) |
-| D (`fi_cutedsl`-MoE) | 37–42 | **6/6 crash** (all S) |
+| Block | Cases | Status | Root cause |
+|-------|-------|--------|------------|
+| A (triton-MoE) × `fi_cudnn` FP4 GEMM | 07–12 | **6/6 crash** (4× S, 2× B) | `RuntimeError: cuDNN is not available` — Python `nvidia-cudnn-cu12` missing in image at run time. **Fixed after image rebuild** — see Test 55 |
+| B (`fi_cutlass`-MoE), both FP4 GEMMs | 13–24 | **12/12 crash** (all S) | `_handle_moe_kernel_config` whitelist: `Invalid quantization 'compressed-tensors'` (only `modelopt_*` / bf16 accepted) |
+| C (cutlass-direct MoE), `fi_cutlass` FP4 GEMM | 25 | timeout (head not ready in 900s) | CG-capture cold-start ~62 s/batch — 900 s startup deadline insufficient for `cutlass_moe_fp4` first-time autotune. Tests 27/30 with piecewise CG worked |
+| C (cutlass-direct MoE) × `fi_cudnn` FP4 GEMM | 31–36 | **6/6 crash** (4× S, 2× B) | Same cuDNN-missing as Block A's cuDNN cases |
+| D (`fi_cutedsl`-MoE) | 37–42 | **6/6 crash** (all S) | `_handle_moe_kernel_config` whitelist: `Invalid quantization 'compressed-tensors'` (only `modelopt_fp4` accepted — even tighter than B) |
+| F (`fi_trtllm`-MoE) | 49–54 | **6/6 crash** (all S) | trtllm-MoE GEMM picks `sm100f`-suffixed Blackwell-Datacenter kernel (`bmm_E2m1_..._sm100f`); we're on **SM121/GB10** (Blackwell-Consumer). Architecture mismatch in trtllm's kernel selector — likely upstream-unfixable until trtllm adds an SM121 codepath |
 
 ### Findings (so far)
 
@@ -230,7 +248,24 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
    - the FP8 0.5.12 winner Test 21 (peak 426.76) by **+2.6 %** — the first time on this cluster that NVFP4 *beats* FP8 on n=8 throughput.
    The sweet spot is unambiguously **s=2**: Test 45 = 438.07 > Test 46 (s=3) = 387.42 > Test 47 (s=4) = 366.38 > Test 48 (s=5, n=8 pending; n=1/n=4 already trending lower). Same shape as the FP8 0.5.12 sweep (peak at s=2 there too). All MTP cases also lift n=1 vs no-MTP (78–95 vs Test 01's 71.89) — draft pre-fill amortizes even under single-tenant load.
 9. **Output quality clean across all Block E cases.** TTR_min 0.607–0.715, all finish `length×8` except Test 47 (1× natural `stop`, no repetition flag). The `0c2bdd4` profile fix carries over to the NVFP4 + MTP path as expected.
-10. **Production recommendation (preliminary)**: flip the NVFP4 profile to **Test 45 shape** — triton-MoE + fi-attn + fi_cutlass-fp4 GEMM + piecewise CG + MTP NEXTN s=2 (`speculative_num_steps=2, eagle_topk=1, num_draft_tokens=3, mamba_scheduler_strategy=extra_buffer, enable_spec_v2=true`). Same shape as the active FP8 profile (per [[reference_testlog]] FP8 0.5.12 testlog) but on NVFP4 weights for KV-cache headroom + 7 % throughput.
+10. **Production recommendation**: NVFP4 profile flipped to **Test 45 shape** — triton-MoE + fi-attn + fi_cutlass-fp4 GEMM + piecewise CG + MTP NEXTN s=2 (`speculative_num_steps=2, eagle_topk=1, num_draft_tokens=3, mamba_scheduler_strategy=extra_buffer, enable_spec_v2=true`). Same shape as the active FP8 profile (per [[reference_testlog]] FP8 0.5.12 testlog) but on NVFP4 weights for KV-cache headroom + 7 % throughput. Profile file `roles/k8s_dgx/model_profiles/redhatai-qwen3.6-35b-a3b-nvfp4.yml` already carries these values — the seed config matched the eventual winner so only the comments needed an update.
+
+### Findings — Block F (fi_trtllm MoE) + Block G (cuDNN-FP4 re-test)
+
+Added on 2026-05-22 evening after the initial 48-case sweep finished, the matrix YAML was extended with two follow-ups.
+
+11. **`fi_trtllm` MoE is unusable on GB10 (SM121).** All 6 Block-F cases passed the SGLang pre-check (`flashinfer_trtllm` evidently has no `compressed-tensors` blacklist, unlike Blocks B and D), got through model loading, NCCL init, KV-cache allocation, and even entered the first MoE forward — then crashed in the trtllm AutoTuner:
+    ```
+    flashinfer/fused_moe/core.py: trtllm_fp4_block_scale_moe →
+    /workspace/csrc/trtllm_batched_gemm_runner.cu:278:
+      RuntimeError: Error in function 'run' / Error occurred when running GEMM!
+      Kernel: bmm_E2m1_..._sm100f
+    ```
+    The `sm100f` suffix in the kernel name is the give-away: that's a Blackwell-**Datacenter** (SM100) kernel. We're on **GB10 / SM121** (Blackwell-Consumer/Spark). FlashInfer's trtllm-MoE kernel selector dispatches to an SM100-only path with no SM121 fallback. This is a **hardware/architecture-level mismatch**, not a config issue — needs an upstream `trtllm_fp4_block_scale_moe` SM121 codepath, or a kernel selector that detects SM121 and refuses to dispatch instead of crashing.
+12. **cuDNN-FP4 GEMM (Test 55) works on the rebuilt image, but is slower than fi_cutlass-FP4.** Re-test of the winner shape (triton-MoE + fi-attn + piecewise CG + MTP s=2) with `fp4_gemm_backend: flashinfer_cudnn`: **n=8 peak 393.40** vs Test 45's `flashinfer_cutlass` 438.07 → **−10.2 %**. Output quality clean: TTR_min 0.694, all 8/8 `length`, no salad triggers. Conclusion:
+    - The cuDNN-image-rebuild (adding `nvidia-cudnn-cu12` + `nvidia-cudnn-frontend`) DID fix the Block-A/C `fi_cudnn` startup crashes — the path now goes through end-to-end.
+    - But **cuDNN-FP4 GEMM is not a competitive backend on GB10** for this model class — `flashinfer_cutlass` wins by a comfortable 10 %. Production profile stays on `fp4_gemm_backend: flashinfer_cutlass`.
+    - A full Block-A re-sweep with the rebuilt image would now succeed on Tests 07–12 and 31–36, but unless cuDNN-FP4 is needed for a specific other model, it's diminishing-returns work.
 
 (Re-run via `kikube-bench matrix matrixtest_matrices/sglang_nn4_tp4_ep1/qwen-3.6-35b-a3b-nvfp4/nv580.159_sglang-0.5.12_qwen-3.6-35b-a3b-nvfp4_n4_ep1.yaml`.)
 
