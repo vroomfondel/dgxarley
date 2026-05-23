@@ -140,12 +140,19 @@
 # and contain bind-mounts (e.g. HF-CACHE, k3shared) as sub-paths. Using
 # `state: absent` would try to rmdir the directory and fail with ENOTEMPTY
 # on a master that has already been migrated to local exports.
+#
+# `isnfsmaster` gate: on a host that serves NFS locally, /mnt/nfs and
+# /mnt/nfs-HF-CACHE are bind-mount targets established by
+# roles/common/tasks/nfs_server.yml (from `nfs_bind_mounts`). Without
+# this gate, the cleanup tears the bind down in the same playbook run
+# that just set it up.
 - name: ensure old nfs client mount is unmounted (no rmdir — dir may host local bind-mounts)
   ansible.posix.mount:
     path: /mnt/nfs
     state: unmounted
   when:
     - not (wantsnfsmount | default(false))
+    - not (isnfsmaster | default(false))
   tags:
     - nfsmount
     - k3sinstall
@@ -157,6 +164,7 @@
     state: absent
   when:
     - not (wantsnfsmount | default(false))
+    - not (isnfsmaster | default(false))
   tags:
     - nfsmount
     - k3sinstall
@@ -170,6 +178,7 @@
     state: absent
   when:
     - not (wantsnfsmount | default(false))
+    - not (isnfsmaster | default(false))
   tags:
     - nfsmount
     - k3sinstall

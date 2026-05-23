@@ -34,4 +34,8 @@ logging:
 platforms:
   email:
     skip_attachments: {{ (email.skip_attachments | default(false)) | string | lower }}
+    # Suppress "♻️ Gateway shutting down" / "♻️ Gateway online" lifecycle
+    # mails. Hermes sends these to every active session + the EMAIL_HOME_ADDRESS
+    # home channel on each pod start/stop; pure noise here.
+    gateway_restart_notification: false
 {% endif %}
