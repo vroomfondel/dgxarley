@@ -117,10 +117,10 @@ BRANCH_NAME="sm121"
 # patch by `RECIPE_NAME == *gemma4*`. The Gemma-4 MTP cherry-pick (PR #24436)
 # is additionally version-gated and SKIPPED on SGLang >= v0.5.12, where
 # PR #24436 is merged into the release.
-RECIPE_NAME="sglang-0.5.12-sm121"
-IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.12-sm121"
-#RECIPE_NAME="sglang-0.5.12-gemma4-sm121"
-#IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.12-gemma4-sm121"
+#RECIPE_NAME="sglang-0.5.12-sm121"
+#IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.12-sm121"
+RECIPE_NAME="sglang-0.5.12-gemma4-sm121"
+IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.12-gemma4-sm121"
 
 #RECIPE_NAME="sglang-0.5.11-sm121"
 #IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.11-sm121"
