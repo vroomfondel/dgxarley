@@ -22,3 +22,9 @@ dyndns_hostname: "dyn.example.com"
 
 # WiFi access points for netplan (overridden by vault)
 wifi_access_points: []
+
+# NFS server exports — only applied when `isnfsmaster: true`.
+# Schema: list of { path, clients: [{ cidr, options? }], owner?, group?, mode? }
+# Define in host_vars/<host>/vault.yml (e.g. host_vars/k3smaster/vault.yml).
+nfs_exports: []
+nfs_exports_default_options: "rw,sync,no_subtree_check,no_root_squash"

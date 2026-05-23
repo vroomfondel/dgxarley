@@ -1,0 +1,71 @@
+---
+# file: roles/common/tasks/nfs_server.yml
+# Configures /etc/exports and the nfs-kernel-server service.
+# Gated by `isnfsmaster: true` at the include site. Package install lives in installbasicpackages.yml.
+
+# Bind-mounts run BEFORE /etc/exports so that any export path which is itself
+# a bind-mount target is a real filesystem boundary at the moment nfsd reads
+# the export. This is what enables per-subdir export-ACL enforcement on what
+# would otherwise be same-FS subdirectories — without the bind-mount, a child
+# export's CIDR restriction is only honoured for direct mounts, not for
+# parent-mount traversal. Use it to protect a subdir (e.g. HF-CACHE) from
+# clients that can mount the parent.
+- name: ensure NFS bind-mount source dirs exist
+  file:
+    path: "{{ item.src }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode | default('0755') }}"
+  loop: "{{ nfs_bind_mounts | default([]) }}"
+  loop_control:
+    label: "{{ item.src }} → {{ item.dst }}"
+
+- name: ensure NFS bind-mount target dirs exist
+  file:
+    path: "{{ item.dst }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode | default('0755') }}"
+  loop: "{{ nfs_bind_mounts | default([]) }}"
+  loop_control:
+    label: "{{ item.dst }}"
+
+- name: ensure NFS bind-mounts are in /etc/fstab and active
+  ansible.posix.mount:
+    path: "{{ item.dst }}"
+    src: "{{ item.src }}"
+    fstype: none
+    opts: "bind"
+    state: mounted
+  loop: "{{ nfs_bind_mounts | default([]) }}"
+  loop_control:
+    label: "{{ item.src }} → {{ item.dst }}"
+  notify: reload nfs exports
+
+- name: ensure NFS export paths exist
+  file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode | default('0755') }}"
+  loop: "{{ nfs_exports | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: template /etc/exports
+  template:
+    src: etc_exports.j2
+    dest: /etc/exports
+    owner: root
+    group: root
+    mode: '0644'
+  notify: reload nfs exports
+
+- name: ensure nfs-kernel-server is enabled and running
+  systemd_service:
+    name: nfs-kernel-server
+    state: started
+    enabled: true

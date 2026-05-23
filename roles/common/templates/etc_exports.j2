@@ -1,0 +1,16 @@
+# {{ ansible_managed }}
+# Managed by Ansible role `common` (tag: nfs_server).
+# Edit `nfs_exports` (+ optional `nfs_exports_default_options`) in host_vars/group_vars.
+#
+# Option precedence (most specific first):
+#   1. client.options   — per-client override on an export
+#   2. export.options   — per-export default (e.g. fsid=0 for the v4 pseudo-root)
+#   3. nfs_exports_default_options — global default
+#   4. hard-coded fallback: rw,sync,no_subtree_check,no_root_squash
+
+{% set defopts = nfs_exports_default_options | default('rw,sync,no_subtree_check,no_root_squash') %}
+{% for export in nfs_exports | default([]) %}
+{% set exportopts = export.options | default(defopts) %}
+{{ export.path }}{% for c in export.clients %} {{ c.cidr }}({{ c.options | default(exportopts) }}){% endfor %}
+
+{% endfor %}

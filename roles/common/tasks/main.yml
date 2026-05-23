@@ -10,6 +10,13 @@
   tags:
     - installbasicpackages
 
+- name: configure NFS server exports
+  import_tasks: nfs_server.yml
+  tags:
+    - nfs_server
+  when:
+    - isnfsmaster | default(false)
+
 - name: configure avahi appropriately
   import_tasks: config_avahi.yml
   tags:

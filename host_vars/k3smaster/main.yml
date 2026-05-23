@@ -25,3 +25,75 @@ fwmark_routing:
     inbound_src: "192.168.122.0/24"
     inbound_dst: "192.168.124.100"
     table: 124
+
+
+
+# NFS server config — k3smaster acts as the NFS master.
+# Real values overridden in host_vars/k3smaster/vault.yml.
+# Consumed by roles/common/tasks/nfs_server.yml → /etc/exports (via etc_exports.j2).
+#
+# ─── Schema: nfs_bind_mounts (optional) ─────────────────────────────────────
+#   nfs_bind_mounts:
+#     - src:   "<source path that holds the real data>"
+#       dst:   "<mount target — typically a sub-path inside an exported dir>"
+#       owner: "<optional, default 'root'>"
+#       group: "<optional, default 'root'>"
+#       mode:  "<optional, default '0755'>"
+#
+# Why: when several child exports live as subdirectories of one exported
+# parent (NFSv4 pseudo-root), they all share the parent's filesystem from
+# nfsd's view. Per-child CIDR restrictions then only gate DIRECT mounts of
+# that child — a client allowed onto the parent can traverse into the child
+# regardless. Making each child a separate filesystem boundary (bind-mount)
+# turns the child export's ACL into an enforced traversal boundary: clients
+# not in the child's `clients:` list see an empty directory through the
+# parent mount (no `crossmnt` / `nohide` is set, by design).
+#
+# ─── Schema: nfs_exports ────────────────────────────────────────────────────
+#   nfs_exports:
+#     - path:    "<absolute path to exported directory>"
+#       options: "<optional, per-export NFS options; default nfs_exports_default_options>"
+#       owner:   "<optional, default 'root'>"
+#       group:   "<optional, default 'root'>"
+#       mode:    "<optional, default '0755'>"
+#       clients:
+#         - cidr:    "<client subnet (CIDR) or single host>"
+#           options: "<optional, per-client NFS options; default = export.options>"
+#         - cidr: "..."
+#
+#   nfs_exports_default_options: "rw,sync,no_subtree_check,no_root_squash"
+#
+# Option precedence (most specific first):
+#   1. client.options   (per-client)
+#   2. export.options   (per-export, e.g. fsid=0 for the NFSv4 pseudo-root)
+#   3. nfs_exports_default_options
+#   4. hard-coded template fallback
+#
+# Notes:
+# - Bind-mount sources + targets are auto-created and mounted before /etc/exports
+#   is rendered (so bind-mounts are live when nfsd reads exports).
+# - Export paths are auto-created (file: state=directory) before /etc/exports is rendered.
+# - Changes to /etc/exports / bind-mounts trigger handler `reload nfs exports` (exportfs -ra).
+# - Firewall ports for NFS (2049 etc.) are opened by iptables.sh.j2 when isnfsmaster: true.
+
+isnfsmaster: false
+
+# Example bind-mount: real data on a dedicated source path, exposed under
+# the parent's export tree so it gets the FS-boundary semantics described above.
+nfs_bind_mounts:
+  - src: "/srv/nfs-data/example-share"
+    dst: "/srv/nfs-root/example-share"
+
+# Example exports tree: one parent acting as NFSv4 pseudo-root (fsid=0) plus
+# a child export that is restricted to a single CIDR. Without the bind-mount
+# above, the CIDR restriction would only hold for direct mounts of the child.
+nfs_exports:
+  - path: "/srv/nfs-root"
+    options: "rw,fsid=0,sync,no_subtree_check,no_root_squash"  # NFSv4 pseudo-root
+    clients:
+      - cidr: "192.0.2.0/24"
+      - cidr: "198.51.100.0/24"
+  - path: "/srv/nfs-root/example-share"
+    clients:
+      - cidr: "192.0.2.0/24"   # 198.51.100.0/24 NOT in list — enforced by bind-mount boundary
+nfs_exports_default_options: "rw,sync,no_subtree_check,no_root_squash"
