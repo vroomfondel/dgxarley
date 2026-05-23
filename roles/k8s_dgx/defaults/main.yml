@@ -679,6 +679,15 @@ litellm_default_input_cost_per_token: 0.000003    # $3.00 per 1M input  — Anth
 litellm_default_output_cost_per_token: 0.000015   # $15.00 per 1M output — Anthropic Claude Sonnet 4.5 (≤200K ctx)
 
 
+# Stable LiteLLM alias for Hermes (and any other client that needs a session-
+# stable model name). Each Hermes session pins the model name into its on-disk
+# session.json; resuming with a name that no longer exists in LiteLLM 404s.
+# Routing this alias to whatever SGLang currently serves lets us swap the
+# underlying model without breaking saved sessions or having to re-roll the
+# Hermes pods to update litellm_model in vault.
+litellm_hermes_alias_model: "hermes-default"
+
+
 litellm_model_list:
   - model_name: "{{ sglang_served_model_name }}"
     litellm_params:
@@ -696,6 +705,24 @@ litellm_model_list:
       # Reasoning defaults from _sglang_extra_body_defaults (chat_template_kwargs):
       extra_body: "{{ _sglang_extra_body_defaults if _sglang_extra_body_defaults else omit }}"
       # Spend tracking (nominal cost — edit litellm_default_*_cost_per_token above):
+      input_cost_per_token: "{{ litellm_default_input_cost_per_token }}"
+      output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
+
+  # Stable alias → current SGLang model. Same params as above; only model_name
+  # differs. Set litellm_hermes_alias_model: "" to disable.
+  - model_name: "{{ litellm_hermes_alias_model }}"
+    litellm_params:
+      model: "openai/{{ sglang_served_model_name }}"
+      api_base: "http://sglang.{{ sglang_namespace }}.svc.cluster.local:{{ sglang_port }}/v1"
+      api_key: "none"
+      temperature: "{{ _sglang_sampling_defaults.temperature | default(omit) }}"
+      top_p: "{{ _sglang_sampling_defaults.top_p | default(omit) }}"
+      top_k: "{{ _sglang_sampling_defaults.top_k | default(omit) }}"
+      presence_penalty: "{{ _sglang_sampling_defaults.presence_penalty | default(omit) }}"
+      frequency_penalty: "{{ _sglang_sampling_defaults.frequency_penalty | default(omit) }}"
+      repetition_penalty: "{{ _sglang_sampling_defaults.repetition_penalty | default(omit) }}"
+      min_p: "{{ _sglang_sampling_defaults.min_p | default(omit) }}"
+      extra_body: "{{ _sglang_extra_body_defaults if _sglang_extra_body_defaults else omit }}"
       input_cost_per_token: "{{ litellm_default_input_cost_per_token }}"
       output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
 
@@ -864,7 +891,7 @@ hermes_data_base: "/mnt/nfs/hermes"
 # isolation pattern as hermes_data_base. Pre-req: NFS export mounted on
 # k3smaster at this path before the pod starts.
 hermes_files_base: "/mnt/nfs/hermes-files"
-hermes_default_model: "Qwen/Qwen3.6-35B-A3B-FP8"
+hermes_default_model: "{{ litellm_hermes_alias_model }}"  # stable alias → current SGLang model
 hermes_litellm_url: "http://litellm.litellm.svc.cluster.local:4000"
 hermes_webui_image: "ghcr.io/nesquena/hermes-webui"
 hermes_webui_image_tag: "latest"
