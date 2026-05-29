@@ -780,6 +780,24 @@ apply_patches() {
         || die "Dockerfile patch verification failed"
     echo "Dockerfile patched"
 
+    # 2-kernels. Pin huggingface `kernels` to a transformers-5.x-compatible
+    #     version (default 0.12.3). Workaround for transformers/integrations/
+    #     hub_kernels.py:89 calling LayerRepository(...) without the revision/
+    #     version arg that kernels>=0.13 now requires — SGLang startup fails
+    #     with ValueError at first transformers.activations import.
+    #     The patch adds an `ARG KERNELS_VERSION` + force-reinstall RUN step
+    #     after the transformers install; recipe sets KERNELS_VERSION.
+    #     Always applied — no-op when KERNELS_VERSION is empty in the recipe.
+    if [[ -f "${PATCHES_DIR}/dockerfile-kernels-pin.patch" ]]; then
+        echo "Applying dockerfile-kernels-pin.patch..."
+        patch --dry-run -p1 < "${PATCHES_DIR}/dockerfile-kernels-pin.patch" \
+            || die "kernels-pin Dockerfile patch dry-run failed — upstream Dockerfile drifted; regenerate dockerfile-kernels-pin.patch"
+        patch -p1 < "${PATCHES_DIR}/dockerfile-kernels-pin.patch"
+        grep -q 'ARG KERNELS_VERSION' container-build/Dockerfile.sglang-nightly \
+            || die "kernels-pin Dockerfile patch verification failed"
+        echo "kernels-pin Dockerfile patched"
+    fi
+
     # 2a. Gemma-4 MTP (PR #24436) Dockerfile patch — version-gated.
     #     Adds a COPY + RUN step that cherry-picks upstream PR #24436 into
     #     the SGLang source before `uv pip install ./python`. Inert for
@@ -851,7 +869,7 @@ run_build() {
     [[ -f "${recipe_file}" ]] || die "Recipe not found: ${recipe_file}"
 
     local R_DOCKERFILE R_TARGET R_BASE_IMAGE R_FLASHINFER_VERSION
-    local R_TRANSFORMERS_VERSION R_SGLANG_VERSION R_SGLANG_REF R_IMAGE_TAG
+    local R_TRANSFORMERS_VERSION R_KERNELS_VERSION R_SGLANG_VERSION R_SGLANG_REF R_IMAGE_TAG
     # shellcheck disable=SC1090
     source <(
         set -a
@@ -862,6 +880,7 @@ run_build() {
         echo "R_BASE_IMAGE='${BASE_IMAGE}'"
         echo "R_FLASHINFER_VERSION='${FLASHINFER_VERSION}'"
         echo "R_TRANSFORMERS_VERSION='${TRANSFORMERS_VERSION}'"
+        echo "R_KERNELS_VERSION='${KERNELS_VERSION:-}'"
         echo "R_SGLANG_VERSION='${SGLANG_VERSION}'"
         echo "R_SGLANG_REF='${SGLANG_REF}'"
         echo "R_IMAGE_TAG='${IMAGE_TAG}'"
@@ -885,6 +904,7 @@ run_build() {
     echo "  BASE_IMAGE (in use)  = ${effective_base_image}  [${effective_base_source}]"
     echo "  FLASHINFER_VERSION   = ${R_FLASHINFER_VERSION}"
     echo "  TRANSFORMERS_VERSION = ${R_TRANSFORMERS_VERSION}"
+    echo "  KERNELS_VERSION      = ${R_KERNELS_VERSION:-<unset, skipped>}"
     echo "  SGLANG_VERSION       = ${R_SGLANG_VERSION}"
     echo "  SGLANG_REF           = ${R_SGLANG_REF}"
     echo "  IMAGE_TAG            = ${IMAGE_TAG}"
@@ -909,6 +929,7 @@ run_build() {
         --build-arg "BASE_IMAGE=${effective_base_image}" \
         --build-arg "FLASHINFER_VERSION=${R_FLASHINFER_VERSION}" \
         --build-arg "TRANSFORMERS_VERSION=${R_TRANSFORMERS_VERSION}" \
+        --build-arg "KERNELS_VERSION=${R_KERNELS_VERSION:-}" \
         --build-arg "SGLANG_VERSION=${R_SGLANG_VERSION}" \
         --build-arg "SGLANG_REF=${R_SGLANG_REF}" \
         --build-arg "BUILD_JOBS=${BUILD_JOBS}" \

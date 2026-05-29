@@ -67,6 +67,17 @@ FLASHINFER_VERSION=0.6.11.post1
 # Registrierung der Gemma-4-Assistant-Architektur-Subklasse.
 TRANSFORMERS_VERSION=5.8.0
 
+# `kernels` pin auf letzte <0.13 Version. transformers 5.x deklariert
+# `kernels<0.13` nur in extras_require → bei plain `pip install transformers`
+# greift der Cap nicht. `kernels>=0.13` (seit 2026-04-10) ändert
+# LayerRepository(...) so dass `revision=` oder `version=` Pflicht ist;
+# transformers/integrations/hub_kernels.py:89 passt das nicht mit → SGLang
+# startet nicht (ValueError bei Modul-Import von transformers.activations).
+# Wird vom dockerfile-kernels-pin.patch in einem expliziten --force-reinstall
+# Step gesetzt. Leerstring würde den Step skippen.
+# Entfernen sobald transformers den hub_kernels-Call upstream fixed.
+KERNELS_VERSION=0.12.3
+
 # Pinned to v0.5.12.post1 (released 2026-05-26) — stability cherry-picks on
 # top of v0.5.12, primarily DeepSeek V4 fixes. Why we bump (not just stay
 # on .12): we plan to run RedHatAI/DeepSeek-V4-Flash-NVFP4-FP8, and several

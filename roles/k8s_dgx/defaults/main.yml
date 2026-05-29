@@ -11,21 +11,9 @@ vllm_namespace: "vllm"
 openwebui_namespace: "openwebui"
 
 # curl -s 'https://hub.docker.com/v2/repositories/scitrera/dgx-spark-sglang/tags/?page_size=20&ordering=last_updated' | jq '.results[] | {name, last_updated}'
-#sglang_image: "scitrera/dgx-spark-sglang:0.5.9-t5"
-#sglang_image: "scitrera/dgx-spark-sglang:0.5.9-dev2-acab24a7-t5"
-#sglang_image: "scitrera/dgx-spark-sglang:0.5.10rc0"
-#sglang_image: "scitrera/dgx-spark-sglang:0.5.10"
 
-# default_sglang_image: "scitrera/dgx-spark-sglang:0.5.10"
-
-#default_sglang_image: "scitrera/dgx-spark-sglang:0.5.10"
-# default_sglang_image: "xomoxcc/dgx-spark-sglang:0.5.10-20260429-sm121-dev1"
-# default_sglang_image: "xomoxcc/dgx-spark-sglang:0.5.10-20260429-gemma4-sm121-dev1"
-# default_sglang_image: "scitrera/dgx-spark-sglang:0.5.10-20260429-dev1"
-# default_sglang_image: "xomoxcc/dgx-spark-sglang:0.5.11-sm121"
-# default_sglang_image: "xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121"
-
-default_sglang_image: "scitrera/dgx-spark-sglang:0.5.12"
+default_sglang_image: "xomoxcc/dgx-spark-sglang:0.5.12.post1-sm121"
+#default_sglang_image: "scitrera/dgx-spark-sglang:0.5.12"
 #default_sglang_image: "scitrera/dgx-spark-sglang:0.5.11"
 # default_sglang_image: "xomoxcc/dgx-spark-sglang:0.5.11-sm121"
 

@@ -54,6 +54,10 @@ FLASHINFER_VERSION=0.6.11.post1
 # gemma4_assistant Architektur-Subclass braucht weiterhin >=5.8.0.
 TRANSFORMERS_VERSION=5.8.0
 
+# `kernels` pin — siehe sglang-0.5.12-sm121.recipe + dockerfile-kernels-pin.patch
+# für die Root-Cause. Gleicher Wert über alle 0.5.12-Recipes.
+KERNELS_VERSION=0.12.3
+
 # SGLang auf v0.5.12.post1 gezogen, um den dokumentierten Invariant
 # "gleicher SGLang-Ref wie sglang-0.5.12-sm121.recipe" zu wahren.
 # Die post1-Cherry-Picks sind allesamt DSV4-Fixes, ohne Gemma4-Relevanz —

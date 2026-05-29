@@ -1,0 +1,50 @@
+Pin `kernels` package version to work around transformers 5.x runtime breakage.
+
+transformers/integrations/hub_kernels.py:89 constructs `LayerRepository("cuda", …)`
+at module load time without a `revision=` or `version=` argument. The `kernels`
+library made this required in 0.13.0 (2026-04-10), so any newer install raises:
+
+  ValueError: Either a revision or a version must be specified.
+
+The error fires the first time anything imports transformers.activations — which
+SGLang does very early via `_apply_hf_patches() → modeling_llama`. Symptom:
+SGLang head/worker exits immediately on startup.
+
+transformers 5.8.0 declares `kernels<0.13,>=0.12.0` only in `extras_require`
+([kernels], [integrations], [all], [dev]) — NOT in core install_requires —
+so plain `pip install transformers==5.8.0` does not enforce the cap. Whatever
+version of `kernels` happens to be in the env wins. As of 2026-05-29 the latest
+on PyPI is 0.15.1 (released same day), which is what fresh builds grab.
+
+Fix: force-reinstall the last <0.13 release after the transformers step.
+KERNELS_VERSION="0.12.3" is the highest safe version. Empty string means
+"don't touch", preserving upstream behaviour on builds that don't need this.
+
+Apply to: container-build/Dockerfile.sglang-nightly in the local clone of
+scitrera/cuda-containers, AFTER dockerfile-sm121.patch (which has already
+moved the sglang install to the end of the builder stage).
+
+Remove when transformers ships a hub_kernels.py call that passes the new
+required revision/version arg upstream.
+
+--- a/container-build/Dockerfile.sglang-nightly
++++ b/container-build/Dockerfile.sglang-nightly
+@@ -243,6 +243,18 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
+         uv pip install -U transformers --pre; \
+     fi
+
++# dgxarley: pin huggingface `kernels` to a transformers-5.x-compatible
++# version. transformers/integrations/hub_kernels.py:89 calls
++# LayerRepository("cuda", …) without revision=/version=, which kernels>=0.13
++# rejects at module import time, killing SGLang startup. See
++# patches/dockerfile-kernels-pin.patch for the full root cause.
++ARG KERNELS_VERSION=""
++RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
++    if [ -n "$KERNELS_VERSION" ]; then \
++        echo "=== Pinning kernels==${KERNELS_VERSION} (transformers-5.x compat) ==="; \
++        uv pip install --force-reinstall --no-deps kernels==${KERNELS_VERSION}; \
++    fi
++
+ # SM121 (DGX Spark GB10) shared memory fix for cutlass_moe_fp4.
+ # Patches run_fp4_blockwise_scaled_group_mm_sm120() in the JIT-compiled
+ # nvfp4_blockwise_moe.cuh to use KernelPtrArrayTmaWarpSpecializedCooperative
