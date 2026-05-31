@@ -8,22 +8,31 @@ otherwise dies at the first forward with `ModuleNotFoundError: flash_mla` or
 `Unsupported architecture for sparse decode fwd`. See UPSTREAM_DSV4_BUGS.md §7,
 SGLang #23657, DeepGEMM #317.
 
-This installs the stock flash_mla wheel (the patch WRAPS its interface) and
-builds 0xSero/deepseek-v4-flash-sm120's `deepseek_v4_kernel` CUDA extension
+This installs stock flash_mla (the wrapper WRAPS its interface; flash_mla
+provides flash_mla_interface + FlashMLASchedMeta + host-side get_mla_metadata)
+and builds 0xSero/deepseek-v4-flash-sm120's `deepseek_v4_kernel` CUDA extension
 retargeted from sm_120a to DSV4_KERNEL_ARCH (sm_121a = GB10), then drops its
 top-level sitecustomize hook into dist-packages so every forked sglang worker
 monkey-patches flash_mla_with_kvcache before the first model forward. The hook
 only takes over the sparse-FP8-decode path on sm12x and otherwise falls through
 to stock flash_mla, so it is inert for non-V4 models.
 
+flash_mla is cloned + checked out + submodule-init'd explicitly (NOT
+`pip install git+`): FlashMLA's setup.py needs the csrc/cutlass git submodule,
+which a `git+` install does not reliably fetch. Its sm90/sm100 kernels
+cross-compile fine on CUDA 13.2 (they never RUN on sm121 — the 0xSero kernel
+replaces decode); MAX_JOBS/NVCC_THREADS are bounded to 8 so the heavy CUTLASS
+build does not OOM the GB10 builder. The 0xSero kernel is built in ONE step
+(pip install with DSV4_KERNEL_ARCH set) — a separate build_ext + pip install
+would rebuild it with the sm_120a default and clobber the sm_121a .so.
+
 Placed AFTER the `uv pip install ./python` step and BEFORE the directory split,
 so the kernel + flash_mla + sitecustomize.py land in dist-packages and propagate
 to the runtime stage via the existing COPY --from=builder dist-packages-N steps.
 
-FATAL: a build failure (e.g. flash_mla wheel won't install on sm121, or the
-kernel source needs sm_121a tweaks) aborts the whole image build — we do NOT
-ship a standard image that silently lacks V4-Flash support. To opt out, clear
-DSV4_KERNEL_REPO in the recipe (the RUN step then just echoes a skip).
+FATAL: a build failure (flash_mla won't install / kernel won't compile) aborts
+the whole image build — we do NOT ship a standard image that silently lacks
+V4-Flash support. To opt out, clear DSV4_KERNEL_REPO in the recipe.
 
 Gated on DSV4_KERNEL_REPO being non-empty (recipe sets it) — empty = skip.
 
@@ -32,18 +41,17 @@ and dockerfile-kernels-pin.patch.
 
 --- a/container-build/Dockerfile.sglang-nightly
 +++ b/container-build/Dockerfile.sglang-nightly
-@@ -296,6 +296,34 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
+@@ -296,6 +296,38 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
  RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
      uv pip install --no-build-isolation --no-deps ./python
 
 +# dgxarley: DeepSeek-V4-Flash FlashMLA sparse-decode kernel for sm_121a (GB10).
-+# Install stock flash_mla (the wrapper wraps it) + build the 0xSero sm_120
-+# sparse-decode extension retargeted to DSV4_KERNEL_ARCH, then drop its
-+# sitecustomize hook into dist-packages so every forked sglang worker patches
-+# flash_mla_with_kvcache before the first forward. Installed BEFORE the
-+# directory split so it propagates to the runtime stage. FATAL: a build failure
-+# (flash_mla won't install / kernel won't compile on sm121) aborts the image
-+# build. Clear DSV4_KERNEL_REPO in the recipe to opt out. See UPSTREAM_DSV4_BUGS.md §7.
++# Stock flash_mla (interface + host get_mla_metadata; the 0xSero wrapper wraps
++# it) + the 0xSero sm_120 sparse-decode extension retargeted to DSV4_KERNEL_ARCH.
++# Drops a sitecustomize hook into dist-packages so every forked sglang worker
++# patches flash_mla_with_kvcache before the first forward. Installed BEFORE the
++# directory split so it propagates to the runtime stage. FATAL on failure (clear
++# DSV4_KERNEL_REPO in the recipe to opt out). See UPSTREAM_DSV4_BUGS.md §7.
 +ARG FLASH_MLA_REPO=""
 +ARG FLASH_MLA_REF=""
 +ARG DSV4_KERNEL_REPO=""
@@ -52,14 +60,19 @@ and dockerfile-kernels-pin.patch.
 +RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
 +    if [ -n "$DSV4_KERNEL_REPO" ]; then \
 +      ( set -e; \
-+        echo "=== dgxarley DSV4 FlashMLA: flash_mla@${FLASH_MLA_REF}, arch=${DSV4_KERNEL_ARCH} ==="; \
-+        if [ -n "$FLASH_MLA_REF" ]; then MAX_JOBS=8 NVCC_THREADS=8 uv pip install --no-deps --no-build-isolation "git+${FLASH_MLA_REPO}@${FLASH_MLA_REF}"; fi; \
-+        git clone --depth 1 -b "${DSV4_KERNEL_REF}" "${DSV4_KERNEL_REPO}" /tmp/dsv4; \
-+        cd /tmp/dsv4; \
-+        DSV4_KERNEL_ARCH="${DSV4_KERNEL_ARCH}" NVCC_THREADS=8 python3 setup.py build_ext --inplace; \
-+        uv pip install --no-deps --no-build-isolation .; \
-+        cp deepseek_v4_kernel/sitecustomize_hook.py /usr/local/lib/python3.12/dist-packages/sitecustomize.py; \
-+        cd /; rm -rf /tmp/dsv4 ); \
++        echo "=== dgxarley DSV4 FlashMLA: flash_mla@${FLASH_MLA_REF}, kernel ${DSV4_KERNEL_ARCH} ==="; \
++        if [ -n "$FLASH_MLA_REF" ]; then \
++          git clone "${FLASH_MLA_REPO}" /tmp/flashmla; \
++          git -C /tmp/flashmla checkout "${FLASH_MLA_REF}"; \
++          git -C /tmp/flashmla submodule update --init --recursive csrc/cutlass; \
++          MAX_JOBS=8 NVCC_THREADS=8 uv pip install --no-deps --no-build-isolation /tmp/flashmla; \
++          rm -rf /tmp/flashmla; \
++        fi; \
++        git clone "${DSV4_KERNEL_REPO}" /tmp/dsv4; \
++        git -C /tmp/dsv4 checkout "${DSV4_KERNEL_REF}"; \
++        DSV4_KERNEL_ARCH="${DSV4_KERNEL_ARCH}" NVCC_THREADS=8 MAX_JOBS=8 uv pip install --no-deps --no-build-isolation /tmp/dsv4; \
++        cp /tmp/dsv4/deepseek_v4_kernel/sitecustomize_hook.py /usr/local/lib/python3.12/dist-packages/sitecustomize.py; \
++        rm -rf /tmp/dsv4 ); \
 +    else \
 +      echo "=== Skipping DSV4 FlashMLA kernel (DSV4_KERNEL_REPO empty) ==="; \
 +    fi
