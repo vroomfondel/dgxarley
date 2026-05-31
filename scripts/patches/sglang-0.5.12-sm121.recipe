@@ -100,4 +100,33 @@ KERNELS_VERSION=0.12.3
 SGLANG_VERSION=0.5.12.post1
 SGLANG_REF="v0.5.12.post1"
 
+# ── DeepSeek-V4 FlashMLA sparse-decode kernel (sm_121a) ───────────────────────
+# Bakes a V4-Flash sparse-decode CUDA kernel into the standard image. V4's
+# attention backend hard-imports flash_mla with NO fallback, and upstream
+# FlashMLA ships no sm_120/sm_121 sparse kernel → V4-Flash-FP8 otherwise dies at
+# the first forward (ModuleNotFoundError / "Unsupported architecture for sparse
+# decode fwd"). Fix vendored from 0xSero/deepseek-v4-flash-sm120, retargeted
+# sm_120a → sm_121a. Additive + inert for non-V4 models: the runtime hook only
+# takes over the sparse-FP8-decode path on sm12x and otherwise falls through to
+# stock flash_mla. Full rationale + portability analysis: UPSTREAM_DSV4_BUGS.md §7.
+# Applied by dockerfile-dsv4-flashmla.patch (unconditional on sm121 builds);
+# install hook in roles/k8s_dgx/files/sglang_launch.sh.
+#
+# Stock flash_mla — the 0xSero patch WRAPS its interface, so it must expose
+# flash_mla_interface.flash_mla_with_kvcache + FlashMLASchedMeta. Installed from
+# git (NOT PyPI: PyPI only has an undocumented 1.0.0.dev0; git lets us pin the
+# exact commit whose interface we verified — __version__ 1.0.0 with the full
+# sparse signature + FlashMLASchedMeta). NOTE: deepseek-ai/FlashMLA's setup.py
+# builds only sm90+sm100 kernels (no sm121) — fine, since the 0xSero kernel
+# replaces the sparse-decode path; flash_mla here provides the interface +
+# host-side get_mla_metadata. Pin verified against deepseek_v4_kernel/_patch.py.
+FLASH_MLA_REPO=https://github.com/deepseek-ai/FlashMLA
+FLASH_MLA_REF=9241ae3ef9bac614dd25e45e507e089f888280e0
+DSV4_KERNEL_REPO=https://github.com/0xSero/deepseek-v4-flash-sm120
+# Pin to a commit before prod (main = moving target).
+DSV4_KERNEL_REF=main
+# THE retargeting knob — setup.py honours DSV4_KERNEL_ARCH (default sm_120a).
+# sm_121a = GB10. Append ";arch=compute_120a,code=sm_120a" to also cover sm_120.
+DSV4_KERNEL_ARCH=arch=compute_121a,code=sm_121a
+
 IMAGE_TAG=xomoxcc/dgx-spark-sglang:0.5.12.post1-sm121

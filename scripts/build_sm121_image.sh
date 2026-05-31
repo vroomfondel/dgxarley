@@ -422,6 +422,7 @@ preflight() {
         sgl-kernel-skip-sm90-target.patch
         sgl-kernel-skip-flashmla.patch
         dockerfile-sm121.patch
+        dockerfile-dsv4-flashmla.patch
         build-image-sh-podman.patch
         "${RECIPE_NAME}.recipe"
     )
@@ -798,6 +799,24 @@ apply_patches() {
         echo "kernels-pin Dockerfile patched"
     fi
 
+    # 2-dsv4. DeepSeek-V4-Flash FlashMLA sparse-decode kernel (sm_121a).
+    #     Adds an ARG + RUN step in the builder (before the dist-packages split)
+    #     that installs stock flash_mla and builds 0xSero/deepseek-v4-flash-sm120
+    #     retargeted to DSV4_KERNEL_ARCH. The Dockerfile patch is applied
+    #     unconditionally; the RUN itself is gated on DSV4_KERNEL_REPO (recipe
+    #     sets it) and is FATAL (a build failure aborts the image — clear
+    #     DSV4_KERNEL_REPO in the recipe to opt out).
+    #     No source-patch copy needed — the kernel is git-cloned at build time.
+    if [[ -f "${PATCHES_DIR}/dockerfile-dsv4-flashmla.patch" ]]; then
+        echo "Applying dockerfile-dsv4-flashmla.patch..."
+        patch --dry-run -p1 < "${PATCHES_DIR}/dockerfile-dsv4-flashmla.patch" \
+            || die "dsv4-flashmla Dockerfile patch dry-run failed — upstream Dockerfile drifted; regenerate dockerfile-dsv4-flashmla.patch"
+        patch -p1 < "${PATCHES_DIR}/dockerfile-dsv4-flashmla.patch"
+        grep -q 'DSV4_KERNEL_REPO' container-build/Dockerfile.sglang-nightly \
+            || die "dsv4-flashmla Dockerfile patch verification failed"
+        echo "dsv4-flashmla Dockerfile patched"
+    fi
+
     # 2a. Gemma-4 MTP (PR #24436) Dockerfile patch — version-gated.
     #     Adds a COPY + RUN step that cherry-picks upstream PR #24436 into
     #     the SGLang source before `uv pip install ./python`. Inert for
@@ -870,6 +889,7 @@ run_build() {
 
     local R_DOCKERFILE R_TARGET R_BASE_IMAGE R_FLASHINFER_VERSION
     local R_TRANSFORMERS_VERSION R_KERNELS_VERSION R_SGLANG_VERSION R_SGLANG_REF R_IMAGE_TAG
+    local R_FLASH_MLA_REPO R_FLASH_MLA_REF R_DSV4_KERNEL_REPO R_DSV4_KERNEL_REF R_DSV4_KERNEL_ARCH
     # shellcheck disable=SC1090
     source <(
         set -a
@@ -883,6 +903,11 @@ run_build() {
         echo "R_KERNELS_VERSION='${KERNELS_VERSION:-}'"
         echo "R_SGLANG_VERSION='${SGLANG_VERSION}'"
         echo "R_SGLANG_REF='${SGLANG_REF}'"
+        echo "R_FLASH_MLA_REPO='${FLASH_MLA_REPO:-}'"
+        echo "R_FLASH_MLA_REF='${FLASH_MLA_REF:-}'"
+        echo "R_DSV4_KERNEL_REPO='${DSV4_KERNEL_REPO:-}'"
+        echo "R_DSV4_KERNEL_REF='${DSV4_KERNEL_REF:-main}'"
+        echo "R_DSV4_KERNEL_ARCH='${DSV4_KERNEL_ARCH:-}'"
         echo "R_IMAGE_TAG='${IMAGE_TAG}'"
     )
 
@@ -907,6 +932,11 @@ run_build() {
     echo "  KERNELS_VERSION      = ${R_KERNELS_VERSION:-<unset, skipped>}"
     echo "  SGLANG_VERSION       = ${R_SGLANG_VERSION}"
     echo "  SGLANG_REF           = ${R_SGLANG_REF}"
+    echo "  FLASH_MLA_REPO       = ${R_FLASH_MLA_REPO:-<unset>}"
+    echo "  FLASH_MLA_REF        = ${R_FLASH_MLA_REF:-<unset>}"
+    echo "  DSV4_KERNEL_REPO     = ${R_DSV4_KERNEL_REPO:-<unset, V4 FlashMLA kernel skipped>}"
+    echo "  DSV4_KERNEL_REF      = ${R_DSV4_KERNEL_REF:-main}"
+    echo "  DSV4_KERNEL_ARCH     = ${R_DSV4_KERNEL_ARCH:-<unset>}"
     echo "  IMAGE_TAG            = ${IMAGE_TAG}"
     echo "  BUILD_JOBS           = ${BUILD_JOBS} (overrides Dockerfile ARG default of 2)"
     echo "  sgl-kernel patches:"
@@ -932,6 +962,11 @@ run_build() {
         --build-arg "KERNELS_VERSION=${R_KERNELS_VERSION:-}" \
         --build-arg "SGLANG_VERSION=${R_SGLANG_VERSION}" \
         --build-arg "SGLANG_REF=${R_SGLANG_REF}" \
+        --build-arg "FLASH_MLA_REPO=${R_FLASH_MLA_REPO:-}" \
+        --build-arg "FLASH_MLA_REF=${R_FLASH_MLA_REF:-}" \
+        --build-arg "DSV4_KERNEL_REPO=${R_DSV4_KERNEL_REPO:-}" \
+        --build-arg "DSV4_KERNEL_REF=${R_DSV4_KERNEL_REF:-main}" \
+        --build-arg "DSV4_KERNEL_ARCH=${R_DSV4_KERNEL_ARCH:-}" \
         --build-arg "BUILD_JOBS=${BUILD_JOBS}" \
         --build-arg "APPLY_SGL_KERNEL_ARCH_PRUNE=${APPLY_ARCH_PRUNE}" \
         --build-arg "APPLY_SGL_KERNEL_DISABLE_FA3=${APPLY_DISABLE_FA3}" \
