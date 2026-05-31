@@ -81,7 +81,16 @@ and dockerfile-kernels-pin.patch.
 +        git clone "${DSV4_KERNEL_REPO}" /tmp/dsv4; \
 +        git -C /tmp/dsv4 checkout "${DSV4_KERNEL_REF}"; \
 +        DSV4_KERNEL_ARCH="${DSV4_KERNEL_ARCH}" NVCC_THREADS=8 MAX_JOBS=8 uv pip install --no-deps --no-build-isolation /tmp/dsv4; \
-+        printf 'import deepseek_v4_kernel.sitecustomize_hook\n' > /usr/local/lib/python3.12/dist-packages/zz_dsv4_autopatch.pth; \
++        printf '%s\n' \
++          'import os, sys' \
++          'if os.environ.get("DSV4_KERNEL_DISABLE", "0") not in ("1", "true", "yes"):' \
++          '    try:' \
++          '        from deepseek_v4_kernel._patch import _patch_flash_mla_pkg' \
++          '        _patch_flash_mla_pkg()' \
++          '    except Exception as exc:' \
++          '        print("[dsv4_autopatch] flash_mla patch skipped:", exc, file=sys.stderr)' \
++          > /usr/local/lib/python3.12/dist-packages/dsv4_autopatch.py; \
++        printf 'import dsv4_autopatch\n' > /usr/local/lib/python3.12/dist-packages/zz_dsv4_autopatch.pth; \
 +        rm -rf /tmp/dsv4 ); \
 +    else \
 +      echo "=== Skipping DSV4 FlashMLA kernel (DSV4_KERNEL_REPO empty) ==="; \

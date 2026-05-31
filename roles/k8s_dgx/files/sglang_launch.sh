@@ -964,22 +964,38 @@ else
 fi
 
 # DeepSeek-V4-Flash FlashMLA sparse-decode hook activation (sm_121a / GB10).
-# The image bakes deepseek_v4_kernel + sitecustomize_hook.py, but a
-# sitecustomize.py placed in dist-packages is SHADOWED: Ubuntu ships
-# /usr/lib/python3.12/sitecustomize.py (apport) earlier on sys.path, and Python
-# imports only the FIRST sitecustomize it finds — so our patch_flash_mla() never
+# The image bakes deepseek_v4_kernel, but its sitecustomize.py is SHADOWED:
+# Ubuntu ships /usr/lib/python3.12/sitecustomize.py (apport) earlier on sys.path,
+# and Python imports only the FIRST sitecustomize it finds — so the hook never
 # ran and V4-Flash died with "Unsupported architecture for sparse decode fwd".
-# A .pth file is immune: site.py executes EVERY import-line in EVERY .pth across
-# ALL site dirs (no "first wins"), in main AND every spawned sglang worker. The
-# hook module is try/except-guarded, so a broken kernel just falls through to
-# stock flash_mla. Idempotent (also written by dockerfile-dsv4-flashmla.patch on
-# rebuilt images). See UPSTREAM_DSV4_BUGS.md §7.
-DSV4_PTH="/usr/local/lib/python3.12/dist-packages/zz_dsv4_autopatch.pth"
-if [ -d "/usr/local/lib/python3.12/dist-packages/deepseek_v4_kernel" ]; then
-  echo 'import deepseek_v4_kernel.sitecustomize_hook' > "$DSV4_PTH"
-  echo "Wrote DSV4 FlashMLA autopatch .pth: $DSV4_PTH"
+# A .pth is immune: site.py runs EVERY import-line in EVERY .pth across ALL site
+# dirs (no "first wins"), in main AND every spawned sglang worker.
+#
+# CRITICAL — install ONLY the flash_mla wrapper (_patch_flash_mla_pkg), NOT the
+# kernel's patch_flash_mla()/install(). install() also runs
+# _patch_sglang_indexer_fallbacks(), which imports sglang…nsa.tilelang_kernel →
+# loads tilelang's libcudart_stub.so. At site-init that stub loads BEFORE
+# flashinfer.comm, so flashinfer's find_loaded_library("libcudart") grabs the
+# stub (no cudaDeviceReset) → hard AttributeError at import (NOT caught by
+# sglang's `except ImportError`). sglang imports tilelang itself LATER (after
+# flashinfer), so the indexer fallback is not ours to bootstrap. Guarded: a
+# broken kernel just falls through to stock flash_mla. Idempotent (also written
+# by dockerfile-dsv4-flashmla.patch on rebuilt images). See UPSTREAM_DSV4_BUGS.md §7.
+DSV4_DP="/usr/local/lib/python3.12/dist-packages"
+if [ -d "$DSV4_DP/deepseek_v4_kernel" ]; then
+  cat > "$DSV4_DP/dsv4_autopatch.py" <<'DSV4_AUTOPATCH_EOF'
+import os, sys
+if os.environ.get("DSV4_KERNEL_DISABLE", "0") not in ("1", "true", "yes"):
+    try:
+        from deepseek_v4_kernel._patch import _patch_flash_mla_pkg
+        _patch_flash_mla_pkg()
+    except Exception as exc:
+        print("[dsv4_autopatch] flash_mla patch skipped:", exc, file=sys.stderr)
+DSV4_AUTOPATCH_EOF
+  echo 'import dsv4_autopatch' > "$DSV4_DP/zz_dsv4_autopatch.pth"
+  echo "Installed DSV4 FlashMLA autopatch (flash_mla wrapper only): $DSV4_DP/zz_dsv4_autopatch.pth"
 else
-  echo "DSV4 FlashMLA kernel not present in image, skipping autopatch .pth"
+  echo "DSV4 FlashMLA kernel not present in image, skipping autopatch"
 fi
 
 args=(
