@@ -1,6 +1,22 @@
 # NousResearch/hermes-agent Upstream Bug: Spurious npm install at every `dashboard --tui` launch breaks chat tab in non-root containers
 
-## Status (re-verified 2026-05-09)
+## Status (re-verified 2026-05-31)
+
+> **Update 2026-05-31 — entrypoint chown fix has shipped (condition (a) met).**
+> [PR #33045](https://github.com/NousResearch/hermes-agent/pull/33045)
+> ("fix(docker): chown ui-tui and node_modules on UID remap so TUI esbuild
+> works") **merged 2026-05-27, shipped in v0.15.0 / v2026.5.28**. It extends
+> `docker/stage2-hook.sh` to `chown -R hermes:hermes $INSTALL_DIR/ui-tui
+> $INSTALL_DIR/node_modules` **after** the `usermod` UID remap — exactly the
+> "condition (a)" this doc was waiting for (entrypoint-level chown after
+> remap). **Practical consequence:** the `copy-ui-tui` initContainer can be
+> dropped **once `hermes_image_tag` is bumped to v2026.5.28+**. The repo is
+> currently still pinned at `hermes_image_tag: "v2026.5.16"` (v0.14.0), which
+> does NOT contain #33045, so the initContainer remains mandatory for now.
+> Latest upstream release is **v2026.5.29.2 / v0.15.2** (2026-05-29).
+> Trigger 2 (workspace-link entries) is structurally neutralised at build time
+> by `npm_config_install_links=false` (present since v2026.5.16), so in
+> practice the spurious-reinstall divergence no longer appears.
 
 - **v2026.4.30 (v0.12.0) — BROKEN** in non-root container deployments.
   `hermes dashboard --tui` triggers an npm reinstall on every start; if
@@ -24,8 +40,10 @@
 - **First tagged release with both fixes: v2026.5.7 / v0.13.0** ("The Tenacity
   Release"), published 2026-05-07T16:23 UTC — about 3 h after PR #21267 merged
   (2026-05-07T13:17 UTC) and 3 days after PR #19520 (2026-05-04). Both fixes are
-  in this tag. **Current latest release: v2026.5.29 / v0.15.1 (2026-05-29)** (re-checked 2026-05-29).
-  Trigger 2 (workspace-link entries) is **still unfixed** in v0.15.0 and v0.15.1 — only
+  in this tag. **Current latest release: v2026.5.29.2 / v0.15.2 (2026-05-29)** (re-checked 2026-05-31).
+  Note: **PR #33045 (entrypoint chown after UID remap) merged 2026-05-27, in v0.15.0 / v2026.5.28** —
+  see the Status update at the top; once we bump `hermes_image_tag` to v2026.5.28+ the initContainer
+  is removable. Trigger 2 (workspace-link entries) is **still not fixed in the reinstall logic** in v0.15.x — only
   Trigger 1 is fixed by #19520; no follow-up issue specifically for Trigger 2 has been
   filed (two adjacent open issues #20739 and #25351 cover other TUI chat-tab bugs, not
   Trigger 2). **Our deployment still requires the workaround** because (a) the
@@ -144,13 +162,22 @@ Concretely: a deployment with `hermes_users[*].uid = 1001` keeps hitting
 the same `npm ERR! code EACCES` on `rename(2)`, because the build-time
 `chown` does not propagate through the entrypoint's UID remap.
 
-The `copy-ui-tui` initContainer in this repo is therefore still
+The `copy-ui-tui` initContainer in this repo was therefore still
 required after #21267 lands. Removing it would only be safe if upstream
 either (a) extends the entrypoint to `chown -R "$HERMES_UID:$HERMES_GID"
 /opt/hermes/ui-tui /opt/hermes/node_modules` after `usermod`, or (b)
 makes those trees world-writable, or (c) ships the Trigger 2 logic fix
 so `_tui_need_npm_install()` stops returning `True` spuriously and the
 reinstall never fires.
+
+> **Condition (a) is now satisfied (2026-05-31).** PR #33045 (merged
+> 2026-05-27, in v0.15.0 / v2026.5.28) adds exactly `chown -R hermes:hermes
+> $INSTALL_DIR/ui-tui $INSTALL_DIR/node_modules` to `docker/stage2-hook.sh`
+> **after** the UID remap. So on v2026.5.28+ the initContainer is removable.
+> We are still pinned at `hermes_image_tag: "v2026.5.16"` (v0.14.0), so it
+> stays mandatory until that bump. The deployment comment "only chowns
+> $HERMES_HOME, not /opt/hermes/" is correct for v0.14.0 but will be stale
+> once we move to v0.15.0+.
 
 ## Why PR #19520 Alone Does Not Fix Our Deployment
 
@@ -218,9 +245,14 @@ small (~50 MB) and the node has fast local storage.
   Adds `chown -R hermes:hermes /opt/hermes/ui-tui /opt/hermes/node_modules`
   to the Dockerfile. Validated with `tests/tools/test_dockerfile_node_modules_perms.py`.
 - First release containing both fixes: **v2026.5.7 / v0.13.0** (2026-05-07,
-  "The Tenacity Release"). Current latest release: **v2026.5.29 / v0.15.1** —
-  Trigger 2 still unfixed in v0.15.0 and v0.15.1. Workaround still required.
-  Re-checked 2026-05-29.
+  "The Tenacity Release"). Current latest release: **v2026.5.29.2 / v0.15.2** —
+  Trigger 2 still unfixed in the reinstall logic in v0.15.x (but neutralised at
+  build time by `npm_config_install_links=false`). Re-checked 2026-05-31.
+- **Entrypoint chown fix:** [hermes-agent#33045](https://github.com/NousResearch/hermes-agent/pull/33045)
+  — merged 2026-05-27, shipped in **v0.15.0 / v2026.5.28**. Adds
+  `chown -R hermes:hermes $INSTALL_DIR/ui-tui $INSTALL_DIR/node_modules` to
+  `docker/stage2-hook.sh` **after** the UID remap → satisfies condition (a).
+  `copy-ui-tui` initContainer becomes removable once `hermes_image_tag` ≥ v2026.5.28.
 - Our Trigger 2 report (workspace-link entries) posted 2026-05-04 as
   comment on #18800:
   [#issuecomment-4371280956](https://github.com/NousResearch/hermes-agent/issues/18800#issuecomment-4371280956).

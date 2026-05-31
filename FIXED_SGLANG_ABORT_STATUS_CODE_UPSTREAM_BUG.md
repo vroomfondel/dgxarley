@@ -4,7 +4,7 @@
 
 **Fixed upstream** as of 2026-04-16 (PR [#22535](https://github.com/sgl-project/sglang/pull/22535),
 commit [`f639425f`](https://github.com/sgl-project/sglang/commit/f639425ff06db7b5d379d749b6954eeb38d56972)).
-Re-verified 2026-05-09:
+Re-verified 2026-05-09 (and 2026-05-31: PR #22535 merged 2026-04-16, in v0.5.11/v0.5.12 — the current default image `0.5.12.post1-sm121` includes it; no in-repo workaround ever existed):
 
 - **Still present** in legacy images `scitrera/dgx-spark-sglang:0.5.10` and
   `:0.5.10.post1` — both predate the fix commit.

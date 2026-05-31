@@ -2,7 +2,7 @@
 
 ## Status
 
-**Fixed upstream** as of 2026-03-27. Re-verified 2026-04-16: no regressions reported; fix remains in current `main`.
+**Fixed upstream** as of 2026-03-27. Re-verified 2026-04-16: no regressions reported; fix remains in current `main`. Re-verified 2026-05-31: PR #20232 shipped in v0.5.10 and is present in the current default image `0.5.12.post1-sm121`. NOTE: the `common_utils.py` patch in `roles/k8s_dgx/files/sglang_tune_moe.sh` is now dead code (target gone post-fix; the script's guard prints "patch target not found" and continues) — removable as cleanup.
 
 - Fix PR: [#20232](https://github.com/sgl-project/sglang/pull/20232) — "[fix] qwen3.5 fuse_moe_triton_tune bug", merged 2026-03-27 (commit `e2b8463c`)
 - File: `benchmark/kernels/fused_moe_triton/common_utils.py`, function `get_model_config()`

@@ -29,7 +29,9 @@ Großes Release-Highlight, aber für unseren Cluster nur Hintergrund:
 - Full inference path (TP/EP/CP/DP-Attention, B300/B200/H200/H100/GB200/GB300/MI35X), PD-Disagg, HiSparse-KV-Offload, Reasoning- und Tool-Call-Parser, DeepGemm- und FlashMLA-Kernels inkl. **MegaMoE**.
 - Post-Day-0: HiCache unter UnifiedTree (#24691), W4A4 MegaMoE (#25052), Marlin/FlashInfer W4A8 MoE auf Hopper (#24816, #24986), TP16 auf H100/H20 (#24949), Fused SiLU+clamp+FP8 Quant (#24897), MHC+DeepGemm-Pipeline-Fusion (#24775), Multi-Detokenizer (#24944), PP+PD für DSv4 (#24700).
 
-**Relevanz:** DeepSeek-V4 ist (vermutlich) wieder ein 671B-Klasse-Modell — auf 4×GB10 mit insg. 4×128 GiB Unified Memory passt das selbst in W4A4-Quant grenzwertig (~340 GiB Weights + KV). **Wir setzen das nicht produktiv ein**, aber die kollateralen Kernel-Verbesserungen (MHC-Pipeline, Fused SiLU+Clamp+FP8) fließen in alle MoE-Modelle ein.
+**Relevanz:** Das **volle** DeepSeek-V4 ist ein 671B-Klasse-Modell — auf 4×GB10 mit insg. 4×128 GiB Unified Memory passt das selbst in W4A4-Quant grenzwertig (~340 GiB Weights + KV) und setzen wir nicht ein. Die kollateralen Kernel-Verbesserungen (MHC-Pipeline, Fused SiLU+Clamp+FP8) fließen ohnehin in alle MoE-Modelle ein.
+
+> **Update 2026-05-31 — DeepSeek-V4-*Flash* ist eine separate, kleine Variante und jetzt unser Default-Versuch.** `sgl-project/DeepSeek-V4-Flash-FP8` (256 routed Experts / 6 aktiv, hidden 4096, 43 Layer, block-wise FP8 `ue8m0`) passt auf 4×GB10 und ist als `sglang_model` in `roles/k8s_dgx/defaults/main.yml` gesetzt (Image: `0.5.12.post1-sm121`). ⚠️ **UNTESTED / first-contact** — Profil-Kommentar und Boot/Coherence noch nicht validiert. Zwei vendored Workarounds nötig: (1) `kv_lora_rank: null`-Patch in `sglang_launch.sh` (V4-Flash nutzt q-LoRA + o-LoRA + GQA statt MLA-KV-Compression; transformers-5.x `_DeepseekV4ConfigAlias` lehnt `None` sonst per Strict-Dataclass ab), (2) FP8-Checkpoint statt NVFP4, weil RedHatAIs compressed-tensors-NVFP4-Repackage am `wqkv_a`-Matcher-Gap scheitert. Details: Modellprofil `sgl-project-deepseek-v4-flash-fp8.yml` + `SGLANG_v0.5.12.post1_VERSION_CHANGES.md` (dessen DSv4-Cherry-Picks dadurch relevant werden).
 
 ## 3. Speculative Decoding V2 — Reifegrad steigt, Gemma 4 MTP nativ
 
@@ -116,7 +118,7 @@ Ohne Cookbook-Recipe (oder nicht relevant): Trinity-mini (Ascend), HunyuanVideo 
 
 **Relevanz für unseren Cluster:**
 - **Gemma 4 MTP** ist die einzige direkt relevante Neuerung — bestehender `gemma4`-Profil-Patch könnte um MTP erweitert werden (sobald die Recipe da ist).
-- **Ring-2.6-1T** (1-Trillion-Param Reasoning) und **DeepSeek V4** passen kapazitiv nicht auf 4×GB10.
+- **Ring-2.6-1T** (1-Trillion-Param Reasoning) und das **volle DeepSeek V4** (671B-Klasse) passen kapazitiv nicht auf 4×GB10. Die kleine **DeepSeek-V4-*Flash*-FP8**-Variante hingegen schon — sie ist seit 2026-05-31 unser Default-Versuch (siehe §2-Update).
 - **MiniCPM-V 4.6** / **Intern-S2-Preview** sind VLM/Embedding-Kandidaten — vermutlich Vision/Multimodal, nicht unser aktueller Use-Case.
 - **Laguna-XS.2** (Poolside) — Coding-Modell, eventuell interessant für Hermes-Tooling.
 

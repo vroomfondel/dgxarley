@@ -1,6 +1,6 @@
 # SGLang Upstream Bug: Gemma-4 NVFP4 blocked on SM121
 
-## Status (re-verified 2026-05-29)
+## Status (re-verified 2026-05-31)
 
 - **BF16 variants — WORKING** on our **`xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121`**
   image (SGLang **v0.5.11** + SM121 sgl-kernel patches + flashinfer 0.6.11 +
@@ -20,7 +20,7 @@
 - **NVFP4 variants — STILL BLOCKED.** Both dense (`nvidia/Gemma-4-31B-IT-NVFP4`)
   and MoE (`bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4`) require four sm120/121-
   specific upstream PRs. Three (#22929, #22928, #22927) remain **stale since
-  2026-04-16 with no review activity — over 6 weeks** (re-verified 2026-05-29).
+  2026-04-16 with no review activity — over 6 weeks (45 days)** (re-verified 2026-05-31).
   The fourth, **#22615**, was approved by `kpham-sgl` on 2026-04-22 and rebased
   onto main on 2026-04-30 — its known blocker
   ([flashinfer #2959](https://github.com/flashinfer-ai/flashinfer/pull/2959))
@@ -29,7 +29,7 @@
   longer applies. However, **a new commit landed on 2026-05-23 which invalidated
   that approval** — `reviewDecision` reverted to `REVIEW_REQUIRED` (the old
   `kpham-sgl` APPROVED review still appears in `latestReviews` but no longer
-  counts). **Re-checked 2026-05-29: state still OPEN, unmerged, now needs a
+  counts). **Re-checked 2026-05-31: state still OPEN, unmerged, now needs a
   fresh review cycle. A polite nudge is still warranted, but note the PR
   needs re-review, not just a merge click.** SGLang **v0.5.12.post1**
   (released 2026-05-26) ships without any of the four SM120/121 Gemma-4 NVFP4
@@ -140,7 +140,7 @@ which is shared across all variants.
 
 ## Upstream PRs
 
-Last `gh pr view` check: 2026-05-29. Three SM120/121 PRs (#22929, #22928, #22927) still no movement since 2026-04-16 (6+ weeks). **#22615** was approved by `kpham-sgl` on 2026-04-22 and rebased onto main 2026-04-30, but a **new commit on 2026-05-23 invalidated that approval** — `reviewDecision` is now `REVIEW_REQUIRED` again. The flashinfer-side blocker ([flashinfer #2959](https://github.com/flashinfer-ai/flashinfer/pull/2959)) shipped in flashinfer v0.6.10–v0.6.11 and is no longer a gating dependency. Worth a polite nudge on the PR, noting it needs a fresh review cycle.
+Last `gh pr view` check: 2026-05-31. Three SM120/121 PRs (#22929, #22928, #22927) still no movement since 2026-04-16 (45 days, 6+ weeks). **#22615** was approved by `kpham-sgl` on 2026-04-22 and rebased onto main 2026-04-30, but a **new commit on 2026-05-23 invalidated that approval** — `reviewDecision` is now `REVIEW_REQUIRED` again. The flashinfer-side blocker ([flashinfer #2959](https://github.com/flashinfer-ai/flashinfer/pull/2959)) shipped in flashinfer v0.6.10–v0.6.11 and is no longer a gating dependency. Worth a polite nudge on the PR, noting it needs a fresh review cycle.
 
 | PR | Title | Status | Merged | Relevance |
 |----|-------|--------|--------|-----------|
@@ -184,7 +184,7 @@ All of the following must be present:
 6. PR #22615 — fp8 kv cache with KV-shared layers (**open**, may or may not apply)
 
 The three SM120/121-specific PRs (#22929, #22928, #22927) have been sitting
-since 2026-04-16 with no review activity through 2026-05-29. #22615 was
+since 2026-04-16 with no review activity through 2026-05-31. #22615 was
 approved on 2026-04-22 and rebased on 2026-04-30, but a 2026-05-23 push
 invalidated the approval — it is back to REVIEW_REQUIRED and has not been
 merged.

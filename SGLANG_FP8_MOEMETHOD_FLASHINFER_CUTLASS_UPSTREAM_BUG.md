@@ -2,17 +2,22 @@
 
 ## Status
 
-**Open upstream — no fix in flight for vanilla `Fp8MoEMethod` as of 2026-05-29.**
+**Open upstream — no fix in flight for vanilla `Fp8MoEMethod` as of 2026-05-31.**
 Originally verified on SGLang `v0.5.11` ("The Tenacity Release", tagged 2026-05-05)
 with the upstream image `scitrera/dgx-spark-sglang:0.5.11` (FlashInfer 0.6.10,
 sgl-kernel 0.4.2). Reproduced on Qwen3.6-35B-A3B-FP8, 4×GB10 (SM12.0a), TP=4,
 during the matrix run on 2026-05-10 (case `07_fi_cutlass-moe_fi-attn` in
 `kikube/matrixtest/2026-05-10/results/sglang_nn4_tp4_ep1/qwen-3.6-35b-a3b-fp8/0.5.11/`).
-**SGLang v0.5.12.post1 released 2026-05-26** (DeepSeek-V4 / disaggregation
-stability patch) — release notes contain no `Fp8MoEMethod` + flashinfer_cutlass
-fix; PR #21872 still open and unmerged; PR #22627 merged 2026-05-26 in
-v0.5.12.post1 but only patches `ModelOptFp8MoEMethod` — does NOT fix the vanilla
-`Fp8MoEMethod` + `flashinfer_cutlass` bug described here, which remains present.
+Confirmed still present in **v0.5.12.post1** (the current default image
+`xomoxcc/dgx-spark-sglang:0.5.12.post1-sm121`) by source inspection. Release
+notes contain no `Fp8MoEMethod` + flashinfer_cutlass fix; PR #21872 still open
+and unmerged; PR #22627 merged 2026-05-26 in v0.5.12.post1 but only patches
+`ModelOptFp8MoEMethod` — does NOT fix the vanilla `Fp8MoEMethod` +
+`flashinfer_cutlass` bug described here. The MoE-refactor series (PR #25525
+merged 2026-05-17, #26489 merged 2026-05-30) migrated `flashinfer_cutedsl` /
+`flashinfer_mxfp4` to `MoeRunner` but left `flashinfer_cutlass` + vanilla
+`Fp8MoEMethod` untouched — the `# TODO(cwan): refactor other backends` comment
+in `fp8.py` is still there as of 0.5.12.post1.
 
 The bug is plainly visible in the source — `Fp8MoEMethod.create_moe_runner`
 ends with an explicit `# TODO(cwan): refactor other backends` for everything

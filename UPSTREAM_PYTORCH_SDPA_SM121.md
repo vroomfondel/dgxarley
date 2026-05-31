@@ -3,19 +3,28 @@
 **Filing target:** [scitrera/cuda-containers](https://github.com/scitrera/cuda-containers) — build-tooling for `scitrera/dgx-spark-pytorch-dev:2.10.0-v2-cu131`.
 **Suggested issue title:** *PyTorch SDPA `EFFICIENT_ATTENTION` backend silently returns numerically incorrect output on sm121 in `dgx-spark-pytorch-dev:2.10.0-v2-cu131` (works correctly in NGC PyTorch 25.12 with same major version)*
 **Severity:** silent correctness — no NaN, no Inf, no exception, no warning. Output magnitude is 12–27× off from a CPU reference.
-**Status (re-verified 2026-05-29):** observed and isolated to the scitrera build
+**Status (re-verified 2026-05-31):** observed and isolated to the scitrera build
 pipeline — same defect reproduced byte-identically in both
-`scitrera/dgx-spark-pytorch-dev:2.10.0-v2-cu131` and our own rebuild
-`xomoxcc/dgx-spark-pytorch-dev:2.11.0-v1-cu132` (built from scitrera's
-recipe). Production deploy resolved by switching the ComfyUI image
-base to `nvcr.io/nvidia/pytorch:26.03-py3` (see
-[`COMFYUI_PROMPT_FAIL.md`](COMFYUI_PROMPT_FAIL.md) § "Production fix"
-and `scripts/build_comfyui_image.sh`). scitrera issue not yet filed —
-this document is the source draft. PyTorch 2.12.0 (released 2026-05-13)
-contains no upstream fix for this scitrera build-pipeline defect;
+`scitrera/dgx-spark-pytorch-dev:2.10.0-v2-cu131` and our own scitrera-recipe-faithful
+rebuild `xomoxcc/dgx-spark-pytorch-dev:2.11.0-v1-cu132`. **The root cause is
+scitrera's `sm_121`-only `NVCC_GENCODE` (missing `sm_120`); it is NOT a PyTorch
+upstream bug — PyTorch 2.12.0 (2026-05-13) accordingly contains no "fix".**
+
+> **Update 2026-05-31 — production has moved off the broken gencode.** Both local
+> pytorch recipes (`pytorch-2.11.0-dev-v1.recipe`, `pytorch-2.12.0-dev-v1.recipe`)
+> now build with the **corrected** `TORCH_CUDA_ARCH_LIST="12.0;12.1"` /
+> `NVCC_GENCODE="…sm_120 …sm_121"` (the "Proposed fix" from this doc). The current
+> production SGLang image `xomoxcc/dgx-spark-sglang:0.5.12.post1-sm121` is built on
+> `xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132` with that fixed gencode, so
+> **production SGLang inference on this cluster is no longer affected**. ComfyUI
+> remains on NGC PyTorch `nvcr.io/nvidia/pytorch:26.03-py3` (always correct). The
+> bug + workaround now apply **only** to anyone using the bare `scitrera/*` images
+> directly (not the `xomoxcc/*` images built from this repo's recipes).
+
+scitrera issue not yet filed — this document is the source draft;
 scitrera/cuda-containers has no SDPA/sm121 issue filed and no
-NVCC_GENCODE/sm121 fix committed as of 2026-05-29. The workaround in
-`comfyui_launch.sh.j2` §4c remains required.
+NVCC_GENCODE/sm121 fix committed as of 2026-05-31. The workaround in
+`comfyui_launch.sh.j2` §4c remains relevant for the bare-scitrera path.
 
 ---
 

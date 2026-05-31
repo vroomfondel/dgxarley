@@ -2,7 +2,7 @@
 
 ## Status
 
-**Unreported** as of 2026-05-29 (re-verified: GitHub search for "sharded_state
+**Unreported** as of 2026-05-31 (re-verified: GitHub search for "sharded_state
 speculative" / "speculative_draft_load_format sharded" in `sgl-project/sglang`
 still returns no issues or PRs). Bug exists in SGLang v0.5.9, v0.5.10rc0, v0.5.10,
 v0.5.10.post1, v0.5.11 (2026-05-05), v0.5.12 (2026-05-16), and **v0.5.12.post1**
@@ -14,6 +14,15 @@ inherited `sharded_state` whenever the user doesn't pass the override flag — s
 failure mode as in 0.5.10. The workaround in `sglang_launch.sh` (force
 `--speculative-draft-load-format auto` when main `load_format=sharded_state`) is
 therefore still required on v0.5.11 / v0.5.12 / v0.5.12.post1 / dev1 images.
+
+> **Note (2026-05-31):** SGLang v0.5.12 brings several *Spec-V2* reliability
+> fixes that are accessible via this very workaround once it gets the draft
+> model loaded — PR #23456 (overlap stale-state), #25204 (frozen-KV MTP crash
+> when `bonus_tokens=None`), #24965 (ngram off-by-1), #25033 (Kimi-K2.5 MLA
+> EAGLE + DP attention), all merged and in v0.5.12 / .post1. Re-benchmarking the
+> MTP profiles on 0.5.12 is warranted (see `TODO_0.5.12.md` §5). This does not
+> change the workaround requirement — it just makes the path it unblocks
+> meaningfully better than on 0.5.9.
 
 - File: `sglang/srt/managers/scheduler.py`, method `maybe_init_draft_worker()`
 - Root cause in: `sglang/srt/managers/tp_worker.py`, method `_init_model_config()`

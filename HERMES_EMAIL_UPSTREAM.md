@@ -1,6 +1,6 @@
 # Hermes email gateway — local patch and upstream PRs
 
-Status as of 2026-05-29.
+Status as of 2026-05-31.
 
 ## Why this exists
 
@@ -150,10 +150,16 @@ The `env -u VIRTUAL_ENV` prefix is required because the parent shell's
 
 ### When `hermes_image_tag` is bumped before a PR merges
 
-> **2026-05-29 check:** Latest upstream release is v2026.5.29 (v0.15.1).
-> `gateway/platforms/email.py` blob SHA is **identical** at v2026.5.16 and
-> v2026.5.29 — no re-sync required. All three PRs (#28697, #28699, #28702)
-> are still open/unmerged.
+> **2026-05-31 check:** Latest upstream release is now **v2026.5.29.2 (v0.15.2)**.
+> `gateway/platforms/email.py` blob SHA is still `0fffb82…` (the same commit as
+> our pinned `v2026.5.16`) at v2026.5.29.2 — **identical, no re-sync required**.
+> (Two `email.py`-adjacent commits landed in between — `fix(email): use real
+> hermes version in IMAP ID command` and `…send IMAP ID extension to support
+> 163/NetEase mailbox` — but they live outside `gateway/platforms/email.py`, so
+> the blob SHA is unchanged and the patch stays clean.) All three PRs (#28697,
+> #28699, #28702) are still open/unmerged (last activity 2026-05-19). The repo
+> is still pinned at `hermes_image_tag: v2026.5.16` — if bumping to v2026.5.29.2,
+> re-check the email.py SHA at that tag first.
 
 1. Download the new upstream file:
 

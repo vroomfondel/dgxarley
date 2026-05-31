@@ -1,6 +1,6 @@
 # FlashInfer Upstream Bug: head_dim=512 not supported (Gemma-4 global attention)
 
-## Status (re-verified 2026-05-29 — bug RE-OPENED on a different code path)
+## Status (re-verified 2026-05-31 — bug RE-OPENED on a different code path)
 
 **PR #2959 is necessary but NOT sufficient. The `head_dim=512` dispatch gap
 persists in FlashInfer 0.6.11 / 0.6.11.post1 / 0.6.11.post2 / 0.6.11.post3
@@ -10,12 +10,15 @@ since the original discovery — v0.6.11.post1 (2026-05-13),
 v0.6.11.post2 (2026-05-14), and v0.6.11.post3 (2026-05-15) — none
 contains a fix for the missing dispatch tuple; their release notes
 mention no `head_dim`, `prefill.cuh`, or Gemma-4 changes. As of
-2026-05-29, the latest stable is v0.6.11.post3 and the newest RCs are
-v0.6.12rc1/rc2/rc3 (2026-05-26..29) — **none** contain the missing
-`(NUM_MMA_Q=1, NUM_MMA_KV=1, NUM_WARPS_Q=1, NUM_WARPS_KV=4)` dispatch
-instantiation. Upstream issue
-[#3297](https://github.com/flashinfer-ai/flashinfer/issues/3297) remains
-**OPEN** with no maintainer reply (zero comments as of 2026-05-29). The bug was
+2026-05-31, **v0.6.12 stable shipped 2026-05-29** and still does **not**
+contain the missing `(NUM_MMA_Q=1, NUM_MMA_KV=1, NUM_WARPS_Q=1,
+NUM_WARPS_KV=4)` dispatch instantiation (no `head_dim` / `prefill.cuh`
+entry in the v0.6.12 changelog). Note also that SGLang 0.5.12 /
+0.5.12.post1 still pin flashinfer at **0.6.11.post1**, so even moving to
+the current default image `xomoxcc/dgx-spark-sglang:0.5.12.post1-sm121`
+does not bring v0.6.12 — and would not fix this even if it did. Upstream
+issue [#3297](https://github.com/flashinfer-ai/flashinfer/issues/3297)
+remains **OPEN** with no maintainer reply (zero comments as of 2026-05-31). The bug was
 prematurely marked "fixed" in the 2026-05-10 status; a fresh
 `gemma-4-26b-a4b-it` BF16 matrix sweep on 2026-05-11 (image
 `xomoxcc/dgx-spark-sglang:0.5.11-sm121`, flashinfer 0.6.11) shows that
@@ -206,7 +209,7 @@ FlashInfer gains `head_dim=512` support.
 |------|-----|-------|--------|
 | flashinfer-ai/flashinfer | [#2959](https://github.com/flashinfer-ai/flashinfer/pull/2959) | [Fmha] Add head_dim=512 support for trtllm attention kernels | **merged 2026-04-22** (in v0.6.10rc1 / v0.6.10 / v0.6.10.post1 / v0.6.11), but **incomplete** — does not cover the `(NUM_MMA_Q=1, NUM_MMA_KV=1, NUM_WARPS_Q=1, NUM_WARPS_KV=4)` decode tuple |
 | sgl-project/sglang | [#22079](https://github.com/sgl-project/sglang/pull/22079) | [nvidia] Gemma4 nvfp4 fix | **merged** (2026-04-10) |
-| flashinfer-ai/flashinfer | [#3297](https://github.com/flashinfer-ai/flashinfer/issues/3297) | [Bug] head_dim=512 dispatch gap on SM121 (Gemma-4 global attention) — NUM_MMA_Q=1 NUM_MMA_KV=1 NUM_WARPS_Q=1 NUM_WARPS_KV=4 not instantiated after PR #2959 | **OPEN** (filed 2026-05-12, zero comments, no maintainer reply as of 2026-05-29; not addressed in v0.6.12rc1/rc2/rc3) |
+| flashinfer-ai/flashinfer | [#3297](https://github.com/flashinfer-ai/flashinfer/issues/3297) | [Bug] head_dim=512 dispatch gap on SM121 (Gemma-4 global attention) — NUM_MMA_Q=1 NUM_MMA_KV=1 NUM_WARPS_Q=1 NUM_WARPS_KV=4 not instantiated after PR #2959 | **OPEN** (filed 2026-05-12, zero comments, no maintainer reply as of 2026-05-31; not addressed in v0.6.12 stable, shipped 2026-05-29) |
 
 PR #22079 in SGLang fixed the **Triton attention** side of the `head_dim=512`
 problem (PTX register exhaustion on SM100a/GB200). The companion FlashInfer
