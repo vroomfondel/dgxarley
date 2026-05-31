@@ -409,7 +409,7 @@ dynamo tracing.
   still pin flashinfer at **v0.6.11.post1**, so the current cluster image
   (`xomoxcc/dgx-spark-sglang:0.5.12.post1-sm121`) does NOT contain the upstream
   fix. The local patches stay required until an image bumps flashinfer ≥ v0.6.12.
-- **Migration note:** once v0.6.12 stable ships, images pinning
+- **Migration note:** v0.6.12 stable shipped 2026-05-29, so images pinning
   `flashinfer >= v0.6.12` can retire the local `PATCH_FI_FP4_*` block
   (`allow_in_graph` revision) from `sglang_launch.sh`. Patch 1
   (`get_cuda_version` subprocess bypass, `PATCH_FI_CUDA_VER_EOF`) is
