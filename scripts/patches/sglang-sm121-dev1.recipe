@@ -22,15 +22,17 @@ TARGET=runtime
 # scitrera/dgx-spark-pytorch-dev:2.11.0-v1-cu132, which scitrera committed
 # a recipe for on 2026-04-08 but never built+published to Docker Hub (their
 # main-dir recipes are built manually by the maintainer, no CI; the 2.11
-# recipe additionally depends on an unreleased NCCL fork from zyang-dev).
+# recipe originally pinned an unreleased NCCL fork from zyang-dev — we now
+# build against upstream NVIDIA/nccl instead, see below).
 #
-# To avoid the ~45% perf regression of the 2.10 fallback (see
-# reference_sm121_build_base_regression memory: torch 2.10/cuda 13.1 vs
-# torch 2.11/cuda 13.2 in nvcc codegen + cuBLAS/cuDNN), we build the 2.11
+# To avoid the ~45% perf regression of the 2.10 fallback (torch 2.10/cuda 13.1
+# vs torch 2.11/cuda 13.2 in nvcc codegen + cuBLAS/cuDNN), we build the 2.11
 # base image ourselves via scripts/build_pytorch_base_image.sh and tag it
-# under our namespace. That build consumes the same recipe but with NCCL
-# version resolved to 2.29.7-1 (from zyang-dev/nccl dgxspark-3node-ring
-# makefiles/version.mk).
+# under our namespace. That build consumes the same recipe, now pinned to
+# upstream NCCL v2.30.4-1 (NVIDIA/nccl). The former zyang-dev/nccl
+# dgxspark-3node-ring fork patch turned out to be a default-off subnet-aware-
+# routing feature — a verified no-op on our single-/24 switched (CRS812) fabric;
+# see pytorch-2.12.0-dev-v1.recipe for the full analysis.
 #
 # Prerequisite: run scripts/build_pytorch_base_image.sh BEFORE
 # build_sm121_image.sh on the build host. The result is kept in spark4's

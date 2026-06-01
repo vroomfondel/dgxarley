@@ -31,12 +31,26 @@
 #       requires_dist), so vision is the lockstep canary; audio isn't.
 #   - TORCH_VISION_VERSION 0.26.0 -> 0.27.0  (lockstep w/ torch 2.12.0)
 #   - IMAGE_TAG :2.11.0-v1-cu132 -> :2.12.0-v1-cu132
+#   - NCCL: zyang-dev/nccl#dgxspark-3node-ring 2.29.7-1 -> NVIDIA/nccl v2.30.4-1
+#       (newest full release). We previously held the fork, believing its sole
+#       commit ("Support 3 DGX Sparks in a ring topology via CX-7") was load-
+#       bearing. Reviewing the diff (+141/-0 in src/transport/net_ib/connect.cc)
+#       shows it is actually a DEFAULT-OFF "subnet-aware routing" feature gated by
+#       NCCL_PARAM(IbSubnetAwareRouting, "IB_SUBNET_AWARE_ROUTING", 0): on connect
+#       it picks a local RoCE NIC on the remote peer's IP subnet. It targets
+#       MULTI-subnet direct-connect RoCE rings (each link a separate /24, no
+#       switch). Verified no-op for us, four ways: (1) we never set the env var
+#       (default 0 -> dead code); (2) our QSFP fabric is a single /24
+#       (10.10.10.0/24) so every peer shares the subnet -> returns the default
+#       device unchanged; (3) we run over a real switch (CRS812), not a direct
+#       ring; (4) we pin one HCA (NCCL_IB_MERGE_NICS=0), so there is nothing to
+#       re-select. The patch's own comments call it inert for "single-subnet" and
+#       "switch" setups. Upstream loses us nothing and tracks current NCCL. Sanity
+#       check post-build with the nccl_test framework (k8s_dgx tag nccl_test,
+#       roce variant) — not because we expect breakage, just the usual minor-bump
+#       diligence (2.29 -> 2.30).
 #
 # Deliberately unchanged:
-#   - NCCL: zyang-dev/nccl#dgxspark-3node-ring (last commit 2026-03-13). The
-#     whole purpose of the fork is the "3 DGX Sparks in a ring topology via
-#     CX-7" patch. Upstream NCCL 2.30.4-1 exists (2026-04-22) but the fork
-#     hasn't rebased. Don't bump — would lose the 3-node-ring patch.
 #   - TORCH_CUDA_ARCH_LIST / NVCC_GENCODE: Spark-target arches (sm_120 + sm_121).
 #   - BUILD_JOBS: 8 is the safe ceiling on GB10 (see feedback_build_jobs_gb10).
 #
@@ -52,9 +66,9 @@ TARGET=pytorch_builder
 CUDA_VERSION=13.2.1
 CUDA_SHORT=132
 
-NCCL_VERSION=2.29.7-1
-NCCL_REF=dgxspark-3node-ring
-NCCL_REPO=https://github.com/zyang-dev/nccl.git
+NCCL_VERSION=2.30.4-1
+NCCL_REF=v2.30.4-1
+NCCL_REPO=https://github.com/NVIDIA/nccl.git
 
 BUILD_JOBS=8
 

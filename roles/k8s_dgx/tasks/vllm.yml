@@ -27,6 +27,11 @@
         PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
         NCCL_SOCKET_IFNAME: "{{ nccl_socket_ifname }}"
         NCCL_IB_DISABLE: "1"
+        # NCCL 2.30.4 NVLS regression: silent hang on high-expert MoE weight
+        # load (≥256 experts) on GB10/CX-7 RoCE — the upstream repro (NVIDIA/
+        # nccl#2167) was vLLM TP=8 weight load. NVLS is a no-op here anyway.
+        # See nccl_nvls_enable in defaults. Empty -> omit.
+        NCCL_NVLS_ENABLE: "{{ nccl_nvls_enable if (nccl_nvls_enable | default('')) | length > 0 else omit }}"
         NCCL_DEBUG: "INFO"
 
 - name: Create vLLM launch script ConfigMap

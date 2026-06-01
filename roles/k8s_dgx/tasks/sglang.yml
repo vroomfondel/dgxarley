@@ -151,6 +151,10 @@
         NCCL_IB_MERGE_NICS: "{{ sglang_nccl_env.NCCL_IB_MERGE_NICS | default(omit) }}"
         NCCL_NET: "{{ sglang_nccl_env.NCCL_NET | default(omit) }}"
         NCCL_IB_DISABLE: "{{ sglang_nccl_env.NCCL_IB_DISABLE | default(omit) }}"
+        # NCCL 2.30.4 NVLS regression: silent hang on high-expert MoE weight
+        # load (≥256 experts) on GB10/CX-7 RoCE. NVLS is a no-op here anyway.
+        # See nccl_nvls_enable in defaults + NVIDIA/nccl#2167. Empty -> omit.
+        NCCL_NVLS_ENABLE: "{{ nccl_nvls_enable if (nccl_nvls_enable | default('')) | length > 0 else omit }}"
         NCCL_DEBUG: "INFO"
 
 - name: Create SGLang launch script ConfigMap

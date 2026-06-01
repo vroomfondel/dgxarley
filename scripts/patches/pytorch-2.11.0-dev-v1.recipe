@@ -8,9 +8,13 @@
 # maintainer). See reference_sm121_build_base_regression memory for context.
 #
 # This is a verbatim copy of scitrera's pytorch-2.11.0-dev-v1.recipe EXCEPT:
-# 1. NCCL_VERSION: "2.29.XX" placeholder (scitrera draft) -> "2.29.7-1"
-#    (resolved from the actual zyang-dev/nccl dgxspark-3node-ring branch
-#    at makefiles/version.mk: MAJOR=2, MINOR=29, PATCH=7, PKG_REVISION=1).
+# 1. NCCL: switched from scitrera's draft NCCL fork to upstream NVIDIA/nccl
+#    v2.30.4-1 (newest full release). scitrera's draft pinned the unpublished
+#    zyang-dev/nccl#dgxspark-3node-ring fork, whose sole patch is a DEFAULT-OFF
+#    "subnet-aware routing" feature (NCCL_IB_SUBNET_AWARE_ROUTING) for multi-
+#    subnet direct-connect RoCE rings — a verified no-op on our single-/24
+#    (10.10.10.0/24) switched (CRS812) fabric. See pytorch-2.12.0-dev-v1.recipe
+#    for the full analysis. Upstream loses us nothing and tracks current NCCL.
 # 2. IMAGE_TAG: "scitrera/dgx-spark-pytorch-dev:..." -> "xomoxcc/..."
 #    Uses our namespace to avoid colliding with any future upstream build.
 #
@@ -23,9 +27,9 @@ TARGET=pytorch_builder
 CUDA_VERSION=13.2.0
 CUDA_SHORT=132
 
-NCCL_VERSION=2.29.7-1
-NCCL_REF=dgxspark-3node-ring
-NCCL_REPO=https://github.com/zyang-dev/nccl.git
+NCCL_VERSION=2.30.4-1
+NCCL_REF=v2.30.4-1
+NCCL_REPO=https://github.com/NVIDIA/nccl.git
 
 BUILD_JOBS=8
 
