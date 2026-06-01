@@ -164,7 +164,10 @@ Bringing the block-FP8 checkpoint up on 4×GB10 / SM121 is a sequence of
 first-contact failures. Each is fixed by a profile flag in
 `sgl-project-deepseek-v4-flash-fp8.yml` (plumbed into BOTH serving and the
 `sglang_shard` Job — the runtime-kernel and weight-dtype choices must match
-between shard-save and serve). The order they surface during startup:
+between shard-save and serve). The walls span config-parse → weight load →
+warmup → and (verified 2026-05-31) the **first real forward request**: model
+load + `Uvicorn running` is NOT the finish line — walls 6–8 only fire when the
+first prompt is actually decoded. The order they surface:
 
 | # | Stage | Symptom | Fix |
 |---|-------|---------|-----|
@@ -174,6 +177,9 @@ between shard-save and serve). The order they surface during startup:
 | 4 | kernel warmup | `tf32_hc_prenorm_gemm → InternalError ... hyperconnection.hpp:56 Unsupported architecture` | `SGLANG_OPT_DEEPGEMM_HC_PRENORM=0` |
 | 5 | decode (pre-empted) | `paged_mqa_logits` DeepGEMM kernel, same SM121 gap | `SGLANG_FP8_PAGED_MQA_LOGITS_TORCH=1` |
 | — | weight load (host RAM) | kernel **SIGKILL** (no CUDA trace) at end of load — MoE expert fusion in `process_weights_after_loading` doubles unified-memory footprint | node **swap** (see below) |
+| 6 | first forward | `AssertionError: assert seq_lens.shape == (batch_size,)` in `dsv4/indexer.py:fp8_paged_mqa_logits_torch` | launch source-patch (squeeze trailing singleton) |
+| 7 | first forward (decode) | `topk_v2.cuh:472 CUDA error: invalid argument` — TVM jit `topk_transform_512_v2` | `SGLANG_TOPK_TRANSFORM_512_TORCH=1` |
+| 0 | first forward | `RuntimeError: Unsupported architecture for sparse decode fwd` (FlashMLA) | baked FlashMLA sm_121a kernel + `.pth` hook — see **§7** |
 
 **(2) `wo_a` fp8→bf16 — `SGLANG_OPT_FP8_WO_A_GEMM` (#25181, default-on since 0.5.12).**
 The opt keeps the o-LoRA `wo_a` projection fp8 and runs an fp8 GEMM. V4-Flash-FP8
@@ -221,6 +227,89 @@ skips the fusion, so it fits in RAM without swap (and serving must not swap —
 paging weights/activations would wreck latency). Swap device: `dgx_prepare`
 tag `swap`; kubelet policy: `k3sserver` gate `k3s_node_swap_enabled`.
 
+**(6) C4-indexer torch fallback asserts 1-D `seq_lens` (forward-time).** Enabling
+`SGLANG_FP8_PAGED_MQA_LOGITS_TORCH=1` (wall 5) routes the indexer to
+`dsv4/indexer.py:fp8_paged_mqa_logits_torch`, but its caller `forward_c4_indexer`
+unconditionally unsqueezes `c4_seq_lens` to 2-D `(batch, 1)` for the deep_gemm /
+tilelang kernels — and the torch fallback `assert seq_lens.shape == (batch_size,)`.
+→ `AssertionError` on the **first multi-token forward** (any prompt, not just
+EAGLE; speculative is off here). sglang's own gap. **Note:** the vendored
+0xSero `_patch_sglang_indexer_fallbacks()` was meant to fix exactly this but
+targets the OLD module paths (`nsa.tilelang_kernel`, `compressed.indexer`) — on
+v0.5.12.post1 the indexer moved to `attention/dsv4/indexer.py`, so it patches
+nothing. Fix = a launch-time source patch that squeezes a trailing singleton
+before the assert (`sglang_launch.sh`, marker `assert seq_lens.shape ==
+(batch_size,)`; no-op when already 1-D).
+
+**(7) C4-indexer top-k transform TVM kernel dies on sm_121 (decode).** The next
+wall, immediately after (6): `forward_c4_indexer` picks `topk_transform_512_v2`
+(a TVM jit kernel, `sglang/jit_kernel/...`) when `SGLANG_OPT_USE_TOPK_V2`
+(default-on) and no capture buffer. On GB10 it aborts with
+`topk_v2.cuh:472 CUDA error: invalid argument` at decode. sglang ships a pure-
+torch fallback `topk_transform_512_pytorch_vectorized`, selected by
+`SGLANG_TOPK_TRANSFORM_512_TORCH=1` — and the torch branch is checked **before**
+the v2 branch, so the flag alone wins (no need to also clear `OPT_USE_TOPK_V2`).
+Profile flag `topk_transform_512_torch: true` → env, plumbed serving-side
+(decode-time kernel; irrelevant to the shard Job). Same fallback family as (5).
+
+**Post-load warmup latency.** With (4)/(5)/(7) on the torch/TileLang fallbacks,
+the **first** request after startup takes ~2 min (one-time JIT/compile of the
+TileLang MHC-prenorm path et al. on first real forward) — the request can outlast
+a 120 s client timeout while the server still completes it (200 OK). Warm
+requests are normal latency. Do not mistake the first-request stall for a hang.
+
+**On `load_format`.** Verified 2026-05-31: `load_format: auto` (in-process MoE
+fusion, no pre-sharding) loaded cleanly on the BestEffort serving Deployment
+**without** triggering the host-RAM SIGKILL of the swap story above — the ~2×
+fusion spike fit under 121 GiB for this checkpoint at TP=4. `sharded_state` (skip
+fusion at serve) remains the swap-free design, but is not strictly required here.
+
+---
+
+## 7. FlashMLA sparse-decode kernel for sm_121a + the `.pth` hook (wall #0)
+
+V4's attention backend (`deepseek_v4_backend.py`) hard-imports `flash_mla` and
+calls `flash_mla.flash_mla_with_kvcache(...)` with **no fallback**, and upstream
+FlashMLA ships no sm_120/sm_121 sparse-decode kernel → the first forward dies
+`RuntimeError: Unsupported architecture for sparse decode fwd`. We bake a
+sm_121a kernel into the image (vendored from `0xSero/deepseek-v4-flash-sm120`,
+retargeted `sm_120a → sm_121a`) + stock `flash_mla` for the interface, and
+monkey-patch `flash_mla_with_kvcache` at interpreter startup. Three sub-walls,
+each a non-obvious trap (all hit during bringup 2026-05-31):
+
+**(a) The hook never ran — Ubuntu shadows our `sitecustomize.py`.** The kernel
+ships `sitecustomize_hook.py`; dropping it at
+`/usr/local/lib/python3.12/dist-packages/sitecustomize.py` looks right but Python
+imports only the **first** `sitecustomize` on `sys.path`, and Ubuntu's
+`/usr/lib/python3.12/sitecustomize.py` (apport) sits earlier → ours never loaded,
+patch never applied, stock FlashMLA crashed. Fix = a **`.pth`** file instead:
+`site.py` executes the `import` line in **every** `.pth` across all site dirs (no
+"first wins"), in main **and** every spawned sglang worker. Drop
+`zz_dsv4_autopatch.pth` → `import dsv4_autopatch`.
+
+**(b) Don't call `install()` — it loads tilelang's libcudart stub too early.**
+The kernel's `patch_flash_mla()` (= `install()`) also runs
+`_patch_sglang_indexer_fallbacks()`, which imports `sglang…nsa.tilelang_kernel`
+→ loads `tilelang/lib/libcudart_stub.so`. If that stub loads **before**
+`flashinfer.comm`, flashinfer's `find_loaded_library("libcudart")` grabs the stub
+(missing `cudaDeviceReset`) → `AttributeError` at import — a HARD crash, NOT caught
+by sglang's `except ImportError` (unlike the benign `cuda.tile` ModuleNotFoundError
+from flashinfer 0.6.12, which sglang tolerates → allreduce-unavailable fallback).
+Fix = the autopatch calls **only** `_patch_flash_mla_pkg()` (installs the wrapper,
+no tilelang). sglang imports tilelang itself LATER, after flashinfer, in its
+natural (proven-safe) order; bootstrapping it early is not our job. (And
+`_patch_sglang_indexer_fallbacks()` is a no-op here anyway — see §6 wall 6.)
+
+**(c) The wrapper is gated, inert for non-V4.** `_make_wrapper` only takes over
+when `indices is not None` AND device-cap major == 12 (GB10 reports `(12, 1)`)
+AND `is_fp8_kvcache` AND `q.element_size() == 2`; otherwise it defers to stock
+flash_mla. So the `.pth` is safe to ship image-wide.
+
+Artifacts: `scripts/patches/dockerfile-dsv4-flashmla.patch` (bakes kernel +
+`.pth` at build), `sglang_launch.sh` (writes `dsv4_autopatch.py` + `.pth` at
+runtime — no rebuild needed), recipe knobs `FLASH_MLA_*` / `DSV4_KERNEL_*` in
+`scripts/patches/sglang-0.5.12-sm121.recipe`.
+
 ---
 
 ## What we actually run: `sgl-project/DeepSeek-V4-Flash-FP8`
@@ -248,13 +337,19 @@ FP8 paths directly — **#25733/#26063** (single-token-decode garbled text via
 **#25646/#26072** (HiSparse GSM8K accuracy 0.825→0.960). See
 `SGLANG_v0.5.12.post1_VERSION_CHANGES.md`.
 
-**Remaining risk (untested):** the profile is first-contact. Flash serving is
-still being stabilized upstream — [#25165](https://github.com/sgl-project/sglang/issues/25165)
-(main "broke" with V4-Flash deployment), [#23743](https://github.com/sgl-project/sglang/issues/23743)
-(Flash GB200 serving fixes tracker), [#25526](https://github.com/sgl-project/sglang/issues/25526)
-(Flash + HiCache piecewise CUDA graph), [#26647](https://github.com/sgl-project/sglang/issues/26647)
-(Mooncake HiCache + Flash hybrid cache). Expect possible further first-contact
-issues past model load.
+**Status — end-to-end verified 2026-05-31.** With walls 1–7 + the §7 FlashMLA
+hook in place, the 4×GB10 deployment loads, serves, and **decodes coherent
+output** (correct factual answer, `200 OK`, clean token distribution) — confirmed
+by a real `/v1/completions` request at TP=4. The earlier "expect issues past
+model load" warning was correct: walls 6, 7 and §7 all surfaced only on the first
+forward, past `Uvicorn running`. Subsequent first-contact risk is lower but not
+zero — Flash serving is still stabilizing upstream
+([#25165](https://github.com/sgl-project/sglang/issues/25165) main "broke" with
+V4-Flash, [#23743](https://github.com/sgl-project/sglang/issues/23743) GB200
+serving tracker, [#25526](https://github.com/sgl-project/sglang/issues/25526)
+HiCache piecewise CUDA graph, [#26647](https://github.com/sgl-project/sglang/issues/26647)
+Mooncake HiCache hybrid cache) — features we don't enable (HiCache, MTP/EAGLE,
+PD-disagg) may surface new walls if turned on.
 
 ---
 

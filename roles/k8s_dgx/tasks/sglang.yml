@@ -60,6 +60,9 @@
         # paged_mqa_logits→torch. Without these, V4 asserts "Unsupported architecture".
         SGLANG_OPT_DEEPGEMM_HC_PRENORM: "{{ '1' if sglang_opt_deepgemm_hc_prenorm | bool else '0' }}"
         SGLANG_FP8_PAGED_MQA_LOGITS_TORCH: "{{ '1' if sglang_fp8_paged_mqa_logits_torch | bool else '0' }}"
+        # C4-indexer top-k transform: TVM jit topk_transform_512_v2 dies on sm_121
+        # (topk_v2.cuh:472 CUDA error: invalid argument) at decode → torch fallback.
+        SGLANG_TOPK_TRANSFORM_512_TORCH: "{{ '1' if sglang_topk_transform_512_torch | bool else '0' }}"
         SGLANG_LOAD_FORMAT: "{{ sglang_load_format }}"
         SGLANG_WEIGHT_LOADER_DISABLE_MMAP: "{{ sglang_weight_loader_disable_mmap | string | lower }}"
         SGLANG_WEIGHT_LOADER_DROP_CACHE_AFTER_LOAD: "{{ sglang_weight_loader_drop_cache_after_load | string | lower }}"
@@ -298,7 +301,7 @@
               k8s.v1.cni.cncf.io/networks: "{{ '[{\"name\":\"qsfp-vf' ~ qsfp_sriov_assignments.sglang.vf ~ '\",\"ips\":[\"' ~ _sglang_qsfp_ips[worker_rank] ~ '/24\"]}]' if qsfp_sriov_enabled | default(false) else 'qsfp-direct-worker' ~ worker_rank }}"
               kubectl.kubernetes.io/default-container: sglang
               checksum/launch-script: "{{ lookup('file', role_path ~ '/files/sglang_launch.sh') | hash('sha256') }}"
-              checksum/config: "{{ (sglang_model ~ sglang_context_length ~ sglang_kv_cache_dtype ~ sglang_mem_fraction_static ~ sglang_quantization ~ sglang_load_format ~ sglang_attention_backend ~ sglang_ep ~ sglang_tp ~ sglang_pp) | hash('sha256') }}"
+              checksum/config: "{{ (sglang_model ~ sglang_context_length ~ sglang_kv_cache_dtype ~ sglang_mem_fraction_static ~ sglang_quantization ~ sglang_load_format ~ sglang_attention_backend ~ sglang_ep ~ sglang_tp ~ sglang_pp ~ sglang_topk_transform_512_torch) | hash('sha256') }}"
           spec:
             enableServiceLinks: false         # prevent K8s SGLANG_PORT=tcp://... injection
             hostIPC: true                    # shared memory for NCCL
@@ -445,7 +448,7 @@
               k8s.v1.cni.cncf.io/networks: "{{ '[{\"name\":\"qsfp-vf' ~ qsfp_sriov_assignments.sglang.vf ~ '\",\"ips\":[\"' ~ qsfp_sriov_assignments.sglang.head_ip ~ '/24\"]}]' if qsfp_sriov_enabled | default(false) else 'qsfp-direct' }}"
               kubectl.kubernetes.io/default-container: sglang
               checksum/launch-script: "{{ lookup('file', role_path ~ '/files/sglang_launch.sh') | hash('sha256') }}"
-              checksum/config: "{{ (sglang_model ~ sglang_context_length ~ sglang_kv_cache_dtype ~ sglang_mem_fraction_static ~ sglang_quantization ~ sglang_load_format ~ sglang_attention_backend ~ sglang_ep ~ sglang_tp ~ sglang_pp) | hash('sha256') }}"
+              checksum/config: "{{ (sglang_model ~ sglang_context_length ~ sglang_kv_cache_dtype ~ sglang_mem_fraction_static ~ sglang_quantization ~ sglang_load_format ~ sglang_attention_backend ~ sglang_ep ~ sglang_tp ~ sglang_pp ~ sglang_topk_transform_512_torch) | hash('sha256') }}"
           spec:
             serviceAccountName: sglang-head
             enableServiceLinks: false         # prevent K8s SGLANG_PORT=tcp://... injection

@@ -155,9 +155,15 @@ sglang_opt_fp8_wo_a_gemm: "{{ sglang_model_profiles[sglang_model].opt_fp8_wo_a_g
 #  - fp8_paged_mqa_logits_torch=true → SGLANG_FP8_PAGED_MQA_LOGITS_TORCH=1: torch
 #    fallback for the DSA Lightning-Indexer paged_mqa_logits kernel (the next
 #    wall, at decode). Slower than the kernel but correct on SM121.
-# Defaults match upstream (hc_prenorm on, mqa_logits_torch off); V4-Flash flips both.
+#  - topk_transform_512_torch=true → SGLANG_TOPK_TRANSFORM_512_TORCH=1: torch
+#    fallback (topk_transform_512_pytorch_vectorized) for the C4-indexer top-k
+#    transform. The TVM jit kernel topk_transform_512_v2 (SGLANG_OPT_USE_TOPK_V2,
+#    default-on) dies on sm_121 with `topk_v2.cuh:472 CUDA error: invalid
+#    argument` at decode. The torch branch is checked BEFORE the v2 branch.
+# Defaults match upstream (hc_prenorm on, the torch fallbacks off); V4-Flash flips them.
 sglang_opt_deepgemm_hc_prenorm: "{{ sglang_model_profiles[sglang_model].opt_deepgemm_hc_prenorm | default(true) }}"
 sglang_fp8_paged_mqa_logits_torch: "{{ sglang_model_profiles[sglang_model].fp8_paged_mqa_logits_torch | default(false) }}"
+sglang_topk_transform_512_torch: "{{ sglang_model_profiles[sglang_model].topk_transform_512_torch | default(false) }}"
 # FP4 GEMM backend: "auto" (default), "flashinfer_cudnn", "cutlass".
 # Controls the GEMM kernel for W4A4 (FP4) quantized models. Not relevant for
 # AWQ (W4A16) or FP8 models — those use FP16/FP8 GEMM paths respectively.

@@ -58,8 +58,8 @@ _model_profile:
     # KV cache headroom matters because MTP draft tokens add per-batch slack.
     # Raise to 262144 / 524288 / 1048576 after the n=1 baseline confirms KV
     # cache fits at the chosen mem_fraction_static.
-    context_length: 128
-    load_format: "sharded_state"
+    context_length: 131072
+    load_format: "auto"
     # 131072
     # quantization: auto-detected from checkpoint (quant_method=fp8 block-wise,
     # ue8m0 scales) — NO explicit flag, same as zai-org/GLM-4.7-FP8. Do NOT set
@@ -107,6 +107,11 @@ _model_profile:
     # Independent of disable_deep_gemm (that's the JIT-MoE DeepGEMM switch).
     opt_deepgemm_hc_prenorm: false
     fp8_paged_mqa_logits_torch: true
+    # C4-indexer top-k transform: the TVM jit kernel topk_transform_512_v2
+    # (SGLANG_OPT_USE_TOPK_V2, default-on) dies on sm_121 at decode with
+    # `topk_v2.cuh:472 CUDA error: invalid argument`. Route to the torch fallback
+    # (topk_transform_512_pytorch_vectorized), checked before the v2 branch.
+    topk_transform_512_torch: true
     disable_deep_gemm: true
     disable_cuda_graph: true
     disable_piecewise_cuda_graph: true
@@ -151,4 +156,4 @@ _model_profile:
     speculative_eagle_topk: 1
     speculative_num_draft_tokens: 2
     sglang_image: "xomoxcc/dgx-spark-sglang:0.5.12.post1-sm121"
-    memory_request: "100g"
+    memory_request: "100Gi"

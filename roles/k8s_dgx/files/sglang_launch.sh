@@ -963,6 +963,40 @@ else
   echo "DeepseekV3Config kv_lora_rank patch: not needed or already applied, skipping"
 fi
 
+# DeepSeek-V4-Flash C4-indexer torch-fallback seq_lens shape fix (SM121).
+# With SGLANG_FP8_PAGED_MQA_LOGITS_TORCH=1 (our profile — DeepGEMM ships no sm_121
+# paged_mqa_logits kernel, §6) forward_c4_indexer() unconditionally unsqueezes
+# c4_seq_lens to 2-D (batch,1) for the deep_gemm/tilelang kernels, but the torch
+# fallback fp8_paged_mqa_logits_torch() asserts 1-D `seq_lens.shape==(batch_size,)`
+# → AssertionError on the FIRST multi-token forward (not just EAGLE). Squeeze a
+# trailing singleton before the assert (no-op when already 1-D). This is sglang's
+# own gap: the vendored 0xSero _patch_sglang_indexer_fallbacks targets the OLD
+# nsa/compressed module paths and does NOT apply on v0.5.12.post1 (the indexer
+# moved to attention/dsv4/indexer.py). See UPSTREAM_DSV4_BUGS.md §6.
+DSV4_INDEXER="/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/attention/dsv4/indexer.py"
+if [ -f "$DSV4_INDEXER" ] && grep -q '    assert seq_lens.shape == (batch_size,)' "$DSV4_INDEXER"; then
+  python3 << 'PATCH_DSV4_INDEXER_EOF'
+f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/attention/dsv4/indexer.py"
+with open(f) as fh:
+    code = fh.read()
+old = "    assert seq_lens.shape == (batch_size,)\n"
+new = ("    if seq_lens.dim() == 2 and seq_lens.shape[-1] == 1:\n"
+       "        seq_lens = seq_lens.squeeze(-1)\n"
+       "    assert seq_lens.shape == (batch_size,)\n")
+if new in code:
+    print("DSV4 indexer seq_lens patch: already applied, skipping")
+elif old not in code:
+    print("DSV4 indexer seq_lens patch: marker not found, skipping")
+else:
+    code = code.replace(old, new, 1)
+    with open(f, "w") as fh:
+        fh.write(code)
+    print("Patched dsv4/indexer.py: fp8_paged_mqa_logits_torch tolerates 2-D seq_lens")
+PATCH_DSV4_INDEXER_EOF
+else
+  echo "DSV4 indexer seq_lens patch: not needed or already applied, skipping"
+fi
+
 # DeepSeek-V4-Flash FlashMLA sparse-decode hook activation (sm_121a / GB10).
 # The image bakes deepseek_v4_kernel, but its sitecustomize.py is SHADOWED:
 # Ubuntu ships /usr/lib/python3.12/sitecustomize.py (apport) earlier on sys.path,
