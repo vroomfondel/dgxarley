@@ -3,7 +3,7 @@
 # ~ $ curl -s https://api.github.com/repos/k3s-io/k3s/releases | jq -r '.[0].tag_name'
 # v1.35.4+k3s1
 
-k3s_version: "v1.36.0+k3s1"
+k3s_version: "v1.36.1+k3s1"
 
 k3s_node_ip: "{{ ansible_facts.default_ipv4.address }}"
 
@@ -14,10 +14,12 @@ kubelet_image_gc_high_threshold: 95
 kubelet_image_gc_low_threshold: 90
 kubelet_image_minimum_gc_age: "24h"
 
-# Kubelet eviction thresholds — values below are the upstream kubelet defaults,
-# set explicitly so they are visible/tunable (e.g. a buildah/HF-cache spike on a
-# spark briefly dipping nodefs<10% triggers a DiskPressure taint + pod eviction).
-kubelet_eviction_hard: "memory.available<100Mi,nodefs.available<10%,nodefs.inodesFree<5%,imagefs.available<15%,imagefs.inodesFree<5%"
+# Kubelet eviction thresholds — *.available lowered from the upstream defaults
+# (nodefs<10%, imagefs<15%) to 2% so a buildah/HF-cache/weight spike on a spark
+# (1.8T disk, only ~15% free) no longer trips a DiskPressure taint + pod eviction.
+# inodesFree kept at the 5% upstream default. Restore defaults by reverting to:
+# "memory.available<100Mi,nodefs.available<10%,nodefs.inodesFree<5%,imagefs.available<15%,imagefs.inodesFree<5%"
+kubelet_eviction_hard: "memory.available<100Mi,nodefs.available<2%,nodefs.inodesFree<5%,imagefs.available<2%,imagefs.inodesFree<5%"
 kubelet_eviction_pressure_transition_period: "5m"
 
 # Node swap (KEP-2400, GA since k8s 1.30 — we run 1.36). OFF by default; enable
