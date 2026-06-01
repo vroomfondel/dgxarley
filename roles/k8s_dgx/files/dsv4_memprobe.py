@@ -30,53 +30,117 @@ if os.environ.get("DSV4_MEMPROBE", "0") in ("1", "true", "yes"):
     import importlib.abc
     import importlib.util
 
-    def _meminfo() -> tuple[float, float, float, float]:
-        a = r = -1.0
+    # Full snapshot to find the swap-out TRIGGER: which memory category grows
+    # while anon swaps out. torch's allocator view (cuda_alloc) is NOT enough on
+    # unified memory — NCCL/driver/other allocations show only in the device
+    # mem_get_info(used) and in the /proc/meminfo categories. /proc/vmstat gives
+    # the real swap-out + reclaim counters (diff across ticks for rates). Values
+    # in GB except *_ctr (raw cumulative page counters).
+    def _snap() -> "dict[str, float]":
+        d: "dict[str, float]" = {}
         try:
             import torch
 
-            a = torch.cuda.memory_allocated() / 1e9
-            r = torch.cuda.memory_reserved() / 1e9
+            free, total = torch.cuda.mem_get_info()
+            d["cuda_alloc"] = torch.cuda.memory_allocated() / 1e9
+            d["cuda_resv"] = torch.cuda.memory_reserved() / 1e9
+            d["dev_used"] = (total - free) / 1e9  # whole-device used (incl NCCL/driver/other)
+            d["dev_free"] = free / 1e9
         except Exception:
-            pass
-        rss = swap = -1.0
-        try:
-            for ln in open("/proc/self/status"):
-                if ln.startswith("VmRSS:"):
-                    rss = int(ln.split()[1]) / 1e6
-                    break
-        except Exception:
-            pass
+            d.update(cuda_alloc=-1.0, cuda_resv=-1.0, dev_used=-1.0, dev_free=-1.0)
         try:
             mi = {}
             for ln in open("/proc/meminfo"):
                 k, v = ln.split(":", 1)
-                mi[k] = int(v.split()[0])
-            swap = (mi["SwapTotal"] - mi["SwapFree"]) / 1e6
+                mi[k] = int(v.split()[0])  # kB
+
+            def gb(key: str) -> float:
+                return mi.get(key, 0) / 1024.0 / 1024.0
+
+            d.update(
+                memfree=gb("MemFree"),
+                cached=gb("Cached"),
+                anon=gb("AnonPages"),
+                mapped=gb("Mapped"),
+                shmem=gb("Shmem"),
+                srecl=gb("SReclaimable"),
+                sunrecl=gb("SUnreclaim"),
+                pagetbl=gb("PageTables"),
+                swapused=(mi.get("SwapTotal", 0) - mi.get("SwapFree", 0)) / 1024.0 / 1024.0,
+            )
         except Exception:
             pass
-        return a, r, rss, swap
+        try:
+            vs = {}
+            for ln in open("/proc/vmstat"):
+                p = ln.split()
+                if len(p) == 2:
+                    vs[p[0]] = int(p[1])
+            d["pswpout_ctr"] = vs.get("pswpout", 0)
+            d["pgst_kswapd_ctr"] = vs.get("pgsteal_kswapd", 0)
+            d["pgst_direct_ctr"] = vs.get("pgsteal_direct", 0)
+        except Exception:
+            pass
+        try:
+            for ln in open("/proc/self/status"):
+                if ln.startswith("VmSwap:"):
+                    d["self_vmswap"] = int(ln.split()[1]) / 1024.0 / 1024.0
+                    break
+        except Exception:
+            pass
+        return d
+
+    _ORDER = [
+        "cuda_alloc",
+        "cuda_resv",
+        "dev_used",
+        "dev_free",
+        "memfree",
+        "cached",
+        "anon",
+        "mapped",
+        "shmem",
+        "srecl",
+        "sunrecl",
+        "pagetbl",
+        "swapused",
+        "self_vmswap",
+        "pswpout_ctr",
+        "pgst_kswapd_ctr",
+        "pgst_direct_ctr",
+    ]
+
+    def _fmt(d: "dict[str, float]") -> str:
+        out = []
+        for k in _ORDER:
+            v = d.get(k)
+            if v is None:
+                continue
+            out.append(("%s=%d" % (k, v)) if k.endswith("_ctr") else ("%s=%.2f" % (k, v)))
+        return " ".join(out)
 
     def _emit(tag: str) -> None:
-        a, r, rss, sw = _meminfo()
-        sys.stderr.write(
-            "[memprobe] %-40s cuda_alloc=%7.2fG cuda_resv=%7.2fG rss=%7.2fG node_swap=%7.2fG\n" % (tag, a, r, rss, sw)
-        )
+        sys.stderr.write("[memprobe] %-40s %s\n" % (tag, _fmt(_snap())))
         sys.stderr.flush()
 
     _ticking = threading.Event()
 
     def _ticker() -> None:
-        la = lr = -99.0
+        # Detailed line every ~1.5s (whole NCCL-phase trajectory lands in Loki),
+        # plus immediately on a >0.5G cuda or >1G swap move. Runs only in the
+        # loading process (started from the load_model wrapper).
+        n = 0
+        lca = lsw = -99.0
         while True:
-            a, r, rss, sw = _meminfo()
-            if abs(a - la) > 0.5 or abs(rss - lr) > 0.5:
-                sys.stderr.write(
-                    "[memprobe.tick] cuda_alloc=%7.2fG cuda_resv=%7.2fG rss=%7.2fG node_swap=%7.2fG\n" % (a, r, rss, sw)
-                )
+            d = _snap()
+            n += 1
+            ca = d.get("cuda_alloc", -1.0)
+            sw = d.get("swapused", -1.0)
+            if n % 3 == 0 or abs(ca - lca) > 0.5 or abs(sw - lsw) > 1.0:
+                sys.stderr.write("[memprobe.tick] %s\n" % _fmt(d))
                 sys.stderr.flush()
-                la, lr = a, rss
-            time.sleep(0.2)
+                lca, lsw = ca, sw
+            time.sleep(0.5)
 
     def _start_ticker_once() -> None:
         if not _ticking.is_set():
