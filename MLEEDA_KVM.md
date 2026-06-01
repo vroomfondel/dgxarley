@@ -4,10 +4,10 @@
 
 The MLEEDA KVM has a **3-pin RS232 screw terminal block** labeled:
 
-| Pin | Function |
-|-----|----------|
-| **R** | Receive (RX) |
-| **G** | Ground |
+| Pin   | Function      |
+|-------|---------------|
+| **R** | Receive (RX)  |
+| **G** | Ground        |
 | **T** | Transmit (TX) |
 
 ## Connecting to a Raspberry Pi via USB
@@ -19,10 +19,10 @@ The MLEEDA KVM has a **3-pin RS232 screw terminal block** labeled:
 
 Wiring (crossed, like null modem):
 
-| KVM Terminal | DB9 Pin |
-|--------------|---------|
-| **T** (TX)   | Pin 2 (RX) |
-| **R** (RX)   | Pin 3 (TX) |
+| KVM Terminal | DB9 Pin     |
+|--------------|-------------|
+| **T** (TX)   | Pin 2 (RX)  |
+| **R** (RX)   | Pin 3 (TX)  |
 | **G** (GND)  | Pin 5 (GND) |
 
 ### Option B: USB-to-RS232 adapter with bare wire ends
@@ -48,13 +48,13 @@ RX:  AA BB 03 11 <value> EE
 
 ### Commands
 
-| Cmd    | Value           | Action                        |
-|--------|-----------------|-------------------------------|
-| `0x01` | `0x01`–`0x0A`  | Switch to port 1–10           |
-| `0x10` | `0x00`          | Query current active port     |
-| `0x02` | `0x00` / `0x01` | Buzzer off / on               |
+| Cmd    | Value                    | Action                         |
+|--------|--------------------------|--------------------------------|
+| `0x01` | `0x01`–`0x0A`            | Switch to port 1–10            |
+| `0x10` | `0x00`                   | Query current active port      |
+| `0x02` | `0x00` / `0x01`          | Buzzer off / on                |
 | `0x03` | `0x00` / `0x0A` / `0x1E` | LCD timeout: never / 10s / 30s |
-| `0x81` | `0x00` / `0x01` | Input auto-detection off / on |
+| `0x81` | `0x00` / `0x01`          | Input auto-detection off / on  |
 
 ### Example: Switch to port 3
 

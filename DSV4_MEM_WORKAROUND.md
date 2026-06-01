@@ -81,14 +81,14 @@ immediately-prior container and is lost across a crash-loop).
 
 ## 3. What we ruled out (each by measurement)
 
-| Hypothesis | Test | Result |
-|---|---|---|
-| CUDA / device memory doubles | `torch.cuda` snapshot | 93 GB clean (weights+KV), **0 inactive/transient**. `cuda_alloc` flat at 73 GB through the whole swap window. **Not CUDA.** |
-| Buffered loader never frees cache | read `weight_utils.py` | True code gap: `buffered_multi_thread_safetensors_weights_iterator` accepts `drop_cache_after_load` but **never calls it** (the single-thread + non-buffered iterators do). But… |
-| …so single-thread (which *does* drop) fixes it | `-e ...extra_config={"enable_multithread_load":false}` | **Same** swap (~54 GB). Drop-cache gap is real but **not** the lever. |
-| Disable mmap (read into anon) | `weight_loader_disable_mmap=true` | **Worse — OOM** (`c10::Error`). Anon read buffers are non-reclaimable; mmap (file-backed, reclaimable/swappable) is the *survivable* path. |
-| Lower swappiness / make pod BestEffort | (rejected) | swappiness=100 is intentional; the swap is real demand, not elective — confirmed below. |
-| `fastsafetensors` as-is | `load_format=fastsafetensors` | **Crash** — `Gloo connectFullMesh timeout`: sglang's wrapper does a `WORLD`-collective load onto `cuda:{world_rank}` (invalid on 1-GPU worker nodes). Needs patching (§5). |
+| Hypothesis                                     | Test                                                   | Result                                                                                                                                                                           |
+|------------------------------------------------|--------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| CUDA / device memory doubles                   | `torch.cuda` snapshot                                  | 93 GB clean (weights+KV), **0 inactive/transient**. `cuda_alloc` flat at 73 GB through the whole swap window. **Not CUDA.**                                                      |
+| Buffered loader never frees cache              | read `weight_utils.py`                                 | True code gap: `buffered_multi_thread_safetensors_weights_iterator` accepts `drop_cache_after_load` but **never calls it** (the single-thread + non-buffered iterators do). But… |
+| …so single-thread (which *does* drop) fixes it | `-e ...extra_config={"enable_multithread_load":false}` | **Same** swap (~54 GB). Drop-cache gap is real but **not** the lever.                                                                                                            |
+| Disable mmap (read into anon)                  | `weight_loader_disable_mmap=true`                      | **Worse — OOM** (`c10::Error`). Anon read buffers are non-reclaimable; mmap (file-backed, reclaimable/swappable) is the *survivable* path.                                       |
+| Lower swappiness / make pod BestEffort         | (rejected)                                             | swappiness=100 is intentional; the swap is real demand, not elective — confirmed below.                                                                                          |
+| `fastsafetensors` as-is                        | `load_format=fastsafetensors`                          | **Crash** — `Gloo connectFullMesh timeout`: sglang's wrapper does a `WORLD`-collective load onto `cuda:{world_rank}` (invalid on 1-GPU worker nodes). Needs patching (§5).       |
 
 Also established: the 73 GB weights are **device-managed and do NOT appear in the
 process's `/proc` RSS** (steady-state RSS ~3 GB). So the bytes that swap during
@@ -140,11 +140,11 @@ breaks on our cluster. A launch-time source patch (in `sglang_launch.sh`,
 alongside the existing kv_lora / indexer patches; inert unless
 `load_format=fastsafetensors`) rewrites the three offending lines:
 
-| sglang default (broken here) | patched |
-|---|---|
-| `pg = torch.distributed.group.WORLD` | `pg = SingleGroup()` — each rank loads its files **independently**; no cross-node collective → no `Gloo connectFullMesh` timeout |
+| sglang default (broken here)            | patched                                                                                                                                                                                                                       |
+|-----------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `pg = torch.distributed.group.WORLD`    | `pg = SingleGroup()` — each rank loads its files **independently**; no cross-node collective → no `Gloo connectFullMesh` timeout                                                                                              |
 | `device = torch.device(f"cuda:{rank}")` | `device = torch.device("cuda", torch.cuda.current_device())` — the **local** device with an explicit index (bare `"cuda"` is rejected by fastsafetensors' `set_device`; `cuda:{world_rank}` is invalid on 1-GPU worker nodes) |
-| `SafeTensorsFileLoader(pg, device)` | `SafeTensorsFileLoader(pg, device, nogds=True)` — bounce-buffer streaming (no GDS) |
+| `SafeTensorsFileLoader(pg, device)`     | `SafeTensorsFileLoader(pg, device, nogds=True)` — bounce-buffer streaming (no GDS)                                                                                                                                            |
 
 TP sharding is unchanged: each rank reads the full tensors and the existing
 per-parameter `weight_loader` slices its TP portion — exactly as the normal
@@ -158,13 +158,13 @@ pattern.)
 
 memprobe trace, default mmap loader vs patched fastsafetensors (head node):
 
-| metric | default (mmap, buffered) | **patched fastsafetensors** |
-|---|---|---|
-| `cached` (shard mmap) | ~28 GB | **~10 GB** |
-| `dev_used` peak | ~128 GB | ~103–128 GB |
-| **`swapused` during load** | **~50–65 GB** | **~3 GB (baseline — no load swap)** |
-| pod restarts | (rode swap; transient) | **0** |
-| failure mode w/o swap | OOM | n/a (no swap needed) |
+| metric                     | default (mmap, buffered) | **patched fastsafetensors**         |
+|----------------------------|--------------------------|-------------------------------------|
+| `cached` (shard mmap)      | ~28 GB                   | **~10 GB**                          |
+| `dev_used` peak            | ~128 GB                  | ~103–128 GB                         |
+| **`swapused` during load** | **~50–65 GB**            | **~3 GB (baseline — no load swap)** |
+| pod restarts               | (rode swap; transient)   | **0**                               |
+| failure mode w/o swap      | OOM                      | n/a (no swap needed)                |
 
 The swap line stays flat at the ~3 GB baseline across the **entire** load,
 instead of climbing to ~50 GB. The host-side checkpoint pileup that memray/smaps
@@ -195,12 +195,12 @@ Prerequisite: `fastsafetensors` must be in the image (it is — v0.3.2).
 
 ## 8. Files
 
-| File | Change |
-|---|---|
+| File                                   | Change                                                                                                                                                                                                           |
+|----------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `roles/k8s_dgx/files/sglang_launch.sh` | launch-time source patch of `fastsafetensors_weights_iterator` (SingleGroup + local device-with-index + `nogds=True`); also writes/activates the memprobe `.pth` + `pip install memray` when `SGLANG_MEMPROBE=1` |
-| `roles/k8s_dgx/files/dsv4_memprobe.py` | the reusable probe (CUDA history + memray + smaps + stack sampler + meminfo categories), env-gated |
-| `roles/k8s_dgx/tasks/sglang.yml` | `SGLANG_MEMPROBE` / `SGLANG_MODEL_LOADER_EXTRA_CONFIG` env, probe file in the launch ConfigMap, checksum wiring |
-| `roles/k8s_dgx/defaults/main.yml` | `sglang_memprobe` default |
+| `roles/k8s_dgx/files/dsv4_memprobe.py` | the reusable probe (CUDA history + memray + smaps + stack sampler + meminfo categories), env-gated                                                                                                               |
+| `roles/k8s_dgx/tasks/sglang.yml`       | `SGLANG_MEMPROBE` / `SGLANG_MODEL_LOADER_EXTRA_CONFIG` env, probe file in the launch ConfigMap, checksum wiring                                                                                                  |
+| `roles/k8s_dgx/defaults/main.yml`      | `sglang_memprobe` default                                                                                                                                                                                        |
 
 Reusable diagnostics worth keeping: the memprobe (both-layer + stack sampler +
 smaps), and querying Loki for historical/crashed-container logs.
