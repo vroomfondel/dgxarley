@@ -4,10 +4,12 @@
 # (62 layers, hidden 3072, 256 experts / 8 active, num_key_value_heads=8). UNLIKE the
 # M2.5 lineage (which ran PP=4/TP=1), this profile runs TP=4/PP=1: 8 KV heads divide
 # cleanly by 4 (2 per rank), so tensor parallelism is viable and drops the pipeline
-# bubbles. The empirical tuning values below (triton MoE, eager, flashinfer attn/fp4,
-# mem_fraction, cuda_graph_max_bs) were measured on the M2.5 *PP=4* SM121 TESTLOGS and
-# are NOT yet re-measured for M2.7 on TP=4 — treat as placeholder defaults pending the
-# sglang_nn4_tp4_ep1 matrix run (which exists to re-decide exactly these axes).
+# bubbles. The MoE-runner and CUDA-graph axes were RE-MEASURED for M2.7 on TP=4 by
+# the sglang_nn4_tp4_ep1 matrix (2026-06-01, sglang-0.5.12.post1) — winner is
+# flashinfer_cutlass MoE + flashinfer attn + fi_cutlass FP4 + piecewise CUDA graph.
+# See TESTLOGS/sglang_nn4_tp4_ep1/minimax-m2.7-nvfp4/TESTLOG_nv580.159_sglang-0.5.12.post1_minimax-m2.7-nvfp4_4n.md.
+# The remaining values inherited from the M2.5 PP=4 logs (mem_fraction, cuda_graph_max_bs,
+# kv_cache_dtype) were NOT specifically swept and stand as reasonable defaults.
 _model_profile:
   "nvidia/MiniMax-M2.7-NVFP4":
     info_url: "https://huggingface.co/nvidia/MiniMax-M2.7-NVFP4"
@@ -46,14 +48,18 @@ _model_profile:
     # Without it, transformers refuses to load the model class. Safe here because
     # the code comes from NVIDIA's official nvidia/MiniMax-M2.7-NVFP4 repo.
     trust_remote_code: true
-    # triton MoE inherited from the PP=4 winner. CAVEAT: the "fi_cutlass MoE crashes
-    # (Xid 13, all 16 PP=4 tests 17–32 failed)" finding was PP-specific. On TP=4,
-    # flashinfer_cutlass is the NVIDIA model-card recommended MoE backend and the
-    # proven NVFP4 path on our other TP models (qwen3-235b, glm-4.7) — so it is a
-    # winner-candidate here, NOT a known crash. The TP=4 matrix (Block A fi_cutlass
-    # vs Block B triton) decides; switch this to flashinfer_cutlass if A wins.
-    # PP=4 reference winner: triton moe + fi attn + fi_cutlass fp4 + eager → 63.9 tok/s at 8∥.
-    moe_runner_backend: "triton"
+    # flashinfer_cutlass MoE — RESOLVED by the TP=4 matrix (2026-06-01,
+    # sglang-0.5.12.post1, see TESTLOGS/sglang_nn4_tp4_ep1/minimax-m2.7-nvfp4/).
+    # Block A (fi_cutlass) won: top n8 peak 136–139 tok/s, stable across all CG
+    # variants. The old "fi_cutlass MoE crashes (Xid 13, PP=4 tests 17–32)" caveat
+    # was a pipeline-stage interaction and does NOT apply on TP=4/PP=1 — fi_cutlass
+    # is the NVIDIA model-card MoE backend and the proven NVFP4 path on our other TP
+    # models (qwen3-235b, glm-4.7). Block B (triton) tied within ~3% but lost on
+    # single-stream latency. PROBES both crashed at startup: flashinfer_trtllm
+    # (sm100-only batched-GEMM, no sm121 kernel) and cutlass-direct (MoeRunner
+    # NotImplementedError) — do not use either. PP=4 ref (superseded): triton moe +
+    # eager → 63.9 tok/s at 8∥.
+    moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
     mem_fraction_static: "0.80"
     # mem_fraction_static: "0.40"  # for speculative_enabled=true
@@ -64,14 +70,19 @@ _model_profile:
     # lower throughput (Test 9: 48.9 vs Test 1: 61.2 at 8∥).
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 4
-    # Piecewise CUDA graphs OOM'd on PP (58 chunks × 256 experts per stage) — a
-    # PP-only failure. On TP=4/PP=1 there are no stages, so piecewise is viable; this
-    # PP-inherited disable is re-evaluated by the matrix CG-sweep (no-CG/piecewise/full).
-    disable_piecewise_cuda_graph: true
-    # Eager inherited from the PP=4 winner (eager won there because pipeline bubbles
-    # dominated). On TP=4/PP=1 that rationale is gone — CUDA graphs may well win, so
-    # the matrix re-decides. PP=4 ref: eager 63.9 vs full-CG 61.2 tok/s at 8∥.
-    disable_cuda_graph: true
+    # Piecewise CUDA graph ENABLED — RESOLVED by the TP=4 matrix. The PP=4 OOM
+    # ("58 chunks × 256 experts per stage") was a pipeline-stage failure; on
+    # TP=4/PP=1 there are no stages, so piecewise is viable and was the best
+    # all-rounder (case 02: n8 peak 136.0, n1 35.9 tok/s @ 0.42s TTFT, 8/8 clean
+    # at every concurrency level). Both eager (no-CG) cases paid a huge cold-start
+    # penalty — 11.9s (fi_cutlass) / 67s (triton) n1 TTFT — so eager is OUT here.
+    disable_piecewise_cuda_graph: false
+    # CUDA graph ENABLED (was eager, PP=4-inherited). On TP=4/PP=1 the pipeline-bubble
+    # rationale for eager is gone and the matrix confirmed piecewise CG wins on
+    # latency at parity throughput. PP=4 ref (superseded): eager 63.9 vs full-CG 61.2
+    # at 8∥. NB: full-CG (case 03) edged n1 but flaked 1/8 at n8; piecewise had zero
+    # fails — hence piecewise, not full-CG.
+    disable_cuda_graph: false
     cuda_graph_max_bs: 16
     pp_async_batch_depth: 0  # no-op at PP=1 (no pipeline stages). PP=4 ref: pp_async hurt throughput (50.0 vs 63.9).
     # DeepGemm is designed for FP8 with ue8m0 scale format. For NVFP4 models
