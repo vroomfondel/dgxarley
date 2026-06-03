@@ -1,39 +1,129 @@
 # Model profile: nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4
 # Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+#
+# UPDATED 2026-06-02 — modernized from the original 0.5.x-era stub against the
+# current HF model card + config.json and the newer model_profile schema keys
+# (tp_size/pp, fp4_gemm_backend, disable_piecewise_cuda_graph, mamba_scheduler_strategy,
+# enable_spec_v2, native MTP block). Architecture facts below are from config.json;
+# the tuning values are reasonable defaults and are NOT yet validated by a test
+# matrix on this cluster — treat as first-contact (no TESTLOG exists yet).
+#
+# >>> IMAGE CAVEAT <<<  The model card serves this model on a DEDICATED SGLang
+# dev image (lmsysorg/sglang:dev-cu13-nemotronh-nano-omni-reasoning-v3). Mainline
+# SGLang 0.5.12 / our xomoxcc-sm121 build may NOT yet carry the NemotronHForCausalLM
+# NVFP4 path. First boot is the litmus test — if SGLang rejects the arch or the
+# mamba kernels, we need a per-profile `sglang_image:` override (see TODO_0.5.12 §
+# "Pro Modellprofil sglang_image überschreiben") before this profile is usable.
 _model_profile:
   "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4":
     info_url: "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
-    # 120B/12B LatentMoE (Mamba2-Transformer hybrid), NVFP4 quantized (~67 GB weights).
-    # Fits on 1× DGX Spark (128 GB) with ~61 GB free for KV cache — no multi-node needed.
-    # Context: 256K default, up to 1M with SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1.
-    # Reasoning ON/OFF via chat_template_kwargs: enable_thinking (true/false), low_effort (true/false).
-    # Multi-Token Prediction (MTP) enables native speculative decoding.
+    # 120B total / 12B active LatentMoE — Mamba2 + MoE + select-attention HYBRID
+    # (NemotronHForCausalLM, model_type=nemotron_h). config.json: 88 layers,
+    # hidden_size 4096, 32 attention heads, num_key_value_heads=2 (GQA),
+    # n_routed_experts=512 + 1 shared, num_experts_per_tok=22, moe_latent_size=1024
+    # (tokens projected to a latent dim for expert routing), ssm_state_size=128,
+    # mamba_num_heads=128. NVFP4 quantized (~67 GB weights, mixed precision:
+    # expert FFN weights = FP4 group_size 16, attention/latent-proj/MTP/embeddings
+    # = FP8/BF16 for stability).
+    # max_position_embeddings = 262144 (256K). The model card's "up to 1M" needs
+    # SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1 — do NOT raise context_length
+    # above 262144 without it.
+    # Reasoning ON/OFF + low-effort via chat_template_kwargs (enable_thinking /
+    # low_effort). Native Multi-Token Prediction (num_nextn_predict_layers=1,
+    # mtp_hybrid_override_pattern "*E") → speculative decoding, see MTP block below.
     # Supported languages: EN, FR, DE, IT, JA, ES, ZH.
-    # Recommended launch (NVIDIA model card):
-    #   sglang serve --model-path nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4 \
-    #     --trust-remote-code --reasoning-parser nemotron_3 --tool-call-parser qwen3_coder
-    # load_format: "sharded_state"
+    #
+    # Recommended SGLang launch (NVIDIA model card):
+    #   python3 -m sglang.launch_server --model-path nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4 \
+    #     --trust-remote-code --quantization modelopt_fp4 --mem-fraction-static 0.8 \
+    #     --max-running-requests 8 --reasoning-parser nemotron_3 \
+    #     --tool-call-parser qwen3_coder --disable-piecewise-cuda-graph
+    # NOTE: the card's reasoning parser is "nemotron_3" for SGLang (vLLM/TRT-LLM use
+    # the "super_v3"/"nano-v3" plugin instead — do not copy those here).
+    #
+    # load_format: "auto" (NVFP4 sharded_state is disabled — double-processes
+    # weights in process_weights_after_loading, eats ~4 GB headroom for no I/O win;
+    # same rationale as nvidia-minimax-m2.7-nvfp4.yml).
     load_format: "auto"
+    nccl_transport: "roce"
+    # PARALLELISM — TP=4 → PP = nnodes/tp = 4/4 = 1 (single TP group across all 4
+    # nodes, no pipeline stages). Cluster is fixed at sglang_nnodes=4; ~67 GB sharded
+    # over TP=4 → ~17 GB weights/GPU, leaving the bulk of 128 GB for KV. NB: with
+    # num_key_value_heads=2 and TP=4, SGLang REPLICATES each KV head across 2 ranks
+    # (4 % 2 == 0) — valid GQA behaviour, the same way our other low-KV-head MoE
+    # models run TP. NVIDIA's model card recommends TP=1/EP=1 (single GPU); TP=4/PP=1
+    # trades that for cluster-wide tensor parallelism (more KV, all-reduce traffic on
+    # RoCE). Alternative: tp_size: 1 → PP=4 keeps the 2 KV heads intact and matches the
+    # card's parallelism, at the cost of pipeline bubbles (see nvidia-glm-5-nvfp4.yml).
+    # Both paths are UNVALIDATED here.
+    tp_size: 4
     context_length: 262144
     quantization: "modelopt_fp4"
-    # moe_runner_backend: required with EP>1 on NVFP4. Without it, SGLang's
-    # auto-select falls through to cutlass_moe_fp4 which has an assertion bug
-    # ("Number of experts must match") with EP>1. flashinfer_cutlass bypasses
-    # this and correctly handles EP-partitioned expert weights.
-    # NVIDIA's Advanced Deployment Guide doesn't specify a backend, but uses
-    # EP=TP which implies the flashinfer path (same as MiniMax-M2.5-NVFP4).
-    moe_runner_backend: "flashinfer_cutlass"
+    # trust_remote_code: required — NemotronH ships custom model + tokenizer code in
+    # the HF repo that SGLang must execute. Safe: official nvidia/ repo.
     trust_remote_code: true
+    # flashinfer_cutlass MoE — the proven NVFP4 MoE path on our other NVIDIA NVFP4
+    # models (qwen3-235b, glm-4.7, minimax-m2.7). Model card does not pin a backend;
+    # this is the established default. UNVALIDATED on the LatentMoE/512-expert layout.
+    moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
-    num_experts: 512
-    ep_size: "{{ sglang_nnodes if (512 % (sglang_nnodes | int) == 0) else 1 }}"
+    # mem_fraction_static = post-weight KV reserve fraction (higher = more KV). Card
+    # uses 0.80 for the single-GPU case; under PP=4 only ~17 GB/GPU is weights, so
+    # 0.80 is conservative and could go higher once boot is confirmed.
     mem_fraction_static: "0.80"
+    # attention_backend: model card does NOT specify one. Keeping triton (the prior
+    # profile's choice); flashinfer is the alternative (head_dim=128 is supported).
+    # Mamba2 SSM layers use their own kernels regardless of this setting.
     attention_backend: "triton"
+    fp4_gemm_backend: "flashinfer_cutlass"
+    jit_max_jobs: 4
+    # disable-piecewise-cuda-graph: set EXPLICITLY by the model card's SGLang launch
+    # line — likely because the Mamba2/attention hybrid graph doesn't piecewise-capture
+    # cleanly. Keep true until proven otherwise (cross-ref FLASHINFER_0.6.12_TODO §2).
+    disable_piecewise_cuda_graph: true
+    disable_cuda_graph: false
+    cuda_graph_max_bs: 8
+    pp_async_batch_depth: 0
+    # DeepGemm targets FP8/ue8m0 scale format; for NVFP4 (scale_fmt != ue8m0) its JIT
+    # kernels aren't optimized, block the scheduler watchdog, and exhaust system RAM.
+    # Disabled → FP4 GEMM selection falls to fp4_gemm_backend above.
+    disable_deep_gemm: true
+    # chunked_prefill_size: model card recommends chunked prefill (bounds the Mamba
+    # conv/SSM-state memory spike on long prefills). SGLang enables it by default;
+    # uncomment to pin a chunk size if long-context prefills OOM.
+    # chunked_prefill_size: 131072
     reasoning_parser: "nemotron_3"
     tool_call_parser: "qwen3_coder"
-    chat_template_kwargs:
-      enable_thinking: true
-      low_effort: false
+    # chat_template_kwargs: REMOVED — the current xomoxcc:0.5.12.post1-sm121 build
+    # rejects the server-side `--chat-template-kwargs` flag ("sglang serve: error:
+    # unrecognized arguments: --chat-template-kwargs ..."). The model card never sets
+    # it as a launch flag anyway: reasoning defaults to ON in the chat template and is
+    # toggled PER REQUEST via extra_body={"chat_template_kwargs":{"enable_thinking":
+    # false}} / {"low_effort": true}. Do NOT re-add as a profile key on this image.
+    # chat_template_kwargs:
+    #   enable_thinking: true
+    #   low_effort: false
+    num_experts: 512
+    # ep_size: 1 with TP=4 → MoE runs tensor-parallel (experts sharded across the 4
+    # ranks, no expert-parallel all-to-all). Matches the model card's EP=1. To switch
+    # to EP=TP=4 (all-to-all MoE, attention stays TP) use the dynamic form:
+    # ep_size: "{{ sglang_nnodes if (512 % (sglang_nnodes | int) == 0) else 1 }}".
+    ep_size: 1
     recommended_sampling:
       temperature: 1.0
       top_p: 0.95
+    # ---- Native MTP / speculative decoding (num_nextn_predict_layers=1) ----
+    # OFF by default (untested). The MTP head shares the target weights, so there is
+    # NO separate draft model (speculative_draft_model_path stays empty). On this
+    # MAMBA-HYBRID model, enabling spec decode requires the spec_v2 path together
+    # with the extra-buffer mamba scheduler (see defaults/main.yml:96-98). To enable,
+    # set ALL of: speculative_enabled: true, enable_spec_v2: true,
+    # mamba_scheduler_strategy: "extra_buffer" (and consider lowering mem_fraction_static).
+    speculative_enabled: false
+    speculative_algo: NEXTN
+    speculative_num_steps: 3
+    speculative_num_draft_tokens: 4
+    speculative_eagle_topk: 1
+    speculative_draft_model_path: ""
+    # enable_spec_v2: true
+    # mamba_scheduler_strategy: "extra_buffer"
