@@ -131,22 +131,34 @@ _model_profile:
     recommended_sampling:
       temperature: 1.0
       top_p: 0.95
-    # ---- Native MTP / speculative decoding (num_nextn_predict_layers=1) ----
-    # ENABLED (untested). The MTP head shares the target weights, so there is NO
-    # separate draft model (speculative_draft_model_path stays empty). On this
-    # MAMBA-HYBRID model, MTP requires the spec_v2 path together with the extra-buffer
-    # mamba scheduler (see defaults/main.yml:96-98) — both uncommented below.
-    # Values are the model-card recommendation: the card's vLLM speculative_config
-    # uses num_speculative_tokens=3, which maps to NEXTN num_steps=3 + num_draft_tokens=4
-    # (= steps+1) on a topk=1 chain (single MTP layer → no EAGLE tree; topk=1 is correct
-    # for NEXTN and does NOT trigger the EAGLE "topk=1 silently disables" path).
-    # NOTE: MTP draft buffers + the 512K KV (context_length above) both eat memory — if
-    # this OOMs at startup, drop mem_fraction_static (e.g. 0.60) or shorten context first.
-    speculative_enabled: true
-    speculative_algo: NEXTN
+    # ---- Native MTP / speculative decoding (1 built-in MTP layer) ----
+    # The values below follow the SGLang Cookbook recipe for Nemotron-3-Super
+    # (https://docs.sglang.io/cookbook/autoregressive/NVIDIA/Nemotron3-Super):
+    #   --speculative-algorithm EAGLE --speculative-num-steps 3
+    #   --speculative-eagle-topk 1 --speculative-num-draft-tokens 4 --disable-radix-cache
+    # NOTE the corrections vs the first attempt:
+    #   * algo is EAGLE, NOT NEXTN — SGLang drives Nemotron's embedded MTP layer as an
+    #     EAGLE-style tail draft; no external draft model (speculative_draft_model_path "").
+    #   * mamba_scheduler_strategy "extra_buffer" is REJECTED on NemotronH (hard assert
+    #     "mamba extra_buffer is not supported for NemotronHForCausalLM" in
+    #     apply_nemotron_h_defaults → _handle_mamba_radix_cache). Leave it UNSET
+    #     (default no_buffer). The defaults/main.yml:96-98 extra_buffer↔spec_v2 note is
+    #     for OTHER hybrids, not NemotronH. enable_spec_v2 is likewise not in the recipe.
+    # >>> TWO OPEN BLOCKERS before MTP actually works/pays off here:
+    #   1. The recipe needs `--disable-radix-cache`, which our sglang_launch.sh does NOT
+    #      currently expose (no profile key — only disable_overlap_schedule). Without it
+    #      the mamba radix-cache path runs; needs a launch-script addition.
+    #   2. Upstream bug sgl-project/sglang#21138 — MTP on NemotronH rejects ~all draft
+    #      tokens (accept_rate≈0.33), i.e. boots but gives little/no speedup.
+    # Until both are resolved, speculative_enabled stays false (decision 2026-06-03:
+    # boot base + 512K first, MTP is a documented follow-up — the EAGLE values below are
+    # already correct, just flip speculative_enabled + wire --disable-radix-cache). Memory
+    # note: MTP draft buffers + the 512K KV both eat memory; drop mem_fraction_static if OOM.
+    speculative_enabled: false
+    speculative_algo: EAGLE
     speculative_num_steps: 3
     speculative_num_draft_tokens: 4
     speculative_eagle_topk: 1
     speculative_draft_model_path: ""
-    enable_spec_v2: true
-    mamba_scheduler_strategy: "extra_buffer"
+    # enable_spec_v2: true                       # not in the cookbook recipe for NemotronH
+    # mamba_scheduler_strategy: "extra_buffer"   # REJECTED on NemotronH — do not set
