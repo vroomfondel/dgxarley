@@ -7,6 +7,10 @@ Uses IMAP to receive and SMTP to send messages.
 ------------------------------------------------------------------------------
 LOCAL PATCH (dgxarley) — synced to upstream tag v2026.5.16
 (commit 0fffb82d0b949820c380019de646a46a0a6de678 of gateway/platforms/email.py).
+Still current: upstream gateway/platforms/email.py is byte-identical
+(md5 318ae8f3e6d4b26718784e0c94bf8458) across v2026.5.16 .. v2026.5.29.2 and
+main — verified 2026-06-04. The s6-overlay image restructure (v2026.5.28)
+changed init/entrypoint, not this file, so no re-sync was needed for the bump.
 
 Adds three behaviours that upstream lacks:
 

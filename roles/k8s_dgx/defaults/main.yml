@@ -948,7 +948,15 @@ litellm_guardrails: []
 # when chatting — Hermes is a CLI, not a daemon; there is no shared agent
 # process to multiplex onto.
 hermes_namespace: "hermes"
-hermes_image_tag: "v2026.5.16"
+# v2026.5.28 restructured the image: tini → s6-overlay (PID 1 = /init),
+# gosu → s6-setuidgid, node:22-bookworm-slim build stage (size 2.63 → 1.12 GB).
+# The pre-s6 entrypoint contract is preserved ("Architecture B"): default
+# ENTRYPOINT /init runs cont-init (stage2-hook.sh: usermod $HERMES_UID/$HERMES_GID
+# + chown), then our `args:` via docker/main-wrapper.sh → `s6-setuidgid hermes
+# hermes <args>`. We never hard-code command:, so the swap is transparent.
+# gateway/platforms/email.py is byte-identical across v2026.5.16..5.29.2 → the
+# hermes_email_gateway_patched.py patch needs NO re-sync. Verified 2026-06-04.
+hermes_image_tag: "v2026.5.29.2"
 # NFS-backed hostPath base on k3smaster — per-user subdirs <base>/<username>
 # are mounted as /opt/data inside the pod (subdir-only, no parent visibility).
 hermes_data_base: "/mnt/nfs/hermes"

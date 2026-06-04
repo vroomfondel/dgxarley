@@ -306,18 +306,25 @@ spec:
         - name: hermes
           image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes_image_tag) }}"
           imagePullPolicy: Always
-          # We let the image's ENTRYPOINT (/opt/hermes/docker/entrypoint.sh)
-          # run instead of overriding `command:`. The entrypoint:
-          #   1. Starts as root, usermod's the baked-in `hermes` user (UID
-          #      10000) to HERMES_UID/HERMES_GID, chown's HERMES_HOME, and
-          #      `gosu hermes` re-execs itself.
-          #   2. Now running as the user, sources the venv, mkdir's
-          #      $HERMES_HOME/{cron,sessions,logs,hooks,memories,skills,
-          #      skins,plans,workspace,home}, copies cli-config.yaml.example /
-          #      .env.example / SOUL.md if missing, runs skills_sync.py.
-          #   3. If $1 is an executable on PATH → exec "$@" raw; otherwise
+          # We let the image's default ENTRYPOINT run instead of overriding
+          # `command:`. Since v2026.5.28 that ENTRYPOINT is s6-overlay's /init
+          # (pre-s6 it was /opt/hermes/docker/entrypoint.sh, now a deprecated
+          # shim). The s6 flow preserves the old contract 1:1 ("Architecture B"):
+          #   1. /init runs as root, cont-init script stage2-hook.sh usermod's
+          #      the baked-in `hermes` user (UID 10000) to HERMES_UID/HERMES_GID
+          #      and chown's HERMES_HOME + .venv + ui-tui.
+          #   2. docker/main-wrapper.sh (the CMD wrapper) sources the venv,
+          #      cd's /opt/data, sets HOME=/opt/data, then drops via
+          #      `s6-setuidgid hermes` (replaces the old `gosu hermes`).
+          #      $HERMES_HOME dir-seed (cron/sessions/logs/.../.env/SOUL.md/
+          #      skills_sync) is done by stage2-hook under s6-setuidgid.
+          #   3. If $1 is an executable on PATH → exec it raw; otherwise
           #      → exec hermes "$@". So `args: [dashboard, --host, ...]`
-          #      becomes `exec hermes dashboard --host ...`.
+          #      becomes `s6-setuidgid hermes hermes dashboard --host ...`.
+          # NB: the image also auto-starts two s6 services — `main-hermes`
+          # (a no-op `sleep infinity` slot) and `dashboard` (gated OFF unless
+          # HERMES_DASHBOARD is truthy, which we do NOT set) — so neither
+          # collides with our CMD dashboard on 9119.
           # That gives us a /etc/passwd entry for our UID (so HOME is set,
           # which fixes npm cache EACCES), pre-created data dirs, SOUL.md,
           # and bundled-skills sync — all of which our previous explicit
@@ -336,18 +343,18 @@ spec:
 {% if _dashboard_tui %}
             - "--tui"
 {% endif %}
-          # Container-level securityContext overrides pod-level. Entrypoint
-          # MUST start as root to do usermod + gosu drop. After the entrypoint
-          # gosu's, the python process runs as <uid> matching pod-level intent.
+          # Container-level securityContext overrides pod-level. /init MUST
+          # start as root to do the usermod + s6-setuidgid drop. After the
+          # drop, the python process runs as <uid> matching pod-level intent.
           securityContext:
             runAsUser: 0
             runAsGroup: 0
             runAsNonRoot: false
           env:
-            # Read by entrypoint.sh: `usermod -u $HERMES_UID hermes`.
-            # After this the gosu-spawned hermes process runs as <uid> with a
-            # proper /etc/passwd entry (HOME=/opt/data via the hermes user's
-            # passwd entry — no need to set HOME explicitly).
+            # Read by cont-init stage2-hook.sh: `usermod -u $HERMES_UID hermes`.
+            # After this the s6-setuidgid-spawned hermes process runs as <uid>
+            # with a proper /etc/passwd entry (HOME=/opt/data is set explicitly
+            # by main-wrapper.sh before the privilege drop).
             - name: HERMES_UID
               value: "{{ item.uid }}"
             - name: HERMES_GID

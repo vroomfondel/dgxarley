@@ -440,10 +440,12 @@ spec:
 {% if _email_enabled %}
         # Email gateway sidecar — polls IMAP and dispatches via SMTP using the
         # EMAIL_* vars from /opt/data/.env (merged by the merge-config init).
-        # Uses the agent image because the `hermes` CLI lives there. The image
-        # entrypoint usermod's the baked-in `hermes` user to HERMES_UID/GID and
-        # `gosu`-drops before exec'ing `hermes gateway run`. No HTTP port — the
-        # gateway is daemon-only; rely on K8s restart-on-crash for liveness.
+        # Uses the agent image because the `hermes` CLI lives there. The image's
+        # /init (s6-overlay since v2026.5.28) usermod's the baked-in `hermes`
+        # user to HERMES_UID/GID via cont-init, then main-wrapper.sh
+        # `s6-setuidgid hermes`-drops before exec'ing `hermes gateway run`
+        # (pre-s6 this was the entrypoint + gosu). No HTTP port — the gateway
+        # is daemon-only; rely on K8s restart-on-crash for liveness.
         # Shares /opt/data with the webui container so both see the same
         # sessions/skills/.env. Outbound mail from webui-spawned hermes
         # subprocesses also works via the same .env, no extra wiring needed.
