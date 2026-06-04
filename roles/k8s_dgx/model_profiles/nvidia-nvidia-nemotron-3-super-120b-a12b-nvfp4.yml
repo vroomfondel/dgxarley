@@ -4,16 +4,22 @@
 # UPDATED 2026-06-02 — modernized from the original 0.5.x-era stub against the
 # current HF model card + config.json and the newer model_profile schema keys
 # (tp_size/pp, fp4_gemm_backend, disable_piecewise_cuda_graph, mamba_scheduler_strategy,
-# enable_spec_v2, native MTP block). Architecture facts below are from config.json;
-# the tuning values are reasonable defaults and are NOT yet validated by a test
-# matrix on this cluster — treat as first-contact (no TESTLOG exists yet).
+# enable_spec_v2, native MTP block). Architecture facts below are from config.json.
 #
-# >>> IMAGE CAVEAT <<<  The model card serves this model on a DEDICATED SGLang
-# dev image (lmsysorg/sglang:dev-cu13-nemotronh-nano-omni-reasoning-v3). Mainline
-# SGLang 0.5.12 / our xomoxcc-sm121 build may NOT yet carry the NemotronHForCausalLM
-# NVFP4 path. First boot is the litmus test — if SGLang rejects the arch or the
-# mamba kernels, we need a per-profile `sglang_image:` override (see TODO_0.5.12 §
-# "Pro Modellprofil sglang_image überschreiben") before this profile is usable.
+# VALIDATED 2026-06-04 — first test matrix run (7 cases, sglang 0.5.12, RoCE, TP=4):
+# TESTLOGS/sglang_nn4_tp4_ep1/nemotron-3-super-120b-a12b-nvfp4/
+#   TESTLOG_nv580.159_sglang-0.5.12_nemotron-3-super-120b-a12b-nvfp4_4n.md
+# The first-contact defaults below MATCHED the winner (Case 03: full-CG + fi_cutlass
+# MoE + fi_cutlass fp4_gemm + ctx524k → n=8 peak 135.06 tok/s, 8/8 clean) — so the
+# serving values are unchanged; only the caveats below were downgraded to facts.
+#
+# >>> IMAGE CAVEAT — RESOLVED 2026-06-04 <<<  Although the model card serves this on a
+# DEDICATED dev image (lmsysorg/sglang:dev-cu13-nemotronh-nano-omni-reasoning-v3), the
+# mainline UPSTREAM base scitrera/dgx-spark-sglang:0.5.12 DOES carry the
+# NemotronHForCausalLM NVFP4 path + Mamba2 SM121 kernels — Case 01 booted and emitted
+# coherent tokens. No dev-image and NO per-profile `sglang_image:` override are needed
+# for serving. (fi_cudnn fp4_gemm is the one gap — that wheel is missing from the base
+# image; see fp4_gemm_backend note below. fp4_gemm stays flashinfer_cutlass anyway.)
 _model_profile:
   "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4":
     info_url: "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
@@ -43,7 +49,12 @@ _model_profile:
     # The ceiling is memory/prefill-compute, not quality: only 8 of 88 layers are
     # attention (growing KV), the 80 Mamba layers keep constant recurrent state, so KV
     # stays modest — but the 8 full-attention layers' prefill is still O(seq²). Pair long
-    # context with chunked_prefill_size (below). UNTESTED on this cluster.
+    # context with chunked_prefill_size (below). VALIDATED 2026-06-04: 262K/512K/1M all
+    # boot and run at ~equal throughput (n=8 peak 118/135/135 tok/s; the 262K case only
+    # reads lower because it lost 1/8 to the repetition detector — see TESTLOG). NoPE +
+    # 80/88 Mamba layers → KV barely grows, so 512K and 1M are essentially FREE vs 262K;
+    # the only reason to cap shorter is RULER quality (82.5 @ 512K, 71.0 @ 1M). 524288 is
+    # the chosen default; raise to 1048576 if >512K context is ever needed.
     # Reasoning ON/OFF + low-effort via chat_template_kwargs (enable_thinking /
     # low_effort). Native Multi-Token Prediction (num_nextn_predict_layers=1,
     # mtp_hybrid_override_pattern "*E") → speculative decoding, see MTP block below.
@@ -80,13 +91,19 @@ _model_profile:
     # the HF repo that SGLang must execute. Safe: official nvidia/ repo.
     trust_remote_code: true
     # flashinfer_cutlass MoE — the proven NVFP4 MoE path on our other NVIDIA NVFP4
-    # models (qwen3-235b, glm-4.7, minimax-m2.7). Model card does not pin a backend;
-    # this is the established default. UNVALIDATED on the LatentMoE/512-expert layout.
+    # models (qwen3-235b, glm-4.7, minimax-m2.7). VALIDATED 2026-06-04: the ONLY viable
+    # MoE runner on this model. MUST stay flashinfer_cutlass — `triton` is NOT an
+    # optional alternative, it startup-CRASHES (Case 06): the triton runner flag is
+    # ignored on the NVFP4 modelopt path, which always dispatches the FFN through
+    # cutlass_moe_fp4, and the LatentMoE/512-expert shape trips a hard assertion there
+    # (moe/cutlass_moe.py:427 `nx2_w1 == intermediate_size_per_partition*2`).
     moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
-    # mem_fraction_static = post-weight KV reserve fraction (higher = more KV). Card
-    # uses 0.80 for the single-GPU case; under PP=4 only ~17 GB/GPU is weights, so
-    # 0.80 is conservative and could go higher once boot is confirmed.
+    # mem_fraction_static = post-weight KV reserve fraction (higher = more KV).
+    # VALIDATED 2026-06-04 (TP=4/PP=1): weights load to 23.31 GB/GPU (modelopt_mixed),
+    # and 0.80 reserves a 16.58M-token KV cache at ctx524k (K 15.81 + V 15.81 GB) with
+    # ~23.6 GB still free after CUDA-graph capture — i.e. 0.80 is comfortable and could
+    # go higher if more KV is wanted. No OOM at 262K/512K/1M.
     mem_fraction_static: "0.80"
     # attention_backend: MUST NOT be triton — SGLang's apply_nemotron_h_defaults hook
     # hard-asserts against it ("NemotronHForCausalLM does not support triton attention
@@ -94,6 +111,11 @@ _model_profile:
     # starts with Mamba, not attention). flashinfer works (head_dim=128 supported).
     # Mamba2 SSM layers use their own kernels regardless of this setting.
     attention_backend: "flashinfer"
+    # fp4_gemm_backend: flashinfer_cutlass — VALIDATED 2026-06-04 (winner shape). Do NOT
+    # switch to flashinfer_cudnn on the scitrera base image: Case 05 startup-crashes with
+    # "RuntimeError: cuDNN is not available" (the nvidia-cudnn-cu12 wheel is not in this
+    # base; it needs the cuDNN-layer image from scripts/build_cudnn_image.sh). fi_cutlass
+    # already wins on the Qwen3.6-NVFP4 comparison, so cuDNN-FP4 is not worth the rebuild.
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 4
     # disable-piecewise-cuda-graph: set EXPLICITLY by the model card's SGLang launch
