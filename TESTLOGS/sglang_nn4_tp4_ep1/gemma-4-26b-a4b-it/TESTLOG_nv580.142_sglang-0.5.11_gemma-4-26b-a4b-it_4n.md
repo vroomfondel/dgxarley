@@ -83,7 +83,11 @@ All tests use: `tp=4, pp=1, ep=1, nccl_transport=roce, kv_cache_dtype=fp8_e4m3, 
 | 17 | fi_cutedsl | triton    | true           | true          | **crash B**         | —         | —        | —           |
 | 18 | fi_cutedsl | triton    | false          | false         | **crash B**         | —         | —        | —           |
 
-**Crash A** (`attention_backend=flashinfer`, 6/6 cases): `RuntimeError: FlashInfer Internal Error: Invalid configuration : NUM_MMA_Q=1 NUM_MMA_D_QK=32 NUM_MMA_D_VO=32 NUM_MMA_KV=1 NUM_WARPS_Q=1 NUM_WARPS_KV=4` from `flashinfer/attention/prefill.cuh:2978`. **Same dispatch-table miss as on 0.5.10 — PR #2959 did NOT fix this.** The matrix preamble's hopeful note was wrong: PR #2959 fixes head_dim=512, but the crash signature shows `NUM_MMA_D_QK/VO=32` which corresponds to **head_dim=256 + RoPE_dim=64** (the Gemma-4 hybrid sliding/global attention config). That dispatch entry is still missing in flashinfer 0.6.11. Case 08 (eager) hits the same error at the first prefill call rather than at CUDA-graph capture, hence `bench_crash` instead of `startup_crash`, but the same root cause.
+**Crash A** (`attention_backend=flashinfer`, 6/6 cases): `RuntimeError: FlashInfer Internal Error: Invalid configuration` from `flashinfer/attention/prefill.cuh:2978`. **Same dispatch-table miss as on 0.5.10 — PR #2959 did NOT fix this.** The matrix preamble's hopeful note was wrong. `NUM_MMA_D_QK=NUM_MMA_D_VO=32` = `512/16` on **both** QK and VO → this is genuine **head_dim=512** (NOT "head_dim=256 + RoPE=64" — 256+64=320, ÷16=20≠32; corrected 2026-06-04). PR #2959 added *some* head_dim=512 tuples but not the two Gemma-4 hits. **There are TWO missing tuples, not one** (verified from raw head logs across all 6 fi-attn cases + the 31B-it sibling):
+- **decode** (`forward_decode`, hit during CUDA-graph capture → `startup_crash`): `NUM_MMA_Q=1 NUM_MMA_KV=1 NUM_WARPS_Q=1 NUM_WARPS_KV=4`
+- **prefill/extend** (`forward_extend`, hit on first forward in eager → `bench_crash`): `NUM_MMA_Q=1 NUM_MMA_KV=2 NUM_WARPS_Q=4 NUM_WARPS_KV=1`
+
+You only see one tuple per run: CG-on captures the decode graph first (aborts before any request); eager skips capture so the first forward is a prefill (aborts before decode). Case 08 (eager) is `bench_crash` on the *extend* tuple — the prefill path is independently broken, not just CUDA-graph capture. `NUM_MMA_Q=1` in both (Q split across `NUM_WARPS_Q`). Full analysis: `FLASHINFER_HEAD_DIM_512_UPSTREAM_BUG.md`.
 
 **Crash B** (`moe_runner_backend=flashinfer_cutedsl`, 6/6 cases): `AssertionError: Invalid quantization 'None'. FlashInfer CuteDSL MOE currently supports only: 'modelopt_fp4'.` Pre-check assertion at `server_args.py:2975`. Same fail-fast behaviour as on Qwen3.6-35B-A3B-FP8 — the new `fi_cutedsl` MoE backend (PR #21339) is FP4-only by design; BF16 weights are rejected before model load.
 
@@ -142,7 +146,7 @@ Result dir: `kikube/matrixtest/2026-05-11/results/sglang_nn4_tp4_ep1/gemma-4-26b
 3. **triton-MoE vs fi_cutlass MoE: tied at n=8.** triton-MoE (Cases 4–6) lands at 203–209; fi_cutlass MoE (Cases 10–12) at 206–214. Within 3 % across the matched configs; fi_cutlass wins by 5 tok/s at the winner shape (piecewise on). Both MoE backends benefit equally from the native Gemma-4 path.
 4. **Piecewise CG slightly better at n=8 on this model** (Case 06: 208.50 vs Case 04: 206.76; Case 12: 213.72 vs Case 10: 206.65). +1–3 % delta — within run-to-run noise on n=8 but consistent in direction.
 5. **Eager penalty narrowed** vs 0.5.10: was ~10 % gap at n=8 on 0.5.10 (159.8 vs 180.5), now ~3 % (203.17 vs 208.50). Same pattern as 27B-FP8 and 31B-it under 0.5.11 (Spec V2 + Overlap defaults narrow the eager penalty across the board).
-6. **fi-attn still broken** on Gemma-4 — same prefill.cuh dispatch table miss as on 0.5.10. PR #2959 in flashinfer 0.6.11 addresses head_dim=512, not Gemma-4's head_dim=256 + RoPE_dim=64 (which translates to NUM_MMA_D_QK/VO=32). To unblock fi-attn we'd need a separate flashinfer fix; not done as of 0.6.11. **Profile default `attention_backend: triton` remains correct.**
+6. **fi-attn still broken** on Gemma-4 — same prefill.cuh dispatch-table miss as on 0.5.10. PR #2959 added *some* head_dim=512 tuples but left the two Gemma-4 hits uninstantiated (decode `NUM_MMA_KV=1/WQ=1/WKV=4` + prefill `NUM_MMA_KV=2/WQ=4/WKV=1`, both head_dim=512 → NUM_MMA_D_QK/VO=32). To unblock fi-attn we'd need a separate flashinfer fix covering both; not done as of 0.6.11/0.6.12. **Profile default `attention_backend: triton` remains correct.** (See Crash A note above + `FLASHINFER_HEAD_DIM_512_UPSTREAM_BUG.md`.)
 7. **fi_cutedsl MoE is FP4-only by design.** BF16 Gemma-4 will never work with this backend (same assertion as on the 35B-A3B-FP8 testlog). Not a regression — designed FP4-only.
 
 ### Output quality verified
@@ -158,7 +162,7 @@ Result dir: `kikube/matrixtest/2026-05-11/results/sglang_nn4_tp4_ep1/gemma-4-26b
 
 ```yaml
 moe_runner_backend: flashinfer_cutlass   # +5 tok/s vs triton @ winner shape n=8
-attention_backend: triton                # fi-attn still crashes; PR #2959 ≠ this dispatch entry
+attention_backend: triton                # fi-attn still crashes; PR #2959 leaves 2 head_dim=512 tuples (decode+prefill) uninstantiated
 disable_cuda_graph: false
 disable_piecewise_cuda_graph: false      # piecewise on, +1–3 % at n=8
 nccl_transport: roce
@@ -219,7 +223,7 @@ Result dir: `kikube/matrixtest/2026-05-15/results/sglang_nn4_tp4_ep1/gemma-4-26b
 
 ```yaml
 moe_runner_backend: triton                                # cookbook-validated MTP path
-attention_backend: triton                                 # fi-attn crashes (head_dim=256+RoPE=64 dispatch miss)
+attention_backend: triton                                 # fi-attn crashes (head_dim=512 dispatch miss: 2 tuples, decode+prefill)
 disable_cuda_graph: false
 disable_piecewise_cuda_graph: false
 nccl_transport: roce

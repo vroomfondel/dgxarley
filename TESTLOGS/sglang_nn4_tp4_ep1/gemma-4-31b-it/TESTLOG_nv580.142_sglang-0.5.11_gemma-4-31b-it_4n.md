@@ -64,7 +64,7 @@ At runtime SGLang detects `Gemma4AssistantForCausalLM` as drafter and **auto-pro
 | 10 | triton | on / on | 5              | 6                 | 1          | ok     | 23.40     | 88.27     | 149.73      |
 | 11 | triton | on / on | 6              | 7                 | 1          | ok     | **26.68 ★**| **91.41 ★**| 146.11    |
 
-**fi-attn (Cases 1–3) — 3× startup_crash, same FlashInfer dispatch-table miss as on 0.5.10.** The Gemma-4 head_dim=256 + RoPE=64 prefill kernel still hits `FlashInfer Internal Error: Invalid configuration : NUM_MMA_Q=1 NUM_MMA_D_QK=32 NUM_MMA_D_VO=32 NUM_MMA_KV=1 NUM_WARPS_Q=1 NUM_WARPS_KV=4` from `prefill.cuh:2978`. FlashInfer 0.6.8.post1 + sgl-kernel 0.4.2 did not fix the dispatch-table gap. Even Case 02 (eager, no CUDA graph) crashes — the assert fires at the first decode call, not during graph capture. **Workaround: triton-attn (the profile default), as on 0.5.10.**
+**fi-attn (Cases 1–3) — 3× startup_crash, same FlashInfer dispatch-table miss as on 0.5.10.** Gemma-4's head_dim=512 global-attention kernel (`NUM_MMA_D_QK=NUM_MMA_D_VO=32` = 512/16; NOT "256+RoPE=64" — corrected 2026-06-04) hits `FlashInfer Internal Error: Invalid configuration` from `prefill.cuh:2978`. **TWO tuples are missing, not one** (both `NUM_MMA_Q=1`, head_dim=512): decode `NUM_MMA_KV=1 NUM_WARPS_Q=1 NUM_WARPS_KV=4` (CG-on, fires during capture → `startup_crash`) and prefill/extend `NUM_MMA_KV=2 NUM_WARPS_Q=4 NUM_WARPS_KV=1` (eager Case 02, fires on the first `forward_extend` — i.e. **prefill, not decode** as previously stated → `bench_crash`). FlashInfer 0.6.8.post1 + sgl-kernel 0.4.2 did not fix either gap; PR #2959 (0.6.11) added other head_dim=512 tuples but not these two. **Workaround: triton-attn (the profile default), as on 0.5.10.** Full analysis: `FLASHINFER_HEAD_DIM_512_UPSTREAM_BUG.md`.
 
 All triton-attn cases finish with `stop` × N (Gemma is concise; ~1.2 k tokens vs the 3072 cap).
 
@@ -90,7 +90,7 @@ n=1 is essentially flat across versions (~10 tok/s — single-stream is compute-
 
 ### Notes
 
-- **fi-attn still broken** on 0.5.11 — same FlashInfer dispatch gap as 0.5.10. Profile default of `attention_backend: triton` remains correct. To unblock fi-attn, the FlashInfer dispatch table would need entries for `NUM_MMA_D_QK=32 / NUM_MMA_D_VO=32` (head_dim=256 + RoPE=64). Upstream issue not yet filed.
+- **fi-attn still broken** on 0.5.11 — same FlashInfer dispatch gap as 0.5.10. Profile default of `attention_backend: triton` remains correct. To unblock fi-attn, the FlashInfer dispatch table needs the two missing `head_dim=512` (`NUM_MMA_D_QK=NUM_MMA_D_VO=32`) tuples: decode `NUM_MMA_KV=1/WQ=1/WKV=4` + prefill `NUM_MMA_KV=2/WQ=4/WKV=1`. Filed upstream as [flashinfer #3297](https://github.com/flashinfer-ai/flashinfer/issues/3297) (2026-05-12).
 - **Image** is the `xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121` custom build (Gemma-4 source patches). Vanilla `scitrera/dgx-spark-sglang:0.5.11` not tested for this model.
 - **Output quality verified** across all 39 successful requests:
   - `response_snippet` (head ~1 kB + tail ~500–700 B) scanned for word-salad
@@ -209,7 +209,7 @@ n=1 keeps climbing (+1.3 vs Test 09), n=4 keeps climbing (+2.0 vs Test 09), n=8 
 **Production recommendation (Gemma-4 31B-it dense, FROZEN_KV_MTP):**
 
 ```yaml
-attention_backend: triton                   # fi-attn still crashes (head_dim=256+RoPE=64 dispatch miss)
+attention_backend: triton                   # fi-attn still crashes (head_dim=512 dispatch miss: 2 tuples, decode+prefill)
 disable_cuda_graph: false
 disable_piecewise_cuda_graph: false
 nccl_transport: roce
