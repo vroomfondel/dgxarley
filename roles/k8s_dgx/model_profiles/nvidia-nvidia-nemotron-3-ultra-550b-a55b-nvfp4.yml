@@ -1,0 +1,182 @@
+# Model profile: nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+#
+# CREATED 2026-06-05 — derived from the SISTER profile
+# nvidia-nvidia-nemotron-3-super-120b-a12b-nvfp4.yml (same NemotronHForCausalLM
+# arch family, same NVFP4 mixed quant, same SGLang launch contract). Architecture
+# facts below are from this model's config.json (resolve/main, fetched 2026-06-05).
+# The Super sibling was VALIDATED on this cluster 2026-06-04
+# (TESTLOGS/sglang_nn4_tp4_ep1/nemotron-3-super-120b-a12b-nvfp4/) — the BACKEND
+# choices (flashinfer_cutlass MoE only, flashinfer attn, flashinfer_cutlass fp4
+# GEMM, full-CG + piecewise-off) are inherited from that validated run because the
+# arch is identical bar scale. Ultra ITSELF is FIRST-CONTACT / UNVALIDATED — no
+# matrix run yet; the dominant open risk is MEMORY (see >>> MEMORY <<< below), not
+# arch support.
+#
+# >>> IMAGE <<<  Boots on the mainline UPSTREAM base scitrera/dgx-spark-sglang:0.5.12
+# (the Super sibling's litmus passed there 2026-06-04 — NemotronHForCausalLM NVFP4 +
+# Mamba2 SM121 kernels are present). No dedicated dev-image and NO per-profile
+# `sglang_image:` override needed. fi_cudnn fp4_gemm is the one gap on that base
+# (cuDNN wheel missing) — fp4_gemm stays flashinfer_cutlass anyway (see below).
+#
+# >>> MEMORY — the dominant risk for the 550B Ultra <<<
+# The Super sibling loaded to 23.31 GB/GPU for 120B at TP=4 → ~0.78 bytes/param
+# (NVFP4-mixed: FP4 expert FFN + FP8/BF16 attn/latent/embeddings). At the same
+# density the 550B Ultra is ~430 GB total → ~107 GB/GPU sharded over TP=4, leaving
+# only ~21 GB/GPU of the 128 GB for KV + activations + CUDA graphs. This is TIGHT:
+#   * mem_fraction_static MUST exceed the weight fraction (~0.84) just to fit the
+#     weights; 0.85 is the floor, 0.88–0.92 is the realistic band. If the head
+#     OOMs on weight load or CUDA-graph capture, RAISE mem_fraction_static first.
+#   * context_length defaults to the config-native 262144 (NO override) — boot-safe.
+#     512K/1M (the Super sibling's NoPE long-context trick) are MEMORY-GATED here,
+#     not free as on Super — only attempt after a clean 262144 boot, and expect to
+#     trade KV headroom. UNTESTED.
+#   * TP=4 vs PP=4 (tp_size:1) shard the SAME ~107 GB/GPU either way (4 GPUs, 430 GB),
+#     so neither buys weight headroom; TP=4 is kept for KV/all-reduce parity with Super.
+#   * If 262144 still OOMs at high mem_fraction_static, drop context_length below the
+#     native cap and/or pin chunked_prefill_size.
+_model_profile:
+  "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4":
+    info_url: "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4"
+    # 550B total / 55B active LatentMoE — Mamba2 + MoE + select-attention HYBRID
+    # (NemotronHForCausalLM, model_type=nemotron_h). config.json: 108 layers
+    # (layers_block_type = 48 mamba + 48 moe + 12 attention), hidden_size 8192,
+    # 64 attention heads, num_key_value_heads=2 (GQA), n_routed_experts=512 + 1
+    # shared, num_experts_per_tok=22, moe_latent_size=2048 (tokens projected to a
+    # latent dim for expert routing — 2× the Super's 1024), moe_intermediate_size
+    # 5120, moe_shared_expert_intermediate_size 10240, ssm_state_size=128,
+    # mamba_num_heads=256, mamba_head_dim=64, n_groups=8, vocab_size=131072.
+    # NVFP4 quantized (~430 GB weights est., mixed precision: expert FFN = FP4
+    # group_size 16, attention/latent-proj/MTP/embeddings = FP8/BF16). kv_cache
+    # scheme fp8 (num_bits 8 float) per quantization_config.
+    # CONTEXT: config.json caps max_position_embeddings at 262144. The Nemotron-3
+    # family uses NoPE (no positional embeddings — Mamba2 carries order) and was
+    # natively long-context-trained, so there is NO RoPE/YaRN to scale: extending
+    # context is literally raising context_length AND lifting the config cap via
+    # json_model_override_args (auto-sets SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1;
+    # see tasks/sglang.yml). NO rope_scaling. BUT unlike the Super sibling — where
+    # 512K/1M were essentially free — on the 550B Ultra long context is MEMORY-GATED
+    # (only ~21 GB/GPU left after weights). Example for 512K, ONLY after a clean
+    # 262144 boot confirms headroom:
+    #   context_length: 524288
+    #   json_model_override_args: '{"max_position_embeddings": 524288}'
+    # config.json has rope_theta=10000 / partial_rotary_factor=1.0 present, but these
+    # are vestigial defaults — the family is NoPE per the Technical Report (same as
+    # the Super profile's reasoning). UNTESTED on this cluster.
+    # Reasoning ON/OFF + low-effort toggled PER REQUEST via extra_body chat_template_kwargs
+    # (enable_thinking / low_effort) — NOT a launch flag (see chat_template_kwargs note).
+    # Native Multi-Token Prediction (num_nextn_predict_layers=1, mtp_layers_block_type
+    # ['attention','moe']) → speculative decoding, see MTP block below.
+    #
+    # Recommended SGLang launch (NVIDIA model card pattern, mirrors Super):
+    #   python3 -m sglang.launch_server --model-path nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4 \
+    #     --trust-remote-code --quantization modelopt_fp4 --mem-fraction-static 0.85 \
+    #     --reasoning-parser nemotron_3 --tool-call-parser qwen3_coder \
+    #     --disable-piecewise-cuda-graph
+    # NOTE: reasoning parser is "nemotron_3" for SGLang (vLLM/TRT-LLM use the
+    # "super_v3"/"ultra_v3" plugin instead — do not copy those here).
+    #
+    # load_format: "auto" (NVFP4 sharded_state is disabled — double-processes
+    # weights in process_weights_after_loading, eats headroom for no I/O win;
+    # same rationale as the Super / minimax-m2.7 profiles — and headroom is
+    # especially precious here).
+    load_format: "auto"
+    nccl_transport: "roce"
+    # PARALLELISM — TP=4 → PP = nnodes/tp = 4/4 = 1 (single TP group across all 4
+    # nodes). Cluster is fixed at sglang_nnodes=4; ~430 GB weights / TP=4 →
+    # ~107 GB/GPU. With num_key_value_heads=2 and TP=4, SGLang REPLICATES each KV
+    # head across 2 ranks (4 % 2 == 0) — valid GQA, same as Super. See >>> MEMORY <<<
+    # for why TP=4 vs tp_size:1/PP=4 makes no weight-headroom difference here.
+    tp_size: 4
+    # context_length: config-native cap, NO override — boot-safe first contact.
+    # Raise (+ json_model_override_args) ONLY after a clean 262144 boot, memory
+    # permitting. Contrast the Super profile which defaults to 524288.
+    context_length: 262144
+    quantization: "modelopt_fp4"
+    # trust_remote_code: required — NemotronH ships custom model + tokenizer code in
+    # the HF repo that SGLang must execute. Safe: official nvidia/ repo.
+    trust_remote_code: true
+    # flashinfer_cutlass MoE — VALIDATED as the ONLY viable MoE runner on the Super
+    # sibling (2026-06-04). MUST stay flashinfer_cutlass — `triton` is NOT an
+    # alternative, it startup-CRASHES on this arch: the triton runner flag is ignored
+    # on the NVFP4 modelopt path, which always dispatches the FFN through
+    # cutlass_moe_fp4, and the LatentMoE/512-expert shape trips a hard assertion there
+    # (moe/cutlass_moe.py: `nx2_w1 == intermediate_size_per_partition*2`). Inherited
+    # from Super; re-confirm on Ultra's first matrix run.
+    moe_runner_backend: "flashinfer_cutlass"
+    kv_cache_dtype: "fp8_e4m3"
+    # mem_fraction_static = fraction of total GPU mem for the static pool (weights +
+    # KV). FLOOR is ~0.85 here just to fit ~107 GB/GPU weights; realistic band
+    # 0.88–0.92. RAISE this first if the head OOMs on weight load / CG capture; only
+    # then reduce context. See >>> MEMORY <<<. (Super runs 0.80 with huge headroom —
+    # Ultra has almost none.)
+    mem_fraction_static: "0.85"
+    # attention_backend: MUST NOT be triton — SGLang's apply_nemotron_h_defaults hook
+    # hard-asserts against it ("NemotronHForCausalLM does not support triton attention
+    # backend, as the first layer might not be an attention layer"; the hybrid pattern
+    # starts with Mamba). flashinfer works (head_dim=128 supported). Validated on Super.
+    attention_backend: "flashinfer"
+    # fp4_gemm_backend: flashinfer_cutlass — VALIDATED on Super (winner shape). Do NOT
+    # switch to flashinfer_cudnn on the scitrera base image: it startup-crashes with
+    # "RuntimeError: cuDNN is not available" (the nvidia-cudnn-cu12 wheel is not in this
+    # base; needs the cuDNN-layer image from scripts/build_cudnn_image.sh). fi_cutlass
+    # wins anyway, so cuDNN-FP4 is not worth the rebuild.
+    fp4_gemm_backend: "flashinfer_cutlass"
+    jit_max_jobs: 4
+    # disable-piecewise-cuda-graph: set EXPLICITLY by the model card; the Mamba2/attn
+    # hybrid graph doesn't piecewise-capture cleanly, and on Super piecewise gave no
+    # benefit. Keep true.
+    disable_piecewise_cuda_graph: true
+    disable_cuda_graph: false
+    cuda_graph_max_bs: 8
+    pp_async_batch_depth: 0
+    # DeepGemm targets FP8/ue8m0 scale format; for NVFP4 (scale_fmt != ue8m0) its JIT
+    # kernels aren't optimized, block the scheduler watchdog, and exhaust system RAM.
+    # Disabled → FP4 GEMM selection falls to fp4_gemm_backend above.
+    disable_deep_gemm: true
+    # chunked_prefill_size: model card recommends chunked prefill (bounds the Mamba
+    # conv/SSM-state memory spike on long prefills). SGLang enables it by default;
+    # uncomment to pin a smaller chunk if long-context prefills OOM — more likely to
+    # be needed on Ultra than on Super given the memory pressure.
+    # chunked_prefill_size: 131072
+    reasoning_parser: "nemotron_3"
+    tool_call_parser: "qwen3_coder"
+    # chat_template_kwargs: NOT a profile key on this image — the xomoxcc:0.5.12.post1
+    # build rejects the server-side `--chat-template-kwargs` flag, and the model card
+    # never sets it as a launch flag. Reasoning defaults ON in the chat template and is
+    # toggled PER REQUEST via extra_body={"chat_template_kwargs":{"enable_thinking":
+    # false}} / {"low_effort": true}. Same as the Super profile.
+    num_experts: 512
+    # ep_size: 1 with TP=4 → MoE runs tensor-parallel (experts sharded across the 4
+    # ranks, no expert-parallel all-to-all). Matches Super + the model card. To switch
+    # to EP=TP=4 (all-to-all MoE) use the dynamic form:
+    # ep_size: "{{ sglang_nnodes if (512 % (sglang_nnodes | int) == 0) else 1 }}".
+    ep_size: 1
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95
+    # ---- Native MTP / speculative decoding (1 built-in MTP layer) ----
+    # Mirrors the Super profile (SGLang Cookbook recipe for the Nemotron-3 family):
+    #   --speculative-algorithm EAGLE --speculative-num-steps 3
+    #   --speculative-eagle-topk 1 --speculative-num-draft-tokens 4 --disable-radix-cache
+    #   * algo is EAGLE, NOT NEXTN — SGLang drives the embedded MTP layer as an
+    #     EAGLE-style tail draft; no external draft model (draft_model_path "").
+    #   * mamba_scheduler_strategy "extra_buffer" is REJECTED on NemotronH (hard assert
+    #     in apply_nemotron_h_defaults) — leave UNSET (default no_buffer). enable_spec_v2
+    #     is likewise not in the recipe.
+    # >>> TWO OPEN BLOCKERS before MTP works/pays off (same as Super):
+    #   1. The recipe needs `--disable-radix-cache`, which our sglang_launch.sh does NOT
+    #      yet expose (no profile key). Needs a launch-script addition.
+    #   2. Upstream sgl-project/sglang#21138 — MTP on NemotronH rejects ~all draft
+    #      tokens (accept_rate≈0.33), i.e. boots but gives little/no speedup.
+    # Plus on Ultra: MTP draft buffers add memory pressure on an already-tight budget.
+    # Until the blockers resolve, speculative_enabled stays false; the EAGLE values
+    # below are pre-staged (flip speculative_enabled + wire --disable-radix-cache).
+    speculative_enabled: false
+    speculative_algo: EAGLE
+    speculative_num_steps: 3
+    speculative_num_draft_tokens: 4
+    speculative_eagle_topk: 1
+    speculative_draft_model_path: ""
+    # enable_spec_v2: true                       # not in the cookbook recipe for NemotronH
+    # mamba_scheduler_strategy: "extra_buffer"   # REJECTED on NemotronH — do not set
