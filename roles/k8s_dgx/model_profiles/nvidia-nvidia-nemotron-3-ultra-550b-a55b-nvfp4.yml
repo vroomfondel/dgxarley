@@ -105,11 +105,17 @@ _model_profile:
     # from Super; re-confirm on Ultra's first matrix run.
     moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
-    # mem_fraction_static = fraction of total GPU mem for the static pool (weights +
-    # KV). FLOOR is ~0.85 here just to fit ~107 GB/GPU weights; realistic band
-    # 0.88–0.92. RAISE this first if the head OOMs on weight load / CG capture; only
-    # then reduce context. See >>> MEMORY <<<. (Super runs 0.80 with huge headroom —
-    # Ultra has almost none.)
+    # mem_fraction_static is NOT a vLLM-style "fraction of total for weights+KV". It
+    # sizes the OVERHEAD RESERVE held back AFTER weights load: reserve = (1 - this) *
+    # pre-weight-free-mem; KV pool = post-weight-free - reserve. So HIGHER → smaller
+    # reserve → MORE KV; LOWER → bigger reserve → less KV (too low → KV goes negative
+    # → "Not enough memory, increase --mem-fraction-static" crash at KV profiling).
+    # Weights load BEFORE this, so a real weight-load OOM is NOT fixable here (needs
+    # more TP). The reserve covers activations + CUDA-graph capture (enabled here,
+    # cuda_graph_max_bs:8) — so too HIGH starves CG capture → OOM (LOWER it, do not
+    # raise). Band 0.88–0.92 balances KV vs CG-capture headroom; 0.85 leaves KV thin
+    # but positive. See >>> MEMORY <<<. (Super runs 0.80 with huge headroom — Ultra
+    # has almost none.)
     mem_fraction_static: "0.85"
     # attention_backend: MUST NOT be triton — SGLang's apply_nemotron_h_defaults hook
     # hard-asserts against it ("NemotronHForCausalLM does not support triton attention
