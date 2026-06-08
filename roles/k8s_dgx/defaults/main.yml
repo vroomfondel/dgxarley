@@ -27,8 +27,9 @@ sglang_nnodes: 4
 #sglang_model: "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
 
 sglang_model: "RedHatAI/Qwen3.6-35B-A3B-NVFP4"
-# sglang_model: "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4"
 # sglang_model: "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
+# sglang_model: "Qwen/Qwen3.6-27B-FP8"
+# sglang_model: "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4"
 # sglang_model: "nvidia/MiniMax-M2.7-NVFP4"
 # sglang_model: "canada-quant/DeepSeek-V4-Flash-W4A16-FP8-MTP"
 # sglang_model: "nvidia/Qwen3.5-397B-A17B-NVFP4"
@@ -612,6 +613,7 @@ hf_cache_path: "/var/lib/hf-cache"
 hf_token: "hf_CHANGEME"
 # HuggingFace model pre-download Job
 hf_preload_models:
+   - "Qwen/Qwen3.6-27B-FP8"
    - "RedHatAI/Qwen3.6-35B-A3B-NVFP4"
    - "RedHatAI/Qwen3-Coder-Next-NVFP4"
    - "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4"
