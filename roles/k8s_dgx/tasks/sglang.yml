@@ -25,6 +25,7 @@
     _sglang_svc_check.resources[0].metadata.annotations['kikube.io/managed-by'] == 'kikube'
 
 - name: Create SGLang ConfigMap
+  register: _sglang_configmap
   kubernetes.core.k8s:
     state: present
     apply: true  # full replace — removes stale keys (e.g. NCCL_IB_DISABLE after RoCE switch)
@@ -319,7 +320,7 @@
               k8s.v1.cni.cncf.io/networks: "{{ '[{\"name\":\"qsfp-vf' ~ qsfp_sriov_assignments.sglang.vf ~ '\",\"ips\":[\"' ~ _sglang_qsfp_ips[worker_rank] ~ '/24\"]}]' if qsfp_sriov_enabled | default(false) else 'qsfp-direct-worker' ~ worker_rank }}"
               kubectl.kubernetes.io/default-container: sglang
               checksum/launch-script: "{{ (lookup('file', role_path ~ '/files/sglang_launch.sh') ~ lookup('file', role_path ~ '/files/dsv4_memprobe.py')) | hash('sha256') }}"
-              checksum/config: "{{ (sglang_model ~ sglang_context_length ~ sglang_kv_cache_dtype ~ sglang_mem_fraction_static ~ sglang_quantization ~ sglang_load_format ~ sglang_attention_backend ~ sglang_ep ~ sglang_tp ~ sglang_pp ~ sglang_topk_transform_512_torch ~ (sglang_memprobe | default('0') | string) ~ (sglang_model_loader_extra_config | default('')) ~ (sglang_weight_loader_disable_mmap | string)) | hash('sha256') }}"
+              checksum/config: "{{ _sglang_configmap.result.data | to_json(sort_keys=True) | hash('sha256') }}"  # hash of the WHOLE rendered sglang-config ConfigMap (omit-stripped by k8s, sort_keys-stable) → rolls pods on ANY config/knob change (cuda_graph_max_bs, moe_runner_backend, mamba_*, …), not a hand-picked field subset
           spec:
             enableServiceLinks: false         # prevent K8s SGLANG_PORT=tcp://... injection
             hostIPC: true                    # shared memory for NCCL
@@ -466,7 +467,7 @@
               k8s.v1.cni.cncf.io/networks: "{{ '[{\"name\":\"qsfp-vf' ~ qsfp_sriov_assignments.sglang.vf ~ '\",\"ips\":[\"' ~ qsfp_sriov_assignments.sglang.head_ip ~ '/24\"]}]' if qsfp_sriov_enabled | default(false) else 'qsfp-direct' }}"
               kubectl.kubernetes.io/default-container: sglang
               checksum/launch-script: "{{ (lookup('file', role_path ~ '/files/sglang_launch.sh') ~ lookup('file', role_path ~ '/files/dsv4_memprobe.py')) | hash('sha256') }}"
-              checksum/config: "{{ (sglang_model ~ sglang_context_length ~ sglang_kv_cache_dtype ~ sglang_mem_fraction_static ~ sglang_quantization ~ sglang_load_format ~ sglang_attention_backend ~ sglang_ep ~ sglang_tp ~ sglang_pp ~ sglang_topk_transform_512_torch ~ (sglang_memprobe | default('0') | string) ~ (sglang_model_loader_extra_config | default('')) ~ (sglang_weight_loader_disable_mmap | string)) | hash('sha256') }}"
+              checksum/config: "{{ _sglang_configmap.result.data | to_json(sort_keys=True) | hash('sha256') }}"  # hash of the WHOLE rendered sglang-config ConfigMap (omit-stripped by k8s, sort_keys-stable) → rolls pods on ANY config/knob change (cuda_graph_max_bs, moe_runner_backend, mamba_*, …), not a hand-picked field subset
           spec:
             serviceAccountName: sglang-head
             enableServiceLinks: false         # prevent K8s SGLANG_PORT=tcp://... injection
