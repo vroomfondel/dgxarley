@@ -396,6 +396,10 @@ ollama_embed_replicas: 1
 
 # Ollama model profiles
 ollama_model_profiles:
+  "qwen3-coder-next:latest":
+    info_url: "https://ollama.com/library/qwen3-coder-next"
+    # 80B total / 3B active MoE (hybrid attention), latest = q4_K_M (~52 GB), 256K ctx
+    context_length: 262144
   "qwen3-coder:latest":
     info_url: "https://ollama.com/library/qwen3-coder"
     # 30B total / 3.3B active MoE, latest tag = 30b (~19 GB)
@@ -418,6 +422,7 @@ ollama_embed_model_profiles:
 
 # Active ollama model — parameters pulled from ollama_model_profiles
 #ollama_model: "qwen3-coder:latest"
+#ollama_model: "qwen3-coder-next:latest"
 ollama_model: "qwen2.5-coder:latest"
 ollama_preload_models:
   - "{{ ollama_model }}"
@@ -968,9 +973,10 @@ hermes_namespace: "hermes"
 # ENTRYPOINT /init runs cont-init (stage2-hook.sh: usermod $HERMES_UID/$HERMES_GID
 # + chown), then our `args:` via docker/main-wrapper.sh → `s6-setuidgid hermes
 # hermes <args>`. We never hard-code command:, so the swap is transparent.
-# gateway/platforms/email.py is byte-identical across v2026.5.16..5.29.2 → the
-# hermes_email_gateway_patched.py patch needs NO re-sync. Verified 2026-06-04.
-hermes_image_tag: "v2026.5.29.2"
+# gateway/platforms/email.py is byte-identical across v2026.5.16..6.5 and main
+# (md5 318ae8f3e6d4b26718784e0c94bf8458) → the hermes_email_gateway_patched.py
+# patch needs NO re-sync. Verified 2026-06-08.
+hermes_image_tag: "v2026.6.5"
 # NFS-backed hostPath base on k3smaster — per-user subdirs <base>/<username>
 # are mounted as /opt/data inside the pod (subdir-only, no parent visibility).
 hermes_data_base: "/mnt/nfs/hermes"
