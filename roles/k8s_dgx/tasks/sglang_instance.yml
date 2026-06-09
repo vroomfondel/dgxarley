@@ -5,6 +5,22 @@
 # instance. Resource names are prefixed with inst.prefix (= "sglang" for the
 # "default" instance, so its resources are byte-identical to the old layout).
 
+# Validate parallelism fits the node count BEFORE creating anything. Catches a
+# profile/instance tp_size that doesn't divide the node count (which would
+# otherwise yield pp=0) and an ep that doesn't divide tp.
+- name: Validate parallelism fits node count ({{ inst.prefix }})
+  ansible.builtin.assert:
+    that:
+      - (sglang_tp | int) >= 1 and (sglang_pp | int) >= 1 and (sglang_ep | int) >= 1
+      - (sglang_tp | int) * (sglang_pp | int) == (_sglang_active_nnodes | int)
+      - (sglang_tp | int) % (sglang_ep | int) == 0
+    fail_msg: >-
+      Instance '{{ inst.prefix }}': tp={{ sglang_tp }} * pp={{ sglang_pp }}
+      must equal nodes={{ _sglang_active_nnodes }} (1 GPU/node) and ep={{ sglang_ep }}
+      must divide tp. Set tp_size/pp_size/ep_size on the instance, pick a model
+      whose profile fits, or change the nodes list.
+    success_msg: "{{ inst.prefix }}: tp={{ sglang_tp }} pp={{ sglang_pp }} ep={{ sglang_ep }} over {{ _sglang_active_nnodes }} node(s) OK"
+
 # Guard: refuse to deploy if KIKUBE has taken over management of SGLang.
 # The KIKUBE product layer (dgxarley-custom) sets kikube.io/managed-by=kikube
 # on all resources it manages. Once that annotation is present on the Service,

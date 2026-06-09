@@ -74,6 +74,12 @@ qsfp_sriov_assignments:
     worker_ip1: "10.10.10.202"
     worker_ip2: "10.10.10.203"
     worker_ip3: "10.10.10.204"
+  sglang_coder:
+    vf: 4
+    head_ip: "10.10.10.241"
+    worker_ip1: "10.10.10.242"
+    worker_ip2: "10.10.10.243"
+    worker_ip3: "10.10.10.244"
   vllm:
     vf: 1
     head_ip: "10.10.10.205"

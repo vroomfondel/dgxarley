@@ -67,6 +67,14 @@ sglang_model_profiles: {}
 _sglang_active_model: "{{ sglang_model }}"
 _sglang_active_nnodes: "{{ sglang_nnodes }}"
 _sglang_active_sriov_key: "sglang"
+# Per-instance tp/pp/ep override ("" = derive from profile/nnodes). Lets a
+# sub-cluster instance run a model whose profile pins parallelism that doesn't
+# fit its node count. Precedence: inst override > profile > default.
+# The fit (tp*pp == nnodes, ep | tp) is enforced by an assert in
+# sglang_instance.yml, so a bad override/profile fails before deploy.
+_sglang_active_tp: ""
+_sglang_active_pp: ""
+_sglang_active_ep: ""
 
 sglang_speculative_enabled: "{{ sglang_model_profiles[_sglang_active_model].speculative_enabled | default(false) }}"
 sglang_speculative_algo: "{{ sglang_model_profiles[_sglang_active_model].speculative_algo | default('NEXTN') }}"
@@ -260,12 +268,12 @@ sglang_jit_max_jobs: "{{ sglang_model_profiles[_sglang_active_model].jit_max_job
 
 # Tensor parallelism: from model profile or nnodes (default).
 # With PP > 1 (pipeline parallelism), tp * pp = nnodes.
-sglang_tp: "{{ sglang_model_profiles[_sglang_active_model].tp_size | default(_sglang_active_nnodes) }}"
+sglang_tp: "{{ _sglang_active_tp if (_sglang_active_tp | string | length > 0) else (sglang_model_profiles[_sglang_active_model].tp_size | default(_sglang_active_nnodes)) }}"
 # Pipeline parallelism: auto-derived as nnodes / tp_size.
 # PP > 1 distributes model layers across pipeline stages instead of sharding
 # weights via TP. Required when a model's num_key_value_heads isn't divisible
 # by nnodes (e.g. MiniMax M2.5: 8 KV heads, 8 % 3 ≠ 0 → can't use TP=3).
-sglang_pp: "{{ (_sglang_active_nnodes | int) // (sglang_tp | int) }}"
+sglang_pp: "{{ _sglang_active_pp if (_sglang_active_pp | string | length > 0) else ((_sglang_active_nnodes | int) // (sglang_tp | int)) }}"
 # PP async micro-batching depth: overlaps forward passes across pipeline stages.
 # 0 = synchronous (default). Only effective when pp > 1.
 sglang_pp_async_batch_depth: "{{ sglang_model_profiles[_sglang_active_model].pp_async_batch_depth | default(0) }}"
@@ -274,7 +282,7 @@ sglang_pp_async_batch_depth: "{{ sglang_model_profiles[_sglang_active_model].pp_
 # all-to-all instead of all-reduce — more efficient for MoE over Ethernet.
 # Attention layers remain tensor-parallel regardless of EP.
 # Set per model profile; defaults to 1 (no expert parallelism).
-sglang_ep: "{{ sglang_model_profiles[_sglang_active_model].ep_size | default(1) }}"
+sglang_ep: "{{ _sglang_active_ep if (_sglang_active_ep | string | length > 0) else (sglang_model_profiles[_sglang_active_model].ep_size | default(1)) }}"
 # EP load balancer: dynamically rebalances expert assignment across ranks.
 # Only effective when ep_size > 1.
 sglang_enable_eplb: "{{ sglang_model_profiles[_sglang_active_model].enable_eplb | default(false) }}"
@@ -373,6 +381,13 @@ sglang_moe_config_dir: "/root/.cache/huggingface/moe_configs"
 #                  knobs (tp/pp/ep, context_length, quantization, image, kernel
 #                  backends, speculative, …) re-resolve from THIS model's
 #                  profile automatically via _sglang_active_model.
+#   tp_size:       tensor-parallel override (default: profile tp_size, else
+#                  #nodes). Needed when the model's profile pins a tp_size that
+#                  doesn't fit a sub-cluster instance's node count.
+#   pp_size:       pipeline-parallel override (default: #nodes // tp). tp*pp
+#                  must equal #nodes (1 GPU/node) — enforced by assert.
+#   ep_size:       expert-parallel override (default: profile ep_size, else 1).
+#                  Must divide tp — enforced by assert.
 #   prefix:        K8s resource-name prefix AND the `app` label value. Default:
 #                  "sglang" for the "default" instance, "sglang-<key>" otherwise.
 #   hostname:      ingress/cert/DNS short name -> <hostname>.<dns_suffix>.
@@ -391,6 +406,34 @@ sglang_moe_config_dir: "/root/.cache/huggingface/moe_configs"
 # per node, so overlap is impossible there.
 sglang_instances:
   default: {}
+  # --- Example: a second instance serving Qwen3-Coder-Next over ALL 4 nodes,
+  # tp=4 / ep=4 / pp=1. Commented out — it CO-LOCATES with `default` on every
+  # spark, so before enabling it you MUST:
+  #   1. qsfp_sriov_enabled: true AND a dedicated qsfp_sriov_assignments entry
+  #      whose KEY equals sriov_key below ("sglang-coder" — its own VF + QSFP IP
+  #      block; real values live in group_vars/all/vault.yml). Then re-run
+  #      dgx.yml --tags qsfp_sriov and k8s_dgx.yml --tags multus.
+  #   2. nvidia_gpu_timeslice_replicas >= 2 so each GPU is allocatable twice
+  #      (default + coder pod share each spark).
+  # ep=4 (=tp) switches the MoE layers to all-to-all expert parallelism.
+  #
+  # NAMING — two distinct identifiers, don't conflate them:
+  #   * instance KEY ("coder") -> prefix/hostname "sglang-<key>" = "sglang-coder",
+  #     used for K8s resource names AND the DNS/cert hostname, so it MUST be
+  #     RFC1123/DNS-safe: lowercase + digits + '-' only, NO underscore (an '_'
+  #     key yields invalid object names and an invalid cert/DNS name). Hence the
+  #     key is "coder" (not "sglang_coder" / "sglang-coder", which would double
+  #     the prefix to "sglang-sglang-...").
+  #   * sriov_key ("sglang_coder") -> only a lookup into qsfp_sriov_assignments
+  #     (never a resource name), so it can be any string — it just has to match
+  #     that dict's key exactly (underscore here is fine, unlike the KEY above).
+  coder:
+    model: "RedHatAI/Qwen3-Coder-Next-NVFP4"
+    nodes: [1, 2, 3, 4]
+    sriov_key: "sglang_coder"
+    tp_size: 4
+    ep_size: 4
+    pp_size: 1
 
 # Merged UNDER each sglang_instances entry (entry wins). _inst_key is the dict
 # key of the current instance, set by the loop in sglang.yml. Defaults that

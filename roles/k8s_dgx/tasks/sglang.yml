@@ -9,6 +9,7 @@
 #   _sglang_active_model     = inst.model     -> re-resolves all model-derived knobs
 #   _sglang_active_nnodes    = #nodes         -> re-resolves tp/pp + QSFP IP slice
 #   _sglang_active_sriov_key = inst.sriov_key -> selects the VF + QSFP IP block
+#   _sglang_active_{tp,pp,ep} = inst overrides ("" = derive from profile/nnodes)
 - name: Deploy each SGLang instance
   ansible.builtin.include_tasks: sglang_instance.yml
   loop: "{{ sglang_instances | dict2items }}"
@@ -21,3 +22,6 @@
     _sglang_active_model: "{{ inst.model }}"
     _sglang_active_nnodes: "{{ inst.nodes | length }}"
     _sglang_active_sriov_key: "{{ inst.sriov_key }}"
+    _sglang_active_tp: "{{ inst.tp_size | default('') }}"
+    _sglang_active_pp: "{{ inst.pp_size | default('') }}"
+    _sglang_active_ep: "{{ inst.ep_size | default('') }}"
