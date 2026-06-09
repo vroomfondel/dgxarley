@@ -12,9 +12,9 @@ defaults
     log-format "%ci:%cp [%t] %ft %b/%s %Tq/%Tw/%Tc/%Tr/%Ta %ST %B %{+Q}r"
 
 frontend sglang
-    bind *:{{ sglang_port }}
+    bind *:{{ inst.port }}
     http-request set-header X-Real-IP %[src]
     default_backend sglang_back
 
 backend sglang_back
-    server sglang 127.0.0.1:{{ sglang_internal_port }}
+    server sglang 127.0.0.1:{{ inst.internal_port }}
