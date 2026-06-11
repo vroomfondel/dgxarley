@@ -303,6 +303,14 @@ the global flag.
 - **FA3 ships a sm121 SASS.** Then drop both `XFORMERS_DISABLE_FLASH_ATTN=1`
   and Patch 2.
 
+> **2026-06-11 — xformers releases v0.0.33–v0.0.35; patch status update (last checked 2026-06-11 against v0.0.35):**
+>
+> xformers v0.0.33 (2025-11), v0.0.34 (2026-01-23), and v0.0.35 (2026-02-20, titled "Rely on upstream FA3") have been released since the v0.0.32 pin.
+>
+> **Patch 1 — still required on v0.0.35.** Verified: `xformers/ops/fmha/cutlass.py` in v0.0.35 still has `CUDA_MAXIMUM_COMPUTE_CAPABILITY = (9, 0)` with no sm121 dispatch added in any of v0.0.33–v0.0.35. Patch 1 remains necessary.
+>
+> **Patch 2 — rationale changes on v0.0.35+.** v0.0.35 stopped bundling prebuilt Flash-Attention 3 and instead relies on PyTorch-index wheels ("Rely on upstream FA3"). This means the **build-time** `XFORMERS_DISABLE_FLASH_ATTN=1` disable may be unnecessary on v0.0.35+ (there is no bundled FA3 to suppress at build time). However, the **runtime belt-and-braces** patch in `flash3.py` may still be warranted as defence against a stray FA3 wheel from the pip cache or a post-build install. Verify against a v0.0.35 build before dropping either: confirm `flash3._C_flashattention3 is None` without the build-time env var, then decide. Do NOT drop Patch 2 until verified. `XFORMERS_REF` and both patches are **unchanged** — evaluate before bumping.
+
 ### How to verify a candidate xformers version
 
 ```bash

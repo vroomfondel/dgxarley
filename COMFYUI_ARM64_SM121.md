@@ -70,6 +70,8 @@ SDPA `EFFICIENT_ATTENTION` kernels (verified empirically — see
 Acceptable cost for guaranteed correctness; see Section 11 for leaner
 options if image size is a hard constraint.
 
+> **2026-06-11 note — CUTLASS 4.5.0 and future NGC bases:** CUTLASS 4.5.0 (2026-05-13) added working SM120/SM121 block-scaled MMA ("Block Scaled MMA for SM120 now works on Spark"). NGC PyTorch monthlies post-26.03 that pick up CUTLASS 4.5.x are therefore worth testing as base images once available. The statement that NGC remains the only verified-correct PyTorch base for sm121 is still accurate as of 2026-06-11 — scitrera recipes still carry the broken sm_121-only `NVCC_GENCODE` flag at tag v0.5.12.post1.
+
 ---
 
 ## 2. Project layout
