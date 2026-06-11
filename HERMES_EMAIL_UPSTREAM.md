@@ -1,6 +1,6 @@
 # Hermes email gateway — local patch and upstream PRs
 
-Status as of 2026-05-31.
+Status as of 2026-06-11.
 
 ## Why this exists
 
@@ -168,6 +168,11 @@ The `env -u VIRTUAL_ENV` prefix is required because the parent shell's
 > 29097 bytes) — **no re-sync required**; the patch in
 > `roles/k8s_dgx/files/hermes_email_gateway_patched.py` stays clean (its header
 > already records this). All three PRs (#28697, #28699, #28702) remain open.
+
+> **2026-06-11 check:** All three PRs (#28697, #28699, #28702) still open —
+> keine Bewegung seit 2026-05-19. `gateway/platforms/email.py` blob SHA
+> unverändert (`0fffb82d`) sowohl in v2026.6.5 als auch in `main` →
+> **kein Re-Sync nötig**. v2026.6.5 ist weiterhin das aktuellste Release.
 
 1. Download the new upstream file:
 
