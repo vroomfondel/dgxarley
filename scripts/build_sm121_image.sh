@@ -79,7 +79,20 @@ BRANCH_NAME="sm121"
 # source patches (PRs #22929/#22928) are also applied — the underlying
 # build steps and SM121 sgl-kernel patches are identical.
 #
-# Current set (v0.5.12 line — DEFAULT):
+# Current set (v0.5.13 line — DEFAULT):
+#   sglang-0.5.13-sm121.recipe         — SGLang v0.5.13 + SM121 sgl-kernel
+#                                        patches + flashinfer 0.6.12 + the
+#                                        UNMERGED DeepSeek-V4 NVFP4 MoE PR
+#                                        #25820, rebased onto v0.5.13 and
+#                                        gated by the recipe variable
+#                                        APPLY_DSV4_NVFP4_PR25820=1. Drops the
+#                                        0xSero DSV4-FlashMLA kernel bake
+#                                        (native SM120/121 path via PR #24692
+#                                        in v0.5.13 — UPSTREAM_DSV4_BUGS.md §8).
+#                                        Target: nvidia/DeepSeek-V4-Flash-NVFP4.
+#                                        Tag: xomoxcc/dgx-spark-sglang:0.5.13-sm121
+#
+# Previous set (v0.5.12 line):
 #   sglang-0.5.12-sm121.recipe         — SGLang v0.5.12 + six SM121 sgl-kernel
 #                                        patches + flashinfer 0.6.11.post1.
 #                                        Tag: xomoxcc/dgx-spark-sglang:0.5.12-sm121
@@ -116,10 +129,15 @@ BRANCH_NAME="sm121"
 # apply_patches() gates the Gemma-4 source patches and the gemma4 Dockerfile
 # patch by `RECIPE_NAME == *gemma4*`. The Gemma-4 MTP cherry-pick (PR #24436)
 # is additionally version-gated and SKIPPED on SGLang >= v0.5.12, where
-# PR #24436 is merged into the release.
-RECIPE_NAME="sglang-0.5.12-sm121"
-# IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.12-sm121"
-IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.12.post1-sm121"
+# PR #24436 is merged into the release. The DSV4 NVFP4 patch (PR #25820) is
+# gated by the recipe variable APPLY_DSV4_NVFP4_PR25820=1 instead of a name
+# pattern — see apply_patches().
+RECIPE_NAME="sglang-0.5.13-sm121"
+IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.13-sm121"
+
+#RECIPE_NAME="sglang-0.5.12-sm121"
+## IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.12-sm121"
+#IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.12.post1-sm121"
 #RECIPE_NAME="sglang-0.5.12-gemma4-sm121"
 #IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.12.post1-gemma4-sm121"
 
@@ -451,6 +469,15 @@ preflight() {
             sglang-gemma4-geglu-nan-clamp.patch
         )
     fi
+    # DSV4 NVFP4 patches (PR #25820) are only required when the recipe opts in
+    # via APPLY_DSV4_NVFP4_PR25820=1. See apply_patches() for the matching gate.
+    if [[ -f "${PATCHES_DIR}/${RECIPE_NAME}.recipe" ]] \
+        && grep -qE '^APPLY_DSV4_NVFP4_PR25820=1' "${PATCHES_DIR}/${RECIPE_NAME}.recipe"; then
+        required_files+=(
+            dockerfile-dsv4-nvfp4.patch
+            sglang-dsv4-nvfp4-pr25820.patch
+        )
+    fi
 
     local missing=0
     for f in "${required_files[@]}"; do
@@ -719,6 +746,18 @@ apply_patches() {
         apply_gemma4_mtp_patch=0
     fi
 
+    # DSV4 NVFP4 (PR #25820) — gated by an explicit recipe variable rather
+    # than a name pattern or version gate: the patch must be dropped the
+    # moment the PR lands in the pinned SGLANG_REF (re-applying a merged
+    # patch fails the in-container dry-run and aborts the build), and an
+    # explicit APPLY_DSV4_NVFP4_PR25820=0/absent keeps that state visible
+    # in the recipe itself instead of in script heuristics.
+    local apply_dsv4_nvfp4_patch=0
+    if [[ -f "${PATCHES_DIR}/${RECIPE_NAME}.recipe" ]] \
+        && grep -qE '^APPLY_DSV4_NVFP4_PR25820=1' "${PATCHES_DIR}/${RECIPE_NAME}.recipe"; then
+        apply_dsv4_nvfp4_patch=1
+    fi
+
     # 1. Drop sgl-kernel source patches into the build context.
     # The Dockerfile COPY steps read from container-build/patches/ and the
     # in-container `patch` invocations are conditionally gated by the
@@ -756,12 +795,20 @@ apply_patches() {
         sglang-gemma4-nvfp4-expert-loading.patch
         sglang-gemma4-geglu-nan-clamp.patch
     )
+    # DSV4 NVFP4 source patch (PR #25820 rebased onto v0.5.13) — copied only
+    # when the recipe opts in, same rationale as the gemma4 patches.
+    local dsv4_nvfp4_source_patches=(
+        sglang-dsv4-nvfp4-pr25820.patch
+    )
     local patches_to_copy=( "${always_source_patches[@]}" )
     if (( apply_gemma4_mtp_patch )); then
         patches_to_copy+=( "${mtp_source_patches[@]}" )
     fi
     if (( apply_gemma4_patches )); then
         patches_to_copy+=( "${gemma4_source_patches[@]}" )
+    fi
+    if (( apply_dsv4_nvfp4_patch )); then
+        patches_to_copy+=( "${dsv4_nvfp4_source_patches[@]}" )
     fi
     for p in "${patches_to_copy[@]}"; do
         if [[ -f "${PATCHES_DIR}/${p}" ]]; then
@@ -849,6 +896,25 @@ apply_patches() {
         echo "Gemma4 Dockerfile patched"
     else
         echo "Skipping dockerfile-gemma4-nvfp4.patch (RECIPE_NAME='${RECIPE_NAME}' is not a gemma4 variant)"
+    fi
+
+    # 2c. DSV4 NVFP4 (PR #25820) Dockerfile patch — recipe-gated (see the
+    #     apply_dsv4_nvfp4_patch determination above). Adds the COPY + RUN
+    #     step that applies sglang-dsv4-nvfp4-pr25820.patch to the sglang
+    #     source before `uv pip install ./python`. NOTE: anchors on the same
+    #     Dockerfile region as the gemma4-nvfp4 patch — not combinable with
+    #     a gemma4 recipe without regenerating the context (no such recipe
+    #     exists; the dry-run below catches it if that ever changes).
+    if (( apply_dsv4_nvfp4_patch )); then
+        echo "Applying dockerfile-dsv4-nvfp4.patch..."
+        patch --dry-run -p1 < "${PATCHES_DIR}/dockerfile-dsv4-nvfp4.patch" \
+            || die "DSV4 NVFP4 Dockerfile patch dry-run failed — regenerate dockerfile-dsv4-nvfp4.patch"
+        patch -p1 < "${PATCHES_DIR}/dockerfile-dsv4-nvfp4.patch"
+        grep -q 'sglang-dsv4-nvfp4-pr25820.patch' container-build/Dockerfile.sglang-nightly \
+            || die "DSV4 NVFP4 Dockerfile patch verification failed"
+        echo "DSV4 NVFP4 Dockerfile patched"
+    else
+        echo "Skipping dockerfile-dsv4-nvfp4.patch (recipe does not set APPLY_DSV4_NVFP4_PR25820=1)"
     fi
 
     # 3. Drop in the recipe file. run_build() parses it inline and calls
@@ -948,6 +1014,7 @@ run_build() {
     echo "    skip-flashmla      = $([ ${APPLY_SKIP_FLASHMLA} -eq 1 ] && echo APPLY || echo skip)  (--keep-flashmla opts out)"
     echo "  source patches (in apply_patches stage on x86):"
     echo "    gemma4-mtp PR24436 = (handled in apply_patches() — version-gated, see log above)"
+    echo "    dsv4-nvfp4 PR25820 = (handled in apply_patches() — recipe-gated via APPLY_DSV4_NVFP4_PR25820, see log above)"
 
     # The build context is container-build/ (contains Dockerfile + patches/
     # subdir). Podman streams it to the remote build host over the socket;

@@ -1,0 +1,99 @@
+#
+# Custom recipe: SGLang v0.5.13 + our SM121 sgl-kernel patches
+#                + DeepSeek-V4 NVFP4 MoE (unmerged upstream PR #25820).
+#
+# PURPOSE: first build that can serve nvidia/DeepSeek-V4-Flash-NVFP4 —
+# see roles/k8s_dgx/model_profiles/nvidia-deepseek-v4-flash-nvfp4.yml
+# (BLOCKER section) and UPSTREAM_DSV4_BUGS.md §3/§5/§8. Created 2026-06-12.
+#
+# Pinned to upstream tag `v0.5.13` (cut 2026-06-11T08:09Z; on PyPI since
+# 2026-06-11T10:16Z; bare tag, no GitHub release page at recipe-creation
+# time). DSV4-relevant content vs v0.5.12.post1:
+#   - PR #24692 (merged 2026-06-01): native SM120 support for DeepSeek-V4
+#     inference — flash_mla_sm120.py Triton kernel (check is major==12, so
+#     it covers SM121/GB10), fp8_paged_mqa_logits_torch_sm120 (handles the
+#     seq_lens squeeze internally), MXFP4 MoE Triton fallback. This makes
+#     UPSTREAM_DSV4_BUGS.md §6 walls 0 and 6 obsolete → the 0xSero FlashMLA
+#     kernel bake is DROPPED from this recipe (see DSV4_KERNEL_REPO below).
+#   - PR #26209 (merged 2026-06-02): FP4 Indexer for DeepSeek V4 (DSA path).
+#   - Walls 1/2/4/5/7 are UNCHANGED in v0.5.13 (verified §8) — the
+#     kv_lora_rank launch patch and the profile fallback flags
+#     (opt_deepgemm_hc_prenorm=false, fp8_paged_mqa_logits_torch=true,
+#     topk_transform_512_torch=true) stay required.
+#
+# Crash A status (CUTLASS_NVFP4_SM121_PRD.md): v0.5.13 still pins CUTLASS
+# 57e3cfb47a (v4.2.1 era; CMakeLists switched to URL-tarball FetchContent
+# but the SAME commit) — the Pingpong/StageCountAutoCarveout code in
+# nvfp4_blockwise_moe.cuh is unchanged, so sgl-kernel-sm121.patch (the
+# implemented PRD Option 2) remains REQUIRED and applies cleanly (verified
+# 2026-06-12 against the tag, as do arch-prune / disable-fa3 /
+# skip-sm90-target; skip-flashmla context was regenerated the same day —
+# the post-include section is "triton kernels" since ~0.5.12). A CUTLASS
+# 4.5.x bump (upstream fix NVIDIA/cutlass#3144) is a SEPARATE experiment,
+# deliberately not part of this first 0.5.13 build.
+#
+# Delta gegenüber sglang-0.5.12-sm121.recipe:
+#   - SGLANG_VERSION 0.5.12.post1 → 0.5.13, SGLANG_REF v0.5.12.post1 → v0.5.13
+#   - FLASH_MLA_REPO / DSV4_KERNEL_REPO geleert (PR #24692 macht den
+#     vendored sm_121a-Kernel + .pth-Hook redundant, §8)
+#   - NEU: APPLY_DSV4_NVFP4_PR25820=1 — build_sm121_image.sh wendet damit
+#     dockerfile-dsv4-nvfp4.patch an, das sglang-dsv4-nvfp4-pr25820.patch
+#     (PR #25820 rebased auf v0.5.13) in den sglang-Source einspielt.
+#     Auf 0/entfernen, sobald #25820 im gepinnten Tag enthalten ist.
+#   - FLASHINFER_VERSION bleibt 0.6.12 — das ist der upstream-Pin von
+#     v0.5.13 (python/pyproject.toml: flashinfer_python[cu13]==0.6.12).
+#     Offene 0.6.12-Punkte: FLASHINFER_0.6.12_TODO.md.
+#
+# RUNTIME CAVEAT: PR #25820 ist upstream nur auf B200 (SM100) validiert
+# und default-routet auf moe_runner_backend=flashinfer_trtllm_routed —
+# auf SM121 NICHT lauffähig (#26324). Das Modellprofil pinnt deshalb
+# flashinfer_cutlass explizit; der Auto-Hook greift nur bei "auto".
+# Erstboot auf GB10 ist ein First-Contact-Experiment.
+#
+# Voraussetzungen: xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132 Base
+# auf spark4 (scripts/build_pytorch_base_image.sh, siehe
+# ensure_base_image_present in build_sm121_image.sh).
+#
+DOCKERFILE=Dockerfile.sglang-nightly
+TARGET=runtime
+
+BASE_IMAGE=xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132
+
+# Upstream-Pin von v0.5.13 (identisch zum bisherigen lokalen Pin).
+FLASHINFER_VERSION=0.6.12
+
+# transformers 5.8.0 weiter pinning für Gemma-4-assistant-Drafter
+# (gemma4_assistant AutoConfig-Registrierung) — unverändert zu 0.5.12.
+TRANSFORMERS_VERSION=5.8.0
+
+# `kernels` <0.13 pin — transformers-5.x hub_kernels.py inkompatibel mit
+# kernels>=0.13 (LayerRepository braucht revision=/version=). Unverändert;
+# entfernen sobald transformers das upstream fixt (siehe 0.5.12-Recipe).
+KERNELS_VERSION=0.12.3
+
+SGLANG_VERSION=0.5.13
+SGLANG_REF="v0.5.13"
+
+# ── DeepSeek-V4 FlashMLA kernel: DROPPED on 0.5.13 ───────────────────────────
+# PR #24692 (in v0.5.13) ships a native SM120/121 sparse-decode path in
+# deepseek_v4_backend.py (_is_sm120 via major==12) — the 0xSero vendored
+# sm_121a kernel and the stock-flash_mla interface install are redundant
+# (UPSTREAM_DSV4_BUGS.md §8, walls 0+6). Empty values skip the Dockerfile
+# step (gated on DSV4_KERNEL_REPO being non-empty). Re-add the four values
+# from sglang-0.5.12-sm121.recipe if a flash_mla import error proves the
+# native path insufficient.
+FLASH_MLA_REPO=
+FLASH_MLA_REF=
+DSV4_KERNEL_REPO=
+DSV4_KERNEL_REF=
+DSV4_KERNEL_ARCH=
+
+# ── DeepSeek-V4 NVFP4 MoE: upstream PR #25820, rebased onto v0.5.13 ──────────
+# Gates dockerfile-dsv4-nvfp4.patch in build_sm121_image.sh::apply_patches,
+# which adds the COPY+RUN step applying sglang-dsv4-nvfp4-pr25820.patch to
+# the sglang source before `uv pip install ./python`. Set to 0 (or delete)
+# once PR #25820 is merged into the pinned SGLANG_REF — re-applying a merged
+# patch fails the in-container dry-run and aborts the build (by design).
+APPLY_DSV4_NVFP4_PR25820=1
+
+IMAGE_TAG=xomoxcc/dgx-spark-sglang:0.5.13-sm121

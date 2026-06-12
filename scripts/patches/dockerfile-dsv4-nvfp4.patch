@@ -1,0 +1,46 @@
+DeepSeek-V4 NVFP4 (PR #25820) patch-application step for
+container-build/Dockerfile.sglang-nightly.
+
+Adds one COPY+RUN step that applies sglang-dsv4-nvfp4-pr25820.patch
+(upstream PR #25820 rebased onto v0.5.13 — hybrid FP8+NVFP4 checkpoint
+support for nvidia/DeepSeek-V4-Flash-NVFP4) to the sglang Python source
+AFTER the SM121 sgl-kernel patches but BEFORE `uv pip install ./python`,
+so the installed package picks up the changes. Same pattern as
+dockerfile-gemma4-nvfp4.patch.
+
+Apply to: container-build/Dockerfile.sglang-nightly AFTER
+dockerfile-sm121.patch has been applied. Application is gated by
+build_sm121_image.sh on the recipe variable APPLY_DSV4_NVFP4_PR25820=1
+(set in sglang-0.5.13-sm121.recipe; remove the variable / set 0 once
+PR #25820 is merged into the pinned SGLANG_REF).
+
+NOTE: anchors on the same Dockerfile region as dockerfile-gemma4-nvfp4
+.patch (the end of the sm121-debug block). The two are not used together
+today (no gemma4+dsv4 recipe); if that ever changes, apply gemma4 first
+and regenerate this patch's context.
+
+--- a/container-build/Dockerfile.sglang-nightly
++++ b/container-build/Dockerfile.sglang-nightly
+@@ -290,6 +290,22 @@
+         echo "=== Skipping sgl-kernel-sm121-debug.patch (APPLY_SGL_KERNEL_SM121_DEBUG=${APPLY_SGL_KERNEL_SM121_DEBUG}) ==="; \
+     fi
+ 
++# DeepSeek-V4 NVFP4 MoE support (upstream PR #25820, not yet merged).
++# Regenerated against tag v0.5.13 — adds HybridFp8NvFp4Config so hybrid
++# FP8(base)+NVFP4(experts) checkpoints (nvidia/DeepSeek-V4-Flash-NVFP4)
++# load; FusedMoE routes through ModelOptNvFp4FusedMoEMethod. Applied to
++# the sglang Python source before pip install so the installed
++# dist-packages picks up the changes. This COPY+RUN step only exists in
++# builds whose recipe sets APPLY_DSV4_NVFP4_PR25820=1 (the dockerfile
++# patch adding this step is gated by build_sm121_image.sh).
++COPY patches/sglang-dsv4-nvfp4-pr25820.patch /tmp/sglang-dsv4-nvfp4-pr25820.patch
++RUN set -e; cd /data/sglang && \
++    echo "=== Applying sglang-dsv4-nvfp4-pr25820.patch (PR #25820) ===" && \
++    patch --dry-run -p1 < /tmp/sglang-dsv4-nvfp4-pr25820.patch && \
++    patch -p1 < /tmp/sglang-dsv4-nvfp4-pr25820.patch && \
++    grep -q 'HybridFp8NvFp4Config' python/sglang/srt/layers/quantization/modelopt_quant.py && \
++    echo 'DSV4 NVFP4 PR #25820 patch applied successfully'
++
+ # Install sglang package (no deps, no build isolation since base has torch).
+ # Moved here from its original early-stage location so the installed
+ # dist-packages picks up the patched nvfp4_blockwise_moe.cuh above.

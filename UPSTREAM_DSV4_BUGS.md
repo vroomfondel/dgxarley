@@ -37,6 +37,18 @@
 > `nvidia/DeepSeek-V4-Flash-NVFP4` (createdAt 2026-05-18T00:02Z) existiert —
 > die Aussage in §5 „kein nvidia/DeepSeek-V4-Flash-NVFP4" war falsch. Siehe §5
 > für die Korrektur und die Implikation für die Kapazitätsabschätzung.
+>
+> **Update 2026-06-12 (später) — lokaler Build-Pfad angelegt.**
+> `scripts/patches/sglang-0.5.13-sm121.recipe` baut SGLang v0.5.13 (enthält
+> #26209 + #24692) plus PR #25820 als Source-Patch
+> (`sglang-dsv4-nvfp4-pr25820.patch`, rebased auf v0.5.13 vom PR-Head
+> `f9c7cd475b`, Recipe-Gate `APPLY_DSV4_NVFP4_PR25820=1`) → Image-Tag
+> `xomoxcc/dgx-spark-sglang:0.5.13-sm121`. Damit entfällt das Warten auf den
+> #25820-Merge für einen Testboot. ACHTUNG: #25820 default-routet auf
+> `flashinfer_trtllm_routed` (B200/SM100-only, vgl. #26324) — das Modellprofil
+> `nvidia-deepseek-v4-flash-nvfp4.yml` pinnt deshalb `flashinfer_cutlass`.
+> 0xSero-FlashMLA-Kernel + seq_lens-Squeeze sind in diesem Recipe entfernt
+> (§8, Walls 0+6 nativ via #24692); Walls 1/2/4/5/7-Workarounds bleiben aktiv.
 
 Summary of everything that blocks or constrains serving **DeepSeek-V4-Flash** on
 our 4×GB10 / SM121 cluster under SGLang. Context (as written 2026-05-31): the
