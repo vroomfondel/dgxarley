@@ -26,6 +26,8 @@ scitrera/cuda-containers has no SDPA/sm121 issue filed and no
 NVCC_GENCODE/sm121 fix committed as of 2026-05-31. The workaround in
 `comfyui_launch.sh.j2` §4c remains relevant for the bare-scitrera path.
 
+> **Update 2026-06-12 — scitrera/cuda-containers opt-in `b12x` variant added, but broken default persists.** Commit `44a9e8b5` (2026-06-09, "feat: add CUDA_VARIANT argument to Dockerfiles and update installation scripts for optional b12x support") introduced an opt-in `b12x` build variant. However, the default `NVCC_GENCODE="-gencode=arch=compute_121,code=sm_121"` in `container-build/Dockerfile.base` (lines ~6 and ~80) is **unchanged** — the broken sm_121-only gencode persists in the default path. Users who don't explicitly pass `CUDA_VARIANT=b12x` will still get the broken default. No public issue has been filed against scitrera/cuda-containers as of 2026-06-12; the issue-filing prompt below remains valid.
+
 ---
 
 ## Verified scope

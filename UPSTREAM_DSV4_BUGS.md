@@ -15,12 +15,28 @@
 > SGLang ist also in Arbeit, aber nicht verfügbar.
 >
 > **2026-06-11 — SGLang-Tag v0.5.13 heute geschnitten** (2026-06-11T08:09:52Z,
-> nur Git-Tag, noch kein GitHub-Release). Enthält **PR #24692** (SM120-Support
-> für DeepSeek-V4-Inference, merged 2026-06-01) sowie **#26209** (FP4 Indexer).
-> Cluster-Images laufen weiterhin auf v0.5.12.post1-basierten Builds. PR #25820
-> (NVFP4 MoE) meldet laut letztem Kommentar vom 2026-06-11: „Flash NVFP4 is
-> working now" (GSM8K 96.21% auf B200) — PR noch offen/ungemergt, kein
-> SM120/121-Test erwähnt. Details zu den Wall-Auswirkungen von #24692 in §8.
+> noch kein GitHub-Release). `sglang 0.5.13` wurde am 2026-06-11T10:16Z auf PyPI
+> veröffentlicht (~2 h nach dem Tag) — als reguläres Release installierbar, auch
+> wenn kein GitHub-Release-Page existiert (Stand 2026-06-12). Enthält **PR
+> #24692** (SM120-Support für DeepSeek-V4-Inference, merged 2026-06-01) sowie
+> **#26209** (FP4 Indexer). Cluster-Images laufen weiterhin auf
+> v0.5.12.post1-basierten Builds. PR #25820 (NVFP4 MoE) meldet laut letztem
+> Kommentar vom 2026-06-11: „Flash NVFP4 is working now" (GSM8K 96.21% auf
+> B200) — PR noch offen/ungemergt, kein SM120/121-Test erwähnt. Details zu den
+> Wall-Auswirkungen von #24692 in §8.
+>
+> **Update 2026-06-12 — PR #25820 Status.** PR weiterhin offen; `/tag-and-rerun-ci`
+> wurde 2026-06-12T07:18Z gepostet, `mergeable_state: blocked` (CI ausstehend),
+> 13 Reviewer angefordert. Timeline: 2026-06-10 User-Report „Flash NVFP4 not
+> working" (cuda_graph_runner exception) → 2026-06-10T17:28 trevor-m identifiziert
+> veralteten quant_config im HF-Repo → 2026-06-11T11:50 „Flash NVFP4 is working
+> now" nach HF-seitigem quant-config-Fix (GSM8K 96.21% auf B200; kein
+> SM120/121-Test).
+>
+> **Update 2026-06-12 — `nvidia/DeepSeek-V4-Flash-NVFP4` existiert.** Das HF-Repo
+> `nvidia/DeepSeek-V4-Flash-NVFP4` (createdAt 2026-05-18T00:02Z) existiert —
+> die Aussage in §5 „kein nvidia/DeepSeek-V4-Flash-NVFP4" war falsch. Siehe §5
+> für die Korrektur und die Implikation für die Kapazitätsabschätzung.
 
 Summary of everything that blocks or constrains serving **DeepSeek-V4-Flash** on
 our 4×GB10 / SM121 cluster under SGLang. Context (as written 2026-05-31): the
@@ -37,13 +53,17 @@ Flash serving is still being stabilized upstream.
 | 2 | compressed-tensors `wqkv_a` vs `fused_wqa_wkv` target mismatch | **Open upstream** (#23724) | Makes RedHatAI / kylesayrs / canada-quant NVFP4 unloadable |
 | 3 | NVFP4 MoE / FP4 indexer for V4 not implemented | **Partial** — FP4 indexer #26209 merged 2026-06-02 (main, in v0.5.13-Tag); NVFP4 MoE #25820 open (Flash NVFP4 working on B200 per 2026-06-11 comment, kein SM121-Test) | Kein nutzbarer NVFP4-Pfad auf SGLang für uns bis #25820 gemergt |
 | 4 | NVFP4 runner instability on V4-Flash/Pro | **Open / partly closed** (#26324, #25704) | Even where NVFP4 loads, output is NaN/garbage except EAGLE |
-| 5 | `nvidia/DeepSeek-V4-Pro-NVFP4` does not fit | N/A (capacity) | 913 GB weights vs 512 GB cluster RAM |
+| 5 | `nvidia/DeepSeek-V4-Pro-NVFP4` does not fit; `nvidia/DeepSeek-V4-Flash-NVFP4` needs verification | N/A (capacity) | Pro: 913 GB vs 512 GB — does not fit. Flash NVFP4 (~162B params) may fit TP=4 — unverified, see §5 |
 
-**Net conclusion:** `sgl-project/DeepSeek-V4-Flash-FP8` (block-wise FP8) is the
-**only viable V4 path on SGLang** for this cluster today. NVFP4 of V4-Flash is a
-dead end on SGLang on two independent axes — no loadable checkpoint **and**
-incomplete runtime support. NVFP4 would only work via **vLLM** (the RedHatAI
-checkpoint is vLLM-targeted).
+**Net conclusion (Stand 2026-05-31, teilweise überholt):**
+`sgl-project/DeepSeek-V4-Flash-FP8` (block-wise FP8) is the **only viable V4
+path on SGLang** for this cluster today. NVFP4 of V4-Flash remained a dead end
+on two independent axes — incomplete runtime support (#25820 offen) **and**
+fehlender SGLang-nativer Checkpoint. ~~no loadable checkpoint~~ — **Update
+2026-06-12:** `nvidia/DeepSeek-V4-Flash-NVFP4` existiert seit 2026-05-18 (§5).
+Die Achse „kein Checkpoint" entfällt damit sobald #25820 gemergt ist; die Achse
+„unvollständige Runtime" bleibt bis dahin bestehen. NVFP4 via vLLM (RedHatAI
+checkpoint, vLLM-targeted) ist weiterhin eine Alternative.
 
 ---
 
@@ -162,13 +182,24 @@ On **SM121** specifically, our own `cutlass_moe_fp4` crashes apply on top (see
 
 ---
 
-## 5. `nvidia/DeepSeek-V4-Pro-NVFP4` does not fit (capacity, not a bug)
+## 5. `nvidia/DeepSeek-V4-Pro-NVFP4` does not fit — `nvidia/DeepSeek-V4-Flash-NVFP4` needs verification (capacity, not a bug)
 
-The only NVIDIA ModelOpt-NVFP4 of V4 is the **Pro** variant — there is **no
-`nvidia/DeepSeek-V4-Flash-NVFP4`** (NVIDIA published only Pro for V4; the nvidia
-org otherwise has R1 / V3-0324 / R1-0528 / V3.1 / V3.2 NVFP4).
+> **Update 2026-06-12:** Die ursprüngliche Aussage „there is no
+> `nvidia/DeepSeek-V4-Flash-NVFP4`" und „the only NVIDIA ModelOpt-NVFP4 of V4
+> is the Pro variant" waren **falsch**. Das HF-Repo
+> `nvidia/DeepSeek-V4-Flash-NVFP4` existiert seit 2026-05-18T00:02Z (zuletzt
+> geändert 2026-06-10T19:33Z, im Zuge des PR #25820 quant-config-Fix-Zyklus),
+> 46 Safetensors-Shards (vs. 64 für Pro). `hf_quant_config.json` bestätigt:
+> producer `modelopt`, version `dsv4-nvfp4-experts`, quant_algo
+> `MIXED_PRECISION`, NVFP4 auf `layers.*.ffn.experts`, group_size 16 — gleiches
+> Format wie das Pro-Checkpoint. Voraussetzung für die Nutzung: PR #25820 muss
+> gemergt sein (Stand 2026-06-12: offen, CI-blocked, vgl. Status-Block oben).
+> Kapazitäts-Implikation: Die §5-Abschätzung „does not fit" galt für Pro (913
+> GB); Flash NVFP4 (~162 B params, NVFP4 experts, ~46 Shards) ist deutlich
+> kleiner und könnte bei TP=4 in 4×128 GB passen — **muss noch verifiziert
+> werden**, war bisher keine betrachtete Option.
 
-Pro numbers (verified via HF API):
+**`nvidia/DeepSeek-V4-Pro-NVFP4`** — Pro-Variante (nicht lauffähig auf diesem Cluster):
 - **913 GB** of weights on disk (64 safetensors), **~910 B params**, 61 layers,
   hidden 7168, 384 routed experts.
 - ModelOpt mixed precision: NVFP4 on **experts only** (`hf_quant_config.json`,
@@ -178,7 +209,13 @@ Pro numbers (verified via HF API):
 Cluster has **4×128 GB = 512 GB** total. At TP/EP=4 that is **~228 GB/GPU**
 needed vs **128 GB** available — ~1.8× over capacity, before KV cache /
 activations / CUDA context. Even hypothetical pure NVFP4 (~455 GB) leaves no
-runtime headroom. Only the **Flash** variant (~162 B) fits.
+runtime headroom. **Pro does not fit.**
+
+**`nvidia/DeepSeek-V4-Flash-NVFP4`** — Flash-Variante (~162 B params, 46
+safetensors-Shards): Kapazitäts-Abschätzung steht aus. Bei TP=4 und ~1
+byte/param sind ~162 GB Gewichte zu erwarten — nominal in 4×128 GB passend,
+aber KV-Cache / Aktivierungen / CUDA-Kontext müssen gegengerechnet werden.
+Erst sinnvoll zu testen, sobald PR #25820 gemergt ist.
 
 ---
 
@@ -382,11 +419,11 @@ PD-disagg) may surface new walls if turned on.
 | Ref | Title | State |
 |-----|-------|-------|
 | PR #23882 | DeepSeek-V4 day-0 support (`DeepseekV4ForCausalLM`) | merged (v0.5.12) |
-| PR #24692 | feat: SM120 (Blackwell Desktop) support for DeepSeek-V4 inference | **merged 2026-06-01; im v0.5.13-Tag (2026-06-11) enthalten** |
+| PR #24692 | feat: SM120 (Blackwell Desktop) support for DeepSeek-V4 inference | **merged 2026-06-01; im v0.5.13-Tag (2026-06-11) enthalten; auf PyPI als 0.5.13 seit 2026-06-11T10:16Z; noch kein GitHub-Release-Page (Stand 2026-06-12)** |
 | #23602 | DeepSeek V4 Roadmap | open |
 | #23724 | Support DeepSeek-V4 Compressed-tensor W4A16 | open |
 | #25820 | [NVIDIA] Support NVFP4 MoE for DeepSeek-V4 | open (2026-06-11: Flash NVFP4 working auf B200, GSM8K 96.21%; kein SM120/121-Test) |
-| #26209 | Add FP4 Indexer for DeepSeek V4 | **merged 2026-06-02 into main; im v0.5.13-Tag (2026-06-11) enthalten, noch kein GitHub Release** |
+| #26209 | Add FP4 Indexer for DeepSeek V4 | **merged 2026-06-02 into main; im v0.5.13-Tag (2026-06-11) enthalten; auf PyPI als 0.5.13 seit 2026-06-11T10:16Z; noch kein GitHub-Release-Page (Stand 2026-06-12)** |
 | #26324 | flashinfer_trtllm MoE runner asserts on DeepSeek-V4-Flash NVFP4 (B200) | open |
 | #25704 | V4-Pro NVFP4 B200: NaN/garbage except EAGLE | closed |
 | #25165 | main branch broke with deepseek v4 flash deployment | open |
@@ -422,7 +459,7 @@ einem v0.5.13-Image ändert.
 | 0 | FlashMLA sparse-decode (SM121) | 0xSero-vendored Kernel + `.pth`-Hook nötig (§7) | **Redundant** — nativ via `deepseek_v4_backend.py` (`_is_sm120=True`); Hook kann entfernt werden |
 | 1 | `kv_lora_rank=None` strict-dataclass crash | Launch-Patch nötig (`int → int\|None`) | **Weiterhin nötig** — `kv_lora_rank: int = 512` in `configuration_deepseek_v3.py` unverändert; `_DeepseekV4ConfigAlias` in v0.5.13 überschreibt das Feld nicht |
 | 2 | `wqkv_a` vs `fused_wqa_wkv` target mismatch | Nicht patchbar (§2) | **Unverändert** — kein Fix in #24692 |
-| 3 | NVFP4 MoE / FP4-Indexer | FP4-Indexer merged (#26209), MoE-Pfad offen | **Teilweise** — #26209 in v0.5.13; NVFP4 MoE (#25820) weiterhin offen |
+| 3 | NVFP4 MoE / FP4-Indexer | FP4-Indexer merged (#26209), MoE-Pfad offen | **Teilweise** — #26209 in v0.5.13 (PyPI seit 2026-06-11); NVFP4 MoE (#25820) weiterhin offen/CI-blocked (Stand 2026-06-12) |
 | 4 | DeepGEMM MHC-prenorm (SM121) | `SGLANG_OPT_DEEPGEMM_HC_PRENORM=0` nötig | **Weiterhin nötig** — `configurer.py` gated DeepGEMM bei exakt `sm_version==120`, nicht 121; `mhc.py` prüft nur `SGLANG_OPT_DEEPGEMM_HC_PRENORM`; kein Auto-Routing für SM121 in #24692 |
 | 5 | `paged_mqa_logits` DeepGEMM SM121-Lücke | `SGLANG_FP8_PAGED_MQA_LOGITS_TORCH=1` nötig | **Weiterhin nötig** (Env-Var-Routing unverändert) |
 | 6 | `seq_lens.shape`-Assert im torch-Fallback | Launch-Source-Patch nötig | **Redundant** — `fp8_paged_mqa_logits_torch_sm120` in v0.5.13 handhabt Squeeze intern; Patch kann entfernt werden |
