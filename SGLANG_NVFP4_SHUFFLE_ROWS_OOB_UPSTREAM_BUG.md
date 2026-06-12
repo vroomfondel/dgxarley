@@ -9,10 +9,11 @@ activity 2026-03-29, re-checked 2026-06-11; issue #20011 closed 2026-04-11).
 Bug remains present in v0.5.11, v0.5.12, and v0.5.12.post1 (released
 2026-05-26; NVFP4 weight-loading changes #25190/#25107 landed but **not** the
 `_shuffle_rows_torch` OOB fix), and our dev1 image. **Note (2026-05-31):**
-PR #19493 ("improve cutlass_moe_fp4 performance by replacing post-GEMM shuffle_rows
-with fused apply_shuffle_mul_sum") merged to `main` 2026-05-26 — it replaces the
-post-GEMM `c2 = shuffle_rows(c2, c_map, …) + mul + sum` with
-`apply_shuffle_mul_sum(...)`, but does **not** touch the `a_map`/`c_map`
+PR #19493 ("[Perf][Moe] improve cutlass_moe_fp4 performance by using
+`apply_router_weight_on_input`") merged to `main` 2026-05-26 — it replaces the
+post-GEMM `c2 = shuffle_rows(c2, c_map, …) + mul + sum` sequence with a fused
+`apply_shuffle_mul_sum(c2, output, c_map, weights)` call, but does **not** touch
+the `a_map`/`c_map`
 `torch.empty` allocations or `_shuffle_rows_torch`, so the OOB is unaddressed.
 It is also NOT in 0.5.12.post1 (main-only), so the monkey-patch still applies.
 
@@ -23,10 +24,11 @@ ahead of v0.5.12.post1, bare git tag, no GitHub Release page yet). v0.5.13 conta
   `_shuffle_rows_torch` `a_map`/`c_map` `torch.empty` OOB)
 - PR #26861 ("Reduce transient allocations in NVFP4 MoE setup", merged 2026-06-04) —
   reduces transient allocations in NVFP4 MoE setup (does **not** fix the OOB)
-- PR #19493 (merged 2026-05-26, replaces post-GEMM shuffle_rows with
-  `apply_shuffle_mul_sum`) — **IS** in v0.5.13; the "Open: semantic fix" candidate 2
-  (c_map-based scatter pollution) needs re-evaluation against the fused
-  `apply_shuffle_mul_sum` path on v0.5.13+ images before any semantic fix attempt
+- PR #19493 (merged 2026-05-26, replaces the post-GEMM `shuffle_rows + mul + sum`
+  sequence with fused `apply_shuffle_mul_sum(c2, output, c_map, weights)`) — **IS**
+  in v0.5.13; the "Open: semantic fix" candidate 2 (c_map-based scatter pollution)
+  needs re-evaluation against the fused `apply_shuffle_mul_sum` path on v0.5.13+
+  images before any semantic fix attempt
 
 The `_shuffle_rows_torch` OOB on `a_map` remains unaddressed in v0.5.13. The
 workaround (flashinfer_cutlass) is unchanged. The cluster-level workaround

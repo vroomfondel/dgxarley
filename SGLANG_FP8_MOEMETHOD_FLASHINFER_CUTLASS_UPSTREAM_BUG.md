@@ -26,7 +26,22 @@ The bug is plainly visible in the source — `Fp8MoEMethod.create_moe_runner`
 ends with an explicit `# TODO(cwan): refactor other backends` for everything
 that is not triton/aiter/deep_gemm/fi_trtllm.
 
-**No upstream issue or PR has been filed by us yet.** Adjacent open work:
+**Update 2026-06-12:** A third party independently filed the issue and a
+partial-fix PR on 2026-06-11:
+[Issue #27951](https://github.com/sgl-project/sglang/issues/27951)
+("`[Bug] --moe-runner-backend flashinfer_cutlass + FP8 weights crashes with
+AttributeError: 'Fp8MoEMethod' object has no attribute 'runner'`", filed by
+`gujialiang123`) and
+[PR #27968](https://github.com/sgl-project/sglang/pull/27968)
+("`fix(fp8/moe): raise clear error for unsupported MoE runner backend`", filed
+by `Anai-Guo`, closes #27951). **PR #27968 does NOT implement
+`flashinfer_cutlass` support for `Fp8MoEMethod`** — it raises a clean
+`ValueError` for unsupported backends instead of the opaque `AttributeError`.
+The SM12.0a hardware constraint (no SM90 CUTLASS FP8-block kernel) is
+unchanged; the workaround (`moe_runner_backend: triton`) remains the correct
+cluster configuration.
+
+Adjacent open work:
 
 - [PR #21872](https://github.com/sgl-project/sglang/pull/21872)
   ("Add FlashInfer CUTLASS fused MoE support for FP8 block-quantized models on SM90") —
@@ -239,13 +254,15 @@ moe_runner_backend: triton          # vanilla Fp8MoEMethod path that works
 
 ## Action items
 
-1. **File upstream issue** in `sgl-project/sglang` with the stack trace,
+1. ~~**File upstream issue** in `sgl-project/sglang` with the stack trace,
    reproducer command, and a pointer to the
    `# TODO(cwan): refactor other backends` line in `fp8.py` and to
    PRs #21872 / #22627 / Issue #20719 as the existing partial work.
    Title proposal: "`Fp8MoEMethod.create_moe_runner` does not handle
    `flashinfer_cutlass` / `flashinfer_cutedsl` → `AttributeError:
-   'Fp8MoEMethod' object has no attribute 'runner'` at first forward".
+   'Fp8MoEMethod' object has no attribute 'runner'` at first forward".~~
+   **Moot as of 2026-06-12** — Issue #27951 and PR #27968 filed independently
+   by third parties on 2026-06-11. See Status section update above.
 2. **Keep cluster profile pinned to `triton`** for all vanilla-FP8
    MoE models. Document in `CLAUDE.md` once filed.
 3. **Stop re-running the fi_cutlass cases (07–12) of the v0.5.11

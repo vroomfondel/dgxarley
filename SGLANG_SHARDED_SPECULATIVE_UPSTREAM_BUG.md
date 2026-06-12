@@ -29,9 +29,13 @@ therefore still required on v0.5.11 / v0.5.12 / v0.5.12.post1 / v0.5.13 / dev1 i
 
 > **Note (2026-06-11):** SGLang v0.5.13 brings further Spec-V2 changes:
 > Spec V1 deprecation (PR #25464), EAGLE draft kv_indices OOB fixes
-> (#27338, #27460), and FA3 EAGLE crash fix (#25002). The sharded_state
-> workaround is unaffected by these changes — the bug is upstream of the
-> speculative algorithm selection and is still unreported.
+> (#27338, #27460), FA3 EAGLE crash fix (#25077 "Fix(spec): Fix the crash
+> issue in the FA3 backend when running with top-k > 1 and page_size > 1",
+> merged 2026-06-09), and trtllm_mha draft-extend CUDA graph with v2
+> semantics (#25002 "[spec_v2] Enable trtllm_mha draft-extend CUDA graph
+> with v2 semantics", merged 2026-06-05). The sharded_state workaround is
+> unaffected by these changes — the bug is upstream of the speculative
+> algorithm selection and is still unreported.
 
 - File: `sglang/srt/managers/scheduler.py`, method `maybe_init_draft_worker()`
 - Root cause in: `sglang/srt/managers/tp_worker.py`, method `_init_model_config()`

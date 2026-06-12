@@ -12,6 +12,22 @@
 > main and `release/v0.5.13` since 2026-04-16. **v0.5.13** (tag cut
 > 2026-06-11, no GitHub Release page yet) does **not** contain a fix.
 > Monkey-patch in `sglang_launch.sh` still required.
+>
+> **Update 2026-06-12:** PR #22839 received a new third-party comment on
+> 2026-06-11T20:28Z (user `SeedSource`) confirming the bug is still present on
+> SGLang 0.5.13 and identifying a second broken sub-config in the same scope:
+> `norm_topk_prob` accessed via `text_config`. Exact quote (truncated at 600
+> chars per API): *"Confirming this is still live and now blocks two paths: on
+> stock 0.5.12/0.5.13 + transformers 5.x, Qwen3.5-397B-A17B-NVFP4 cannot load
+> at all — we hit the vision_config promotion failure this PR fixes, plus a
+> second sub-config in the same scope (norm_topk_prob via text_config).
+> Reproduced June 11 on 4x DGX Spark; dgxarley's published workaround is
+> semantically correct but file-level patching is required since transformers
+> 5.x binds __post_init__ at class creation."*
+> The `norm_topk_prob via text_config` failure is an additional attribute
+> access on the still-dict `text_config`; our monkey-patch converts all dict
+> sub-configs generically and already covers this case. No further cluster
+> action required.
 
 
 ## Summary
