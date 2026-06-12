@@ -174,6 +174,26 @@ The `env -u VIRTUAL_ENV` prefix is required because the parent shell's
 > unverändert (`0fffb82d`) sowohl in v2026.6.5 als auch in `main` →
 > **kein Re-Sync nötig**. v2026.6.5 ist weiterhin das aktuellste Release.
 
+> **2026-06-12 check — ⚠ Upstream-Divergenz, Re-Sync beim nächsten Tag-Bump erforderlich:**
+> Commit `f03f161b` landete am 2026-06-12T08:07:50Z auf `main`
+> (`fix(gateway): classify email document attachments as DOCUMENT`) und
+> ändert `gateway/platforms/email.py` → neuer Blob-SHA
+> `4eb4972b24ec5b2e2a2b3e06624e456cf501badc` (29585 Bytes, +488 gegenüber `0fffb82d`).
+> Die Änderung liegt im geerbten Upstream-Code innerhalb `_dispatch_message()`,
+> **nicht** in einem unserer `[PATCH-N]`-Abschnitte:
+> - Alt: `if att["type"] == "image": msg_type = MessageType.PHOTO`
+> - Neu: Guard `and msg_type == MessageType.TEXT` auf den PHOTO-Zweig +
+>   neuer `elif att["type"] == "document": msg_type = MessageType.DOCUMENT`
+>   (DOCUMENT schlägt PHOTO bei gemischten Anhängen).
+>
+> **Gepinnte Version v2026.6.5 ist nicht betroffen** (Blob dort weiterhin
+> `0fffb82d`) — kein sofortiger Handlungsbedarf. Beim nächsten Bump von
+> `hermes_image_tag` auf einen Release, der `f03f161b` enthält, muss die
+> neue DOCUMENT-Klassifizierung in
+> `roles/k8s_dgx/files/hermes_email_gateway_patched.py` eingearbeitet werden
+> (Schritt 2 der Re-Sync-Prozedur unten). Alle drei PRs (#28697, #28699,
+> #28702) bleiben offen.
+
 1. Download the new upstream file:
 
    ```bash
