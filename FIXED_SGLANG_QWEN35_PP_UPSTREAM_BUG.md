@@ -10,7 +10,7 @@
 | [#21070](https://github.com/sgl-project/sglang/pull/21070) | Fixed `make_layers()` + fused expert `params_dict` guard | 2026-03-21 | Yes |
 | [#21448](https://github.com/sgl-project/sglang/pull/21448) | Fixed non-fused expert path + Mamba/SSM cache PP sharding + VLM `start_layer`/`end_layer` | 2026-03-30 | Yes |
 
-Related issues: [#19500](https://github.com/sgl-project/sglang/issues/19500) (initial report), [#21184](https://github.com/sgl-project/sglang/issues/21184), [#21185](https://github.com/sgl-project/sglang/issues/21185). Superseded alternative: [PR #21217](https://github.com/sgl-project/sglang/pull/21217) (open, not needed).
+Related issues: [#19500](https://github.com/sgl-project/sglang/issues/19500) (initial report), [#21184](https://github.com/sgl-project/sglang/issues/21184), [#21185](https://github.com/sgl-project/sglang/issues/21185). Superseded alternative: [PR #21217](https://github.com/sgl-project/sglang/pull/21217) (closed without merge 2026-06-10, not needed).
 
 **Our image `scitrera/dgx-spark-sglang:0.5.10` includes all three fixes.** PP support is available.
 

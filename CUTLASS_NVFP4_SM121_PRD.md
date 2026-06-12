@@ -190,6 +190,8 @@ Patch the NVFP4 blockwise MoE kernel source in the SGLang clone during the `scit
 > 2. **The target codepath is dead code walking.** Per sglang#19637 maintainer comments (2026-05-27 … 2026-06-11), the standalone SGLang CUTLASS MoE backend (`moe_runner_backend=cutlass`, incl. the `cutlass_moe_fp4` fallback used by `triton` for NVFP4 weights) is planned for deprecation/removal — NVFP4 MoE converges on the `flashinfer_cutlass` path. An Option-2 patch would have no upstream-merge prospect and would die with the backend.
 >
 > **Action:** keep `flashinfer_cutlass` as the production NVFP4 MoE path (already known-good). Re-check on each SGLang image bump: (a) bundled CUTLASS version ≥ 4.5.0? → test stock `cutlass`/`triton` MoE on SM121, retire this PRD if it works; (b) backend removed entirely? → retire this PRD and migrate any profiles still pinning `cutlass`/`triton` for NVFP4 (e.g. `nvidia/Qwen3.5-397B-A17B-NVFP4` → `cutlass`).
+>
+> **2026-06-12 — v0.5.13 check (a):** `sgl-kernel/CMakeLists.txt` in tag v0.5.13 pins CUTLASS commit `57e3cfb47a2d9e0d46eb6335c3dc411498efa198` (dated 2025-09-16, v4.2.1 era) — identical to v0.5.12.post1. The `nvfp4_blockwise_moe.cuh` in v0.5.13 still uses `StageCountAutoCarveout` + `KernelPtrArrayTmaWarpSpecializedPingpong`. **Crash A is still present in v0.5.13. No SGLang release picks up CUTLASS 4.5.x yet.**
 
 ## Implementation (Option 2)
 
