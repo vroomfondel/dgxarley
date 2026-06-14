@@ -120,6 +120,7 @@ postgresql_postgres_password: "changeme"
 postgresql_openwebui_password: "changeme"
 postgresql_litellm_password: "changeme"
 postgresql_honcho_password: "changeme"
+postgresql_hindsight_password: "changeme"
 
 # Honcho (AI memory backend) — dummy values; override the real ones in
 # group_vars/all/vault.yml. honcho_jwt_secret signs the API's bearer JWTs
@@ -139,6 +140,23 @@ honcho_dialectic_api_key: "sk-changeme"
 honcho_summary_api_key: "sk-changeme"
 honcho_dream_api_key: "sk-changeme"
 honcho_embedding_api_key: "sk-changeme"
+
+# Hindsight (agent memory backend) — dummy values; real ones in
+# group_vars/all/vault.yml. Auth uses our own KeyMapTenantExtension (no Supabase):
+#   hindsight_tenant_keymap  — JSON-able map of bearer key -> tenant name; each
+#                              tenant gets its own Postgres schema. Add real keys
+#                              (long random strings) here in vault. Keys are NOT
+#                              templated — write literal strings.
+#   hindsight_api_key        — the default/admin tenant's bearer key; doubles as
+#                              the control-plane dataplane + UI access key. MUST
+#                              be one of the keys in hindsight_tenant_keymap.
+#   hindsight_llm_api_key    — upstream text-gen key (= LiteLLM master key here).
+#   hindsight_embeddings_api_key — sent to ollama-embed, which ignores it.
+hindsight_tenant_keymap:
+  "changeme-hindsight-api-key": "default"
+hindsight_api_key: "changeme-hindsight-api-key"
+hindsight_llm_api_key: "sk-changeme"
+hindsight_embeddings_api_key: "sk-changeme"
 
 # LiteLLM
 litellm_master_key: "sk-changeme"

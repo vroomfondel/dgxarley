@@ -1267,3 +1267,114 @@ honcho_embedding_api_key: "sk-changeme"
 # later requires re-creating the honcho DB (wipe + re-provision). Default 1536
 # (OpenAI text-embedding-3-small) would NOT fit bge-m3 vectors.
 honcho_embedding_dimensions: 1024
+
+
+# ============================================================================
+# Hindsight — agent memory backend (vectorize-io/hindsight)
+# ============================================================================
+# Deployed by roles/k8s_dgx/tasks/hindsight.yml (tag: hindsight). Modelled on
+# honcho but Hindsight ships THREE components from TWO pinned images (per the
+# upstream helm/hindsight chart):
+#   hindsight-api           — FastAPI on :8888 (/health). Runs Alembic migrations
+#                             on startup (HINDSIGHT_API_RUN_MIGRATIONS_ON_STARTUP)
+#                             and, when the worker is disabled, an INTERNAL task
+#                             worker. Image ghcr.io/vectorize-io/hindsight-api.
+#   hindsight-worker        — OPTIONAL dedicated task worker on :8889 (same image,
+#                             internal api worker is disabled when it runs). Off
+#                             by default — the api's internal worker suffices for
+#                             a single-tenant cluster. Waits on api/health first.
+#   hindsight-control-plane — Next.js web UI on :3000. Image
+#                             ghcr.io/vectorize-io/hindsight-control-plane.
+# Postgres: dedicated `hindsight` DB on the shared instance, pgvector enabled IN
+# that DB (HINDSIGHT_API_VECTOR_EXTENSION=pgvector). Password flows
+# postgresql-secrets → k8s_info → app Secret, same as honcho/litellm.
+# Config: Hindsight is configured ENTIRELY via HINDSIGHT_* env vars (no config
+# file), so non-sensitive routing goes in a ConfigMap (hindsight-config) and
+# only credentials in a Secret (hindsight-env) — both injected via envFrom.
+# Reranker defaults to `rrf` (reciprocal rank fusion) so NO local cross-encoder
+# model is downloaded — keeps the pods stateless and airgap-friendly, matching
+# the no-PVC honcho design. Flip hindsight_reranker_provider to enable reranking.
+hindsight_enabled: true
+hindsight_namespace: "hindsight"
+# PINNED to the helm chart appVersion. Both images share this tag. Bump
+# deliberately — re-check helm/hindsight/values.yaml for new/renamed env keys
+# when you do. No keel auto-update annotations by design.
+hindsight_version: "0.8.2"
+hindsight_api_image: "ghcr.io/vectorize-io/hindsight-api:{{ hindsight_version }}"
+hindsight_cp_image: "ghcr.io/vectorize-io/hindsight-control-plane:{{ hindsight_version }}"
+hindsight_api_port: 8888
+hindsight_cp_port: 3000
+
+# Dedicated worker pods (StatefulSet upstream; a plain Deployment here as we keep
+# no per-replica model cache). OFF by default — the api runs an internal worker.
+hindsight_worker_enabled: false
+hindsight_worker_replicas: 1
+hindsight_worker_port: 8889
+
+# --- LLM (text-gen) → LiteLLM hermes-default alias, OpenAI-compatible ---
+# NOTE: Hindsight's retain/reflect/consolidate steps use tool/function calling —
+# the SGLang model behind hermes-default must have a working tool_call_parser.
+hindsight_llm_provider: "openai"
+hindsight_llm_base_url: "http://litellm.{{ litellm_namespace }}.svc.cluster.local:{{ litellm_port }}/v1"
+hindsight_llm_model: "{{ litellm_hermes_alias_model }}"
+
+# --- Embeddings → ollama-embed direct (same path OpenWebUI/honcho use) ---
+# Provider `openai` against ollama's OpenAI-compatible /v1 endpoint. Dimensions
+# are intentionally NOT sent (HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS unset):
+# ollama returns bge-m3's native 1024-dim vectors and rejecting an unsupported
+# `dimensions` param is avoided. Hindsight fixes the pgvector column on first
+# migration — changing the embedding model later means wiping the hindsight DB.
+hindsight_embeddings_provider: "openai"
+hindsight_embeddings_base_url: "{{ openwebui_embedding_ollama_url }}/v1"
+hindsight_embeddings_model: "{{ ollama_embed_model }}"
+
+# --- Reranker: `rrf` disables model-based reranking (no HF download). Set to
+# `litellm` / `cohere` / `local` etc. to enable; see configuration docs. ---
+hindsight_reranker_provider: "rrf"
+
+# Vector + text-search backends on the shared pgvector Postgres.
+hindsight_vector_extension: "pgvector"
+
+# Control-plane → dataplane wiring. The browser UI calls the api under /api on
+# the SAME public host (Traefik routes /api → hindsight-api), so the api runs
+# with a matching base path. Mirrors the upstream helm ingress mapping.
+hindsight_api_base_path: "/api"
+hindsight_cp_dataplane_api_url: "https://hindsight.{{ dns_external_domain_suffix }}{{ hindsight_api_base_path }}"
+
+# Tenant auth — ON by default, via our OWN TenantExtension (no Supabase/GoTrue).
+# roles/k8s_dgx/files/hindsight_tenant_keymap.py is shipped into the api/worker
+# containers via the hindsight-tenant-ext ConfigMap and loaded with
+# HINDSIGHT_API_TENANT_EXTENSION=hindsight_tenant_keymap:KeyMapTenantExtension
+# (PYTHONPATH=/opt/hindsight-ext). It maps each bearer key to its OWN Postgres
+# schema "<prefix>_<tenant>" → real per-user memory isolation with static keys.
+# Set false to fall back to the no-auth DefaultTenantExtension (open, single
+# schema, protected only by the Traefik ip-allowlist).
+hindsight_auth_enabled: true
+hindsight_tenant_extension_module: "hindsight_tenant_keymap:KeyMapTenantExtension"
+hindsight_tenant_ext_dir: "/opt/hindsight-ext"
+hindsight_tenant_schema_prefix: "tenant"
+
+# key -> tenant map (DUMMY). Each api key authenticates a request and routes it
+# to schema "<hindsight_tenant_schema_prefix>_<tenant>". Tenant names must be
+# valid Postgres identifiers. SENSITIVE (contains keys) — real map in
+# group_vars/all/vault.yml; keys are NOT templated, set literal strings.
+hindsight_tenant_keymap:
+  "changeme-hindsight-api-key": "default"
+
+# --- API keys (DUMMIES) — lowest-precedence, overridden by group_vars/all ---
+# hindsight_api_key is the default/admin tenant's bearer key — it doubles as the
+# control-plane's dataplane key AND its UI access key below, so the UI can reach
+# the (now authenticated) API out of the box. It MUST be one of the keys in
+# hindsight_tenant_keymap. hindsight_llm_api_key / hindsight_embeddings_api_key
+# are the upstream-provider keys (LiteLLM master key for text-gen; ollama ignores
+# the embedding key). Real values live in group_vars/all/vault.yml.
+hindsight_api_key: "changeme-hindsight-api-key"
+hindsight_llm_api_key: "sk-changeme"
+hindsight_embeddings_api_key: "sk-changeme"
+
+# Control-plane keys. dataplane_key is the static bearer the UI sends to the API
+# (must exist in hindsight_tenant_keymap); the UI then sees that tenant's schema.
+# access_key gates the UI itself (login cookie). Empty access_key → UI is open
+# behind the ip-allowlist (HINDSIGHT_CP_ACCESS_KEY unset → login route 503s).
+hindsight_cp_dataplane_key: "{{ hindsight_api_key }}"
+hindsight_cp_access_key: "{{ hindsight_api_key }}"

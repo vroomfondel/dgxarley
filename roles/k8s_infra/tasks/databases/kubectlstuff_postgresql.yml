@@ -22,6 +22,7 @@
         OPENWEBUI_POSTGRES_PASSWORD: "{{ postgresql_openwebui_password }}"
         LITELLM_POSTGRES_PASSWORD: "{{ postgresql_litellm_password }}"
         HONCHO_POSTGRES_PASSWORD: "{{ postgresql_honcho_password }}"
+        HINDSIGHT_POSTGRES_PASSWORD: "{{ postgresql_hindsight_password }}"
 
 
 - name: Create postgresql service
@@ -196,6 +197,26 @@
           # on this managed instance we run the equivalent here. Mirrored at runtime
           # for existing clusters by roles/k8s_dgx/tasks/honcho.yml (k8s_exec block).
           psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "honcho" <<-EOSQL
+          	CREATE EXTENSION IF NOT EXISTS vector;
+          EOSQL
+
+          echo $0 done
+
+        6_createdb_hindsight.sh: |
+          #!/bin/bash
+          export TZ='Europe/Berlin'
+          export HINDSIGHT_POSTGRES_PASSWORD=${HINDSIGHT_POSTGRES_PASSWORD:-${POSTGRES_PASSWORD}}
+
+          psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+          	CREATE USER hindsight WITH PASSWORD '$HINDSIGHT_POSTGRES_PASSWORD';
+          	CREATE DATABASE hindsight owner hindsight;
+          	GRANT ALL PRIVILEGES ON DATABASE hindsight TO hindsight;
+          EOSQL
+
+          # Hindsight stores its embeddings in its own DB (VECTOR_EXTENSION=pgvector),
+          # so pgvector must exist INSIDE the hindsight DB. Mirrored at runtime for
+          # existing clusters by roles/k8s_dgx/tasks/hindsight.yml (k8s_exec block).
+          psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "hindsight" <<-EOSQL
           	CREATE EXTENSION IF NOT EXISTS vector;
           EOSQL
 

@@ -1,0 +1,657 @@
+---
+# Hindsight — agent memory backend (vectorize-io/hindsight). Modelled on
+# honcho.yml. THREE components from TWO pinned images (per upstream
+# helm/hindsight chart, appVersion {{ hindsight_version }}):
+#   hindsight-api           — FastAPI on :{{ hindsight_api_port }} (/health).
+#                             Runs Alembic migrations on startup and an internal
+#                             task worker (unless hindsight_worker_enabled).
+#   hindsight-worker        — OPTIONAL dedicated worker (gated, default off).
+#   hindsight-control-plane — Next.js web UI on :{{ hindsight_cp_port }}.
+# Config is ENTIRELY env-driven (no config file): non-sensitive HINDSIGHT_* keys
+# live in a ConfigMap, credentials in a Secret, both injected via envFrom. See
+# the hindsight_* block in defaults/main.yml for the knobs and rationale.
+
+- name: Create hindsight namespace
+  kubernetes.core.k8s:
+    name: "{{ hindsight_namespace }}"
+    api_version: v1
+    kind: Namespace
+    state: present
+
+
+# ============================================================================
+# PostgreSQL database check/create (idempotent) + pgvector
+# ============================================================================
+# The init-script 6_createdb_hindsight.sh (kubectlstuff_postgresql.yml) only runs
+# on a fresh PG data dir. For existing clusters we ensure the role, DB and the
+# pgvector extension exist at runtime — same pattern as honcho. Hindsight keeps
+# its embeddings in this DB (VECTOR_EXTENSION=pgvector), hence CREATE EXTENSION.
+
+- name: Get hindsight database password from postgresql-secrets
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: postgresql-secrets
+    namespace: postgresql
+  register: hindsight_postgresql_secrets_info
+
+- name: Set hindsight credential facts
+  ansible.builtin.set_fact:
+    hindsight_db_password: "{{ hindsight_postgresql_secrets_info.resources[0].data.HINDSIGHT_POSTGRES_PASSWORD | b64decode }}"
+
+- name: Get PostgreSQL pod
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: postgresql
+    label_selectors:
+      - app=postgresql
+  register: hindsight_postgresql_pods
+
+- name: Set PostgreSQL pod name fact
+  ansible.builtin.set_fact:
+    hindsight_postgresql_pod_name: "{{ hindsight_postgresql_pods.resources[0].metadata.name }}"
+
+- name: Ensure hindsight user, database and pgvector extension exist in PostgreSQL
+  kubernetes.core.k8s_exec:
+    namespace: postgresql
+    pod: "{{ hindsight_postgresql_pod_name }}"
+    command: |
+      bash -c '
+        set -e
+        HINDSIGHT_PASSWORD="{{ hindsight_db_password }}"
+
+        if psql -U postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='\''hindsight'\''" | grep -q 1; then
+          psql -U postgres -c "ALTER USER hindsight WITH PASSWORD '\''${HINDSIGHT_PASSWORD}'\'';"
+          echo "User hindsight: exists (password ensured)"
+        else
+          psql -U postgres -c "CREATE USER hindsight WITH PASSWORD '\''${HINDSIGHT_PASSWORD}'\'';"
+          echo "User hindsight: created"
+        fi
+
+        if psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='\''hindsight'\''" | grep -q 1; then
+          echo "Database hindsight: exists"
+        else
+          psql -U postgres -c "CREATE DATABASE hindsight OWNER hindsight;"
+          psql -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE hindsight TO hindsight;"
+          echo "Database hindsight: created"
+        fi
+
+        # pgvector lives in the hindsight DB itself. Idempotent — IF NOT EXISTS.
+        psql -U postgres -d hindsight -c "CREATE EXTENSION IF NOT EXISTS vector;"
+      '
+  register: hindsight_db_ensure
+  changed_when: "'created' in hindsight_db_ensure.stdout"
+
+
+# ============================================================================
+# Non-sensitive config (HINDSIGHT_* env) — ConfigMap, injected via envFrom
+# ============================================================================
+# Note: HINDSIGHT_API_PORT MUST be set explicitly — the `hindsight-api` Service
+# otherwise injects a Kubernetes service-discovery env var of the same name
+# (tcp://...) that the app would misread as its bind port. The explicit value
+# here overrides it (same reason the upstream helm chart sets it inline).
+
+- name: Create hindsight config (non-sensitive env)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: hindsight-config
+        namespace: "{{ hindsight_namespace }}"
+      data:
+        HINDSIGHT_API_HOST: "0.0.0.0"
+        HINDSIGHT_API_PORT: "{{ hindsight_api_port | string }}"
+        HINDSIGHT_API_BASE_PATH: "{{ hindsight_api_base_path }}"
+        HINDSIGHT_API_LOG_LEVEL: "info"
+        # Run Alembic migrations on startup (default true; explicit for clarity).
+        HINDSIGHT_API_RUN_MIGRATIONS_ON_STARTUP: "true"
+        # Internal worker runs in the api UNLESS a dedicated worker is deployed.
+        HINDSIGHT_API_WORKER_ENABLED: "{{ 'false' if hindsight_worker_enabled else 'true' }}"
+        # Vector + text-search on the shared pgvector Postgres.
+        HINDSIGHT_API_VECTOR_EXTENSION: "{{ hindsight_vector_extension }}"
+        # --- LLM (text-gen) → LiteLLM hermes-default alias ---
+        HINDSIGHT_API_LLM_PROVIDER: "{{ hindsight_llm_provider }}"
+        HINDSIGHT_API_LLM_MODEL: "{{ hindsight_llm_model }}"
+        HINDSIGHT_API_LLM_BASE_URL: "{{ hindsight_llm_base_url }}"
+        # --- Embeddings → ollama-embed direct (OpenAI-compatible /v1) ---
+        HINDSIGHT_API_EMBEDDINGS_PROVIDER: "{{ hindsight_embeddings_provider }}"
+        HINDSIGHT_API_EMBEDDINGS_OPENAI_MODEL: "{{ hindsight_embeddings_model }}"
+        HINDSIGHT_API_EMBEDDINGS_OPENAI_BASE_URL: "{{ hindsight_embeddings_base_url }}"
+        # --- Reranker: rrf = no model-based reranking, no HF download ---
+        HINDSIGHT_API_RERANKER_PROVIDER: "{{ hindsight_reranker_provider }}"
+        # Make our custom TenantExtension importable (the module is subPath-mounted
+        # into this dir from the hindsight-tenant-ext ConfigMap). Harmless when
+        # auth is off — the module is only loaded if TENANT_EXTENSION is set.
+        PYTHONPATH: "{{ hindsight_tenant_ext_dir }}"
+        # NOTE: tenant auth (HINDSIGHT_API_TENANT_EXTENSION / _SCHEMA_PREFIX /
+        # _KEYMAP) is added ONLY when hindsight_auth_enabled — see the
+        # hindsight-env Secret below (the keymap is sensitive). When off, the keys
+        # are omitted entirely so the loader falls back to its no-auth default.
+
+
+# ============================================================================
+# Custom TenantExtension module — shipped via ConfigMap, subPath-mounted into
+# the api/worker containers at {{ hindsight_tenant_ext_dir }}/...py (on PYTHONPATH).
+# ============================================================================
+
+- name: Create hindsight tenant-extension ConfigMap (custom KeyMapTenantExtension)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: hindsight-tenant-ext
+        namespace: "{{ hindsight_namespace }}"
+      data:
+        hindsight_tenant_keymap.py: "{{ lookup('file', role_path ~ '/files/hindsight_tenant_keymap.py') }}"
+
+
+# ============================================================================
+# Sensitive env — Secret, injected via envFrom
+# ============================================================================
+# DB URL + provider keys always; the control-plane keys always (possibly empty);
+# the tenant extension + key map ONLY when auth is enabled.
+
+- name: Build hindsight env secret data
+  ansible.builtin.set_fact:
+    hindsight_secret_data: >-
+      {{
+        {
+          'HINDSIGHT_API_DATABASE_URL': 'postgresql://hindsight:' ~ hindsight_db_password ~ '@postgresql.postgresql.svc.cluster.local:5432/hindsight',
+          'HINDSIGHT_API_LLM_API_KEY': hindsight_llm_api_key,
+          'HINDSIGHT_API_EMBEDDINGS_OPENAI_API_KEY': hindsight_embeddings_api_key,
+          'HINDSIGHT_CP_DATAPLANE_API_KEY': hindsight_cp_dataplane_key,
+          'HINDSIGHT_CP_ACCESS_KEY': hindsight_cp_access_key,
+        }
+        | combine({
+            'HINDSIGHT_API_TENANT_EXTENSION': hindsight_tenant_extension_module,
+            'HINDSIGHT_API_TENANT_SCHEMA_PREFIX': hindsight_tenant_schema_prefix,
+            'HINDSIGHT_API_TENANT_KEYMAP': hindsight_tenant_keymap | to_json,
+          } if hindsight_auth_enabled else {})
+      }}
+
+- name: Create hindsight env secret (DB URL, provider keys, CP keys, tenant map)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: hindsight-env
+        namespace: "{{ hindsight_namespace }}"
+      type: Opaque
+      stringData: "{{ hindsight_secret_data }}"
+
+
+# ============================================================================
+# API (FastAPI dataplane on :{{ hindsight_api_port }})
+# ============================================================================
+
+- name: Create hindsight-api service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      kind: Service
+      apiVersion: v1
+      metadata:
+        name: hindsight-api
+        namespace: "{{ hindsight_namespace }}"
+        labels:
+          app: hindsight-api
+      spec:
+        selector:
+          app: hindsight-api
+        ports:
+          - port: "{{ hindsight_api_port }}"
+            name: http
+            targetPort: "{{ hindsight_api_port }}"
+            protocol: TCP
+
+
+- name: Create hindsight-api deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: hindsight-api
+        namespace: "{{ hindsight_namespace }}"
+        labels:
+          app: hindsight-api
+      spec:
+        replicas: "{{ 1 if hindsight_enabled else 0 }}"
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: hindsight-api
+        template:
+          metadata:
+            labels:
+              app: hindsight-api
+            annotations:
+              checksum/config: "{{ (hindsight_llm_base_url ~ hindsight_llm_model ~ hindsight_embeddings_base_url ~ hindsight_embeddings_model ~ hindsight_reranker_provider ~ hindsight_vector_extension ~ hindsight_api_base_path ~ (hindsight_auth_enabled | string) ~ (hindsight_worker_enabled | string) ~ hindsight_llm_api_key ~ hindsight_embeddings_api_key ~ hindsight_api_key ~ (hindsight_tenant_keymap | to_json) ~ hindsight_tenant_schema_prefix ~ lookup('file', role_path ~ '/files/hindsight_tenant_keymap.py')) | hash('sha256') }}"
+          spec:
+            nodeSelector:
+              kubernetes.io/arch: amd64
+            dnsConfig:
+              options:
+                - name: ndots
+                  value: "1"
+            containers:
+              - name: hindsight-api
+                image: "{{ hindsight_api_image }}"
+                imagePullPolicy: IfNotPresent
+                ports:
+                  - containerPort: "{{ hindsight_api_port }}"
+                    protocol: TCP
+                envFrom:
+                  - configMapRef:
+                      name: hindsight-config
+                  - secretRef:
+                      name: hindsight-env
+                resources:
+                  requests:
+                    cpu: 250m
+                    memory: 512Mi
+                  limits:
+                    cpu: "2"
+                    memory: 4Gi
+                readinessProbe:
+                  httpGet:
+                    path: /health
+                    port: "{{ hindsight_api_port }}"
+                  initialDelaySeconds: 15
+                  periodSeconds: 10
+                # Allow up to ~5 min for first-boot Alembic migrations on a fresh DB.
+                startupProbe:
+                  httpGet:
+                    path: /health
+                    port: "{{ hindsight_api_port }}"
+                  initialDelaySeconds: 10
+                  periodSeconds: 10
+                  failureThreshold: 30
+                livenessProbe:
+                  httpGet:
+                    path: /health
+                    port: "{{ hindsight_api_port }}"
+                  initialDelaySeconds: 30
+                  periodSeconds: 30
+                volumeMounts:
+                  - name: tenant-ext
+                    mountPath: "{{ hindsight_tenant_ext_dir }}/hindsight_tenant_keymap.py"
+                    subPath: hindsight_tenant_keymap.py
+                    readOnly: true
+            restartPolicy: Always
+            volumes:
+              - name: tenant-ext
+                configMap:
+                  name: hindsight-tenant-ext
+
+
+# ============================================================================
+# Worker (OPTIONAL dedicated task worker — gated by hindsight_worker_enabled)
+# ============================================================================
+# Upstream ships this as a StatefulSet for stable HINDSIGHT_API_WORKER_IDs; we
+# keep no per-replica model cache (rrf reranker, remote embeddings) so a stable
+# pod-name worker-id from the StatefulSet is the only thing we need from it.
+
+- name: Create hindsight-worker headless service
+  kubernetes.core.k8s:
+    state: "{{ 'present' if hindsight_worker_enabled else 'absent' }}"
+    definition:
+      kind: Service
+      apiVersion: v1
+      metadata:
+        name: hindsight-worker
+        namespace: "{{ hindsight_namespace }}"
+        labels:
+          app: hindsight-worker
+      spec:
+        clusterIP: None
+        selector:
+          app: hindsight-worker
+        ports:
+          - port: "{{ hindsight_worker_port }}"
+            name: http
+            targetPort: "{{ hindsight_worker_port }}"
+            protocol: TCP
+
+
+- name: Create hindsight-worker statefulset
+  kubernetes.core.k8s:
+    state: "{{ 'present' if hindsight_worker_enabled else 'absent' }}"
+    definition:
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: hindsight-worker
+        namespace: "{{ hindsight_namespace }}"
+        labels:
+          app: hindsight-worker
+      spec:
+        serviceName: hindsight-worker
+        replicas: "{{ hindsight_worker_replicas }}"
+        selector:
+          matchLabels:
+            app: hindsight-worker
+        template:
+          metadata:
+            labels:
+              app: hindsight-worker
+            annotations:
+              checksum/config: "{{ (hindsight_llm_base_url ~ hindsight_llm_model ~ hindsight_embeddings_base_url ~ hindsight_embeddings_model ~ hindsight_reranker_provider ~ hindsight_vector_extension ~ (hindsight_auth_enabled | string) ~ hindsight_llm_api_key ~ hindsight_embeddings_api_key ~ hindsight_api_key ~ (hindsight_tenant_keymap | to_json) ~ hindsight_tenant_schema_prefix ~ lookup('file', role_path ~ '/files/hindsight_tenant_keymap.py')) | hash('sha256') }}"
+          spec:
+            nodeSelector:
+              kubernetes.io/arch: amd64
+            dnsConfig:
+              options:
+                - name: ndots
+                  value: "1"
+            initContainers:
+              # Block until the api has migrated + is serving so the worker's
+              # schema expectations don't crash-loop on a fresh/empty DB.
+              - name: wait-for-api
+                image: "{{ hindsight_api_image }}"
+                imagePullPolicy: IfNotPresent
+                command:
+                  - sh
+                  - -c
+                  - >-
+                    until python -c
+                    "import urllib.request; urllib.request.urlopen('http://hindsight-api.{{ hindsight_namespace }}.svc.cluster.local:{{ hindsight_api_port }}/health', timeout=2)";
+                    do echo 'waiting for hindsight-api /health'; sleep 5; done
+            containers:
+              - name: hindsight-worker
+                image: "{{ hindsight_api_image }}"
+                imagePullPolicy: IfNotPresent
+                command: ["hindsight-worker"]
+                ports:
+                  - containerPort: "{{ hindsight_worker_port }}"
+                    protocol: TCP
+                env:
+                  # Stable per-replica worker id (StatefulSet pod name).
+                  - name: HINDSIGHT_API_WORKER_ID
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: metadata.name
+                  - name: HINDSIGHT_API_WORKER_HTTP_PORT
+                    value: "{{ hindsight_worker_port | string }}"
+                envFrom:
+                  - configMapRef:
+                      name: hindsight-config
+                  - secretRef:
+                      name: hindsight-env
+                resources:
+                  requests:
+                    cpu: 250m
+                    memory: 512Mi
+                  limits:
+                    cpu: "2"
+                    memory: 4Gi
+                readinessProbe:
+                  httpGet:
+                    path: /health
+                    port: "{{ hindsight_worker_port }}"
+                  initialDelaySeconds: 15
+                  periodSeconds: 10
+                livenessProbe:
+                  httpGet:
+                    path: /health
+                    port: "{{ hindsight_worker_port }}"
+                  initialDelaySeconds: 30
+                  periodSeconds: 30
+                volumeMounts:
+                  - name: tenant-ext
+                    mountPath: "{{ hindsight_tenant_ext_dir }}/hindsight_tenant_keymap.py"
+                    subPath: hindsight_tenant_keymap.py
+                    readOnly: true
+            restartPolicy: Always
+            volumes:
+              - name: tenant-ext
+                configMap:
+                  name: hindsight-tenant-ext
+
+
+# ============================================================================
+# Control plane (Next.js web UI on :{{ hindsight_cp_port }})
+# ============================================================================
+
+- name: Create hindsight-control-plane service
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      kind: Service
+      apiVersion: v1
+      metadata:
+        name: hindsight-control-plane
+        namespace: "{{ hindsight_namespace }}"
+        labels:
+          app: hindsight-control-plane
+      spec:
+        selector:
+          app: hindsight-control-plane
+        ports:
+          - port: "{{ hindsight_cp_port }}"
+            name: http
+            targetPort: "{{ hindsight_cp_port }}"
+            protocol: TCP
+
+
+- name: Create hindsight-control-plane deployment
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: hindsight-control-plane
+        namespace: "{{ hindsight_namespace }}"
+        labels:
+          app: hindsight-control-plane
+      spec:
+        replicas: "{{ 1 if hindsight_enabled else 0 }}"
+        strategy:
+          type: Recreate
+        selector:
+          matchLabels:
+            app: hindsight-control-plane
+        template:
+          metadata:
+            labels:
+              app: hindsight-control-plane
+            annotations:
+              checksum/config: "{{ (hindsight_cp_dataplane_api_url ~ hindsight_cp_dataplane_key ~ hindsight_cp_access_key) | hash('sha256') }}"
+          spec:
+            nodeSelector:
+              kubernetes.io/arch: amd64
+            dnsConfig:
+              options:
+                - name: ndots
+                  value: "1"
+            containers:
+              - name: hindsight-control-plane
+                image: "{{ hindsight_cp_image }}"
+                imagePullPolicy: IfNotPresent
+                ports:
+                  - containerPort: "{{ hindsight_cp_port }}"
+                    protocol: TCP
+                env:
+                  - name: NODE_ENV
+                    value: "production"
+                  - name: HINDSIGHT_CP_HOSTNAME
+                    value: "0.0.0.0"
+                  - name: HINDSIGHT_CP_PORT
+                    value: "{{ hindsight_cp_port | string }}"
+                  # Browser-facing dataplane URL (Traefik routes /api → hindsight-api).
+                  - name: HINDSIGHT_CP_DATAPLANE_API_URL
+                    value: "{{ hindsight_cp_dataplane_api_url }}"
+                  # Static bearer the UI sends to the (authenticated) dataplane —
+                  # must be one of the keys in hindsight_tenant_keymap. From the
+                  # hindsight-env Secret so it stays out of the Deployment spec.
+                  - name: HINDSIGHT_CP_DATAPLANE_API_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: hindsight-env
+                        key: HINDSIGHT_CP_DATAPLANE_API_KEY
+                  # UI login gate (empty → UI open behind the ip-allowlist).
+                  - name: HINDSIGHT_CP_ACCESS_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: hindsight-env
+                        key: HINDSIGHT_CP_ACCESS_KEY
+                resources:
+                  requests:
+                    cpu: 250m
+                    memory: 512Mi
+                  limits:
+                    cpu: "1"
+                    memory: 2Gi
+                readinessProbe:
+                  tcpSocket:
+                    port: "{{ hindsight_cp_port }}"
+                  initialDelaySeconds: 10
+                  periodSeconds: 10
+                livenessProbe:
+                  tcpSocket:
+                    port: "{{ hindsight_cp_port }}"
+                  initialDelaySeconds: 30
+                  periodSeconds: 30
+            restartPolicy: Always
+
+
+# ============================================================================
+# Traefik ingress (control-plane at /, dataplane API at /api on one host)
+# ============================================================================
+
+- name: Create hindsight ip-allowlist middleware
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: hindsight-ip-allowlist
+        namespace: "{{ hindsight_namespace }}"
+      spec:
+        ipAllowList:
+          sourceRange: "{{ traefik_internal_allowlist }}"
+
+
+- name: Create hindsight http to https redirect middleware
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: redirect-myhttps
+        namespace: "{{ hindsight_namespace }}"
+      spec:
+        redirectScheme:
+          scheme: https
+
+
+- name: Create hindsight TLS certificate
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: "hindsight.{{ dns_external_domain_suffix }}"
+        namespace: "{{ hindsight_namespace }}"
+      spec:
+        dnsNames:
+          - "hindsight.{{ dns_external_domain_suffix }}"
+        secretName: "hindsight.{{ dns_external_domain_suffix }}"
+        issuerRef:
+          name: letsencrypt-production
+          kind: ClusterIssuer
+
+
+- name: Create hindsight http ingressroute with redirect
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: hindsight-ingress
+        namespace: "{{ hindsight_namespace }}"
+      spec:
+        entryPoints:
+          - web
+        routes:
+          - kind: Rule
+            match: "Host(`hindsight.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            services:
+              - kind: Service
+                name: hindsight-control-plane
+                namespace: "{{ hindsight_namespace }}"
+                passHostHeader: true
+                port: "{{ hindsight_cp_port }}"
+            middlewares:
+              - name: redirect-myhttps
+              - name: hindsight-ip-allowlist
+
+
+- name: Create hindsight https ingressroute
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: hindsight-https-ingress
+        namespace: "{{ hindsight_namespace }}"
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          # /api → dataplane (api runs with matching base_path, no stripPrefix).
+          - kind: Rule
+            match: "Host(`hindsight.{{ dns_external_domain_suffix }}`) && PathPrefix(`{{ hindsight_api_base_path }}`)"
+            priority: 20
+            middlewares:
+              - name: hindsight-ip-allowlist
+            services:
+              - kind: Service
+                name: hindsight-api
+                namespace: "{{ hindsight_namespace }}"
+                passHostHeader: true
+                port: "{{ hindsight_api_port }}"
+          # everything else → control-plane UI.
+          - kind: Rule
+            match: "Host(`hindsight.{{ dns_external_domain_suffix }}`)"
+            priority: 10
+            middlewares:
+              - name: hindsight-ip-allowlist
+            services:
+              - kind: Service
+                name: hindsight-control-plane
+                namespace: "{{ hindsight_namespace }}"
+                passHostHeader: true
+                port: "{{ hindsight_cp_port }}"
+        tls:
+          secretName: "hindsight.{{ dns_external_domain_suffix }}"
+
+
+- name: Register DNS A record for hindsight
+  community.general.nsupdate:
+    server: "{{ nsupdate_server }}"
+    zone: "{{ nsupdate_zone }}"
+    key_name: "{{ nsupdate_tsig_key_name }}"
+    key_secret: "{{ nsupdate_tsig_key_secret }}"
+    key_algorithm: "{{ nsupdate_tsig_algorithm }}"
+    record: "hindsight.{{ dns_external_domain_suffix }}."
+    type: A
+    ttl: "{{ nsupdate_ttl }}"
+    value: "{{ nsupdate_ingress_ip }}"
+    state: present

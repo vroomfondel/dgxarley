@@ -78,6 +78,10 @@
   ansible.builtin.import_tasks: honcho.yml
   tags: honcho
 
+- name: Deploy Hindsight agent memory backend
+  ansible.builtin.import_tasks: hindsight.yml
+  tags: hindsight
+
 - name: Deploy ComfyUI image generation playground
   ansible.builtin.import_tasks: comfyui.yml
   tags: comfyui

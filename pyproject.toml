@@ -121,6 +121,7 @@ exclude = '''(?x)(
     | venv
     | \.pyi$
     | ^roles/k8s_dgx/files/hermes_email_gateway_patched\.py$
+    | ^roles/k8s_dgx/files/hindsight_tenant_keymap\.py$
     )'''
 
 [[tool.mypy.overrides]]
