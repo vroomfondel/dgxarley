@@ -397,6 +397,8 @@ dynamo tracing.
 
 **Fixed upstream; shipped in stable v0.6.12 (2026-05-29), but NOT yet in our images (as of 2026-05-31).**
 
+**Status 2026-06-14:** SGLang v0.5.13 was published as a full GitHub Release on 2026-06-13 and officially bumps flashinfer from 0.6.11.post1 to **0.6.12** (SGLang PR #26854). However, `scitrera/dgx-spark-sglang:0.5.13` does not yet exist on DockerHub — the cluster default remains `scitrera/dgx-spark-sglang:0.5.12`, so all local patches and the `disable_piecewise_cuda_graph: true` profiles stay required. The statements above about SGLang 0.5.12 / 0.5.12.post1 pinning 0.6.11.post1 remain accurate for those image versions.
+
 - **Issue #2999** ("fp4_quantize is incompatible with torch.compile (lazy JIT +
   raw data_ptr access)") was filed independently on 2026-04-15 and closed on
   2026-05-22 by **PR #3081** ("Add torch.compile-compatible custom op for

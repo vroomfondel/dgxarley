@@ -1,5 +1,9 @@
 # FlashInfer Upstream Bug: head_dim=512 not supported (Gemma-4 global attention)
 
+## Status 2026-06-14
+
+PR #3576 remains **OPEN and unmerged**. SGLang v0.5.13 (released 2026-06-13) ships flashinfer 0.6.12 (PR #26854) but does NOT contain the head_dim=512 fix — PR #3576 is not in v0.6.12 or v0.6.13rc1. `attention_backend: triton` workaround remains required on all Gemma-4 profiles. `scitrera/dgx-spark-sglang:0.5.13` not yet on DockerHub; cluster default stays on 0.5.12 images regardless.
+
 ## Status (re-verified 2026-06-11 — Fix-PR #3576 opened by maintainer)
 
 **PR #2959 is necessary but NOT sufficient. The `head_dim=512` dispatch gap
