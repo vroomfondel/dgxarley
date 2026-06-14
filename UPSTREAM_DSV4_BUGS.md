@@ -1,6 +1,6 @@
 # SGLang Upstream Bugs / Gaps: DeepSeek-V4-Flash on SM121 (DGX Spark)
 
-## Status (verified 2026-05-31, upstream re-checked 2026-06-08, re-verified 2026-06-11)
+## Status (verified 2026-05-31, upstream re-checked 2026-06-08, re-verified 2026-06-11, re-verifiziert 2026-06-14)
 
 > **2026-06-08 — DSV4 ist nicht mehr der aktive Default.** `defaults/main.yml`
 > hat auf `sglang_model: RedHatAI/Qwen3.6-35B-A3B-NVFP4` auf Image
@@ -14,10 +14,9 @@
 > NVFP4-MoE-PR #25820 ist weiterhin offen, ein vollständiger NVFP4-V4-Pfad auf
 > SGLang ist also in Arbeit, aber nicht verfügbar.
 >
-> **2026-06-11 — SGLang-Tag v0.5.13 heute geschnitten** (2026-06-11T08:09:52Z,
-> noch kein GitHub-Release). `sglang 0.5.13` wurde am 2026-06-11T10:16Z auf PyPI
-> veröffentlicht (~2 h nach dem Tag) — als reguläres Release installierbar, auch
-> wenn kein GitHub-Release-Page existiert (Stand 2026-06-12). Enthält **PR
+> **2026-06-11 — SGLang-Tag v0.5.13 geschnitten** (2026-06-11T08:09:52Z);
+> **offizielles GitHub-Release am 2026-06-13 veröffentlicht**. `sglang 0.5.13`
+> wurde am 2026-06-11T10:16Z auf PyPI veröffentlicht. Enthält **PR
 > #24692** (SM120-Support für DeepSeek-V4-Inference, merged 2026-06-01) sowie
 > **#26209** (FP4 Indexer). Cluster-Images laufen weiterhin auf
 > v0.5.12.post1-basierten Builds. PR #25820 (NVFP4 MoE) meldet laut letztem
@@ -32,6 +31,23 @@
 > veralteten quant_config im HF-Repo → 2026-06-11T11:50 „Flash NVFP4 is working
 > now" nach HF-seitigem quant-config-Fix (GSM8K 96.21% auf B200; kein
 > SM120/121-Test).
+>
+> **Re-verifiziert 2026-06-14 — v0.5.13 ist offizielles GitHub-Release seit
+> 2026-06-13.** Alle früheren Formulierungen „noch kein GitHub-Release-Page" /
+> „tag-only" / „Stand 2026-06-12" zu v0.5.13 sind damit veraltet.
+> - PR #24692 (SM120-FlashMLA + FP8-Indexer) und PR #26209 (FP4-Indexer) sind
+>   im offiziellen v0.5.13-Release enthalten.
+> - PR #25820 (NVFP4 MoE für DSV4) ist weiterhin OFFEN und NICHT in v0.5.13
+>   gemergt (updatedAt 2026-06-13, letzter Kommentar „update cookbook"). Die
+>   lokale Build-Recipe `APPLY_DSV4_NVFP4_PR25820=1` bleibt nötig.
+> - Wall 0 (FlashMLA sparse-decode) und Wall 6 (seq_lens assert) sind nativ in
+>   v0.5.13 gelöst (via #24692 + `flash_mla_sparse_fwd` / `fp8_paged_mqa_logits_torch_sm120`) —
+>   als redundant bestätigt (vgl. §8).
+> - Wall 1 (kv_lora_rank=512 Patch) per Source-Inspektion in v0.5.13 weiterhin
+>   nötig; `kv_lora_rank: int = 512` in `configuration_deepseek_v3.py`
+>   unverändert. Walls 2/4/5/7 unverändert.
+> - `scitrera/dgx-spark-sglang:0.5.13` noch nicht auf DockerHub; Cluster-Default
+>   bleibt 0.5.12.
 >
 > **Update 2026-06-12 — `nvidia/DeepSeek-V4-Flash-NVFP4` existiert.** Das HF-Repo
 > `nvidia/DeepSeek-V4-Flash-NVFP4` (createdAt 2026-05-18T00:02Z) existiert —
@@ -172,8 +188,8 @@ support:
   NVFP4 MoE for DeepSeek-V4** — open.
 - [#26209](https://github.com/sgl-project/sglang/issues/26209) **Add FP4 Indexer
   for DeepSeek V4** — **merged 2026-06-02** (in `main`, merged_at
-  2026-06-02T07:14:39Z; enthalten im v0.5.13-Tag). Der DSA/Index-Attention-Pfad
-  ist damit upstream verfügbar, aber noch kein GitHub Release.
+  2026-06-02T07:14:39Z; enthalten im offiziellen v0.5.13-Release seit 2026-06-13).
+  Der DSA/Index-Attention-Pfad ist damit upstream verfügbar.
 - Roadmap: [#23602](https://github.com/sgl-project/sglang/issues/23602) DeepSeek V4
   Roadmap.
 
@@ -205,7 +221,7 @@ On **SM121** specifically, our own `cutlass_moe_fp4` crashes apply on top (see
 > producer `modelopt`, version `dsv4-nvfp4-experts`, quant_algo
 > `MIXED_PRECISION`, NVFP4 auf `layers.*.ffn.experts`, group_size 16 — gleiches
 > Format wie das Pro-Checkpoint. Voraussetzung für die Nutzung: PR #25820 muss
-> gemergt sein (Stand 2026-06-12: offen, CI-blocked, vgl. Status-Block oben).
+> gemergt sein (Stand 2026-06-14: offen, ungemergt, vgl. Status-Block oben).
 > Kapazitäts-Implikation: Die §5-Abschätzung „does not fit" galt für Pro (913
 > GB); Flash NVFP4 (~162 B params, NVFP4 experts, ~46 Shards) ist deutlich
 > kleiner und könnte bei TP=4 in 4×128 GB passen — **muss noch verifiziert
@@ -431,11 +447,11 @@ PD-disagg) may surface new walls if turned on.
 | Ref | Title | State |
 |-----|-------|-------|
 | PR #23882 | DeepSeek-V4 day-0 support (`DeepseekV4ForCausalLM`) | merged (v0.5.12) |
-| PR #24692 | feat: SM120 (Blackwell Desktop) support for DeepSeek-V4 inference | **merged 2026-06-01; im v0.5.13-Tag (2026-06-11) enthalten; auf PyPI als 0.5.13 seit 2026-06-11T10:16Z; noch kein GitHub-Release-Page (Stand 2026-06-12)** |
+| PR #24692 | feat: SM120 (Blackwell Desktop) support for DeepSeek-V4 inference | **merged 2026-06-01; im offiziellen v0.5.13-GitHub-Release seit 2026-06-13** |
 | #23602 | DeepSeek V4 Roadmap | open |
 | #23724 | Support DeepSeek-V4 Compressed-tensor W4A16 | open |
 | #25820 | [NVIDIA] Support NVFP4 MoE for DeepSeek-V4 | open (2026-06-11: Flash NVFP4 working auf B200, GSM8K 96.21%; kein SM120/121-Test) |
-| #26209 | Add FP4 Indexer for DeepSeek V4 | **merged 2026-06-02 into main; im v0.5.13-Tag (2026-06-11) enthalten; auf PyPI als 0.5.13 seit 2026-06-11T10:16Z; noch kein GitHub-Release-Page (Stand 2026-06-12)** |
+| #26209 | Add FP4 Indexer for DeepSeek V4 | **merged 2026-06-02; im offiziellen v0.5.13-GitHub-Release seit 2026-06-13** |
 | #26324 | flashinfer_trtllm MoE runner asserts on DeepSeek-V4-Flash NVFP4 (B200) | open |
 | #25704 | V4-Pro NVFP4 B200: NaN/garbage except EAGLE | closed |
 | #25165 | main branch broke with deepseek v4 flash deployment | open |
@@ -448,11 +464,11 @@ PD-disagg) may surface new walls if turned on.
 | #25181 | `SGLANG_OPT_FP8_WO_A_GEMM` default-on | merged (v0.5.12) |
 | #19589 | Qwen3.5 FP8 "Downcasting not allowed" (same error class as §6/2) | **closed 2026-05-02** |
 
-## 8. PR #24692 — SM120-Support für DeepSeek-V4-Inference (update 2026-06-11)
+## 8. PR #24692 — SM120-Support für DeepSeek-V4-Inference (update 2026-06-11, re-verifiziert 2026-06-14)
 
 **PR:** [#24692](https://github.com/sgl-project/sglang/pull/24692) „feat: SM120
 (Blackwell Desktop) support for DeepSeek-V4 inference" — merged 2026-06-01,
-enthalten im v0.5.13-Tag (2026-06-11). Cluster läuft noch auf
+enthalten im offiziellen v0.5.13-GitHub-Release (2026-06-13). Cluster läuft noch auf
 v0.5.12.post1-basierten Images; dieser Abschnitt dokumentiert, was sich mit
 einem v0.5.13-Image ändert.
 
@@ -471,7 +487,7 @@ einem v0.5.13-Image ändert.
 | 0 | FlashMLA sparse-decode (SM121) | 0xSero-vendored Kernel + `.pth`-Hook nötig (§7) | **Redundant** — nativ via `deepseek_v4_backend.py` (`_is_sm120=True`); Hook kann entfernt werden |
 | 1 | `kv_lora_rank=None` strict-dataclass crash | Launch-Patch nötig (`int → int\|None`) | **Weiterhin nötig** — `kv_lora_rank: int = 512` in `configuration_deepseek_v3.py` unverändert; `_DeepseekV4ConfigAlias` in v0.5.13 überschreibt das Feld nicht |
 | 2 | `wqkv_a` vs `fused_wqa_wkv` target mismatch | Nicht patchbar (§2) | **Unverändert** — kein Fix in #24692 |
-| 3 | NVFP4 MoE / FP4-Indexer | FP4-Indexer merged (#26209), MoE-Pfad offen | **Teilweise** — #26209 in v0.5.13 (PyPI seit 2026-06-11); NVFP4 MoE (#25820) weiterhin offen/CI-blocked (Stand 2026-06-12) |
+| 3 | NVFP4 MoE / FP4-Indexer | FP4-Indexer merged (#26209), MoE-Pfad offen | **Teilweise** — #26209 im offiziellen v0.5.13-Release (2026-06-13); NVFP4 MoE (#25820) weiterhin offen/ungemergt (updatedAt 2026-06-13) |
 | 4 | DeepGEMM MHC-prenorm (SM121) | `SGLANG_OPT_DEEPGEMM_HC_PRENORM=0` nötig | **Weiterhin nötig** — `configurer.py` gated DeepGEMM bei exakt `sm_version==120`, nicht 121; `mhc.py` prüft nur `SGLANG_OPT_DEEPGEMM_HC_PRENORM`; kein Auto-Routing für SM121 in #24692 |
 | 5 | `paged_mqa_logits` DeepGEMM SM121-Lücke | `SGLANG_FP8_PAGED_MQA_LOGITS_TORCH=1` nötig | **Weiterhin nötig** (Env-Var-Routing unverändert) |
 | 6 | `seq_lens.shape`-Assert im torch-Fallback | Launch-Source-Patch nötig | **Redundant** — `fp8_paged_mqa_logits_torch_sm120` in v0.5.13 handhabt Squeeze intern; Patch kann entfernt werden |

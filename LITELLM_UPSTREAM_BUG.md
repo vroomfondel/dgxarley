@@ -77,13 +77,13 @@ See: `roles/k8s_dgx/tasks/ollama.yml` — ConfigMap `ollama-tls-haproxy-config`,
 
 ## Upstream Status
 
-**Still open** — re-verified 2026-06-11. No fix merged. LiteLLM has since
-advanced to **v1.88.1** (stable, latest as of 2026-06-11; published
-2026-06-09; v1.89.0-rc.2 published 2026-06-10) and the bug is unchanged:
+**Still open** — re-verified 2026-06-14. No fix merged. LiteLLM has since
+advanced to **v1.89.0** (stable, latest as of 2026-06-14; published
+2026-06-14) and the bug is unchanged:
 `ollama_aembeddings()` in `litellm/llms/ollama/completion/handler.py` still
 calls `litellm.module_level_aclient.post(...)` without `ssl_verify`, and the
 `[TODO]: migrate embeddings to a base handler` comment is still at the top of
-the file. (Previously tracked at v1.88.0, 2026-06-08.)
+the file. (Previously tracked at v1.88.1, 2026-06-11.)
 The ollama embedding path has still not been migrated to the base handler;
 no PR addressing `ollama_aembeddings` + `ssl_verify` exists upstream as of
 today, and the v1.88.x release notes contain no
