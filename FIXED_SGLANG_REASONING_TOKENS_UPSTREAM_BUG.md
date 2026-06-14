@@ -2,14 +2,14 @@
 
 ## Status
 
-**Fixed upstream** as of 2026-04-05. Merged by maintainer `hnyls2002`. Re-verified 2026-04-16: fix still in place in current `main`, included in our v0.5.10 image. Re-verified 2026-05-31: PR #15562 predates v0.5.10 and is in the current default image `0.5.12.post1-sm121`; no workaround needed.
+**Fixed upstream** as of 2026-04-05. Merged by maintainer `hnyls2002`. Re-verified 2026-04-16: fix still in place in current `main`, included in our v0.5.10 image. Re-verified 2026-05-31: PR #15562 predates v0.5.10 and is in the current default image `0.5.12.post1-sm121`; no workaround needed. Re-verified 2026-06-14: PR #15562 still merged, fix present in `scitrera/dgx-spark-sglang:0.5.12`.
 
 - Issue: [#15660](https://github.com/sgl-project/sglang/issues/15660) (closed 2025-12-29, but bug persisted until fix)
 - Fix PR: [#15562](https://github.com/sgl-project/sglang/pull/15562) — **merged 2026-04-04**. Re-tokenizes reasoning content at the API layer to compute `reasoning_tokens` and populates it into `UsageInfo`
 - Closed as duplicate of #15562: [#17938](https://github.com/sgl-project/sglang/pull/17938), [#17764](https://github.com/sgl-project/sglang/pull/17764), [#17156](https://github.com/sgl-project/sglang/pull/17156) — all closed 2026-04-04
 - Closed without merge: [#15875](https://github.com/sgl-project/sglang/pull/15875) — "fix(openai): include reasoning_tokens in streaming usage"
 - Not in v0.5.10rc0 (2026-03-28). **Included in v0.5.10 stable** (released 2026-04-06) and v0.5.10.post1 (2026-04-09, flashinfer bump only)
-- Our image: `0.5.10` — **bug is fixed** in this image
+- Our image: `0.5.12` — **bug is fixed** in this image
 
 ## Affected Configuration
 
@@ -54,7 +54,7 @@ stages, then surfaces it through `UsageInfo`. The PR has:
 
 ## Our Workaround
 
-None needed. The fix is merged upstream and included in our current image (`0.5.10`).
+None needed. The fix is merged upstream and included in our current image (`0.5.12`).
 
 ## Impact
 

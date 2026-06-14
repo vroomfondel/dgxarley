@@ -2,7 +2,7 @@
 
 ## Status
 
-**Fixed upstream** as of 2026-04-06 (re-verified 2026-04-16: all three PRs still merged, our v0.5.10 image includes them; re-verified 2026-05-31: all three predate v0.5.10 and are in the current default image `0.5.12.post1-sm121` — no monkey-patch was ever needed). Three PRs fixed three cascading bugs:
+**Fixed upstream** as of 2026-04-06 (re-verified 2026-04-16: all three PRs still merged, our v0.5.10 image includes them; re-verified 2026-05-31: all three predate v0.5.10 and are in the current default image `0.5.12.post1-sm121` — no monkey-patch was ever needed; re-verified 2026-06-14: all three PRs still merged, present in `scitrera/dgx-spark-sglang:0.5.12`, status unchanged). Three PRs fixed three cascading bugs:
 
 | PR | What it fixed | Merged | In v0.5.10 |
 |----|--------------|--------|-----------|
@@ -12,7 +12,7 @@
 
 Related issues: [#19500](https://github.com/sgl-project/sglang/issues/19500) (initial report), [#21184](https://github.com/sgl-project/sglang/issues/21184), [#21185](https://github.com/sgl-project/sglang/issues/21185). Superseded alternative: [PR #21217](https://github.com/sgl-project/sglang/pull/21217) (closed without merge 2026-06-10, not needed).
 
-**Our image `scitrera/dgx-spark-sglang:0.5.10` includes all three fixes.** PP support is available.
+**Our image `scitrera/dgx-spark-sglang:0.5.12` includes all three fixes.** PP support is available.
 
 Files: `sglang/srt/models/qwen3_5.py`, `sglang/srt/models/qwen3_vl.py`, `sglang/srt/model_executor/model_runner_kv_cache_mixin.py`
 
@@ -126,8 +126,8 @@ Qwen3.5 uses a repeating pattern: 3× GatedDeltaNet (linear attention/SSM) + 1×
 
 ## Our Situation
 
-- **Current image:** `scitrera/dgx-spark-sglang:0.5.10` — all three PP fixes included. PP is available.
-- **No monkey-patch was needed:** Updated to v0.5.10 final which includes all fixes.
+- **Current image:** `scitrera/dgx-spark-sglang:0.5.12` — all three PP fixes included. PP is available.
+- **No monkey-patch was needed:** All fixes predate v0.5.10 and remain in v0.5.12.
 - **Previous workaround (no longer needed):** TP=4 EP=4 PP=1 (no pipeline parallelism).
 
 ## Why PP=4 Was Attempted

@@ -1,13 +1,17 @@
 # SGLang Upstream Bug: Qwen3.6-27B-FP8 token salad via FP8 scale bypass
 
-## Status (re-verified 2026-05-31)
+## Status (re-verified 2026-06-14)
 
 > **2026-05-31:** Still fixed — PR #23467 (merged 2026-04-22) is an ancestor of
-> v0.5.11 and v0.5.12 / v0.5.12.post1, so the current default image
-> `xomoxcc/dgx-spark-sglang:0.5.12.post1-sm121` already contains the fix. The
+> v0.5.11 and v0.5.12 / v0.5.12.post1, so the then-current default image
+> `xomoxcc/dgx-spark-sglang:0.5.12.post1-sm121` already contained the fix. The
 > `PATCH_QUANT_UTILS_EOF` block in `sglang_launch.sh` is therefore a permanent
 > no-op on the current image (sentinel guard short-circuits) — kept only as
 > defense-in-depth for older pins. Removable as cleanup, but harmless.
+>
+> **2026-06-14:** Still fixed — PR #23467 still merged; fix present in the current
+> default image `scitrera/dgx-spark-sglang:0.5.12`. Monkey-patch remains a
+> confirmed no-op (sentinel `def _module_path_match` already in `utils.py`).
 
 - **`Qwen/Qwen3.6-27B-FP8` — BROKEN** on `scitrera/dgx-spark-sglang:0.5.10`. Model
   loads and decode runs, but every request produces multilingual token salad with
