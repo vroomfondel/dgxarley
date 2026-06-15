@@ -23,6 +23,10 @@
   ansible.builtin.import_tasks: nvidia_setup.yml
   tags: nvidia
 
+- name: Install ConnectX firmware tooling (MFT) and report firmware
+  ansible.builtin.import_tasks: mlxfw.yml
+  tags: mlxfw
+
 - name: Configure CPU power settings
   ansible.builtin.import_tasks: cpupower.yml
   tags: cpupower

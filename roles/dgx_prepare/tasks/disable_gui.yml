@@ -27,12 +27,24 @@
   ansible.builtin.command: systemctl set-default multi-user.target
   when: current_default_target.stdout != 'multi-user.target'
 
-- name: Disable, stop and mask gdm3 service
+# On Ubuntu the real display-manager unit is gdm.service; `gdm3.service` is only
+# an alias symlink (/lib/systemd/system/gdm3.service -> gdm.service). Masking the
+# ALIAS (gdm3) replaces /etc/systemd/system/gdm3.service with -> /dev/null, which
+# DECOUPLES the alias: `gdm3` then resolves to the mask (inactive) while the real
+# gdm.service keeps running — the GUI never actually stops. Operate on the canonical
+# units instead. gdm.service is `static` (no [Install]) so `enabled: false` is a
+# no-op there; masked: true is what blocks the start, and set-default multi-user
+# (above) keeps graphical.target out of the boot. display-manager.service is the
+# DM-agnostic handle (symlink -> gdm.service) — masked too, belt and suspenders.
+- name: Disable, stop and mask the display manager (gdm / display-manager)
   ansible.builtin.systemd:
-    name: gdm3
+    name: "{{ item }}"
     state: stopped
-    enabled: false
     masked: true
+  loop:
+    - gdm.service
+    - display-manager.service
+  failed_when: false
 
 - name: Disable and stop DGX dashboard services
   ansible.builtin.systemd:

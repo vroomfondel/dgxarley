@@ -17,6 +17,17 @@ qsfp_sriov_pf_iface: "enp1s0f0np0"
 set_dcbx_manually: false
 qsfp_dcbx_roce_tc: 3
 
+# ConnectX-7 firmware tooling (NVIDIA MFT), managed by tasks/mlxfw.yml (tag: mlxfw).
+# fwupd/LVFS does NOT carry Mellanox/NVIDIA NIC firmware, so `fwupdmgr` always shows
+# "no updates" for the MT2910 (ConnectX-7) — expected, not a sign it's current. MFT
+# (mst/flint/mlxfwmanager/mlxfwreset) is the canonical path; the `mft` package comes
+# from the CUDA sbsa repo. The task INSTALLS MFT and QUERIES the current firmware
+# (read-only) — it deliberately never flashes (a ConnectX update needs mlxfwreset/
+# reboot to activate, so it stays a conscious manual step).
+#   ansible-playbook dgx.yml --tags mlxfw            # install MFT + report current FW
+dgx_mlxfw_enabled: true
+dgx_mlxfw_package: mft
+
 memlock_limit: "unlimited"
 stack_limit: 67108864
 
