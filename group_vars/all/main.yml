@@ -307,8 +307,8 @@ hermes_users:
       # Empty string "" opts out of the respective stage. Defaults shown below.
       working_folder: "Hermes_Working" # INBOX→Working at fetch; "" → skip, INBOX→Done directly
       done_folder: "Hermes_Done"       # final destination after handle_message(); "" → no moves
-      sent_folder: "Sent"              # IMAP APPEND target for outbound replies; "" → SMTP-only
-      process_existing: true           # true (default) → process pre-existing UNSEEN INBOX backlog on start
+      sent_folder: "Sent"              # IMAP APPEND target for outbound replies; "" → SMTP-only. Rendered into config.yaml (platforms.email.extra.sent_folder), not .env — mirrors upstream PR #28697
+      process_existing: true           # true (default) → process pre-existing UNSEEN INBOX backlog on start. Rendered into config.yaml (platforms.email.extra.process_existing), not .env — mirrors upstream PR #28699
       cpu_limit: "500m"                # sidecar caps; defaults 500m / 512Mi
       memory_limit: "512Mi"
     # Ops-managed overrides for the webui Preferences panel. Merged into

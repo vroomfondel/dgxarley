@@ -33,9 +33,25 @@ logging:
 # subprocesses, which inherit the same .env.
 platforms:
   email:
-    skip_attachments: {{ (email.skip_attachments | default(false)) | string | lower }}
+    # Behavioral toggles MUST live under `extra:` — the gateway config loader
+    # only folds `platforms.<name>.extra` into PlatformConfig.extra (which the
+    # adapter reads via extra.get(...)); bare keys here are silently dropped.
+    # Verified on pinned image v2026.6.5 and on upstream main.
+    extra:
+      skip_attachments: {{ (email.skip_attachments | default(false)) | string | lower }}
+      # IMAP APPEND target for outbound replies; "" → SMTP-only (opt-out).
+      # Mirrors upstream PR NousResearch/hermes-agent#28697. Quoted so an empty
+      # string renders as "" rather than a YAML null.
+      sent_folder: "{{ email.sent_folder if email.sent_folder is defined else 'Sent' }}"
+      # Process the pre-existing UNSEEN INBOX backlog on startup instead of
+      # marking it all seen. Mirrors upstream PR #28699. Default true here
+      # (upstream defaults false). Rendered as a real YAML bool.
+      process_existing: {{ (email.process_existing | default(true)) | string | lower }}
     # Suppress "♻️ Gateway shutting down" / "♻️ Gateway online" lifecycle
     # mails. Hermes sends these to every active session + the EMAIL_HOME_ADDRESS
-    # home channel on each pod start/stop; pure noise here.
+    # home channel on each pod start/stop; pure noise here. (Bridged as a bare
+    # key — gateway_restart_notification is on the loader's shared-key allowlist
+    # and also read directly by PlatformConfig.from_dict, unlike the toggles
+    # above.)
     gateway_restart_notification: false
 {% endif %}

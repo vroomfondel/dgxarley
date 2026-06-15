@@ -38,18 +38,23 @@ Adds three behaviours that upstream lacks:
   3.  Opt-in processing of pre-existing INBOX mail on startup (upstream
       hard-codes "ignore everything already there").
 
-Each is opt-out via empty-string env var:
+The folder-lifecycle knobs are opt-out via empty-string env var:
 
   EMAIL_WORKING_FOLDER     default "Hermes_Working"  ("" disables Working stage,
                                                        move goes straight INBOX→Done)
   EMAIL_DONE_FOLDER        default "Hermes_Done"     ("" disables all moves;
                                                        processed mail stays in
                                                        INBOX with \\Seen)
-  EMAIL_SENT_FOLDER        default "Sent"            ("" disables IMAP APPEND)
-  EMAIL_PROCESS_EXISTING   default "1"               ("0" = mark all existing
-                                                       UNSEEN INBOX UIDs as seen
-                                                       on startup and only
-                                                       process truly new ones)
+
+Sent-folder archival and process-existing are configured via config.yaml (NOT
+env), mirroring the upstream PRs — see the Upstreaming note below:
+
+  platforms.email.extra.sent_folder        default "Sent"   ("" disables IMAP APPEND)
+  platforms.email.extra.process_existing   default true     (false = mark all
+                                                              existing UNSEEN INBOX
+                                                              UIDs as seen on startup
+                                                              and only process truly
+                                                              new ones)
 
 When this file is bumped, the upstream source must be re-downloaded and the
 patch sections re-applied:
@@ -64,6 +69,25 @@ patch sections re-applied:
             MOVE per UID
   [PATCH-6] _dispatch_message(): finalize MOVE after handle_message returns
   [PATCH-7] _send_email{,_with_attachment,_with_attachments}(): APPEND to Sent
+
+Upstreaming note: two of these behaviours are being upstreamed —
+  - Sent-folder APPEND ([PATCH-3] _append_to_sent + [PATCH-7] call sites) in
+    PR NousResearch/hermes-agent#28697.
+  - process-existing ([PATCH-4] conditional connect()-time pre-fill) in
+    PR NousResearch/hermes-agent#28699.
+Both PRs' review-driven changes are adopted here so the patch matches what we
+submitted:
+  - APPEND status-tuple check (warn on NO/BAD instead of assuming success):
+    backported into _append_to_sent below.
+  - sent_folder and process_existing are read from config.yaml
+    `platforms.email.extra.*` (config.extra), NOT the old EMAIL_SENT_FOLDER /
+    EMAIL_PROCESS_EXISTING env vars. The loader only folds an explicit
+    ``extra:`` sub-block into config.extra (bare keys are dropped — verified on
+    the pinned tag v2026.6.5 and on main), so the keys MUST be nested under
+    ``extra:`` in hermes_config.yaml.j2. NOTE our process_existing default is
+    True (process the backlog), unlike upstream's False. Only the folder-
+    lifecycle knobs (EMAIL_WORKING_FOLDER/DONE_FOLDER) stay env-only — upstream
+    has no equivalent for those.
 ------------------------------------------------------------------------------
 
 Environment variables:
@@ -335,26 +359,33 @@ class EmailAdapter(BasePlatformAdapter):
         self._smtp_port = int(os.getenv("EMAIL_SMTP_PORT", "587"))
         self._poll_interval = int(os.getenv("EMAIL_POLL_INTERVAL", "15"))
 
-        # [PATCH-2] dgxarley: folder-lifecycle + APPEND-to-Sent + process-existing.
-        # See module docstring for rationale and opt-out semantics. ``getenv``
-        # returns "" when the variable is set-but-empty, which is the deliberate
-        # opt-out signal — DO NOT collapse that to the default with `or`.
+        # [PATCH-2] dgxarley: folder-lifecycle (env) + APPEND-to-Sent (config.yaml)
+        # + process-existing (config.yaml). See module docstring for rationale and
+        # opt-out semantics. ``getenv`` returns "" when the variable is set-but-
+        # empty, which is the deliberate opt-out signal for the folder vars —
+        # DO NOT collapse that to the default with `or`.
         self._working_folder = os.environ.get("EMAIL_WORKING_FOLDER", "Hermes_Working")
         self._done_folder = os.environ.get("EMAIL_DONE_FOLDER", "Hermes_Done")
-        self._sent_folder = os.environ.get("EMAIL_SENT_FOLDER", "Sent")
-        self._process_existing = os.environ.get("EMAIL_PROCESS_EXISTING", "1").strip().lower() in (
-            "1",
-            "true",
-            "yes",
-            "on",
-        )
 
-        # Skip attachments — configured via config.yaml:
+        # Behavioral toggles — configured via config.yaml under an explicit
+        # ``extra:`` block (the loader only folds ``platforms.<name>.extra`` into
+        # config.extra; bare keys are dropped):
         #   platforms:
         #     email:
-        #       skip_attachments: true
+        #       extra:
+        #         skip_attachments: true
+        #         sent_folder: "Sent"        # "" to disable IMAP APPEND entirely
+        #         process_existing: true     # process pre-existing UNSEEN backlog
+        # sent_folder + process_existing mirror the upstream PRs
+        # (NousResearch/hermes-agent#28697 and #28699). Only working/done_folder
+        # remain env-only because upstream has no equivalent for those. Empty
+        # string is a deliberate opt-out for sent_folder — do NOT collapse with
+        # `or`. NOTE: our default for process_existing is True (process the
+        # backlog), unlike upstream's False.
         extra = config.extra or {}
         self._skip_attachments = extra.get("skip_attachments", False)
+        self._sent_folder = extra.get("sent_folder", "Sent")
+        self._process_existing = bool(extra.get("process_existing", True))
 
         # Track message IDs we've already processed to avoid duplicates
         self._seen_uids: set = set()
@@ -560,13 +591,26 @@ class EmailAdapter(BasePlatformAdapter):
                 # Ensure the folder exists; many providers ship a Sent folder
                 # but bespoke setups (e.g. Dovecot without Sieve) may not.
                 self._ensure_folder(imap, self._sent_folder)
-                imap.append(
+                # imaplib returns ("NO"/"BAD", ...) on a rejected APPEND WITHOUT
+                # raising — inspect the status tuple explicitly so a silent
+                # failure isn't logged as success. (Backported from upstream PR
+                # NousResearch/hermes-agent#28697 review.)
+                typ, data = imap.append(
                     self._sent_folder,
                     "(\\Seen)",
                     imaplib.Time2Internaldate(time.time()),
                     raw_bytes,
                 )
-                logger.debug("[Email] APPEND to %r ok", self._sent_folder)
+                if typ != "OK":
+                    detail = b" ".join(p for p in data if isinstance(p, bytes)).decode("utf-8", "replace")
+                    logger.warning(
+                        "[Email] APPEND to %r returned %s: %s",
+                        self._sent_folder,
+                        typ,
+                        detail,
+                    )
+                else:
+                    logger.debug("[Email] APPEND to %r ok", self._sent_folder)
             finally:
                 try:
                     imap.logout()
@@ -596,8 +640,8 @@ class EmailAdapter(BasePlatformAdapter):
             imap.select("INBOX")
             # [PATCH-4] Pre-fill _seen_uids ONLY when not opted in to processing
             # existing INBOX mail. Upstream always pre-fills (= ignore everything
-            # already there); with EMAIL_PROCESS_EXISTING=1 we leave the set
-            # empty so the next poll picks up the historical UNSEEN backlog.
+            # already there); with process_existing=true (config.yaml) we leave
+            # the set empty so the next poll picks up the historical UNSEEN backlog.
             if not self._process_existing:
                 status, data = imap.uid("search", None, "ALL")
                 if status == "OK" and data and data[0]:
@@ -610,7 +654,7 @@ class EmailAdapter(BasePlatformAdapter):
                 )
             else:
                 logger.info(
-                    "[Email] IMAP connection test passed. EMAIL_PROCESS_EXISTING=1 — "
+                    "[Email] IMAP connection test passed. process_existing=true — "
                     "will process pre-existing UNSEEN mail on first poll."
                 )
             imap.logout()
