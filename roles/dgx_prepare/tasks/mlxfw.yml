@@ -15,6 +15,27 @@
 #   mlxfwmanager --online --query     # compare installed vs latest on NVIDIA's CDN
 #   mlxfwmanager -u --online -y       # download + flash, then: mlxfwreset -d <dev> -y
 
+# The official DGX-Spark NIC firmware updater. Bundles the OEM fw-ConnectX7.bin and
+# a systemd service that force-flashes on boot when running != bundled (see the
+# defaults comment). Usually pulled in by the spark/baseos repo already; pinned here
+# so a fresh node is deterministic. `enabled` only creates the boot WantedBy symlink
+# — it does NOT start the unit now, so there is no immediate flash.
+- name: Ensure NVIDIA Spark Mellanox Firmware Manager is installed
+  ansible.builtin.apt:
+    name: "{{ dgx_mlnx_fwmgr_package }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when: dgx_mlnx_fwmgr_enabled | default(true)
+
+- name: Arm the firmware-manager service at boot (enable only, no immediate flash)
+  ansible.builtin.systemd:
+    name: "{{ dgx_mlnx_fwmgr_service }}"
+    enabled: true
+  when:
+    - dgx_mlnx_fwmgr_enabled | default(true)
+    - dgx_mlnx_fwmgr_service_enable | default(true)
+
 - name: Install NVIDIA MFT (ConnectX firmware tooling)
   ansible.builtin.apt:
     name: "{{ dgx_mlxfw_package }}"

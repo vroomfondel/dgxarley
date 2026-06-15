@@ -28,6 +28,21 @@ qsfp_dcbx_roce_tc: 3
 dgx_mlxfw_enabled: true
 dgx_mlxfw_package: mft
 
+# NVIDIA Spark Mellanox Firmware Manager — the ACTUAL ConnectX-7 FW update channel
+# on DGX Spark (fwupd/LVFS and mlxfwmanager --online have no image for the OEM PSID
+# NVD0000000087). This apt package bundles the OEM image (fw-ConnectX7.bin) and a
+# systemd service that compares running-vs-bundled (mstflint) and force-flashes on
+# boot when they differ. It usually arrives via the spark/baseos repo already, but
+# we pin it present + enable the service so a fresh spark deterministically gets NIC
+# FW updates on apt upgrade. enabled (not started): only arms the boot-time symlink,
+# so NO immediate flash — the flash happens at the next reboot, and only if a newer
+# bundled image exists. Set dgx_mlnx_fwmgr_service_enable=false to leave the service
+# state untouched (e.g. to manage flashing entirely by hand).
+dgx_mlnx_fwmgr_enabled: true
+dgx_mlnx_fwmgr_package: nvidia-spark-mlnx-firmware-manager
+dgx_mlnx_fwmgr_service: nvidia-spark-mlnx-firmware-manager.service
+dgx_mlnx_fwmgr_service_enable: true
+
 memlock_limit: "unlimited"
 stack_limit: 67108864
 
