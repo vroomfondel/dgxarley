@@ -235,7 +235,7 @@
             labels:
               app: hindsight-api
             annotations:
-              checksum/config: "{{ (hindsight_llm_base_url ~ hindsight_llm_model ~ hindsight_embeddings_base_url ~ hindsight_embeddings_model ~ hindsight_reranker_provider ~ hindsight_vector_extension ~ hindsight_api_base_path ~ (hindsight_auth_enabled | string) ~ (hindsight_worker_enabled | string) ~ hindsight_llm_api_key ~ hindsight_embeddings_api_key ~ hindsight_api_key ~ (hindsight_tenant_keymap | to_json) ~ hindsight_tenant_schema_prefix ~ lookup('file', role_path ~ '/files/hindsight_tenant_keymap.py')) | hash('sha256') }}"
+              checksum/config: "{{ (hindsight_llm_base_url ~ hindsight_llm_model ~ hindsight_embeddings_base_url ~ hindsight_embeddings_model ~ hindsight_reranker_provider ~ hindsight_vector_extension ~ hindsight_api_base_path ~ (hindsight_auth_enabled | string) ~ (hindsight_worker_enabled | string) ~ hindsight_llm_api_key ~ hindsight_embeddings_api_key ~ (hindsight_tenant_keymap | to_json) ~ hindsight_tenant_schema_prefix ~ lookup('file', role_path ~ '/files/hindsight_tenant_keymap.py')) | hash('sha256') }}"
           spec:
             nodeSelector:
               kubernetes.io/arch: amd64
@@ -345,7 +345,7 @@
             labels:
               app: hindsight-worker
             annotations:
-              checksum/config: "{{ (hindsight_llm_base_url ~ hindsight_llm_model ~ hindsight_embeddings_base_url ~ hindsight_embeddings_model ~ hindsight_reranker_provider ~ hindsight_vector_extension ~ (hindsight_auth_enabled | string) ~ hindsight_llm_api_key ~ hindsight_embeddings_api_key ~ hindsight_api_key ~ (hindsight_tenant_keymap | to_json) ~ hindsight_tenant_schema_prefix ~ lookup('file', role_path ~ '/files/hindsight_tenant_keymap.py')) | hash('sha256') }}"
+              checksum/config: "{{ (hindsight_llm_base_url ~ hindsight_llm_model ~ hindsight_embeddings_base_url ~ hindsight_embeddings_model ~ hindsight_reranker_provider ~ hindsight_vector_extension ~ (hindsight_auth_enabled | string) ~ hindsight_llm_api_key ~ hindsight_embeddings_api_key ~ (hindsight_tenant_keymap | to_json) ~ hindsight_tenant_schema_prefix ~ lookup('file', role_path ~ '/files/hindsight_tenant_keymap.py')) | hash('sha256') }}"
           spec:
             nodeSelector:
               kubernetes.io/arch: amd64

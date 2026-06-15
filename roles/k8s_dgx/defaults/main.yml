@@ -1354,27 +1354,30 @@ hindsight_tenant_extension_module: "hindsight_tenant_keymap:KeyMapTenantExtensio
 hindsight_tenant_ext_dir: "/opt/hindsight-ext"
 hindsight_tenant_schema_prefix: "tenant"
 
-# key -> tenant map (DUMMY). Each api key authenticates a request and routes it
-# to schema "<hindsight_tenant_schema_prefix>_<tenant>". Tenant names must be
-# valid Postgres identifiers. SENSITIVE (contains keys) — real map in
-# group_vars/all/vault.yml; keys are NOT templated, set literal strings.
+# key -> tenant map (DUMMY) — the SINGLE source of truth for API auth. Each api
+# key authenticates a request and routes it to schema
+# "<hindsight_tenant_schema_prefix>_<tenant>"; unmapped keys are REJECTED (no
+# fallback tenant). Tenant names must be valid Postgres identifiers. SENSITIVE
+# (contains keys) — real map in group_vars/all/vault.yml; keys are NOT templated,
+# set literal strings.
 hindsight_tenant_keymap:
-  "changeme-hindsight-api-key": "default"
+  "changeme-hindsight-key": "admin"
 
-# --- API keys (DUMMIES) — lowest-precedence, overridden by group_vars/all ---
-# hindsight_api_key is the default/admin tenant's bearer key — it doubles as the
-# control-plane's dataplane key AND its UI access key below, so the UI can reach
-# the (now authenticated) API out of the box. It MUST be one of the keys in
-# hindsight_tenant_keymap. hindsight_llm_api_key / hindsight_embeddings_api_key
-# are the upstream-provider keys (LiteLLM master key for text-gen; ollama ignores
-# the embedding key). Real values live in group_vars/all/vault.yml.
-hindsight_api_key: "changeme-hindsight-api-key"
+# Upstream-provider keys (DUMMIES; real in vault). hindsight_llm_api_key is the
+# text-gen key (LiteLLM master key here); hindsight_embeddings_api_key is sent to
+# ollama-embed, which ignores it.
 hindsight_llm_api_key: "sk-changeme"
 hindsight_embeddings_api_key: "sk-changeme"
 
-# Control-plane keys. dataplane_key is the static bearer the UI sends to the API
-# (must exist in hindsight_tenant_keymap); the UI then sees that tenant's schema.
-# access_key gates the UI itself (login cookie). Empty access_key → UI is open
-# behind the ip-allowlist (HINDSIGHT_CP_ACCESS_KEY unset → login route 503s).
-hindsight_cp_dataplane_key: "{{ hindsight_api_key }}"
-hindsight_cp_access_key: "{{ hindsight_api_key }}"
+# Control-plane → which tenant the UI browses. NON-secret: just a tenant NAME
+# that must exist in hindsight_tenant_keymap; the actual bearer is looked up from
+# the keymap (so a key is never written twice). Empty (default) → the UI gets NO
+# dataplane key, i.e. it can't read the authenticated API and the UI login is
+# open behind the ip-allowlist. Set it to e.g. "admin" to point the UI at that
+# tenant. Override hindsight_cp_access_key to use a different UI-login password.
+hindsight_cp_tenant: ""
+hindsight_cp_dataplane_key: >-
+  {{ (hindsight_tenant_keymap | dict2items
+        | selectattr('value', 'equalto', hindsight_cp_tenant)
+        | map(attribute='key') | first) | default('', true) }}
+hindsight_cp_access_key: "{{ hindsight_cp_dataplane_key }}"

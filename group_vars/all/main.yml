@@ -143,18 +143,18 @@ honcho_embedding_api_key: "sk-changeme"
 
 # Hindsight (agent memory backend) — dummy values; real ones in
 # group_vars/all/vault.yml. Auth uses our own KeyMapTenantExtension (no Supabase):
-#   hindsight_tenant_keymap  — JSON-able map of bearer key -> tenant name; each
-#                              tenant gets its own Postgres schema. Add real keys
-#                              (long random strings) here in vault. Keys are NOT
-#                              templated — write literal strings.
-#   hindsight_api_key        — the default/admin tenant's bearer key; doubles as
-#                              the control-plane dataplane + UI access key. MUST
-#                              be one of the keys in hindsight_tenant_keymap.
+#   hindsight_tenant_keymap  — the SINGLE source of truth: map of bearer key ->
+#                              tenant name; each tenant gets its own Postgres
+#                              schema. Add real keys (long random strings) here in
+#                              vault. Keys are NOT templated — write literal
+#                              strings. Unmapped keys are rejected (no fallback).
+#   hindsight_cp_tenant      — (optional, non-secret) which tenant the control-
+#                              plane UI browses; must be a tenant NAME from the
+#                              keymap. Empty → UI has no API access (see defaults).
 #   hindsight_llm_api_key    — upstream text-gen key (= LiteLLM master key here).
 #   hindsight_embeddings_api_key — sent to ollama-embed, which ignores it.
 hindsight_tenant_keymap:
-  "changeme-hindsight-api-key": "default"
-hindsight_api_key: "changeme-hindsight-api-key"
+  "changeme-hindsight-key": "admin"
 hindsight_llm_api_key: "sk-changeme"
 hindsight_embeddings_api_key: "sk-changeme"
 
