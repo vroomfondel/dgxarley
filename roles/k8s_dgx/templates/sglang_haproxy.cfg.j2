@@ -9,6 +9,25 @@ defaults
     timeout connect 5s
     timeout client  {{ sglang_haproxy_timeout }}s
     timeout server  {{ sglang_haproxy_timeout }}s
+    # Propagate a client disconnect through to the SGLang backend so it aborts
+    # in-flight generation instead of running on to max_tokens after the caller
+    # is gone (a killed client otherwise leaves "orphan" generations burning the
+    # GPU for minutes). SGLang aborts only when its backend TCP connection is
+    # *fully closed* (uvicorn connection_lost -> Starlette
+    # request.is_disconnected() -> abort_request). Achieving that needs BOTH
+    # directives, verified against the HAProxy 3.2 source:
+    #   - option abortonclose: on a client abort of an already-forwarded request
+    #     HAProxy half-closes the backend (shutdown SHUT_WR). Required to start
+    #     the teardown (commit 9327e7e makes it act on active conns; the 3.2
+    #     manual understates this). A half-close alone is NOT enough — uvicorn
+    #     sits in CLOSE_WAIT and connection_lost does not fire.
+    #   - timeout server-fin: escalates that half-close to a FULL close after the
+    #     timeout (conn_full_close), which is what actually fires connection_lost.
+    #     Without it the full close waits for `timeout server`.
+    # Only engages after a client abort, so healthy requests are unaffected; a
+    # client RST (hard-killed pod) closes the backend immediately.
+    option abortonclose
+    timeout server-fin 1s
     log-format "%ci:%cp [%t] %ft %b/%s %Tq/%Tw/%Tc/%Tr/%Ta %ST %B %{+Q}r"
 
 frontend sglang
