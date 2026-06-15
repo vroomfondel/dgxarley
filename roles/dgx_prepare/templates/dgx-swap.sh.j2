@@ -32,6 +32,9 @@ SWAPPINESS="{{ dgx_swap_swappiness }}"
 MIN_FREE_PCT="{{ dgx_swap_min_free_pct }}"
 SYSCTL_DROPIN="/etc/sysctl.d/99-dgx-swap.conf"
 FSTAB="/etc/fstab"
+# OS-default swapfiles (e.g. DGX-OS /swap.img) that `off` should ALSO remove, so a
+# disabled node is genuinely swap-free. Mirrors dgx_swap_foreign_files in swap.yml.
+FOREIGN_FILES=({% for f in dgx_swap_foreign_files | default([]) %}{{ f | quote }} {% endfor %})
 
 [ "$(id -u)" -eq 0 ] || { echo "ERROR: must run as root." >&2; exit 1; }
 
@@ -44,9 +47,12 @@ is_active() { swapon --noheadings --show=NAME 2>/dev/null | grep -qxF "$SWAP_FIL
 # fstab helpers use awk field-equality (no regex escaping of the path needed).
 fstab_present() { awk -v f="$SWAP_FILE" '$1==f{found=1} END{exit !found}' "$FSTAB"; }
 fstab_add()     { fstab_present || echo "$SWAP_FILE none swap sw 0 0" >> "$FSTAB"; }
-fstab_remove()  {
-    fstab_present || return 0
-    awk -v f="$SWAP_FILE" '$1!=f' "$FSTAB" > "${FSTAB}.dgx-swap.tmp" \
+fstab_remove()  { fstab_remove_path "$SWAP_FILE"; }
+# Drop any fstab line whose mount source is the given path (field-equality, no regex).
+fstab_remove_path() {
+    local f="$1"
+    awk -v f="$f" '$1==f{found=1} END{exit !found}' "$FSTAB" || return 0
+    awk -v f="$f" '$1!=f' "$FSTAB" > "${FSTAB}.dgx-swap.tmp" \
         && mv "${FSTAB}.dgx-swap.tmp" "$FSTAB"
 }
 
@@ -136,15 +142,20 @@ cmd_on() {
 }
 
 cmd_off() {
-    if is_active; then
-        swapoff "$SWAP_FILE"
-        echo "Swap deactivated."
-    fi
-    if [ -e "$SWAP_FILE" ]; then
-        rm -f "$SWAP_FILE"
-        echo "Removed ${SWAP_FILE}."
-    fi
-    fstab_remove
+    # Remove the role-managed swapfile AND any OS-default swapfiles (FOREIGN_FILES,
+    # e.g. /swap.img) so the node ends up genuinely swap-free.
+    local f
+    for f in "$SWAP_FILE" "${FOREIGN_FILES[@]}"; do
+        if swapon --noheadings --show=NAME 2>/dev/null | grep -qxF "$f"; then
+            swapoff "$f"
+            echo "Swap deactivated: $f"
+        fi
+        if [ -e "$f" ]; then
+            rm -f "$f"
+            echo "Removed $f."
+        fi
+        fstab_remove_path "$f"
+    done
     rm -f "$SYSCTL_DROPIN"
     echo ""
     cmd_status

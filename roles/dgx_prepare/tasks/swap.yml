@@ -127,24 +127,33 @@
         state: "{{ 'present' if (dgx_swap_persist | default(false)) else 'absent' }}"
 
 # ─────────────────────────── DISABLE ───────────────────────────
-- name: Remove swapfile
+# Remove BOTH the role-managed swapfile AND any OS-default swapfiles
+# (dgx_swap_foreign_files, e.g. DGX-OS' /swap.img) so a "disabled" node is
+# genuinely swap-free — the role never created /swap.img, but leaving it active
+# would mask the kubelet swapBehavior/failSwapOn policy.
+- name: Remove swapfiles
   when: not (k3s_node_swap_enabled | default(false))
+  vars:
+    _swap_remove_files: "{{ [dgx_swap_file] + (dgx_swap_foreign_files | default([])) }}"
   block:
-    - name: Deactivate swapfile
-      ansible.builtin.command: "swapoff {{ dgx_swap_file }}"
-      when: dgx_swap_file in _swap_active.stdout
+    - name: Deactivate swapfiles (role + OS defaults)
+      ansible.builtin.command: "swapoff {{ item }}"
+      loop: "{{ _swap_remove_files }}"
+      when: item in _swap_active.stdout
       changed_when: true
 
-    - name: Delete swapfile
+    - name: Delete swapfiles (role + OS defaults)
       ansible.builtin.file:
-        path: "{{ dgx_swap_file }}"
+        path: "{{ item }}"
         state: absent
+      loop: "{{ _swap_remove_files }}"
 
-    - name: Drop /etc/fstab entry
+    - name: Drop /etc/fstab entries (role + OS defaults)
       ansible.builtin.lineinfile:
         path: /etc/fstab
-        regexp: "^{{ dgx_swap_file | regex_escape }}[[:space:]]"
+        regexp: "^{{ item | regex_escape }}[[:space:]]"
         state: absent
+      loop: "{{ _swap_remove_files }}"
 
     - name: Remove swappiness drop-in
       ansible.builtin.file:

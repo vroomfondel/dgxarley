@@ -56,3 +56,11 @@ dgx_swap_persist: false
 # filesystem below this % — mirrors the kubelet nodefs.available<10% eviction
 # threshold (a too-big file → DiskPressure taint). Override: -e dgx_swap_force=true.
 dgx_swap_min_free_pct: 10
+# Foreign swapfiles to ALSO remove on disable (k3s_node_swap_enabled=false). The
+# role only ever CREATES dgx_swap_file, but DGX-OS / the Ubuntu installer ship a
+# default /swap.img (16G, fstab-persistent, prio -2). Without listing it here a
+# "disabled" node would still have OS-default swap active — masking failSwapOn and
+# the kubelet swapBehavior policy. Only file-backed swap belongs here (these get
+# swapoff'd, rm'd, and stripped from fstab); never put a block-device partition here.
+dgx_swap_foreign_files:
+  - /swap.img
