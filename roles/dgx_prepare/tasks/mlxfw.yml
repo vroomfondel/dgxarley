@@ -1,19 +1,24 @@
 ---
-# NVIDIA ConnectX-7 firmware tooling (MFT) — INSTALL + QUERY only, never flash.
+# DGX-Spark ConnectX-7 firmware: arm the official updater + install read-only tools.
+# This task NEVER actively flashes from Ansible — at most it ARMS the vendor's
+# boot-time flasher (enable-only, see below).
 #
-# fwupd/LVFS does not carry Mellanox/NVIDIA NIC firmware, so `fwupdmgr` always
-# reports "no available firmware updates" for the MT2910 (ConnectX-7). That is
-# EXPECTED, not a sign the NIC is current — ConnectX firmware ships exclusively
-# via NVIDIA's MFT. The `mft` package (mst / flint / mlxfwmanager / mlxfwreset /
-# mlxconfig) is served from the CUDA sbsa repo
-# (developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa).
+# The DGX-Spark NIC runs an OEM firmware (PSID NVD0000000087, part
+# cx7_P4242_HORIZON_PK_Ax). Neither fwupd/LVFS nor NVIDIA's public CDN carry an
+# image for that PSID — so `fwupdmgr` ("no updates") and `mlxfwmanager --online`
+# ("No matching image found") both come up empty. That is EXPECTED, not a sign the
+# NIC is current, and it means self-flashing against the CDN is NOT the update path.
 #
-# This task INSTALLS MFT and QUERIES the installed firmware (offline, read-only).
-# It deliberately does NOT flash: a ConnectX firmware update is disruptive (must
-# be activated with `mlxfwreset` or a reboot — see feedback_no_reboot) and stays a
-# conscious manual step. To check for / apply a newer image by PSID, by hand:
-#   mlxfwmanager --online --query     # compare installed vs latest on NVIDIA's CDN
-#   mlxfwmanager -u --online -y       # download + flash, then: mlxfwreset -d <dev> -y
+# The real channel is the apt package `nvidia-spark-mlnx-firmware-manager` (spark/
+# baseos repo): it bundles the OEM fw-ConnectX7.bin + a systemd service that, on
+# boot, force-flashes when the running FW differs from the bundled one. A NIC FW
+# update therefore arrives via `apt upgrade` (newer package → newer .bin) and lands
+# at the next reboot. We pin the package present + enable the service here.
+#
+# Separately we install `mft` (mst / flint / mlxfwmanager, from the CUDA sbsa repo)
+# purely as read-only MONITORING — `mlxfwmanager --query` shows which FW is actually
+# on the NIC after a DGX-OS upgrade. Manual flashing stays a conscious out-of-band
+# step (needs mlxfwreset / reboot — see feedback_no_reboot).
 
 # The official DGX-Spark NIC firmware updater. Bundles the OEM fw-ConnectX7.bin and
 # a systemd service that force-flashes on boot when running != bundled (see the
