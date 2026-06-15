@@ -39,6 +39,12 @@ platforms:
     # Verified on pinned image v2026.6.5 and on upstream main.
     extra:
       skip_attachments: {{ (email.skip_attachments | default(false)) | string | lower }}
+      # INBOX → Working → Done folder lifecycle. Mirrors upstream PR #28702.
+      # working_folder="" skips the Working stage (INBOX → Done directly);
+      # done_folder="" disables all moves (INBOX + \Seen, and Working is skipped
+      # too). Quoted so an empty string renders as "" rather than a YAML null.
+      working_folder: "{{ email.working_folder if email.working_folder is defined else 'Hermes_Working' }}"
+      done_folder: "{{ email.done_folder if email.done_folder is defined else 'Hermes_Done' }}"
       # IMAP APPEND target for outbound replies; "" → SMTP-only (opt-out).
       # Mirrors upstream PR NousResearch/hermes-agent#28697. Quoted so an empty
       # string renders as "" rather than a YAML null.

@@ -304,9 +304,10 @@ hermes_users:
         - "owner@example.com"
       skip_attachments: false          # true → strip attachments before LLM
       # Folder-lifecycle knobs (local patch over upstream gateway/platforms/email.py).
-      # Empty string "" opts out of the respective stage. Defaults shown below.
+      # All rendered into config.yaml (platforms.email.extra.*), NOT .env — mirror
+      # upstream PR #28702. Empty string "" opts out of the respective stage.
       working_folder: "Hermes_Working" # INBOX→Working at fetch; "" → skip, INBOX→Done directly
-      done_folder: "Hermes_Done"       # final destination after handle_message(); "" → no moves
+      done_folder: "Hermes_Done"       # final destination after handle_message(); "" → no moves at all (Working skipped too)
       sent_folder: "Sent"              # IMAP APPEND target for outbound replies; "" → SMTP-only. Rendered into config.yaml (platforms.email.extra.sent_folder), not .env — mirrors upstream PR #28697
       process_existing: true           # true (default) → process pre-existing UNSEEN INBOX backlog on start. Rendered into config.yaml (platforms.email.extra.process_existing), not .env — mirrors upstream PR #28699
       cpu_limit: "500m"                # sidecar caps; defaults 500m / 512Mi

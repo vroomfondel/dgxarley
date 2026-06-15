@@ -38,17 +38,17 @@ Adds three behaviours that upstream lacks:
   3.  Opt-in processing of pre-existing INBOX mail on startup (upstream
       hard-codes "ignore everything already there").
 
-The folder-lifecycle knobs are opt-out via empty-string env var:
+All behavioural knobs are configured via config.yaml (NOT env), mirroring the
+upstream PRs — see the Upstreaming note below. They MUST be nested under an
+explicit ``extra:`` block (the loader only folds ``platforms.<name>.extra`` into
+config.extra; bare keys are dropped):
 
-  EMAIL_WORKING_FOLDER     default "Hermes_Working"  ("" disables Working stage,
-                                                       move goes straight INBOX→Done)
-  EMAIL_DONE_FOLDER        default "Hermes_Done"     ("" disables all moves;
-                                                       processed mail stays in
-                                                       INBOX with \\Seen)
-
-Sent-folder archival and process-existing are configured via config.yaml (NOT
-env), mirroring the upstream PRs — see the Upstreaming note below:
-
+  platforms.email.extra.working_folder     default "Hermes_Working"  ("" skips the
+                                                              Working stage → INBOX→Done)
+  platforms.email.extra.done_folder        default "Hermes_Done"  ("" disables all
+                                                              moves; mail stays in INBOX
+                                                              with \\Seen — also skips
+                                                              the Working stage)
   platforms.email.extra.sent_folder        default "Sent"   ("" disables IMAP APPEND)
   platforms.email.extra.process_existing   default true     (false = mark all
                                                               existing UNSEEN INBOX
@@ -70,24 +70,30 @@ patch sections re-applied:
   [PATCH-6] _dispatch_message(): finalize MOVE after handle_message returns
   [PATCH-7] _send_email{,_with_attachment,_with_attachments}(): APPEND to Sent
 
-Upstreaming note: two of these behaviours are being upstreamed —
+Upstreaming note: all of these behaviours are being upstreamed —
   - Sent-folder APPEND ([PATCH-3] _append_to_sent + [PATCH-7] call sites) in
     PR NousResearch/hermes-agent#28697.
   - process-existing ([PATCH-4] conditional connect()-time pre-fill) in
     PR NousResearch/hermes-agent#28699.
-Both PRs' review-driven changes are adopted here so the patch matches what we
-submitted:
+  - INBOX→Working→Done lifecycle ([PATCH-3/4/5/6]) in
+    PR NousResearch/hermes-agent#28702.
+All three PRs' review-driven changes are adopted here so the patch matches what
+we submitted:
   - APPEND status-tuple check (warn on NO/BAD instead of assuming success):
     backported into _append_to_sent below.
-  - sent_folder and process_existing are read from config.yaml
-    `platforms.email.extra.*` (config.extra), NOT the old EMAIL_SENT_FOLDER /
-    EMAIL_PROCESS_EXISTING env vars. The loader only folds an explicit
-    ``extra:`` sub-block into config.extra (bare keys are dropped — verified on
-    the pinned tag v2026.6.5 and on main), so the keys MUST be nested under
-    ``extra:`` in hermes_config.yaml.j2. NOTE our process_existing default is
-    True (process the backlog), unlike upstream's False. Only the folder-
-    lifecycle knobs (EMAIL_WORKING_FOLDER/DONE_FOLDER) stay env-only — upstream
-    has no equivalent for those.
+  - Lifecycle bug-fixes (#28702 review): the Working MOVE in _fetch_new_messages
+    is gated on done_folder AND working_folder AND a Message-ID being present
+    (no Done → no moves; no Message-ID → cannot relocate after MOVE), and
+    _dispatch_message wraps its drop-checks + handle_message in one try/finally
+    so an early drop (self / automated / non-allowlisted) can't strand mail in
+    Working.
+  - ALL behavioural knobs (working_folder, done_folder, sent_folder,
+    process_existing) are read from config.yaml `platforms.email.extra.*`
+    (config.extra), NOT env vars. The loader only folds an explicit ``extra:``
+    sub-block into config.extra (bare keys are dropped — verified on the pinned
+    tag v2026.6.5 and on main), so the keys MUST be nested under ``extra:`` in
+    hermes_config.yaml.j2. NOTE our process_existing default is True (process the
+    backlog), unlike upstream's False. No email behaviour is env-based anymore.
 ------------------------------------------------------------------------------
 
 Environment variables:
@@ -359,31 +365,30 @@ class EmailAdapter(BasePlatformAdapter):
         self._smtp_port = int(os.getenv("EMAIL_SMTP_PORT", "587"))
         self._poll_interval = int(os.getenv("EMAIL_POLL_INTERVAL", "15"))
 
-        # [PATCH-2] dgxarley: folder-lifecycle (env) + APPEND-to-Sent (config.yaml)
-        # + process-existing (config.yaml). See module docstring for rationale and
-        # opt-out semantics. ``getenv`` returns "" when the variable is set-but-
-        # empty, which is the deliberate opt-out signal for the folder vars —
-        # DO NOT collapse that to the default with `or`.
-        self._working_folder = os.environ.get("EMAIL_WORKING_FOLDER", "Hermes_Working")
-        self._done_folder = os.environ.get("EMAIL_DONE_FOLDER", "Hermes_Done")
-
-        # Behavioral toggles — configured via config.yaml under an explicit
-        # ``extra:`` block (the loader only folds ``platforms.<name>.extra`` into
-        # config.extra; bare keys are dropped):
+        # [PATCH-2] dgxarley: folder-lifecycle + APPEND-to-Sent + process-existing,
+        # all configured via config.yaml under an explicit ``extra:`` block (the
+        # loader only folds ``platforms.<name>.extra`` into config.extra; bare keys
+        # are dropped):
         #   platforms:
         #     email:
         #       extra:
         #         skip_attachments: true
-        #         sent_folder: "Sent"        # "" to disable IMAP APPEND entirely
-        #         process_existing: true     # process pre-existing UNSEEN backlog
-        # sent_folder + process_existing mirror the upstream PRs
-        # (NousResearch/hermes-agent#28697 and #28699). Only working/done_folder
-        # remain env-only because upstream has no equivalent for those. Empty
-        # string is a deliberate opt-out for sent_folder — do NOT collapse with
-        # `or`. NOTE: our default for process_existing is True (process the
-        # backlog), unlike upstream's False.
+        #         working_folder: "Hermes_Working"  # "" to skip the Working stage
+        #         done_folder: "Hermes_Done"        # "" to disable all folder moves
+        #         sent_folder: "Sent"               # "" to disable IMAP APPEND
+        #         process_existing: true            # process pre-existing backlog
+        # All four mirror the upstream PRs (NousResearch/hermes-agent #28697,
+        # #28699, #28702). Empty string is a deliberate opt-out for the folder
+        # vars — do NOT collapse with `or`. Lifecycle semantics:
+        #   done_folder="" .............. no moves at all (INBOX, \Seen)
+        #   working_folder="", done set . INBOX -> Done directly
+        #   both set .................... INBOX -> Working -> Done
+        # NOTE: our default for process_existing is True (process the backlog),
+        # unlike upstream's False.
         extra = config.extra or {}
         self._skip_attachments = extra.get("skip_attachments", False)
+        self._working_folder = extra.get("working_folder", "Hermes_Working")
+        self._done_folder = extra.get("done_folder", "Hermes_Done")
         self._sent_folder = extra.get("sent_folder", "Sent")
         self._process_existing = bool(extra.get("process_existing", True))
 
@@ -633,9 +638,15 @@ class EmailAdapter(BasePlatformAdapter):
 
             # [PATCH-4] Ensure our managed folders exist before any MOVE
             # touches them. CREATE is idempotent (NO on "already exists"),
-            # so this is safe to run every reconnect.
-            for folder in (self._working_folder, self._done_folder, self._sent_folder):
-                self._ensure_folder(imap, folder)
+            # so this is safe to run every reconnect. Working/Done are only
+            # created when the lifecycle is active (done_folder set) — with no
+            # Done there are no moves, so nothing to create. The Sent folder is
+            # independent (used by APPEND regardless of the lifecycle).
+            # _ensure_folder itself no-ops on an empty name.
+            if self._done_folder:
+                self._ensure_folder(imap, self._working_folder)
+                self._ensure_folder(imap, self._done_folder)
+            self._ensure_folder(imap, self._sent_folder)
 
             imap.select("INBOX")
             # [PATCH-4] Pre-fill _seen_uids ONLY when not opted in to processing
@@ -757,12 +768,17 @@ class EmailAdapter(BasePlatformAdapter):
                     # [PATCH-5] Two-stage move: park the mail in
                     # ``self._working_folder`` while the agent runs, so a
                     # crash mid-processing leaves a visible "in-flight" trail.
-                    # If Working is empty but Done is set, skip the intermediate
-                    # hop and let _finalize_message move INBOX→Done directly.
-                    # If both are empty, leave the mail in INBOX with \\Seen
-                    # (upstream behaviour).
+                    # Gated on the FULL lifecycle being enabled:
+                    #   - done_folder must be set, else there are no moves at all
+                    #     (done_folder="" = INBOX + \\Seen); moving to Working with
+                    #     no Done would strand the mail there.
+                    #   - a Message-ID must be present: the mail is re-located in
+                    #     Working by Message-ID for the final MOVE → Done (UIDs do
+                    #     not survive a MOVE), so without one it could not advance.
+                    # Mail that skips the Working move stays in INBOX and is moved
+                    # straight to Done by _finalize_message (when done is set).
                     source_folder = "INBOX"
-                    if self._working_folder:
+                    if self._done_folder and self._working_folder and message_id:
                         if self._imap_move(imap, uid, self._working_folder):
                             source_folder = self._working_folder
                         else:
@@ -801,85 +817,93 @@ class EmailAdapter(BasePlatformAdapter):
     async def _dispatch_message(self, msg_data: Dict[str, Any]) -> None:
         """Convert a fetched email into a MessageEvent and dispatch it."""
         sender_addr = msg_data["sender_addr"]
+        message_id = msg_data["message_id"]
+        # [PATCH-6] Folder the mail currently lives in (set by
+        # _fetch_new_messages). The finally below ALWAYS finalizes it, so an
+        # early drop after a Working move can't strand the mail in Working.
+        source_folder = msg_data.get("source_folder", "INBOX")
 
-        # Skip self-messages
-        if sender_addr == self._address.lower():
-            return
-
-        # Never reply to automated senders
-        if _is_automated_sender(sender_addr, {}):
-            logger.debug("[Email] Dropping automated sender at dispatch: %s", sender_addr)
-            return
-
-        # Skip senders not in EMAIL_ALLOWED_USERS — prevents the adapter
-        # from creating a MessageEvent (and thus thread context) for senders
-        # that the gateway will never authorize.  Without this early guard,
-        # a race between dispatch and authorization can result in the adapter
-        # sending a reply even though the handler returned None.
-        allowed_raw = os.getenv("EMAIL_ALLOWED_USERS", "").strip()
-        if allowed_raw:
-            allowed = {addr.strip().lower() for addr in allowed_raw.split(",") if addr.strip()}
-            if sender_addr.lower() not in allowed:
-                logger.debug("[Email] Dropping non-allowlisted sender at dispatch: %s", sender_addr)
+        try:
+            # Skip self-messages
+            if sender_addr == self._address.lower():
                 return
 
-        subject = msg_data["subject"]
-        body = msg_data["body"].strip()
-        attachments = msg_data["attachments"]
+            # Never reply to automated senders
+            if _is_automated_sender(sender_addr, {}):
+                logger.debug("[Email] Dropping automated sender at dispatch: %s", sender_addr)
+                return
 
-        # Build message text: include subject as context
-        text = body
-        if subject and not subject.startswith("Re:"):
-            text = f"[Subject: {subject}]\n\n{body}"
+            # Skip senders not in EMAIL_ALLOWED_USERS — prevents the adapter
+            # from creating a MessageEvent (and thus thread context) for senders
+            # that the gateway will never authorize.  Without this early guard,
+            # a race between dispatch and authorization can result in the adapter
+            # sending a reply even though the handler returned None.
+            allowed_raw = os.getenv("EMAIL_ALLOWED_USERS", "").strip()
+            if allowed_raw:
+                allowed = {addr.strip().lower() for addr in allowed_raw.split(",") if addr.strip()}
+                if sender_addr.lower() not in allowed:
+                    logger.debug("[Email] Dropping non-allowlisted sender at dispatch: %s", sender_addr)
+                    return
 
-        # Determine message type and media
-        media_urls = []
-        media_types = []
-        msg_type = MessageType.TEXT
+            subject = msg_data["subject"]
+            body = msg_data["body"].strip()
+            attachments = msg_data["attachments"]
 
-        for att in attachments:
-            media_urls.append(att["path"])
-            media_types.append(att["media_type"])
-            if att["type"] == "image":
-                msg_type = MessageType.PHOTO
+            # Build message text: include subject as context
+            text = body
+            if subject and not subject.startswith("Re:"):
+                text = f"[Subject: {subject}]\n\n{body}"
 
-        # Store thread context for reply threading
-        self._thread_context[sender_addr] = {
-            "subject": subject,
-            "message_id": msg_data["message_id"],
-        }
+            # Determine message type and media
+            media_urls = []
+            media_types = []
+            msg_type = MessageType.TEXT
 
-        source = self.build_source(
-            chat_id=sender_addr,
-            chat_name=msg_data["sender_name"] or sender_addr,
-            chat_type="dm",
-            user_id=sender_addr,
-            user_name=msg_data["sender_name"] or sender_addr,
-        )
+            for att in attachments:
+                media_urls.append(att["path"])
+                media_types.append(att["media_type"])
+                if att["type"] == "image":
+                    msg_type = MessageType.PHOTO
 
-        event = MessageEvent(
-            text=text or "(empty email)",
-            message_type=msg_type,
-            source=source,
-            message_id=msg_data["message_id"],
-            media_urls=media_urls,
-            media_types=media_types,
-            reply_to_message_id=msg_data["in_reply_to"] or None,
-        )
+            # Store thread context for reply threading
+            self._thread_context[sender_addr] = {
+                "subject": subject,
+                "message_id": message_id,
+            }
 
-        logger.info("[Email] New message from %s: %s", sender_addr, subject)
-        try:
+            source = self.build_source(
+                chat_id=sender_addr,
+                chat_name=msg_data["sender_name"] or sender_addr,
+                chat_type="dm",
+                user_id=sender_addr,
+                user_name=msg_data["sender_name"] or sender_addr,
+            )
+
+            event = MessageEvent(
+                text=text or "(empty email)",
+                message_type=msg_type,
+                source=source,
+                message_id=message_id,
+                media_urls=media_urls,
+                media_types=media_types,
+                reply_to_message_id=msg_data["in_reply_to"] or None,
+            )
+
+            logger.info("[Email] New message from %s: %s", sender_addr, subject)
             await self.handle_message(event)
         finally:
-            # [PATCH-6] Always advance the mail to Done after the agent
-            # is done with it — even if handle_message raised. Sitting in
-            # Hermes_Working forever just looks like a stuck queue.
-            source_folder = msg_data.get("source_folder", "INBOX")
+            # [PATCH-6] Always advance the mail out of its current folder to
+            # Done — on a successful reply, an early drop (self / automated /
+            # non-allowlisted sender), OR a handle_message exception. Without
+            # this, mail that _fetch_new_messages already moved into Working
+            # would be stranded there on any non-success path.
+            # _finalize_message is a no-op when done_folder is unset, when the
+            # mail never moved, or when there is no Message-ID to re-locate it by.
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
                 self._finalize_message,
-                msg_data["message_id"],
+                message_id,
                 source_folder,
             )
 
