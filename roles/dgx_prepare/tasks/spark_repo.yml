@@ -1,0 +1,40 @@
+---
+# Install the NVIDIA DGX Spark APT repository package on all sparks.
+#
+# `nvidia-spark-repo` ships BOTH /etc/apt/sources.list.d/spark.sources AND its
+# signing keyring /usr/share/keyrings/nvidia-spark-repo.gpg (key
+# 2C609607EDFA661DABFD3E4292552E806FE7EE4D, "DGX Spark Packages (Binary
+# Archives) <dgx-spark-pkgs@nvidia.com>"). It is served from the baseos repo
+# (dgx.sources) that ships on every DGX-OS spark image, so no key bootstrap is
+# needed here — installing the package wires up the repo + key atomically.
+#
+# Failure mode this repairs: if the package is purged-but-not-fully (left in
+# dpkg `rc` state, config files retained) its keyring is deleted while the
+# orphaned spark.sources survives -> `apt update` fails with
+# `NO_PUBKEY 92552E806FE7EE4D`. `state: present` reinstalls an `rc` package and
+# restores the keyring; the explicit stat+reinstall below also covers the case
+# where the package is `ii` but the keyring file was removed by hand.
+
+- name: Install nvidia-spark-repo package (provides spark.sources + signing key)
+  ansible.builtin.apt:
+    name: nvidia-spark-repo
+    state: present
+  register: _spark_repo_install
+
+- name: Check the spark repo signing keyring is present
+  ansible.builtin.stat:
+    path: /usr/share/keyrings/nvidia-spark-repo.gpg
+  register: _spark_repo_keyring
+
+- name: Reinstall nvidia-spark-repo when its keyring is missing
+  ansible.builtin.command:
+    cmd: apt-get install -y --reinstall nvidia-spark-repo
+  when: not _spark_repo_keyring.stat.exists
+  register: _spark_repo_reinstall
+  changed_when: true
+
+- name: Refresh apt cache so the spark repo index is fetched
+  ansible.builtin.apt:
+    update_cache: true
+  when: _spark_repo_install is changed
+        or _spark_repo_reinstall is changed

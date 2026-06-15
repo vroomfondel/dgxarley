@@ -1,20 +1,51 @@
 ---
 # Enable or disable SR-IOV Virtual Functions on the QSFP PF.
 # Gated by qsfp_sriov_enabled (default: false).
+#
+# Single source of truth is qsfp_sriov_pf_iface (the PF netdev name). The PCI
+# address is RESOLVED from the interface at runtime via /sys/class/net/<iface>/device
+# (set as the qsfp_sriov_pf_pci fact for the systemd unit + reset script). This keeps
+# it correct-by-construction per host even when PCIe-domain enumeration differs across
+# nodes, and it can never drift out of sync with the interface name.
 
-- name: Resolve sysfs path for QSFP PF
+# Tolerate a slow ConnectX-7 driver bind (e.g. node just booted): the sysfs attr
+# appears only once mlx5_core has named the netdev. Retry rather than hard-fail on
+# the first miss. When disabled, a single best-effort probe is enough.
+- name: Wait for QSFP PF interface to expose SR-IOV
   ansible.builtin.stat:
-    path: "/sys/bus/pci/devices/{{ qsfp_sriov_pf_pci }}/sriov_totalvfs"
+    path: "/sys/class/net/{{ qsfp_sriov_pf_iface }}/device/sriov_totalvfs"
   register: _sriov_sysfs
+  until: _sriov_sysfs.stat.exists
+  retries: "{{ 12 if qsfp_sriov_enabled else 0 }}"
+  delay: 5
+  failed_when: false
 
-- name: Fail if PF does not support SR-IOV
+- name: Fail if QSFP PF does not support SR-IOV
   ansible.builtin.fail:
-    msg: "PCI device {{ qsfp_sriov_pf_pci }} does not expose sriov_totalvfs — SR-IOV not supported"
+    msg: >-
+      Interface {{ qsfp_sriov_pf_iface }} on {{ inventory_hostname }} did not expose
+      sriov_totalvfs within 60s. Check that the ConnectX-7 driver is bound and the
+      interface is present (ip link show {{ qsfp_sriov_pf_iface }}), that the interface
+      name is correct for this host, and that SR-IOV is enabled in NIC firmware
+      (mlxconfig -d <pci> query | grep SRIOV_EN).
   when: qsfp_sriov_enabled and not _sriov_sysfs.stat.exists
+
+# Resolve PCI from the interface for the templates that need it at boot time
+# (systemd unit + reset script address the PF by PCI, which is stable across reboots).
+- name: Resolve QSFP PF PCI address from interface
+  ansible.builtin.command: "readlink -f /sys/class/net/{{ qsfp_sriov_pf_iface }}/device"
+  register: _sriov_pf_dev
+  changed_when: false
+  when: _sriov_sysfs.stat.exists
+
+- name: Set resolved PF PCI fact
+  ansible.builtin.set_fact:
+    qsfp_sriov_pf_pci: "{{ _sriov_pf_dev.stdout | basename }}"
+  when: _sriov_sysfs.stat.exists
 
 - name: Read max supported VFs
   ansible.builtin.slurp:
-    src: "/sys/bus/pci/devices/{{ qsfp_sriov_pf_pci }}/sriov_totalvfs"
+    src: "/sys/class/net/{{ qsfp_sriov_pf_iface }}/device/sriov_totalvfs"
   register: _sriov_max_raw
   when: qsfp_sriov_enabled
 
@@ -46,7 +77,7 @@
 
 - name: Read current VF count
   ansible.builtin.slurp:
-    src: "/sys/bus/pci/devices/{{ qsfp_sriov_pf_pci }}/sriov_numvfs"
+    src: "/sys/class/net/{{ qsfp_sriov_pf_iface }}/device/sriov_numvfs"
   register: _sriov_cur_raw
   when: qsfp_sriov_enabled
 
@@ -67,8 +98,8 @@
       register: _sriov_unit_file
 
     - name: Disable SR-IOV VFs
-      ansible.builtin.shell: echo 0 > /sys/bus/pci/devices/{{ qsfp_sriov_pf_pci }}/sriov_numvfs
-      when: _sriov_unit_file.stat.exists
+      ansible.builtin.shell: echo 0 > /sys/class/net/{{ qsfp_sriov_pf_iface }}/device/sriov_numvfs
+      when: _sriov_unit_file.stat.exists and _sriov_sysfs.stat.exists
       failed_when: false
 
     - name: Stop and disable SR-IOV service

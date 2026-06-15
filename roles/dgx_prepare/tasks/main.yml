@@ -15,6 +15,10 @@
   ansible.builtin.import_tasks: ulimits.yml
   tags: ulimits
 
+- name: Install NVIDIA DGX Spark APT repository package
+  ansible.builtin.import_tasks: spark_repo.yml
+  tags: spark_repo
+
 - name: NVIDIA CDI and driver setup
   ansible.builtin.import_tasks: nvidia_setup.yml
   tags: nvidia
