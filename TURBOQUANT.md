@@ -1,17 +1,40 @@
 # TurboQuant — KV Cache Quantization for Extended Context
 
-> **Re-verified 2026-06-08** (status deltas vs the 2026-05-21 body below):
-> - **llama.cpp PR #21089 is now CLOSED without merge** (not "active again") —
->   the CPU TBQ3/TBQ4 path did not land.
-> - **vLLM #40798 (share decode scratch workspace) is now CLOSED** (2026-06-01);
->   tracking issue #40069 (which listed it as mandatory) and #42215 remain OPEN.
-> - **SGLang still has not merged TurboQuant.** PRs #23135 (last touched
->   2026-06-08) and #21419 (2026-06-05) are still open and more recently active
->   than the dates below; the overall "SGLang is the laggard" conclusion stands.
-> - Latest SGLang release is **v0.5.13** (full GitHub Release 2026-06-13).
->   v0.5.13's changelog lists no TurboQuant merge; PRs #23135 / #21419 were
->   still open as of the 2026-06-08 check above — re-verify against v0.5.13
->   before assuming the "SGLang is the laggard" conclusion still holds.
+> **Re-verified 2026-06-16 — Bewegung ja, aber nichts für uns nutzbar gelandet.**
+> Kurzfassung: viel Upstream-Aktivität (heute, 2026-06-16, Kommentare auf
+> #42215 / #40069 / #41726), aber **kein SGLang-Merge und keine vLLM-Mandatory-
+> Bugfixes in einem Release** — die "SGLang ist der Nachzügler"-Konklusion gilt
+> unverändert, und auch vLLM ist für unsere Modelle (Gemma-4 / non-pow2-head_dim)
+> noch nicht produktionsreif.
+>
+> - **SGLang (für uns die relevante Engine): weiterhin KEIN Merge.** Alle TQ-PRs
+>   offen, **nicht in v0.5.13**: #23135 (fused Triton, aussichtsreichster Pfad,
+>   last touched 2026-06-08) — neue Community-Validierung (A100, GSM8K 79 %,
+>   1.6M-Token-KV), aber dabei **zwei neue kritische Bugs** aufgedeckt
+>   (Decode-Kernel scheitert bei non-power-of-2 `kv_group_num`; Hybrid-/Mamba-
+>   Modelle umgehen TQ still → bleiben bf16), **MLA weiterhin inkompatibel**,
+>   **kein Maintainer-Approval** → Merge nicht absehbar. #21419 (2026-06-05),
+>   #22048 (2026-05-28), #21617 (tot, 2026-04-03), Tracking-Issue #23134 offen.
+> - **vLLM: Core gemergt (#38479, v0.21.0), ABER die zwei laut Tracking-Issue
+>   #40069 verpflichtenden Bugfixes sind bis heute UNGEMERGT** — auch nicht im
+>   neuesten Release **v0.23.0 (2026-06-15)**:
+>   - #42215 (warm up decode kernels) — OPEN, Merge-Konflikte, gaby 2026-06-16
+>     „fix conflicts with main".
+>   - #40798 (share decode workspace) — **CLOSED 2026-05-30 (versehentlich durch
+>     Shallow-Clone zerschossen, nicht stale)**, neu aufgelegt als **#44053**
+>     („Reserve workspace before CUDA graph capture") — ebenfalls OPEN/ungemergt
+>     (2026-06-15). Die frühere Notiz „#40798 CLOSED 2026-06-01, #42215 OPEN" ist
+>     damit präzisiert.
+>   - Offen bleibt zudem der Gemma-4-/head_dim-Stack: #41413 (non-pow2 head_dim),
+>     #41403 (Gemma-4 multimodal), #41726 (chunked prefill + Hybrid-Attn, heute
+>     aktualisiert), #40124 (Hybrid-MoE auf Ampere), #42808 (MTP-Spec-Decode).
+>     Genau die Modellklasse, die uns interessiert, ist also weiter betroffen.
+> - **llama.cpp #21089** (CPU TBQ3/TBQ4) endgültig **CLOSED ohne Merge**
+>   (2026-06-03) — toter Pfad.
+> - Latest SGLang release **v0.5.13** (2026-06-13) enthält weiterhin kein
+>   TurboQuant. **Fazit für uns: kein Handlungsbedarf, kein nutzbarer TQ-Pfad** —
+>   weder über SGLang (kein Merge) noch sinnvoll über vLLM (Mandatory-Bugs +
+>   Gemma-4-Inkompatibilitäten offen).
 
 ## What It Is
 
@@ -126,9 +149,9 @@ has multiple **crash-level bugs open** that affect exactly the model classes we 
 - [#41413](https://github.com/vllm-project/vllm/issues/41413) — TQ fails on non-power-of-2 `head_dim`
 - [#41726](https://github.com/vllm-project/vllm/issues/41726) — TQ crashes on large chunked-continuation prefill with Hybrid-Attention (Qwen3.5-9B)
 - [#42808](https://github.com/vllm-project/vllm/issues/42808) — TQ + MTP speculative decoding workspace-assertion
-- [#42215](https://github.com/vllm-project/vllm/issues/42215) — `[Bugfix][V1][TurboQuant] Warm up decode kernels` (OPEN — listed as mandatory by tracking issue #40069)
-- [#40798](https://github.com/vllm-project/vllm/issues/40798) — Share decode scratch workspace across layers (OPEN — also mandatory per #40069)
-- [#40069](https://github.com/vllm-project/vllm/issues/40069) — central tracking issue: says outright that TurboQuant "does not work without" #40798 and #42215
+- [#42215](https://github.com/vllm-project/vllm/issues/42215) — `[Bugfix][V1][TurboQuant] Warm up decode kernels` (OPEN, mandatory per #40069 — merge conflicts as of 2026-06-16, NOT in v0.23.0)
+- [#40798](https://github.com/vllm-project/vllm/issues/40798) — Share decode scratch workspace across layers (CLOSED 2026-05-30, branch accidentally broken — reopened as [#44053](https://github.com/vllm-project/vllm/pull/44053) "Reserve workspace before CUDA graph capture", still OPEN/unmerged 2026-06-15)
+- [#40069](https://github.com/vllm-project/vllm/issues/40069) — central tracking issue: says outright that TurboQuant "does not work without" the workspace fix (#40798→#44053) and #42215; both still unmerged as of 2026-06-16, so even v0.23.0 ships TQ without its mandatory prerequisites
 
 For our cluster (NVFP4 MoE on SM121/GB10), every one of these is in the danger zone. Hybrid-MoE,
 Gemma-4 multimodal, and MTP spec-decode are all production paths we use or want to use. Treat
