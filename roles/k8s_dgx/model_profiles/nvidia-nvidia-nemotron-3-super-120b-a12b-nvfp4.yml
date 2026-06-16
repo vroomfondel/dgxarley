@@ -220,10 +220,10 @@ _model_profile:
     # a build with the fixes above. To enable: flip speculative_enabled, run on a build
     # with #27998 (or wire --disable-radix-cache), verify accept_len>1 AND no NaN.
     # Memory: MTP draft buffers + 512K KV both eat memory; drop mem_fraction_static if OOM.
-    speculative_enabled: false
+    speculative_enabled: true
     speculative_algo: EAGLE
-    speculative_num_steps: 5            # cookbook 2026-06 (was 3)
-    speculative_num_draft_tokens: 5     # cookbook 2026-06 (was 4)
+    speculative_num_steps: 3  # cookbook 2026-06: 5
+    speculative_num_draft_tokens: 4  # cookbook 2026-06: 5
     speculative_eagle_topk: 1
     speculative_draft_model_path: ""
     # enable_spec_v2: true                       # not in the recipe; see #27184 (spec-v2 / B200)
