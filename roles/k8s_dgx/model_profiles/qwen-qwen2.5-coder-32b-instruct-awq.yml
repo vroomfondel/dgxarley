@@ -2,6 +2,7 @@
 # Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
 _model_profile:
   "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ":
+    knowledge_cutoff: "2024-06"  # source: OpenRouter metadata (unofficial, not in model card) — https://openrouter.ai/qwen/qwen-2.5-coder-32b-instruct
     info_url: "https://huggingface.co/Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
     # 32B dense, AWQ 4-bit (~19 GB / ~9.7 GB per GPU with TP=2)
     # Auto-detection reads quant_method from config.json → AWQMarlinConfig.

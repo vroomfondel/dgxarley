@@ -2,6 +2,7 @@
 # Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
 _model_profile:
   "unsloth/Qwen3-235B-A22B-Instruct-2507-FP8":
+    knowledge_cutoff: "2025-06"  # source: OpenRouter metadata (unofficial, not in model card) — https://openrouter.ai/qwen/qwen3-235b-a22b-2507
     # DISCOURAGED on 2× DGX Spark (128 GB each). FP8 weights alone consume ~118.5 GB
     # per GPU (TP=2), leaving only ~9.5 GB for CUDA context, activations, and KV cache.
     # Realistic context_length is ~32K with minimal concurrency. The ~1-2% quality gain

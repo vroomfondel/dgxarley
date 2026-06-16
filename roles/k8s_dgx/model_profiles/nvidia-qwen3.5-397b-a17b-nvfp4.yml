@@ -3,6 +3,7 @@
 # Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
 _model_profile:
   "nvidia/Qwen3.5-397B-A17B-NVFP4":
+    knowledge_cutoff: null  # no published cutoff found (HF card/tech report/aggregators checked 2026-06)
     info_url: "https://huggingface.co/nvidia/Qwen3.5-397B-A17B-NVFP4"
     # 397B/17B-active MoE (512 experts, top-10, softmax routing), NVFP4 quantized (~234 GB).
     # Architecture: Qwen3.5 MoE — hybrid attention: 15 full GQA layers + 45 linear

@@ -60,6 +60,7 @@
 # squeeze patch become redundant but stay harmless.
 _model_profile:
   "nvidia/DeepSeek-V4-Flash-NVFP4":
+    knowledge_cutoff: null  # no published cutoff found (HF card/tech report/aggregators checked 2026-06)
     info_url: "https://huggingface.co/nvidia/DeepSeek-V4-Flash-NVFP4"
     nccl_transport: "roce"
     tp_size: 4

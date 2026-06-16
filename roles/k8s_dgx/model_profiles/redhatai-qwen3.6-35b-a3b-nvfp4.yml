@@ -16,6 +16,7 @@
 # for the full matrix and per-block findings.
 _model_profile:
   "RedHatAI/Qwen3.6-35B-A3B-NVFP4":
+    knowledge_cutoff: null  # no published cutoff found (HF card/tech report/aggregators checked 2026-06)
     info_url: "https://huggingface.co/RedHatAI/Qwen3.6-35B-A3B-NVFP4"
     # 35B/3B MoE (Gated DeltaNet hybrid), NVFP4 quantization (~10–12 GB on-device
     # weights, vs. ~35 GB for the FP8 sibling). 256 experts, 8 routed + 1 shared

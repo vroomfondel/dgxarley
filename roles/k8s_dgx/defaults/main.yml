@@ -26,9 +26,9 @@ sglang_nnodes: 4
 #sglang_model: "Qwen/Qwen3.5-35B-A3B-FP8"
 #sglang_model: "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
 
-sglang_model: "sparkarena/Minimax-M3-v0-NVFP4"
+# sglang_model: "sparkarena/Minimax-M3-v0-NVFP4"
 # sglang_model: "RedHatAI/Qwen3.6-35B-A3B-NVFP4"
-# sglang_model: "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
+sglang_model: "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
 # sglang_model: "Qwen/Qwen3.6-27B-FP8"
 # sglang_model: "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4"
 # sglang_model: "nvidia/MiniMax-M2.7-NVFP4"

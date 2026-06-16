@@ -12,6 +12,7 @@
 # kv_cache_dtype) were NOT specifically swept and stand as reasonable defaults.
 _model_profile:
   "nvidia/MiniMax-M2.7-NVFP4":
+    knowledge_cutoff: null  # no published cutoff found (HF card/tech report/aggregators checked 2026-06)
     info_url: "https://huggingface.co/nvidia/MiniMax-M2.7-NVFP4"
     # 230B total / 10B active MoE (62 layers, hidden 3072, 256 experts, 8 active/token,
     # sigmoid routing), NVFP4 quantized (~139 GB weights, modelopt v0.43.0).

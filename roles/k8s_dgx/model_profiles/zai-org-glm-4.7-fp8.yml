@@ -2,6 +2,7 @@
 # Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
 _model_profile:
   "zai-org/GLM-4.7-FP8":
+    knowledge_cutoff: null  # no published cutoff found (HF card/tech report/aggregators checked 2026-06)
     info_url: "https://huggingface.co/zai-org/GLM-4.7-FP8"
     # 358B/~58B-active MoE (160 experts, top-8, sigmoid routing), FP8 quantized (~358 GB).
     # Same architecture as nvidia/GLM-4.7-NVFP4 but with FP8 weights (~1 byte/param)

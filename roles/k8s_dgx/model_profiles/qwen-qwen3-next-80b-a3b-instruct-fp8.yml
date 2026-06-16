@@ -2,6 +2,7 @@
 # Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
 _model_profile:
   "Qwen/Qwen3-Next-80B-A3B-Instruct-FP8":
+    knowledge_cutoff: "2025-09"  # source: OpenRouter metadata (unofficial, not in model card) — https://openrouter.ai/qwen/qwen3-next-80b-a3b-instruct
     info_url: "https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Instruct-FP8"
     context_length_max: 262144
     context_length: 262144

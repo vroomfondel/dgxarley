@@ -55,6 +55,7 @@
 # yarn rope (factor 16 over 65536). Same SM121 kernel landmines as the FP8 profile.
 _model_profile:
   "canada-quant/DeepSeek-V4-Flash-W4A16-FP8-MTP":
+    knowledge_cutoff: null  # no published cutoff found (HF card/tech report/aggregators checked 2026-06)
     info_url: "https://huggingface.co/canada-quant/DeepSeek-V4-Flash-W4A16-FP8-MTP"
     nccl_transport: "roce"
     tp_size: 4

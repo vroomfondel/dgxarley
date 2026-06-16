@@ -38,6 +38,7 @@
 # Reported eval: GSM8K 0.910, MMLU-Pro 0.554.
 _model_profile:
   "RedHatAI/DeepSeek-V4-Flash-NVFP4-FP8":
+    knowledge_cutoff: null  # no published cutoff found (HF card/tech report/aggregators checked 2026-06)
     info_url: "https://huggingface.co/RedHatAI/DeepSeek-V4-Flash-NVFP4-FP8"
     nccl_transport: "roce"
     tp_size: 4

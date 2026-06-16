@@ -19,6 +19,7 @@
 # with the winner config + measured throughput numbers.
 _model_profile:
   "mmangkad/Qwen3.6-35B-A3B-NVFP4":
+    knowledge_cutoff: null  # no published cutoff found (HF card/tech report/aggregators checked 2026-06)
     info_url: "https://huggingface.co/mmangkad/Qwen3.6-35B-A3B-NVFP4"
     # 35B/3B MoE (Gated DeltaNet hybrid), NVFP4 quantization via modelopt.
     # 256 experts, 8 routed + 1 shared activated per token. Native 262K context.

@@ -23,6 +23,7 @@
 # image; see fp4_gemm_backend note below. fp4_gemm stays flashinfer_cutlass anyway.)
 _model_profile:
   "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4":
+    knowledge_cutoff: "2026-02"  # post-training cutoff (HF card); pre-training 2025-06 — use latest for LCB contamination
     info_url: "https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
     # 120B total / 12B active LatentMoE — Mamba2 + MoE + select-attention HYBRID
     # (NemotronHForCausalLM, model_type=nemotron_h). config.json: 88 layers,

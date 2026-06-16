@@ -70,6 +70,7 @@
 #       --reasoning-parser minimax-m3 --tool-call-parser minimax-m3
 _model_profile:
   "sparkarena/Minimax-M3-v0-NVFP4":
+    knowledge_cutoff: null  # no published cutoff found (HF card/tech report/aggregators checked 2026-06)
     info_url: "https://huggingface.co/sparkarena/Minimax-M3-v0-NVFP4"
     # Per-profile image override (BLOCKER §1): the sparkarena card's designated
     # serving image for minimax_m3_vl on DGX Spark. Our xomoxcc/scitrera

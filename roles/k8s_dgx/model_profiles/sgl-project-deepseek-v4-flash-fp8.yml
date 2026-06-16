@@ -50,6 +50,7 @@
 #     --tp-size 4 --kv-cache-dtype fp8_e4m3
 _model_profile:
   "sgl-project/DeepSeek-V4-Flash-FP8":
+    knowledge_cutoff: null  # no published cutoff found (HF card/tech report/aggregators checked 2026-06)
     info_url: "https://huggingface.co/sgl-project/DeepSeek-V4-Flash-FP8"
     nccl_transport: "roce"
     tp_size: 4

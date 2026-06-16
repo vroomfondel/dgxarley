@@ -3,6 +3,7 @@
 # Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
 _model_profile:
   "nvidia/Gemma-4-31B-IT-NVFP4":
+    knowledge_cutoff: "2025-01"  # official HF/Google model card (Gemma 4 corpus); month precision
     info_url: "https://huggingface.co/nvidia/Gemma-4-31B-IT-NVFP4"
     # NVFP4-quantized variant of google/gemma-4-31B-it.
     # 30.7B dense, multimodal-capable (text+image+video).

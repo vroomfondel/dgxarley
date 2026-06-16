@@ -3,6 +3,7 @@
 # Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
 _model_profile:
   "nvidia/GLM-4.7-NVFP4":
+    knowledge_cutoff: null  # no published cutoff found (HF card/tech report/aggregators checked 2026-06)
     info_url: "https://huggingface.co/nvidia/GLM-4.7-NVFP4"
     # 358B/~58B-active MoE (160 experts, top-8, sigmoid routing), NVFP4 quantized (~214 GB).
     # Architecture: GLM-4 MoE — standard GQA (num_kv_heads=8, 12:1 ratio), 92 layers

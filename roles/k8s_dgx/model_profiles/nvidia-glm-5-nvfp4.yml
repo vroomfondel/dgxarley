@@ -2,6 +2,7 @@
 # Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
 _model_profile:
   "nvidia/GLM-5-NVFP4":
+    knowledge_cutoff: null  # no published cutoff found (HF card/tech report/aggregators checked 2026-06)
     info_url: "https://huggingface.co/nvidia/GLM-5-NVFP4"
     # 744B/40B-active MoE (256 experts, top-8, sigmoid routing), NVFP4 quantized.
     # Architecture: GlmMoeDsa — MLA (Multi-head Latent Attention) with DSA

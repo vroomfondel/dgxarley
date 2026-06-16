@@ -2,6 +2,7 @@
 # Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
 _model_profile:
   "google/gemma-4-26B-A4B-it":
+    knowledge_cutoff: "2025-01"  # official HF/Google model card (Gemma 4 corpus); month precision
     info_url: "https://huggingface.co/google/gemma-4-26B-A4B-it"
     # ALTERNATIVE: https://huggingface.co/bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4
     # 26B total / ~3.8B active MoE (top_k=8 of 128 experts per token),
