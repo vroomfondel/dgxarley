@@ -906,7 +906,27 @@ litellm_default_output_cost_per_token: 0.000015   # $15.00 per 1M output — Ant
 litellm_hermes_alias_model: "hermes-default"
 
 
-litellm_model_list:
+# The effective model list LiteLLM renders. Composed (not replaced) so callers
+# can append/prepend/remove/MODIFY individual models without duplicating the base:
+#   litellm_model_list_prepend  — entries placed BEFORE the base list
+#   litellm_model_list_append   — entries placed AFTER the base list
+#   litellm_model_list_exclude  — model_names to drop from the BASE only (matched
+#                                 after Jinja renders nested {{ vars }}, so use the
+#                                 resolved name, e.g. the value of ollama_model)
+# exclude is applied to the base list ONLY — prepend/append always survive. To
+# MODIFY a base entry, exclude its model_name AND re-add it (with the same name and
+# your new params) via append/prepend. Leave _litellm_model_list_base alone so
+# default changes keep flowing through. Override the three vars in group/host_vars.
+litellm_model_list_prepend: []
+litellm_model_list_append: []
+litellm_model_list_exclude: []
+
+litellm_model_list: >-
+  {{ litellm_model_list_prepend
+     + (_litellm_model_list_base | rejectattr('model_name', 'in', litellm_model_list_exclude) | list)
+     + litellm_model_list_append }}
+
+_litellm_model_list_base:
   - model_name: "{{ sglang_served_model_name }}"
     litellm_params:
       model: "openai/{{ sglang_served_model_name }}"

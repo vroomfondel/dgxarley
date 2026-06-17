@@ -47,6 +47,21 @@ providesmqttexternal: false
 providescoturn: false
 iswireguardhost: false
 
+# LiteLLM model list — compose, don't replace. The base list is in
+# roles/k8s_dgx/defaults/main.yml (_litellm_model_list_base); these three vars
+# patch it so default changes keep flowing through. Examples (uncomment/edit):
+#
+# litellm_model_list_append:
+#   - model_name: "claude-via-openrouter"
+#     litellm_params:
+#       model: "openrouter/anthropic/claude-sonnet-4-6"
+#       api_base: "https://openrouter.ai/api/v1"
+#       api_key: "{{ openrouter_api_key }}"   # secret -> put real value in vault.yml
+#
+# litellm_model_list_prepend: []      # entries placed before the base list
+# litellm_model_list_exclude:         # drop base entries by resolved model_name
+#   - "{{ ollama_model }}"
+
 # RustFS rc alias for backup uploads
 rustfs_rc_alias: "backupstore"
 rustfs_rc_endpoint: "https://minio.example.com"
