@@ -1,11 +1,11 @@
 # SGLang Test Log — MiniMax-M3-v0-NVFP4 (multimodal MoE + MSA), 4 Nodes, TP=4 PP=1 EP=1, mm:v0 (first serving contact)
 
-> ⚠️ **MATRIX IN PROGRESS — 4 of 7 cases recorded (as of 2026-06-17 19:30 CEST).**
-> Block A (01–02) + Block B 03 (ctx128k, **new winner**) + 04 (ctx128k/mfs0.60,
-> **startup crash** — see §6) are in `MATRIX_SUMMARY_…_4n_1pp_4tp_ep1.json`.
-> **Case 05 (256k/mfs0.60) is loading and is expected to crash the same way.**
-> Triton probe (06) and cuDNN-FP4 probe (07) pending. This log is updated as cases
-> land — see [§ Completeness](#completeness-vs-matrix-definition).
+> ⚠️ **MATRIX IN PROGRESS — 5 of 7 cases recorded (as of 2026-06-17 19:42 CEST).**
+> Block A (01–02) + Block B 03 (ctx128k, **new winner**) in summary. **04 + 05 both
+> startup-crashed** (mfs0.60 starves the KV pool at 128k *and* 256k — see §6;
+> prediction confirmed). **Case 06 (triton MoE) is serving now** (head 2/2 — triton
+> loads the M3 layout, no crash; benchmark in flight). cuDNN-FP4 probe (07) pending.
+> See [§ Completeness](#completeness-vs-matrix-definition).
 
 ## Environment
 
@@ -50,10 +50,10 @@ Run window: 2026-06-17 15:48–16:45 UTC.
 
 ---
 
-## Matrix shape (7 cases defined; **4 recorded, matrix in progress**)
+## Matrix shape (7 cases defined; **5 recorded, matrix in progress**)
 
 - **Block A** (01–02): `flashinfer_cutlass` MoE + fi-attn + fi_cutlass FP4, ctx64k/mfs0.70 — CG variant (01 piecewise = live config, 02 full-CG). ✅ **both ran**
-- **Block B** (03–05): context-ceiling co-fit — ctx128k/mfs0.70, ctx128k/mfs0.60, ctx256k/mfs0.60. 🟡 **03 ran (new winner); 04 crashed (mfs0.60 too low, §6); 05 loading (crash expected)** (the matrix's stated main prize — but the mfs-DOWN axis is backwards, §6)
+- **Block B** (03–05): context-ceiling co-fit — ctx128k/mfs0.70, ctx128k/mfs0.60, ctx256k/mfs0.60. 🟡 **03 ran (new winner); 04 + 05 both crashed (mfs0.60 too low at 128k & 256k, §6)** (the matrix's stated main prize — but the mfs-DOWN axis is backwards, §6)
 - **Block C** (06): `triton` MoE probe @ ctx64k. ⏳ **pending**
 - **Block D** (07): `flashinfer_cudnn` FP4 delta @ ctx64k. ⏳ **pending**
 
@@ -104,7 +104,7 @@ RuntimeError: Not enough memory. Please try to increase --mem-fraction-static.
 ```
 The matrix's Block B intent — *"push context UP and mem_fraction_static DOWN to find what co-fits"* — is **inverted for SGLang**. Unlike vLLM's `gpu_memory_utilization` (lower = less used), SGLang's `mem_fraction_static` is the **static pool that must hold weights + KV**; lowering it *shrinks* the KV budget. With ~60 GB weights, mfs0.60 (≈77 GB static budget on 128 GB) left too little for a 128K KV pool → crash. Case 03 fit 128K **because** it used the *higher* 0.70. **Corrective:** to push context further you must **raise** mfs (toward 0.80–0.85), not lower it.
 
-**Prediction:** case 05 (256k @ **mfs0.60**) will crash the same way — bigger context, same starved fraction, even less viable. The real 256K test needs mfs ≥ 0.80. The Block B 04/05 axis as written cannot find the upper ceiling; it only re-proves the floor. **A corrected sweep (128k/256k at mfs 0.80→0.90) is the actual open item.**
+**Confirmed:** case 05 (256k @ **mfs0.60**) crashed identically (`startup_crash`) — bigger context, same starved fraction, even less viable. The real 256K test needs mfs ≥ 0.80. The Block B 04/05 axis as written cannot find the upper ceiling; it only re-proves the floor. **A corrected sweep (128k/256k at mfs 0.80→0.90) is the actual open item.**
 
 ---
 
@@ -116,8 +116,8 @@ The matrix's Block B intent — *"push context UP and mem_fraction_static DOWN t
 | 02 | A | fi_cutlass / fi / fi_cutlass / **full-CG** / ctx64k / mfs0.70 | ✅ ran |
 | 03 | B | piecewise / **ctx128k** / mfs0.70 | ✅ ran (new winner) |
 | 04 | B | piecewise / ctx128k / **mfs0.60** (KV-headroom) | ❌ **startup crash** — mfs too low (§6) |
-| 05 | B | piecewise / **ctx256k** / mfs0.60 (ctx-push) | 🟡 loading — crash expected (same starved mfs) |
-| 06 | C | **triton** MoE / ctx64k / mfs0.70 (probe) | ⏳ pending |
+| 05 | B | piecewise / **ctx256k** / mfs0.60 (ctx-push) | ❌ **startup crash** — same starved mfs (predicted, confirmed) |
+| 06 | C | **triton** MoE / ctx64k / mfs0.70 (probe) | 🟡 serving now (head 2/2 — triton loads M3; bench in flight) |
 | 07 | D | **fi_cudnn** FP4 / ctx64k / mfs0.70 (probe) | ⏳ pending |
 
 **Matrix is running** (no manual restart needed); the harness appends each case to the summary as it lands. Re-check the summary mtime to pick up 04–07. To resume manually if interrupted:
