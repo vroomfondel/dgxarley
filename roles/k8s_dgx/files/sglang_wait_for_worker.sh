@@ -16,14 +16,25 @@ WAIT_COUNT="${WAIT_COUNT:-1}"
 TIMEOUT="${WAIT_TIMEOUT:-600}"
 INTERVAL="${WAIT_INTERVAL:-5}"
 
+# Single-node (nnodes=1): WAIT_COUNT=nnodes-1=0, no worker pods exist — nothing to
+# wait for. Short-circuit, else the loop below spins to TIMEOUT (grep finds nothing).
+if [ "$WAIT_COUNT" -le 0 ]; then
+  echo "No workers to wait for (WAIT_COUNT=${WAIT_COUNT}, single-node) — skipping."
+  exit 0
+fi
+
 elapsed=0
 echo "Waiting for ${WAIT_COUNT} pod(s) (label: ${LABEL}) in namespace ${NS} ..."
 
 while [ $elapsed -lt $TIMEOUT ]; do
-  # --field-selector filters out stale Completed/Failed pods from previous Jobs
+  # --field-selector filters out stale Completed/Failed pods from previous Jobs.
+  # NB: `grep -c` already prints 0 on no match (with exit 1) — a trailing `|| echo 0`
+  # would APPEND a second "0", making ready_count "0\n0" → `[: integer expression
+  # expected`. So we do NOT use `|| echo 0`; we default the var instead.
   ready_count=$(kubectl get pod -n "$NS" -l "$LABEL" --field-selector=status.phase=Running \
     -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' \
-    2>/dev/null | grep -c "True" || echo 0)
+    2>/dev/null | grep -c "True")
+  ready_count=${ready_count:-0}
   echo "$(date '+%H:%M:%S') workers ready: ${ready_count}/${WAIT_COUNT} (${elapsed}s/${TIMEOUT}s)"
   if [ "$ready_count" -ge "$WAIT_COUNT" ]; then
     echo "All ${WAIT_COUNT} worker pod(s) are Ready."
