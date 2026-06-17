@@ -122,7 +122,7 @@ _model_profile:
     # and 0.80 reserves a 16.58M-token KV cache at ctx524k (K 15.81 + V 15.81 GB) with
     # ~23.6 GB still free after CUDA-graph capture — i.e. 0.80 is comfortable and could
     # go higher if more KV is wanted. No OOM at 262K/512K/1M.
-    mem_fraction_static: "0.80"
+    mem_fraction_static: "0.75"
     # attention_backend: MUST NOT be triton — SGLang's apply_nemotron_h_defaults hook
     # hard-asserts against it ("NemotronHForCausalLM does not support triton attention
     # backend, as the first layer might not be an attention layer"; the hybrid pattern
@@ -189,7 +189,7 @@ _model_profile:
     # ranks, no expert-parallel all-to-all). Matches the model card's EP=1. To switch
     # to EP=TP=4 (all-to-all MoE, attention stays TP) use the dynamic form:
     # ep_size: "{{ sglang_nnodes if (512 % (sglang_nnodes | int) == 0) else 1 }}".
-    ep_size: 1
+    ep_size: 4
     recommended_sampling:
       temperature: 1.0
       top_p: 0.95
