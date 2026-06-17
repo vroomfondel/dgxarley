@@ -21,8 +21,15 @@
 #   - MoE: 128 routed experts, 4 active/token + 1 shared expert, sigmoid routing
 #     with routing bias, routed_scaling_factor 2.0. First 3 layers dense
 #     (moe_layer_freq = [0,0,0,1,1,...]). expert intermediate 3072, dense 12288.
-#   - num_mtp_modules=1 → one MTP/NEXTN draft head baked in (speculative possible
-#     once the loader supports the M3 MTP module — NOT the M2 one we patch today).
+#   - num_mtp_modules in config.json → the M3 ARCH declares an MTP/NEXTN draft
+#     head, BUT NO M3 CHECKPOINT SHIPS MTP WEIGHTS — this is an UPSTREAM omission,
+#     not a quant artifact (verified 2026-06-17): the BF16 source MiniMaxAI/
+#     MiniMax-M3 has layers 0-59 only and zero mtp/nextn/eh_proj/enorm/hnorm/
+#     shared_head tensors, and HF discussion #5 confirms "MTP declared but not in
+#     the released weights." All public NVFP4 quants inherit this — sparkarena,
+#     lukealonso, brandonmusic, Mapika ALL have layers 0-59 / 0 MTP tensors.
+#     → NEXTN is impossible for the entire M3 family until MiniMax releases the
+#     MTP head. No quant can add what the source lacks.
 #   - **MiniMax Sparse Attention (MSA)**: sparse_attention_config use_sparse_attention
 #     true, sparse_index_dim 128, sparse_num_index_heads 4, sparse_topk_blocks 16,
 #     sparse_block_size 128. Custom high-perf sparse-attn operator
@@ -143,9 +150,12 @@ _model_profile:
       temperature: 1.0   # generation_config.json
       top_p: 0.95        # generation_config.json
       top_k: 40
-    # MTP head present (num_mtp_modules=1) → NEXTN is theoretically a 1-step
-    # draft, but the loader must support the M3 MTP module (we only patch the M2
-    # one today, BLOCKER §1). Keep OFF until validated.
+    # MUST stay OFF for the entire M3 family: config declares an MTP module, but
+    # NO M3 checkpoint ships MTP weights — upstream omission, not a quant artifact
+    # (verified 2026-06-17: BF16 MiniMaxAI/MiniMax-M3 + all NVFP4 quants =
+    # layers 0-59, 0 MTP tensors; HF M3 discussion #5 confirms). NEXTN is
+    # impossible until MiniMax releases the MTP head; switching NVFP4 source
+    # won't help — none have it.
     speculative_enabled: false
     speculative_algo: NEXTN
     speculative_num_steps: 1
