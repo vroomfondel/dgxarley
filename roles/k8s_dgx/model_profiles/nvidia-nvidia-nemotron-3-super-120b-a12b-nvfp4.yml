@@ -189,7 +189,7 @@ _model_profile:
     # ranks, no expert-parallel all-to-all). Matches the model card's EP=1. To switch
     # to EP=TP=4 (all-to-all MoE, attention stays TP) use the dynamic form:
     # ep_size: "{{ sglang_nnodes if (512 % (sglang_nnodes | int) == 0) else 1 }}".
-    ep_size: 4
+    ep_size: 1
     recommended_sampling:
       temperature: 1.0
       top_p: 0.95
