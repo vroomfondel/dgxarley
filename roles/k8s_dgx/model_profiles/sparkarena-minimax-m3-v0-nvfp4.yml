@@ -102,7 +102,14 @@ _model_profile:
     # models: qwen3-235b, glm-4.7, minimax-m2.7). UNVERIFIED on M3's 128-expert
     # +1-shared layout; re-sweep once it loads.
     moe_runner_backend: "flashinfer_cutlass"
-    kv_cache_dtype: "fp8_e4m3"
+    # fp8_e4m3 is BROKEN here: the MiniMax Sparse Attention (MSA) triton kernel on
+    # scitrera/dgx-spark-sglang-mm:v0 (SM121/GB10) has no fp8-KV path — tl.dot
+    # asserts rhs in (int8/uint8/fp16/bf16/fp32) and rejects fp8e4nv, dying during
+    # CUDA-graph capture (verified 2026-06-17). Keep "auto" (bf16 KV) until an MSA
+    # kernel with fp8-KV support exists. Cost: 2× KV footprint → cap context far
+    # below 524288 at deploy (see KV note above); lower mem_fraction_static if
+    # capture still OOMs.
+    kv_cache_dtype: "auto"
     # Heavier weights than M2.x (~61 vs ~35 GB/GPU) → less post-weight headroom.
     # 0.80 is the M2.7-inherited default; likely needs LOWERING for M3 (vision
     # tower + MSA buffers). Re-tune; this is a guess.
