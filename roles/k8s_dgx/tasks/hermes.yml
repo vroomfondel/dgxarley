@@ -146,6 +146,34 @@
 # the email gateway holds its runtime flock, so the WebUI badge stays green
 # without shareProcessNamespace (which would crashloop the s6-based email
 # sidecar). Cosmetic only; see the script header for full rationale.
+- name: Render hermes seadrive sidecar entrypoint ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: hermes-seadrive
+        namespace: "{{ hermes_namespace }}"
+        labels:
+          app: hermes
+      data:
+        hermes_seadrive_start.sh: "{{ lookup('file', 'hermes_seadrive_start.sh') }}"
+
+- name: Render hermes merge-config ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: hermes-merge-config
+        namespace: "{{ hermes_namespace }}"
+        labels:
+          app: hermes
+      data:
+        hermes_merge_config.py: "{{ lookup('file', 'hermes_merge_config.py') }}"
+
 - name: Render hermes gateway-state refresher ConfigMap
   kubernetes.core.k8s:
     state: present

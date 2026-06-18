@@ -52,6 +52,9 @@ spec:
         # the ConfigMap/Secret update alone leaves the pod on stale settings.
         checksum/config: "{{ lookup('template', 'hermes/hermes_config.yaml.j2') | hash('sha256') }}"
         checksum/env:    "{{ lookup('template', 'hermes/hermes_env.j2')         | hash('sha256') }}"
+        # Roll the pod when the merge-config script changes so the new merge
+        # logic runs against /opt/data on next start.
+        checksum/merge:  "{{ lookup('file', 'hermes_merge_config.py') | hash('sha256') }}"
         # Hash the raw login secret so rotating basicauth_password (which is
         # only referenced by the Caddy users.json ConfigMap — no rollover
         # on its own) forces a fresh pod. Hash the cleartext, not bcrypt:
@@ -97,18 +100,11 @@ spec:
               mountPath: /workspace
 {% endif %}
         # Strategic merge of ops-managed keys into /opt/data/config.yaml +
-        # /opt/data/.env. We can NOT mount them as subPath of a ConfigMap/Secret
-        # directly — that makes them bind-mounts, and Hermes'
-        # `atomic_yaml_write()` does rename(2) over the target which fails with
-        # EBUSY on bind-mounts (the original 2026 trace was triggered by a
-        # Settings → Theme save).
-        #
-        # Strategy: every top-level key present in the seed (provider, default-
-        # model, base_url for config.yaml; OPENAI_API_KEY for .env) is enforced
-        # on every pod start. Keys the user added (theme, tool toggles, extra
-        # provider keys) are preserved. Lets ops update the cluster default and
-        # propagate to existing pods on next restart, while still letting users
-        # customise non-managed bits in the WebUI without losing their work.
+        # /opt/data/.env. Script lives in roles/k8s_dgx/files/hermes_merge_config.py
+        # (ConfigMap hermes-merge-config, mounted at /opt/merge-config); see its
+        # header for the full rationale (bind-mount EBUSY, key-preservation
+        # strategy, litellm api_key injection). UID/GID are passed via env so the
+        # file stays static/cluster-wide.
         #
         # Uses the agent image because it already has PyYAML in its venv and
         # is guaranteed cached on the node (used by the main container too).
@@ -116,53 +112,21 @@ spec:
           image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes_image_tag) }}"
           command:
             - /opt/hermes/.venv/bin/python
-            - -c
-            - |
-              import os, yaml
-              UID, GID = {{ item.uid }}, {{ item.gid }}
-              def deep_override(user, ops):
-                  for k, v in ops.items():
-                      if isinstance(v, dict) and isinstance(user.get(k), dict):
-                          deep_override(user[k], v)
-                      else:
-                          user[k] = v
-              # config.yaml — strategic merge
-              ops = yaml.safe_load(open("/seed-config/config.yaml")) or {}
-              try:
-                  user = yaml.safe_load(open("/opt/data/config.yaml")) or {}
-              except FileNotFoundError:
-                  user = {}
-              deep_override(user, ops)
-              with open("/opt/data/config.yaml", "w") as f:
-                  yaml.safe_dump(user, f, sort_keys=False)
-              os.chown("/opt/data/config.yaml", UID, GID)
-              os.chmod("/opt/data/config.yaml", 0o600)
-              # .env — KEY=VALUE merge (ops wins for managed keys, others kept)
-              def parse_env(p):
-                  out = {}
-                  if not os.path.exists(p):
-                      return out
-                  for line in open(p):
-                      s = line.strip()
-                      if not s or s.startswith("#") or "=" not in s:
-                          continue
-                      k, v = s.split("=", 1)
-                      out[k.strip()] = v
-                  return out
-              ops_env = parse_env("/seed-secret/.env")
-              user_env = parse_env("/opt/data/.env")
-              user_env.update(ops_env)
-              with open("/opt/data/.env", "w") as f:
-                  for k, v in user_env.items():
-                      f.write(f"{k}={v}\n")
-              os.chown("/opt/data/.env", UID, GID)
-              os.chmod("/opt/data/.env", 0o600)
+            - /opt/merge-config/hermes_merge_config.py
+          env:
+            - name: MERGE_UID
+              value: "{{ item.uid }}"
+            - name: MERGE_GID
+              value: "{{ item.gid }}"
           securityContext:
             runAsUser: 0
             runAsNonRoot: false
           volumeMounts:
             - name: data
               mountPath: /opt/data
+            - name: merge-config
+              mountPath: /opt/merge-config
+              readOnly: true
             - name: seed-config
               mountPath: /seed-config
               readOnly: true
@@ -243,54 +207,16 @@ spec:
               value: "{{ item.gid }}"
             - name: SEAFILE_LIBRARY_NAME
               value: "{{ hermes_seafile_library_name }}"
+          # Entrypoint script is shared with the webui pod's identical seadrive
+          # sidecar — roles/k8s_dgx/files/hermes_seadrive_start.sh (ConfigMap
+          # hermes-seadrive, mounted at /opt/seadrive).
           command:
             - /bin/bash
-            - -c
-            - |
-              set -euo pipefail
-              mkdir -p /etc /var/cache/seadrive /seadrive
-              grep -q '^user_allow_other' /etc/fuse.conf 2>/dev/null \
-                || echo 'user_allow_other' >> /etc/fuse.conf
-
-              cat > /tmp/seadrive.conf <<EOF
-              [account]
-              server = ${SEAFILE_SERVER}
-              username = ${SEAFILE_USER}
-              token = ${SEAFILE_TOKEN}
-              is_pro = false
-
-              [general]
-              client_name = hermes-${HOSTNAME}
-              EOF
-              chmod 0600 /tmp/seadrive.conf
-
-              seadrive \
-                -c /tmp/seadrive.conf \
-                -d /var/cache/seadrive \
-                -l /var/log/seadrive.log \
-                -o allow_other,uid=${WANTED_UID},gid=${WANTED_GID},umask=0077 \
-                /seadrive &
-              SEADRIVE_PID=$!
-
-              for i in $(seq 1 60); do
-                  if [ -d "/seadrive/${SEAFILE_LIBRARY_NAME}" ]; then
-                      break
-                  fi
-                  sleep 1
-              done
-              if [ ! -d "/seadrive/${SEAFILE_LIBRARY_NAME}" ]; then
-                  echo "seadrive: library '${SEAFILE_LIBRARY_NAME}' did not appear within 60s — check Seafile credentials/server reachability" >&2
-                  cat /var/log/seadrive.log >&2 || true
-                  kill ${SEADRIVE_PID} 2>/dev/null || true
-                  exit 1
-              fi
-
-              mount --bind "/seadrive/${SEAFILE_LIBRARY_NAME}" /workspace
-              echo "seadrive: ${SEAFILE_LIBRARY_NAME} mounted at /workspace (pid=${SEADRIVE_PID})"
-
-              trap 'umount /workspace 2>/dev/null || true; fusermount -u /seadrive 2>/dev/null || true; kill -TERM ${SEADRIVE_PID} 2>/dev/null || true' TERM INT
-              wait ${SEADRIVE_PID}
+            - /opt/seadrive/hermes_seadrive_start.sh
           volumeMounts:
+            - name: seadrive-entrypoint
+              mountPath: /opt/seadrive
+              readOnly: true
             - name: workspace-fuse
               mountPath: /workspace
               mountPropagation: Bidirectional
@@ -506,6 +432,9 @@ spec:
         # just provides a shared mountpoint across containers in the pod.
         - name: workspace-fuse
           emptyDir: {}
+        - name: seadrive-entrypoint
+          configMap:
+            name: hermes-seadrive
 {% else %}
         # User-managed input/output shelf, mounted at /workspace. Same per-user
         # NFS subdir isolation as the data volume.
@@ -514,6 +443,9 @@ spec:
             path: "{{ hermes_files_base }}/{{ item.username }}"
             type: DirectoryOrCreate
 {% endif %}
+        - name: merge-config
+          configMap:
+            name: hermes-merge-config
         - name: seed-config
           configMap:
             name: "hermes-config-{{ item.username }}"

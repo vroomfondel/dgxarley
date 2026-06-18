@@ -1,6 +1,11 @@
 {# Hermes Agent config — rendered per user via lookup('template', ...).
-   Provider "custom" routes through OpenAI-compatible API; api_key comes from
-   OPENAI_API_KEY in the .env file (mounted as Secret).
+   Provider "custom" routes through an OpenAI-compatible API (LiteLLM).
+   NOTE: model.api_key is deliberately NOT set here — this file becomes the
+   non-secret ConfigMap. The merge-config initContainer patches model.api_key
+   in at startup from the Secret-backed .env (OPENAI_API_KEY). It MUST end up in
+   config (not just .env) because Hermes host-gates OPENAI_API_KEY to
+   openai.com/azure (GHSA / #28660) and the WebUI auxiliary_client reads the key
+   from config, not os.environ. See the merge-config block in the deployments.
    See: https://hermes-agent.nousresearch.com/docs/user-guide/configuration
 #}
 model:

@@ -59,6 +59,8 @@ spec:
         # need to re-merge into /opt/data on update.
         checksum/config:      "{{ lookup('template', 'hermes/hermes_config.yaml.j2') | hash('sha256') }}"
         checksum/env:         "{{ lookup('template', 'hermes/hermes_env.j2')         | hash('sha256') }}"
+        # Roll the pod when the shared merge-config script changes.
+        checksum/merge:       "{{ lookup('file', 'hermes_merge_config.py') | hash('sha256') }}"
         # Hash the raw login secret so rotating basicauth_password (which is
         # only referenced by the Caddy users.json ConfigMap and the
         # WEBUI_PASSWORD Secret key — neither of which triggers a pod
@@ -148,93 +150,38 @@ spec:
               mountPath: /workspace
 {% endif %}
         # Strategic merge of ops-managed keys into /opt/data/config.yaml +
-        # /opt/data/.env. Mirrors hermes-agent pod's merge-config initContainer
-        # — needed because the webui spawns its own `hermes` subprocesses which
-        # read the same config.yaml/.env. Race-safe because both pods derive
-        # the same ops-managed values from the same ConfigMap/Secret. See
-        # hermes_agent_deployment.yaml.j2 for the full EBUSY rationale.
+        # /opt/data/.env (+ /opt/data/.webui/settings.json). Shares the exact
+        # script with the hermes-agent pod's merge-config initContainer —
+        # roles/k8s_dgx/files/hermes_merge_config.py (ConfigMap
+        # hermes-merge-config, mounted at /opt/merge-config); see its header for
+        # the full EBUSY rationale. Needed here because the webui spawns its own
+        # `hermes` subprocesses reading the same config.yaml/.env. Race-safe
+        # because both pods derive the same ops-managed values from the same
+        # ConfigMap/Secret. UID/GID via env; WEBUI_SETTINGS_B64 additionally
+        # drives the WebUI settings.json merge (agent pod omits it).
         - name: merge-config
           image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes_image_tag) }}"
           command:
             - /opt/hermes/.venv/bin/python
-            - -c
-            - |
-              import os, yaml
-              UID, GID = {{ item.uid }}, {{ item.gid }}
-              def deep_override(user, ops):
-                  for k, v in ops.items():
-                      if isinstance(v, dict) and isinstance(user.get(k), dict):
-                          deep_override(user[k], v)
-                      else:
-                          user[k] = v
-              ops = yaml.safe_load(open("/seed-config/config.yaml")) or {}
-              try:
-                  user = yaml.safe_load(open("/opt/data/config.yaml")) or {}
-              except FileNotFoundError:
-                  user = {}
-              deep_override(user, ops)
-              with open("/opt/data/config.yaml", "w") as f:
-                  yaml.safe_dump(user, f, sort_keys=False)
-              os.chown("/opt/data/config.yaml", UID, GID)
-              os.chmod("/opt/data/config.yaml", 0o600)
-              def parse_env(p):
-                  out = {}
-                  if not os.path.exists(p):
-                      return out
-                  for line in open(p):
-                      s = line.strip()
-                      if not s or s.startswith("#") or "=" not in s:
-                          continue
-                      k, v = s.split("=", 1)
-                      out[k.strip()] = v
-                  return out
-              ops_env = parse_env("/seed-secret/.env")
-              user_env = parse_env("/opt/data/.env")
-              user_env.update(ops_env)
-              with open("/opt/data/.env", "w") as f:
-                  for k, v in user_env.items():
-                      f.write(f"{k}={v}\n")
-              os.chown("/opt/data/.env", UID, GID)
-              os.chmod("/opt/data/.env", 0o600)
-              # Merge STATE_DIR/settings.json with the WebUI preferences
-              # defined in `webui_settings` on this user. Mirrors the
-              # config.yaml/.env merge above — ops-managed keys WIN, all
-              # other keys the user has set via the Preferences panel
-              # (POST /api/settings) are preserved. The nine ops-relevant
-              # toggles live in api/config.py:_SETTINGS_DEFAULTS upstream
-              # (sidebar_density, show_cli_sessions, simplified_tool_calling,
-              # busy_input_mode, …); none has an env/config override.
-{% set _webui_settings = item.webui_settings | default({}) %}
-{% if _webui_settings %}
-              import base64, json
-              state_dir = "/opt/data/.webui"
-              settings_path = os.path.join(state_dir, "settings.json")
-              os.makedirs(state_dir, exist_ok=True)
-              os.chown(state_dir, UID, GID)
-              os.chmod(state_dir, 0o700)
-              # base64 round-trip — the rendered JSON contains lowercase
-              # `true`/`false`/`null` which are not valid Python literals;
-              # parsing through json.loads avoids any quoting/escaping
-              # corner cases (single quotes in values etc.).
-              ops_settings = json.loads(base64.b64decode("{{ _webui_settings | to_json | b64encode }}"))
-              try:
-                  user_settings = json.load(open(settings_path))
-                  if not isinstance(user_settings, dict):
-                      user_settings = {}
-              except (FileNotFoundError, json.JSONDecodeError):
-                  user_settings = {}
-              user_settings.update(ops_settings)  # ops keys win
-              with open(settings_path, "w") as f:
-                  json.dump(user_settings, f, indent=2, sort_keys=True)
-              os.chown(settings_path, UID, GID)
-              os.chmod(settings_path, 0o600)
-{% endif %}
+            - /opt/merge-config/hermes_merge_config.py
+          env:
+            - name: MERGE_UID
+              value: "{{ item.uid }}"
+            - name: MERGE_GID
+              value: "{{ item.gid }}"
+            # base64 of the per-user webui_settings JSON; empty/`{}` → the
+            # settings.json merge is skipped inside the script.
+            - name: WEBUI_SETTINGS_B64
+              value: "{{ item.webui_settings | default({}) | to_json | b64encode }}"
           securityContext:
             runAsUser: 0
             runAsNonRoot: false
           volumeMounts:
             - name: data
               mountPath: /opt/data
+            - name: merge-config
+              mountPath: /opt/merge-config
+              readOnly: true
             - name: seed-config
               mountPath: /seed-config
               readOnly: true
@@ -299,61 +246,16 @@ spec:
               value: "{{ item.gid }}"
             - name: SEAFILE_LIBRARY_NAME
               value: "{{ hermes_seafile_library_name }}"
+          # Entrypoint script is shared with the agent pod's identical seadrive
+          # sidecar — roles/k8s_dgx/files/hermes_seadrive_start.sh (ConfigMap
+          # hermes-seadrive, mounted at /opt/seadrive).
           command:
             - /bin/bash
-            - -c
-            - |
-              set -euo pipefail
-              # FUSE needs /etc/fuse.conf with user_allow_other so containers
-              # running as a different UID can read /workspace contents.
-              mkdir -p /etc /var/cache/seadrive /seadrive
-              grep -q '^user_allow_other' /etc/fuse.conf 2>/dev/null \
-                || echo 'user_allow_other' >> /etc/fuse.conf
-
-              cat > /tmp/seadrive.conf <<EOF
-              [account]
-              server = ${SEAFILE_SERVER}
-              username = ${SEAFILE_USER}
-              token = ${SEAFILE_TOKEN}
-              is_pro = false
-
-              [general]
-              client_name = hermes-${HOSTNAME}
-              EOF
-              chmod 0600 /tmp/seadrive.conf
-
-              # Background seadrive; -f keeps it foreground but we want it
-              # parallel with the bind-mount step.
-              seadrive \
-                -c /tmp/seadrive.conf \
-                -d /var/cache/seadrive \
-                -l /var/log/seadrive.log \
-                -o allow_other,uid=${WANTED_UID},gid=${WANTED_GID},umask=0077 \
-                /seadrive &
-              SEADRIVE_PID=$!
-
-              # Wait for the library to appear (FUSE caches lazily; ~3–10s).
-              for i in $(seq 1 60); do
-                  if [ -d "/seadrive/${SEAFILE_LIBRARY_NAME}" ]; then
-                      break
-                  fi
-                  sleep 1
-              done
-              if [ ! -d "/seadrive/${SEAFILE_LIBRARY_NAME}" ]; then
-                  echo "seadrive: library '${SEAFILE_LIBRARY_NAME}' did not appear within 60s — check Seafile credentials/server reachability" >&2
-                  cat /var/log/seadrive.log >&2 || true
-                  kill ${SEADRIVE_PID} 2>/dev/null || true
-                  exit 1
-              fi
-
-              # Propagate the lib content onto the shared emptyDir mount.
-              mount --bind "/seadrive/${SEAFILE_LIBRARY_NAME}" /workspace
-              echo "seadrive: ${SEAFILE_LIBRARY_NAME} mounted at /workspace (pid=${SEADRIVE_PID})"
-
-              # Forward signals to seadrive so K8s graceful shutdown works.
-              trap 'umount /workspace 2>/dev/null || true; fusermount -u /seadrive 2>/dev/null || true; kill -TERM ${SEADRIVE_PID} 2>/dev/null || true' TERM INT
-              wait ${SEADRIVE_PID}
+            - /opt/seadrive/hermes_seadrive_start.sh
           volumeMounts:
+            - name: seadrive-entrypoint
+              mountPath: /opt/seadrive
+              readOnly: true
             - name: workspace-fuse
               mountPath: /workspace
               mountPropagation: Bidirectional
@@ -386,6 +288,16 @@ spec:
               value: "/opt/agent-src"
             - name: HERMES_WEBUI_STATE_DIR
               value: "/opt/data/.webui"
+            # Persist uv's wheel cache on the per-user data hostPath (local
+            # ext4) instead of the ephemeral overlay default (/uv_cache). The
+            # nesquena image does NOT bundle hermes-agent's runtime deps
+            # (dotenv/requests/httpx); docker_init.bash reinstalls agent[all]
+            # into the ephemeral /app/venv on every pod start. A persistent
+            # cache makes that reinstall fast (cached wheels, no re-download).
+            # NOT persisting /app/venv itself: the webui image is unpinned
+            # (:latest), and a python-version change would leave a broken venv.
+            - name: UV_CACHE_DIR
+              value: "/opt/data/.uv-cache"
             # Auto-install hermes-agent runtime deps (dotenv, etc.) into the
             # webui venv on first start. Without this, "run_agent" features
             # break with ModuleNotFoundError; web UI itself still loads.
@@ -425,6 +337,16 @@ spec:
               mountPath: /opt/data
             - name: agent-src
               mountPath: /opt/agent-src
+            # Same agent-src volume ALSO mounted at /opt/hermes — docker_init.bash
+            # only auto-installs hermes-agent[all] (dotenv/requests/httpx) if it
+            # finds the source at the hardcoded /opt/hermes or
+            # ~/.hermes/hermes-agent. Our HERMES_WEBUI_AGENT_DIR=/opt/agent-src is
+            # NOT one of those, so without this the base install is skipped (with a
+            # "hermes-agent source not found" warning) and run_agent only gets its
+            # deps via the slow lazy fallback. Mounting here makes the base install
+            # find it → no missing-modules warning, deps present from first boot.
+            - name: agent-src
+              mountPath: /opt/hermes
 {% if _seafile_workspace %}
             - name: workspace-fuse
               mountPath: /workspace
@@ -540,7 +462,7 @@ spec:
             - name: HERMES_HOME
               value: "/opt/data"
             - name: REFRESH_INTERVAL_S
-              value: "30"
+              value: "10"
           resources:
             requests:
               cpu: "5m"
@@ -565,6 +487,9 @@ spec:
         # just provides a shared mountpoint across containers in the pod.
         - name: workspace-fuse
           emptyDir: {}
+        - name: seadrive-entrypoint
+          configMap:
+            name: hermes-seadrive
 {% else %}
         # User-managed input/output shelf, mounted at /workspace. Same per-user
         # NFS subdir isolation as the data volume.
@@ -575,6 +500,9 @@ spec:
 {% endif %}
         - name: agent-src
           emptyDir: {}
+        - name: merge-config
+          configMap:
+            name: hermes-merge-config
         - name: seed-config
           configMap:
             name: "hermes-config-{{ item.username }}"
