@@ -52,9 +52,18 @@ dev = [
     "types-requests",
     "types-PyYAML",
     "sglang",
+    "typer",
     "types-pyserial"
     # torch is installed via requirements-dev.txt with --extra-index-url
     # (PyTorch cu129 wheel index) — cannot be specified here in pyproject.toml
+]
+# Runtime deps for dgxarley.integration.sglang_bench (the bench_serving launcher).
+# sglang pulls in transformers + pybase64 at import time, typer drives the CLI.
+sglang-bench = [
+    "sglang",
+    "transformers",
+    "pybase64",
+    "typer",
 ]
 web = [
     "fastapi",
@@ -128,12 +137,14 @@ exclude = '''(?x)(
 module = [
     "cv2", "numpy", "pytesseract", "kubernetes.*",
     "aiohttp", "ascii_magic", "uvicorn", "fastapi", "fastapi.*",
+    "sglang.*",
 ]
 ignore_missing_imports = true
 
 
 [project.scripts]
 sglang-raw = "dgxarley.integration.sglang_raw:main"
+sglang-bench = "dgxarley.integration.sglang_bench:main"
 sglang-test = "dgxarley.integration.sglang_integration_test:main"
 openwebui-test = "dgxarley.integration.openwebui_integration_test:main"
 ollama-test = "dgxarley.integration.ollama_integration_test:main"
