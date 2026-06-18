@@ -23,7 +23,7 @@ _model_profile:
     # WARNING: model_type=qwen3_5_moe may require transformers upgrade.
     nccl_transport: "roce"
     tp_size: 4  # model card says TP=4; num_kv_heads=2 may limit to TP=2 — needs testing
-    context_length: 196608  # model max 262144; conservative start
+    context_length: 262144
     quantization: "modelopt_fp4"
     trust_remote_code: true
     # EP=1 TP=4 winner config (Test 38, with MTP, 2026-04-16):
@@ -35,7 +35,14 @@ _model_profile:
     #     are within noise.
     # See TESTLOGS/sglang_nn4_tp4_ep1/qwen-3.5-397b-a17b-nvfp4/
     #     TESTLOG_nv580.142_sglang-0.5.10_qwen3.5-397b-nvfp4_4n.md
-    moe_runner_backend: "cutlass"
+    # 2026-06-18: the standalone "cutlass" MoE runner (Test-38 winner above, on
+    # image 0.5.10) was REMOVED in the default image 0.5.12 — it now raises
+    # `NotImplementedError: Unsupported runner backend: MoeRunnerBackend.CUTLASS`
+    # at load_model. Switched to the GB10 NVFP4 default `flashinfer_cutlass`
+    # (per TODO_0.5.12.md action item). Re-benchmark vs the 0.5.10 cutlass
+    # numbers; if cutlass-direct is wanted back, pin sglang_image to a build
+    # that still ships the standalone cutlass MoE runner.
+    moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
     # 0.75 with MTP: draft tokens need extra KV cache headroom.
     # 0.80 was used without MTP but OOMs with speculative enabled.
