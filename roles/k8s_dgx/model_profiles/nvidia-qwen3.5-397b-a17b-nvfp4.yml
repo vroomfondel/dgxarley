@@ -54,12 +54,23 @@ _model_profile:
     disable_piecewise_cuda_graph: true
     # disable_flashinfer_cutlass_moe_fp4_allgather: true
     disable_cuda_graph: false
-    cuda_graph_max_bs: 8
+    cuda_graph_max_bs: 16
     pp_async_batch_depth: 0
     disable_deep_gemm: true
-    # Qwen3.5 reasoning: model card doesn't specify SGLang parser.
-    # vLLM uses "qwen3". For SGLang, try "deepseek-r1" or "qwen3" if available.
+    # Parsers (verified 2026-06-18 against the running 0.5.12 image registry +
+    # the official SGLang Qwen3.5 doc https://docs.sglang.io/basic_usage/qwen3_5.html,
+    # which recommends `--reasoning-parser qwen3 --tool-call-parser qwen3_coder`):
+    #   reasoning_parser "qwen3" — registered key (also "qwen3-thinking"); splits
+    #     the <think> blocks (think tokens confirmed in n=1 bench output).
     reasoning_parser: "qwen3"
+    # tool_call_parser "qwen3_coder" — the WHOLE Qwen3.5/3.6 family (not just the
+    # Coder variant) emits XML-style <tool_call><function=…> calls, parsed by
+    # Qwen3CoderDetector. Do NOT use "qwen25"/"hermes" (JSON <tool_call>{…}</tool_call>
+    # parsers, Qwen25Detector) — Qwen3.5 produces XML, so those silently leak the
+    # tool tags into content (upstream Qwen3.6 issue #125). Required for working
+    # tool-calling behind hermes-default (Honcho/Hindsight/Hermes). Matches the
+    # sibling mmangkad-qwen3.6-27b-nvfp4 profile.
+    tool_call_parser: "qwen3_coder"
     num_experts: 512
     # EP=1 required: flashinfer_cutlass/triton/cutlass MoE all crash at EP>1
     # due to the StandardDispatcher EP combine bug (see
