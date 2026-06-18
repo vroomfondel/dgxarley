@@ -81,9 +81,11 @@
 #       --tool-call-parser minimax-m3 --max-running-requests 32 \
 #       --schedule-policy lpm --enable-custom-logit-processor
 #   (--max-running-requests / --schedule-policy / --enable-custom-logit-processor
-#    come from global dgxarley defaults, not this profile.) NB the live serving
-#    point used context_length 65536 + mem_fraction_static 0.70 (deploy-time caps
-#    BELOW the profile's 524288 ceiling / 0.80 default — see those keys' notes).
+#    come from global dgxarley defaults, not this profile.) NB the FIRST live point
+#    used a conservative deploy override (context_length 65536 + mfs 0.70); the
+#    kikube matrix (2026-06-18) then swept context/mfs and the profile now carries
+#    the WINNER (case 12): context_length 524288 + mfs 0.90, full 512K co-fit and
+#    top throughput. See those keys' notes + TESTLOG_…_minimax-m3-v0-nvfp4_4n.md.
 _model_profile:
   "sparkarena/Minimax-M3-v0-NVFP4":
     knowledge_cutoff: null  # no published cutoff found (HF card/tech report/aggregators checked 2026-06)
@@ -103,10 +105,13 @@ _model_profile:
     tp_size: 4
     # max_position_embeddings = 524288 (512K). The card markets "1M context" via
     # MSA, but config pins 524288 and rope_scaling is null — do NOT exceed it.
-    # NB: full 512K KV will NOT fit at TP=4 with ~61 GB/GPU weights; cap the
-    # practical context far lower at deploy time (KV-pool cap), this is just the
-    # architectural ceiling. CONFIRMED: the live serving point ran 65536 (64K);
-    # how far context can be pushed beyond that is the open kikube-matrix question.
+    # WINNER VALUE (kikube matrix case 12, 2026-06-18): the FULL 512K window co-fits
+    # at TP=4 with mem_fraction_static 0.90 and is the throughput winner (n16 agg
+    # 115.98, clean 16/16). The old "512K won't fit at TP=4" worry was dense-KV math
+    # — MSA makes KV sub-linear, so it fits. Throughput RISES with context (no cost
+    # to long). See TESTLOG_…_minimax-m3-v0-nvfp4_4n.md §5. (Earlier live point ran
+    # 65536; that was conservative.) NB: bench drove text-only short prompts — the
+    # 512K co-fit is proven for KV-pool allocation, not yet for >100K-token inputs.
     context_length: 524288
     # NVFP4. SGLang's NVFP4 flag is modelopt_fp4; this checkpoint's producer is
     # generic "quantization-tool", and the loader VERIFIED accepts it (STATUS §5).
@@ -122,15 +127,16 @@ _model_profile:
     # scitrera/dgx-spark-sglang-mm:v0 (SM121/GB10) has no fp8-KV path — tl.dot
     # asserts rhs in (int8/uint8/fp16/bf16/fp32) and rejects fp8e4nv, dying during
     # CUDA-graph capture (verified 2026-06-17). Keep "auto" (bf16 KV) until an MSA
-    # kernel with fp8-KV support exists. Cost: 2× KV footprint → cap context far
-    # below 524288 at deploy (see KV note above); lower mem_fraction_static if
-    # capture still OOMs.
+    # kernel with fp8-KV support exists. (Even with 2× bf16 KV footprint, the full
+    # 512K context co-fits at mfs0.90 — see context_length note + TESTLOG §5.)
     kv_cache_dtype: "auto"
-    # Heavier weights than M2.x (~61 vs ~35 GB/GPU) → less post-weight headroom.
-    # 0.80 is the M2.7-inherited default and is UNTESTED on M3; the verified live
-    # serving point used 0.70 (at context_length 65536). Treat 0.70 as the known-
-    # good value and re-tune upward only if the KV pool needs it; 0.80 is a guess.
-    mem_fraction_static: "0.80"
+    # WINNER VALUE (kikube matrix case 12, 2026-06-18). On SGLang, mem_fraction_static
+    # is the static pool that must hold weights + KV — HIGHER = more KV room (NOT
+    # vLLM's lower-=-less semantics). 0.90 is what unlocks the full 512K window and
+    # tops throughput. Cases at 0.60 CRASHED ("Not enough memory") — you must raise
+    # mfs to push context, not lower it (TESTLOG §6). Earlier live point used 0.70
+    # at 64K; 0.90 is the verified ceiling value.
+    mem_fraction_static: "0.90"
     # VERIFIED working live (STATUS §2): the M3 custom model code handles MiniMax
     # Sparse Attention internally, so --attention-backend flashinfer serves the
     # model. NOT a placeholder. (Open question is whether MSA sparsity is actually
@@ -138,10 +144,9 @@ _model_profile:
     attention_backend: "flashinfer"
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 4
-    # CUDA graph ENABLED (piecewise) — this IS the verified live config; the model
-    # captures a piecewise graph fine. Eager is OUT: broken on cutlass_moe_fp4
-    # paths (see CLAUDE.md / TURBOQUANT.md). full-CG vs piecewise is still an open
-    # sweep (kikube matrix).
+    # CUDA graph ENABLED (piecewise) — WINNER value: every kikube matrix winner
+    # (incl. case 12) is piecewise; full-CG (case 02) gave no advantage at context
+    # (TESTLOG §2/§7). Eager is OUT: broken on cutlass_moe_fp4 (CLAUDE.md/TURBOQUANT.md).
     disable_piecewise_cuda_graph: false
     disable_cuda_graph: false
     cuda_graph_max_bs: 16
