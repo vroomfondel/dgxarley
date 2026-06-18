@@ -7,6 +7,23 @@
   tags:
     - installbasicpackages
 
+- name: deinstall cups (no printers on servers)
+  apt:
+    pkg:
+      - cups
+      - cups-daemon
+      - cups-browsed
+      - cups-common
+      - cups-client
+      - cups-filters
+      - cups-core-drivers
+    state: absent
+    purge: true
+    autoremove: true
+  tags:
+    - installbasicpackages
+    - cups
+
 #- name: Check if apparmor is installed
 #  ansible.builtin.package_facts:
 #    manager: apt
