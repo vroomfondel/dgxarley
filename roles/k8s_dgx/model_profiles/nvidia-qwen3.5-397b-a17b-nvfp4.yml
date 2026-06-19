@@ -25,10 +25,17 @@ _model_profile:
     tp_size: 4  # model card says TP=4; num_kv_heads=2 may limit to TP=2 — needs testing
     context_length: 262144
     quantization: "modelopt_fp4"
-    # Pinned to the matrix-validated build (2026-06-19, driver 580.159). The
-    # default plain 0.5.12 regresses n=1 (~31.7 vs 39.1 on cudnn); see the
-    # parser/moe comments below + the 0.5.12-cudnn TESTLOG.
-    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.12-cudnn"
+    # 2026-06-19: NO image pin — the matrix-validated winner is the DEFAULT base
+    # `scitrera/dgx-spark-sglang:0.5.12` (default_sglang_image). The earlier
+    # `xomoxcc/dgx-spark-sglang:0.5.12-cudnn` pin was DROPPED: a base-image twin
+    # matrix (same driver 580.159) showed the base BEATS cudnn on this exact config
+    # (case 18: 40.1/95.1/125.4/172.6 vs cudnn Test 29: 39.1/89.7/120.7/163.6,
+    # +3–6%). The earlier "base regresses n=1 (~31.7)" note was a cuda_graph_max_bs=8
+    # artifact (matrix uses 16). The cudnn-exclusive fi_cudnn FP4 path also turned
+    # out to be present on the base image too (case 13 ran clean) — base vs cudnn
+    # is a wash on no-spec and a base win on MTP. See:
+    #   TESTLOGS/sglang_nn4_tp4_ep1/qwen-3.5-397b-a17b-nvfp4/
+    #     TESTLOG_nv580.159_sglang-0.5.12_qwen3.5-397b-nvfp4_4n.md
     trust_remote_code: true
     # EP=1 TP=4 winner config (Test 38, with MTP, 2026-04-16):
     #   Test 38: cutlass MoE + triton attn + fi_cutlass FP4 + CG on + MTP
@@ -43,18 +50,17 @@ _model_profile:
     # image 0.5.10) was REMOVED in 0.5.12 — it now raises `NotImplementedError:
     # Unsupported runner backend: MoeRunnerBackend.CUTLASS` at load_model.
     # Switched to `flashinfer_cutlass`.
-    # 2026-06-19: re-benchmarked — a 32-config matrix on xomoxcc/dgx-spark-sglang:
-    # 0.5.12-cudnn (driver 580.159) confirms THIS exact config as the overall
-    # winner (Test 29): 39.1 / 89.7 / 120.7 / 163.6 tok/s (n=1/4/8/16). Matches
-    # the old 0.5.10 cutlass-direct n=1 (40.0) within noise and BEATS it at n>=4.
-    # In 0.5.12 flashinfer_cutlass MoE is also FIXED at EP=1 (was broken in 0.5.10)
-    # and now beats triton MoE across the board. See:
+    # 2026-06-19: re-benchmarked twice (driver 580.159). A 32-config matrix on the
+    # *-cudnn image first confirmed THIS config as overall winner (Test 29:
+    # 39.1/89.7/120.7/163.6). A follow-up 21-config matrix on the DEFAULT base
+    # 0.5.12 then beat it (case 18: 40.1/95.1/125.4/172.6, +3–6%) — so the base is
+    # the winner and the cudnn pin was dropped (see image comment above). MTP depth
+    # sweep (cases 17–20) peaks at s3/d4: s1/d2=144.5, s3/d4=172.6, s5/d5=159.8,
+    # s5/d7=153.7 (n=16) — deeper draft chains REGRESS, confirming s3/d4 below.
+    # In 0.5.12 flashinfer_cutlass MoE is FIXED at EP=1 (was broken in 0.5.10) and
+    # beats triton MoE across the board. See:
     #   TESTLOGS/sglang_nn4_tp4_ep1/qwen-3.5-397b-a17b-nvfp4/
-    #     TESTLOG_nv580.159_sglang-0.5.12-cudnn_qwen3.5-397b-nvfp4_4n.md
-    # NOTE: those numbers are on the *-cudnn image; this profile does NOT pin an
-    # sglang_image, so it currently deploys the default (plain 0.5.12). Pin
-    # `sglang_image: "xomoxcc/dgx-spark-sglang:0.5.12-cudnn"` to deploy the
-    # validated build.
+    #     TESTLOG_nv580.159_sglang-0.5.12_qwen3.5-397b-nvfp4_4n.md
     moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
     # 0.75 with MTP: draft tokens need extra KV cache headroom.

@@ -1,6 +1,6 @@
 # SGLang Test Log — Qwen3.5 397B-A17B NVFP4, 4 Nodes, TP=4 EP=1, v0.5.12 (base image)
 
-> ⏳ **RUN IN PROGRESS** — 18 / 21 cases complete as of 2026-06-19 ~15:34. 🎯 Decisive result: cookbook MTP s3/d4 (18) = **40.1 / 95.1 / 125.4 / 172.6** — the new winner, and it **BEATS** cudnn Test 29 (39.1/89.7/120.7/163.6) by +3–6% across the board. Case 19 (s5/d5) running; 19–21 pending.
+> ✅ **RUN COMPLETE** — 21 / 21 cases done as of 2026-06-19 ~16:44 (14–16 trtllm probes crashed as expected). 🎯 Winner: cookbook MTP s3/d4 (**case 18**) = **40.1 / 95.1 / 125.4 / 172.6**, which **BEATS** cudnn Test 29 (39.1/89.7/120.7/163.6) by +3–6% across the board. MTP depth sweep peaks at s3/d4 then regresses (s5/d5=159.8, s5/d7=153.7 — classic draft overshoot). Cross-runner case 21 (triton-MoE + same MTP) tops everything at n=1 (42.5) but trails 18 at concurrency (161.8 vs 172.6 n=16) — fi_cutlass-MoE still wins the throughput end.
 
 ## Environment
 
@@ -57,9 +57,9 @@ All cases: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4, kv
 | 16 | fi_trtllm  | triton | fi_cutlass | on  | —       | **CRASH**   | —        | —        | —        | —         |
 | 17 | fi_cutlass | triton | fi_cutlass | on  | s1/d2   | **DONE**    | 31.4     | 82.2     | 109.7    | 144.5     |
 | 18 | fi_cutlass | triton | fi_cutlass | on  | s3/d4   | **DONE ★**  | **40.1** | **95.1** | **125.4**| **172.6** |
-| 19 | fi_cutlass | triton | fi_cutlass | on  | s5/d5   | ⏳ running   | —        | —        | —        | —         |
-| 20 | fi_cutlass | triton | fi_cutlass | on  | s5/d7   | pending     | —        | —        | —        | —         |
-| 21 | triton     | triton | fi_cutlass | on  | s3/d4   | pending     | —        | —        | —        | —         |
+| 19 | fi_cutlass | triton | fi_cutlass | on  | s5/d5   | **DONE**    | 37.6     | 84.2     | 111.7    | 159.8     |
+| 20 | fi_cutlass | triton | fi_cutlass | on  | s5/d7   | **DONE**    | 34.1     | 83.8     | 110.8    | 153.7     |
+| 21 | triton     | triton | fi_cutlass | on  | s3/d4   | **DONE**    | 42.5     | 86.0     | 115.6    | 161.8     |
 
 - **cg**: `on` = full CUDA graphs; `off` = eager; `pw` = piecewise. **mtp**: NEXTN `steps/draft`, `—` = off.
 - **† Case 07** = the designated no-spec serving reference (fi_cutlass-MoE + fi-attn + full-CG).
@@ -79,7 +79,11 @@ All cases: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4, kv
 - **Block A triton-MoE (01–06) complete — mirrors the cudnn image 1:1.** Best triton-MoE config is piecewise (03: 138.8 n=16), same as cudnn. triton-vs-fi attn = wash; CG-on > no-CG at low concurrency only. As expected, since both images share the fi_cutlass FP4 path. The fi_cutlass-MoE (07–12) and MTP (17–21) cases are where a base-vs-cudnn delta could still appear.
 - **fi_cutlass-MoE works on the base image too and beats triton-MoE** (case 07: 147.8 n=16 vs triton best 138.8, +6.5%) — comparable to the cudnn twin (its case 13: 144.3 n=16). So the cudnn FP4 wheel is not required for fi_cutlass-MoE; it only adds the (separate) fi_cudnn FP4 GEMM option. MTP cases (17–18) still the decisive comparison.
 - **Block A complete (01–12, no-spec).** Ranking holds: all six fi_cutlass-MoE configs (07–12: 143–148 n=16) beat all six triton-MoE configs (01–06: 135–139 n=16). Best no-spec = **case 07** (fi-attn/full-CG, 147.8). attn and CG-variant are second-order within each MoE family. Whole block tracks the cudnn twin within ±3% (a wash, see the comparison handed over earlier). The MTP block (17–21) is what's left to decide a base-vs-cudnn winner.
-- **⚠️ The fi_cudnn FP4 GEMM probe (13) did NOT crash on the base image** — contrary to the matrix premise ("scitrera/dgx-spark-sglang:0.5.12 ships no cuDNN-FP4 wheel"). It ran clean (23.2 / 69.4 / 104.2 / 147.8) and **ties case 07 for best no-spec** (highest n=1 of the whole run). Implications: (a) the matrix's "fp4 axis collapses to fi_cutlass only" assumption is false — the base image *does* have cuDNN-FP4; (b) this removes the only claimed cudnn-exclusive advantage, since fi_cudnn matches the cudnn twin's fi_cudnn cases (~148 n=16) and is available here too. The 21-vs-32-case split (vs the cudnn matrix) was therefore unnecessary. **Base vs cudnn is now looking like a full wash; the MTP headline (17–21 vs cudnn Test 29) is the last open question.**
+- **⚠️ The fi_cudnn FP4 GEMM probe (13) did NOT crash on the base image** — contrary to the matrix premise ("scitrera/dgx-spark-sglang:0.5.12 ships no cuDNN-FP4 wheel"). It ran clean (23.2 / 69.4 / 104.2 / 147.8) and **ties case 07 for best no-spec** (highest n=1 of the whole run). Implications: (a) the matrix's "fp4 axis collapses to fi_cutlass only" assumption is false — the base image *does* have cuDNN-FP4; (b) this removes the only claimed cudnn-exclusive advantage, since fi_cudnn matches the cudnn twin's fi_cudnn cases (~148 n=16) and is available here too. The 21-vs-32-case split (vs the cudnn matrix) was therefore unnecessary. **Base vs cudnn is a full wash; the only differentiator is the MTP headline, which the base image wins (case 18 > cudnn Test 29).**
+
+- **🧪 MTP depth sweep (17–20) — s3/d4 is the sweet spot, deeper drafts REGRESS.** With fi_cutlass-MoE/triton-attn/full-CG fixed: s1/d2 (17) = 144.5, **s3/d4 (18) = 172.6 ★**, s5/d5 (19) = 159.8, s5/d7 (20) = 153.7 (n=16). Acceptance-rate gains from longer draft chains are outweighed by per-step verification cost past d4 — monotonic falloff after the s3/d4 peak at every concurrency. This confirms the cookbook s3/d4 pick was correct and there's no headroom in going deeper. Same shape on n=1 (40.1 → 37.6 → 34.1).
+
+- **🔀 Cross-runner check (21) — MTP helps triton-MoE too, but fi_cutlass-MoE still wins at concurrency.** Triton-MoE + the same MTP s3/d4 (21) posts 42.5 / 86.0 / 115.6 / 161.8. It actually **edges out case 18 at n=1** (42.5 vs 40.1 — triton-MoE's lower per-token latency dominates when there's no batching), but falls behind from n=4 up (161.8 vs 172.6 at n=16, −6.3%). So the no-spec ranking holds under MTP: triton-MoE for single-stream latency, **fi_cutlass-MoE (case 18) for served throughput** — and 18 remains the overall winner and the config to pin.
 
 ## Refresh
 
