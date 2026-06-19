@@ -25,6 +25,10 @@ _model_profile:
     tp_size: 4  # model card says TP=4; num_kv_heads=2 may limit to TP=2 — needs testing
     context_length: 262144
     quantization: "modelopt_fp4"
+    # Pinned to the matrix-validated build (2026-06-19, driver 580.159). The
+    # default plain 0.5.12 regresses n=1 (~31.7 vs 39.1 on cudnn); see the
+    # parser/moe comments below + the 0.5.12-cudnn TESTLOG.
+    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.12-cudnn"
     trust_remote_code: true
     # EP=1 TP=4 winner config (Test 38, with MTP, 2026-04-16):
     #   Test 38: cutlass MoE + triton attn + fi_cutlass FP4 + CG on + MTP
@@ -36,12 +40,21 @@ _model_profile:
     # See TESTLOGS/sglang_nn4_tp4_ep1/qwen-3.5-397b-a17b-nvfp4/
     #     TESTLOG_nv580.142_sglang-0.5.10_qwen3.5-397b-nvfp4_4n.md
     # 2026-06-18: the standalone "cutlass" MoE runner (Test-38 winner above, on
-    # image 0.5.10) was REMOVED in the default image 0.5.12 — it now raises
-    # `NotImplementedError: Unsupported runner backend: MoeRunnerBackend.CUTLASS`
-    # at load_model. Switched to the GB10 NVFP4 default `flashinfer_cutlass`
-    # (per TODO_0.5.12.md action item). Re-benchmark vs the 0.5.10 cutlass
-    # numbers; if cutlass-direct is wanted back, pin sglang_image to a build
-    # that still ships the standalone cutlass MoE runner.
+    # image 0.5.10) was REMOVED in 0.5.12 — it now raises `NotImplementedError:
+    # Unsupported runner backend: MoeRunnerBackend.CUTLASS` at load_model.
+    # Switched to `flashinfer_cutlass`.
+    # 2026-06-19: re-benchmarked — a 32-config matrix on xomoxcc/dgx-spark-sglang:
+    # 0.5.12-cudnn (driver 580.159) confirms THIS exact config as the overall
+    # winner (Test 29): 39.1 / 89.7 / 120.7 / 163.6 tok/s (n=1/4/8/16). Matches
+    # the old 0.5.10 cutlass-direct n=1 (40.0) within noise and BEATS it at n>=4.
+    # In 0.5.12 flashinfer_cutlass MoE is also FIXED at EP=1 (was broken in 0.5.10)
+    # and now beats triton MoE across the board. See:
+    #   TESTLOGS/sglang_nn4_tp4_ep1/qwen-3.5-397b-a17b-nvfp4/
+    #     TESTLOG_nv580.159_sglang-0.5.12-cudnn_qwen3.5-397b-nvfp4_4n.md
+    # NOTE: those numbers are on the *-cudnn image; this profile does NOT pin an
+    # sglang_image, so it currently deploys the default (plain 0.5.12). Pin
+    # `sglang_image: "xomoxcc/dgx-spark-sglang:0.5.12-cudnn"` to deploy the
+    # validated build.
     moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
     # 0.75 with MTP: draft tokens need extra KV cache headroom.
