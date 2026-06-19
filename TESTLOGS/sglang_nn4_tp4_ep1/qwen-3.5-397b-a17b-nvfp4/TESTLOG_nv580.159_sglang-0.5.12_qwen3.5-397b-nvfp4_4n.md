@@ -1,6 +1,6 @@
 # SGLang Test Log — Qwen3.5 397B-A17B NVFP4, 4 Nodes, TP=4 EP=1, v0.5.12 (base image)
 
-> ⏳ **RUN IN PROGRESS** — 6 / 21 cases complete as of 2026-06-19 ~11:32. Block A triton-MoE (01–06) done; case 07 (first fi_cutlass-MoE) running. Numbers for cases 07–21 are pending; this log will be filled as the matrix advances.
+> ⏳ **RUN IN PROGRESS** — 8 / 21 cases complete as of 2026-06-19 ~12:26. fi_cutlass-MoE in progress (07 still best, 147.8 n=16); case 09 running. Numbers for cases 09–21 are pending; this log will be filled as the matrix advances.
 
 ## Environment
 
@@ -45,9 +45,9 @@ All cases: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4, kv
 | 04 | triton     | triton | fi_cutlass | on  | —       | **DONE**    | 20.8     | 66.4     | 99.4     | 138.6     |
 | 05 | triton     | triton | fi_cutlass | off | —       | **DONE**    | 13.4     | 60.7     | 95.5     | 135.3     |
 | 06 | triton     | triton | fi_cutlass | pw  | —       | **DONE**    | 20.7     | 64.5     | 99.4     | 136.4     |
-| 07 | fi_cutlass | fi     | fi_cutlass | on  | —       | ⏳ running†  | —        | —        | —        | —         |
-| 08 | fi_cutlass | fi     | fi_cutlass | off | —       | pending     | —        | —        | —        | —         |
-| 09 | fi_cutlass | fi     | fi_cutlass | pw  | —       | pending     | —        | —        | —        | —         |
+| 07 | fi_cutlass | fi     | fi_cutlass | on  | —       | **DONE**    | 21.3     | 69.3     | 103.6    | 147.8     |
+| 08 | fi_cutlass | fi     | fi_cutlass | off | —       | **DONE**    | 19.9     | 65.6     | 100.3    | 143.8     |
+| 09 | fi_cutlass | fi     | fi_cutlass | pw  | —       | ⏳ running   | —        | —        | —        | —         |
 | 10 | fi_cutlass | triton | fi_cutlass | on  | —       | pending     | —        | —        | —        | —         |
 | 11 | fi_cutlass | triton | fi_cutlass | off | —       | pending     | —        | —        | —        | —         |
 | 12 | fi_cutlass | triton | fi_cutlass | pw  | —       | pending     | —        | —        | —        | —         |
@@ -74,6 +74,7 @@ All cases: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4, kv
 - **CUDA graphs ON is worth ~+47% at n=1** (case 01 on: 21.0 vs case 02 off: 14.3); the gap closes by n=4 (64.3 vs 62.6) and vanishes at n=16 (~136 both). Same pattern as the cudnn run.
 - **Piecewise graphs (03) ≈ best of the triton-MoE trio so far** — marginally ahead at n=8/n=16 (100.3 / 138.8 vs 98.4 / 136.2 full-CG), n=1 within noise. Tracks cudnn cases 1–3.
 - **Block A triton-MoE (01–06) complete — mirrors the cudnn image 1:1.** Best triton-MoE config is piecewise (03: 138.8 n=16), same as cudnn. triton-vs-fi attn = wash; CG-on > no-CG at low concurrency only. As expected, since both images share the fi_cutlass FP4 path. The fi_cutlass-MoE (07–12) and MTP (17–21) cases are where a base-vs-cudnn delta could still appear.
+- **fi_cutlass-MoE works on the base image too and beats triton-MoE** (case 07: 147.8 n=16 vs triton best 138.8, +6.5%) — comparable to the cudnn twin (its case 13: 144.3 n=16). So the cudnn FP4 wheel is not required for fi_cutlass-MoE; it only adds the (separate) fi_cudnn FP4 GEMM option. MTP cases (17–18) still the decisive comparison.
 
 ## Refresh
 
