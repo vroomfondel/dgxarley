@@ -15,8 +15,8 @@
 # it via its diffusion-LLM (dLLM) path, NOT the autoregressive Scheduler. Runtime
 # support is upstream PR #28054 (still OPEN/unmerged upstream as of 2026-06-19;
 # docs cookbook #27824 merged 2026-06-10), baked into our image:
-#   - Image: xomoxcc/dgx-spark-sglang:0.5.13-gemmadiffusion-sm121 carries the
-#     PR #28054 dLLM runtime (recipe sglang-0.5.13-gemma4-diffusion-sm121.recipe,
+#   - Image: xomoxcc/dgx-spark-sglang:0.5.14-gemmadiffusion-sm121 carries the
+#     PR #28054 dLLM runtime (recipe sglang-0.5.14-gemma4-diffusion-sm121.recipe,
 #     APPLY_DIFFUSIONGEMMA_PR28054=1). The plain 0.5.13-gemma4 image does NOT
 #     carry the dLLM code and rejects the flag — this profile pins the
 #     gemmadiffusion image accordingly.
@@ -102,7 +102,8 @@ _model_profile:
       top_k: 64
     speculative_enabled: false
     # Image MUST be the gemmadiffusion build (bakes PR #28054 dLLM runtime); the
-    # plain 0.5.13-gemma4 image rejects --dllm-algorithm Gemma4Renoise. Built from
-    # sglang-0.5.13-gemma4-diffusion-sm121.recipe via scripts/build_sm121_image.sh.
-    # sglang_image: "xomoxcc/dgx-spark-sglang:0.5.13-gemma4-sm121"  # autoregressive Gemma-4 only — no dLLM code
-    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.13-gemmadiffusion-sm121"
+    # plain gemma4 image rejects --dllm-algorithm Gemma4Renoise. Built from
+    # sglang-0.5.14-gemma4-diffusion-sm121.recipe (THE unified Gemma image — all
+    # five Gemma profiles share it) via scripts/build_sm121_image.sh.
+    # sglang_image: "xomoxcc/dgx-spark-sglang:0.5.13-gemmadiffusion-sm121"  # prior v0.5.13 diffusion image
+    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.14-gemmadiffusion-sm121"

@@ -67,7 +67,16 @@ _model_profile:
       temperature: 1.0
       top_p: 0.95
       top_k: 64
-    speculative_enabled: false
-    # sglang_image: "xomoxcc/dgx-spark-sglang:main-gemma4-sm121"
+    speculative_enabled: true
+    speculative_algo: "NEXTN"  # auto-promoted to FROZEN_KV_MTP at runtime
+    speculative_draft_model_path: "google/gemma-4-26B-A4B-it-assistant"
+    speculative_num_steps: 3
+    speculative_num_draft_tokens: 4  # = num_steps + 1
+    speculative_eagle_topk: 1
+    enable_spec_v2: true  # auto-disabled by FROZEN_KV_MTP at runtime
+    # Unified Gemma-4 image (all five share it). Carries the #22928 geglu patch
+    # this NVFP4 model needs; FROZEN_KV_MTP (#28081) + DiffusionGemma (#28054)
+    # bakes are gated-off/inert here. Recipe: sglang-0.5.14-gemma4-diffusion-sm121.
+    # sglang_image: "xomoxcc/dgx-spark-sglang:0.5.13-gemma4-sm121"  # prior NVFP4-Gemma image
     # sglang_image: "xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121"
-    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.13-gemma4-sm121"
+    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.14-gemmadiffusion-sm121"

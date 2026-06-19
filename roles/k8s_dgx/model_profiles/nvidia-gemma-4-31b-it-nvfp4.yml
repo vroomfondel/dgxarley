@@ -64,7 +64,7 @@ _model_profile:
     jit_max_jobs: 4
     disable_piecewise_cuda_graph: true  # fp4_quantize has no fake-tensor impl → dynamo trace fails
     disable_cuda_graph: false
-    cuda_graph_max_bs: 8
+    cuda_graph_max_bs: 16
     pp_async_batch_depth: 0
     disable_deep_gemm: true
     # Parsers per the SGLang Gemma 4 cookbook (gemma4 covers the whole family;
@@ -85,17 +85,14 @@ _model_profile:
     speculative_num_draft_tokens: 5  # = num_steps + 1
     speculative_eagle_topk: 1
     enable_spec_v2: true  # auto-disabled by FROZEN_KV_MTP at runtime
-    # ── Image: xomoxcc/dgx-spark-sglang:0.5.13-gemma4-sm121 ─────────────────
-    # Why the gemma4 image (not lean): Gemma-4 NVFP4 has historically required
-    #   the gemma4-image source patches (the 0.5.11 testlog ran on
-    #   0.5.11-gemma4-sm121). 0.5.13-gemma4 now carries only the geglu-nan-clamp
-    #   patch (PR #22928, GeGLU + FP4 block-scale NaN clamp on SM120/121);
-    #   PR #22929 (per-expert NVFP4 loading) went upstream-native in 0.5.13 and
-    #   was dropped from the recipe — so the old "gemma4 image crashes dense
-    #   BF16" caveat no longer applies and all four Gemma-4 profiles now share
-    #   this one image.
-    # Why 0.5.13-gemma4 over 0.5.11-gemma4: flashinfer 0.6.13rc2 (PR #3576,
-    #   head_dim=512) — see header.
-    # sglang_image: "xomoxcc/dgx-spark-sglang:main-gemma4-sm121"
-    # sglang_image: "xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121"  # flashinfer 0.6.11 → head_dim=512 crash
-    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.13-gemma4-sm121"
+    # ── Image: xomoxcc/dgx-spark-sglang:0.5.14-gemmadiffusion-sm121 ──────────
+    # THE unified Gemma-4 image — all five Gemma profiles share it. Carries the
+    # gemma4-NVFP4 geglu-nan-clamp patch (#22928) this NVFP4 model needs, plus
+    # (gated-off / inert here) the FROZEN_KV_MTP fix (#28081) and DiffusionGemma
+    # bake (#28054). Main-ahead pin (commit 3a1417a, post-v0.5.13). NB:
+    # flashinfer-attn stays allowlist-rejected for Gemma4 regardless of the
+    # 0.6.13rc2 head_dim=512 work — see header.
+    # Recipe: sglang-0.5.14-gemma4-diffusion-sm121.recipe.
+    # sglang_image: "xomoxcc/dgx-spark-sglang:0.5.13-gemma4-sm121"   # prior NVFP4-Gemma image
+    # sglang_image: "xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121"   # flashinfer 0.6.11 (older)
+    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.14-gemmadiffusion-sm121"
