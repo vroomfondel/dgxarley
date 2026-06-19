@@ -7,6 +7,13 @@ but uses torch.distributed for multi-node init (no MPI needed).
 Environment variables (set by K8s pod spec):
   MASTER_ADDR, MASTER_PORT, RANK, WORLD_SIZE
   NCCL_SOCKET_IFNAME, NCCL_DEBUG
+
+Sweep range is overridable via env (defaults preserve the original 1MB-1GB
+sweep so qsfp_nccl_test.yml is unchanged). Lower NCCL_BENCH_MIN_BYTES to
+profile the small-message, latency-bound region that gates TP decode -- see
+NCCL_BANDWIDTH_PROFILING.md:
+  NCCL_BENCH_MIN_BYTES, NCCL_BENCH_MAX_BYTES  (accept K/M/G suffix, e.g. 8K)
+  NCCL_BENCH_WARMUP, NCCL_BENCH_ITERS, NCCL_BENCH_STEP
 """
 
 import os
@@ -14,11 +21,29 @@ import time
 import torch
 import torch.distributed as dist
 
-WARMUP_ITERS = 5
-BENCH_ITERS = 20
-MIN_BYTES = 1 * 1024 * 1024  # 1 MB
-MAX_BYTES = 1024 * 1024 * 1024  # 1 GB
-STEP_FACTOR = 2
+
+def _env_bytes(name: str, default: int) -> int:
+    """Parse a byte count from env, accepting an optional K/M/G suffix."""
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    raw = raw.strip().upper()
+    mult = {"K": 1024, "M": 1024**2, "G": 1024**3}.get(raw[-1:], 1)
+    return int(raw[:-1]) * mult if mult != 1 else int(raw)
+
+
+# Defaults preserve the original 1MB-1GB sweep (env-overridable, see module docstring).
+WARMUP_ITERS = int(os.environ.get("NCCL_BENCH_WARMUP", "5"))
+BENCH_ITERS = int(os.environ.get("NCCL_BENCH_ITERS", "20"))
+MIN_BYTES = _env_bytes("NCCL_BENCH_MIN_BYTES", 1 * 1024 * 1024)  # 1 MB
+MAX_BYTES = _env_bytes("NCCL_BENCH_MAX_BYTES", 1024 * 1024 * 1024)  # 1 GB
+STEP_FACTOR = int(os.environ.get("NCCL_BENCH_STEP", "2"))
+
+# The TP-decode all-reduce is small (KB-range, latency-bound). On a single
+# ConnectX-7 with two interlocked QSFP behind PCIe Gen5 x4, a mis-spanned link
+# halves effective bandwidth -- visible as small busbw << large busbw. Sizes at
+# or below this threshold are treated as the "small/decode" region in the summary.
+SMALL_REGION_BYTES = _env_bytes("NCCL_BENCH_SMALL_REGION_BYTES", 1 * 1024 * 1024)  # 1 MB
 
 
 def main() -> None:
@@ -94,6 +119,20 @@ def main() -> None:
         print(
             f"RESULT: {world_size} ranks | peak busbw {peak_busbw:.2f} GB/s ({peak_busbw * 8:.1f} Gbit/s) @ {peak_size[0] // 1024 // 1024}MB | avg busbw {avg_busbw:.2f} GB/s ({avg_busbw * 8:.1f} Gbit/s)"
         )
+
+        # Small (decode) vs large (peak) busbw ratio -- the interleaved-port
+        # diagnostic. A correctly-spanned dual-QSFP path keeps the small-message
+        # busbw a healthy fraction of peak; a mis-spanned PCIe x4 link roughly
+        # halves it. See NCCL_BANDWIDTH_PROFILING.md for interpretation.
+        small = [r for r in results if r[0] <= SMALL_REGION_BYTES]
+        if small:
+            small_peak = max(r[4] for r in small)
+            ratio = small_peak / peak_busbw if peak_busbw else 0.0
+            flag = "  <-- LOW: check NCCL port/channel spanning" if ratio < 0.4 else ""
+            print(
+                f"RATIO: small(<= {SMALL_REGION_BYTES // 1024}KB) peak busbw {small_peak:.2f} GB/s "
+                f"= {ratio:.2f}x of large peak{flag}"
+            )
 
     dist.destroy_process_group()
 
