@@ -43,16 +43,25 @@ _model_profile:
     # num_steps=2 + num_draft_tokens=3 for +14% n=1; the n=8 trade-off is ~−5%.
     #
     # MTP requirements (same as 31B-it):
-    # - Image must carry the PR #24436 cherry-pick — both 0.5.11-sm121 and
-    #   0.5.11-gemma4-sm121 do (always_source_patches in build_sm121_image.sh).
-    #   The lean 0.5.11-sm121 is preferred: the gemma4-sm121 NVFP4 source
-    #   patches (PRs #22929/#22928) target NVFP4 checkpoints and add no value
-    #   to BF16 workloads — and the v1 of #22929 crashed dense Gemma-4 at
-    #   load with 'range(num_experts) TypeError: NoneType' (gated since v2).
+    # - Image must carry Gemma-4 MTP support. PR #24436 is upstream-native from
+    #   v0.5.12 on, so on the 0.5.13 image the build script SKIPS the
+    #   sglang-gemma4-mtp-pr24436.patch cherry-pick — MTP works natively.
+    # - The old "prefer the lean image over gemma4" reasoning is OBSOLETE on
+    #   0.5.13: the gemma4-only NVFP4 patch #22929 (the one that historically
+    #   risked dense Gemma-4 weight-load) went upstream-native and was dropped
+    #   from the 0.5.13-gemma4 recipe, which now carries only the FP4-only
+    #   #22928 (geglu-nan-clamp, inert on BF16). All four Gemma-4 profiles now
+    #   safely share the single 0.5.13-gemma4-sm121 image (see bottom note).
     # - speculative_algo: NEXTN auto-promoted to FROZEN_KV_MTP at runtime.
     # - enable_spec_v2 auto-disabled by FROZEN_KV_MTP at runtime.
     # - num_draft_tokens MUST equal num_steps + 1 (autoadjust does not fire).
-    # - attention_backend=triton mandatory (FlashInfer global_head_dim=512 crash).
+    # - attention_backend=triton: handles global_head_dim=512 correctly.
+    #   flashinfer crashed on head_dim=512 up to 0.6.12, but THIS image
+    #   (0.5.13-gemma4, flashinfer 0.6.13rc2) ships the fa2 head_dim=512 fix
+    #   (PR #3576) — triton is no longer PERMANENTLY mandatory, it stays the
+    #   default only until the §7 re-validation flips it (both crash paths +
+    #   benchmark). Do NOT flip before that test. See
+    #   FLASHINFER_HEAD_DIM_512_UPSTREAM_BUG.md + FLASHINFER_0.6.12_TODO.md §7.
     # - Drafter google/gemma-4-26B-A4B-it-assistant: per-pod model-download
     #   initContainer auto-appends speculative_draft_model_path to
     #   HF_PRELOAD_MODELS when speculative_enabled=true (tasks/sglang.yml).
@@ -81,8 +90,14 @@ _model_profile:
     speculative_num_draft_tokens: 4  # = num_steps + 1
     speculative_eagle_topk: 1
     enable_spec_v2: true  # auto-disabled by FROZEN_KV_MTP at runtime
+    # ── Image: xomoxcc/dgx-spark-sglang:0.5.13-gemma4-sm121 ─────────────────
+    # All four Gemma-4 profiles share this one image since 0.5.13: safe for
+    # BF16 (the dense-risky #22929 is gone — upstream-native in 0.5.13) and
+    # carries flashinfer 0.6.13rc2 (PR #3576 head_dim=512). MTP via PR #24436 is
+    # upstream-native. Previously this profile used the lean 0.5.11-sm121.
     # sglang_image: "xomoxcc/dgx-spark-sglang:main-gemma4-sm121"
     # sglang_image: "xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121"
-    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.11-sm121"
+    # sglang_image: "xomoxcc/dgx-spark-sglang:0.5.11-sm121"  # pre-0.5.13: lean image for BF16
+    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.13-gemma4-sm121"
 
 

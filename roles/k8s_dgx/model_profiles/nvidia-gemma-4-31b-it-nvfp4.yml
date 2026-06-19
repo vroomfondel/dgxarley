@@ -5,33 +5,95 @@ _model_profile:
   "nvidia/Gemma-4-31B-IT-NVFP4":
     knowledge_cutoff: "2025-01"  # official HF/Google model card (Gemma 4 corpus); month precision
     info_url: "https://huggingface.co/nvidia/Gemma-4-31B-IT-NVFP4"
+    # ALTERNATIVE (BF16 source): https://huggingface.co/google/gemma-4-31B-it
     # NVFP4-quantized variant of google/gemma-4-31B-it.
-    # 30.7B dense, multimodal-capable (text+image+video).
-    # Architecture: 60 layers, hybrid attention 5:1 sliding-to-full,
+    # 30.7B DENSE (NOT MoE), multimodal-capable (Gemma4ForConditionalGeneration
+    # ships text + vision + audio heads; SGLang uses the text path).
+    # Architecture: 60 layers, hybrid attention 5:1 sliding-to-full (every 6th
+    # layer is full_attention, the rest sliding_window=1024).
     # num_attention_heads=32, num_key_value_heads=16 (2:1 GQA), head_dim=256.
-    # Global layers: global_head_dim=512, num_global_kv_heads=4.
-    # Context: 262144 native (256K). vocab_size: 262144.
-    # NVFP4: FFN weights are FP4; attention, lm_head remain BF16.
-    # ~18-20 GB total after quantization → ~5 GB/GPU at TP=4.
+    # Global (full-attention) layers: Unified K/V, global_head_dim=512,
+    # num_global_kv_heads=4, proportional RoPE (partial_rotary_factor=0.25).
+    # rope_theta: 10000 (sliding) / 1000000 (full). vocab_size: 262144.
+    # Context: 262144 native (256K, no YaRN needed).
+    # NVFP4: ModelOpt v0.42.0 quantized BOTH weights AND activations to NVFP4
+    # (dense model → full W4A4 on the linear layers, NOT the MoE experts-only
+    # recipe the 26B-A4B uses; lm_head/embeddings stay BF16). Near-BF16 accuracy
+    # per card (AIME 87.92→87.60, MMLU-Pro 85.25→84.94, GPQA 85.80→85.35). Apache-2.0.
+    # ~18-20 GB total after quantization → ~5 GB/GPU at TP=4 (ample KV headroom).
+    #
+    # ── VALIDATION STATUS: UNVALIDATED on this cluster ──────────────────────
+    # First-time test for this model has NEVER completed: the 0.5.11 matrix was
+    # set up but the run is still pending — no throughput numbers exist.
+    # See TESTLOGS/sglang_nn4_tp4_ep1/gemma-4-31b-it-nvfp4/
+    #     TESTLOG_nv580.142_sglang-0.5.11_gemma-4-31b-it-nvfp4_4n.md
+    # ("Run pending — first-time test"). No 0.5.13 testlog yet either.
+    # Treat the backend values below as INHERITED sibling defaults (mirrored
+    # from the 26B-A4B NVFP4 / Qwen3-235B NVFP4 winners), NOT matrix winners for
+    # this model — re-run the matrix on the current image before trusting them.
+    #
+    # ── flashinfer head_dim=512 / image situation (READ before touching attention) ──
+    # Gemma-4's global-attention layers use head_dim=512, which the flashinfer
+    # FA2 prefill/decode kernel REJECTED outright on SM121 (register-budget
+    # guard KTraits::IsInvalid(), not a missing dispatch entry) up to and
+    # including flashinfer 0.6.12 / 0.6.13rc1. On any image ≤ that,
+    # attention_backend=flashinfer is a GUARANTEED crash for Gemma-4 (startup
+    # CUDA-graph capture on the decode tuple, or first forward in eager on the
+    # prefill/extend tuple). Full root cause: FLASHINFER_HEAD_DIM_512_UPSTREAM_BUG.md.
+    # flashinfer PR #3576 (merged 2026-06-15, first shipped in v0.6.13rc2,
+    # 2026-06-17) adds head_dim=512 to the fa2 path for SM120/121 — and THIS
+    # profile's image (0.5.13-gemma4-sm121) pins flashinfer 0.6.13rc2, so
+    # head_dim=512 flashinfer attention is present for the first time. BUT it is
+    # UNVALIDATED here: the §7 boot test (BOTH crash paths — CG-on decode tuple
+    # AND --disable-cuda-graph prefill/extend tuple) has not been run. If first
+    # boot still crashes at prefill.cuh on a global-attention layer, fall back to
+    # attention_backend: "triton" (proven head_dim=512 workaround, used by the
+    # BF16 siblings). See FLASHINFER_0.6.12_TODO.md §7 + the bug-doc Follow-up.
     nccl_transport: "roce"
-    tp_size: 4
+    tp_size: 4  # num_kv_heads=16 → 4 per GPU
     context_length: 262144
     quantization: "modelopt_fp4"
     trust_remote_code: true
     kv_cache_dtype: "fp8_e4m3"
     mem_fraction_static: "0.90"
+    # attention_backend=flashinfer — now potentially-supported via flashinfer
+    #   0.6.13rc2 / PR #3576 in this image, but UNVALIDATED (see header). triton
+    #   is the proven fallback if it crashes on the head_dim=512 global layers.
     attention_backend: "flashinfer"
+    # fp4_gemm_backend=flashinfer_cutlass — flashinfer_cudnn FP4 GEMM is broken
+    #   on SM121 (100% startup crash across sibling NVFP4 matrices — same
+    #   regression as GLM-4.7 / Qwen3.5-397B / Qwen3-235B). cutlass is the only
+    #   working FP4 GEMM path on SM121.
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 4
-    disable_piecewise_cuda_graph: true  # fp4_quantize has no fake-tensor impl
+    disable_piecewise_cuda_graph: true  # fp4_quantize has no fake-tensor impl → dynamo trace fails
     disable_cuda_graph: false
     cuda_graph_max_bs: 8
     pp_async_batch_depth: 0
     disable_deep_gemm: true
+    # Parsers per the SGLang Gemma 4 cookbook (gemma4 covers the whole family;
+    # the nvidia card omits a serve command but Gemma 4 ships a built-in thinking
+    # mode + tool calling). Required for Hermes tool/function calling behind
+    # hermes-default. (vLLM's --enable-auto-tool-choice has no SGLang equivalent —
+    # SGLang enables tool parsing implicitly when tool_call_parser is set.)
+    reasoning_parser: "gemma4"
+    tool_call_parser: "gemma4"
     recommended_sampling:
-      temperature: 1.0
+      temperature: 1.0  # card: temperature=1.0, top_p=0.95; top_k=64 is the Gemma default
       top_p: 0.95
       top_k: 64
-    speculative_enabled: false
+    speculative_enabled: false  # no public EAGLE3/MTP draft for the NVFP4 dense variant
+    # ── Image: xomoxcc/dgx-spark-sglang:0.5.13-gemma4-sm121 ─────────────────
+    # Why the gemma4 image (not lean): Gemma-4 NVFP4 has historically required
+    #   the gemma4-image source patches (the 0.5.11 testlog ran on
+    #   0.5.11-gemma4-sm121). 0.5.13-gemma4 now carries only the geglu-nan-clamp
+    #   patch (PR #22928, GeGLU + FP4 block-scale NaN clamp on SM120/121);
+    #   PR #22929 (per-expert NVFP4 loading) went upstream-native in 0.5.13 and
+    #   was dropped from the recipe — so the old "gemma4 image crashes dense
+    #   BF16" caveat no longer applies and all four Gemma-4 profiles now share
+    #   this one image.
+    # Why 0.5.13-gemma4 over 0.5.11-gemma4: flashinfer 0.6.13rc2 (PR #3576,
+    #   head_dim=512) — see header.
     # sglang_image: "xomoxcc/dgx-spark-sglang:main-gemma4-sm121"
-    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121"
+    # sglang_image: "xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121"  # flashinfer 0.6.11 → head_dim=512 crash
+    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.13-gemma4-sm121"

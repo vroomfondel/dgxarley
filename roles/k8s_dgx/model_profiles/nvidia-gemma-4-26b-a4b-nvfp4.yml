@@ -1,0 +1,68 @@
+---
+# Model profile: nvidia/Gemma-4-26B-A4B-NVFP4
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+#
+# Official NVIDIA ModelOpt NVFP4 quant of google/gemma-4-26B-A4B-it. Same
+# `nvfp4_experts_only` recipe and on-device shape as the community
+# bg-digitalservices/Gemma-4-26B-A4B-it-NVFP4 (see that profile) — only the
+# MoE expert FFN weights are FP4; attention, router, lm_head stay BF16.
+# Quantized with NVIDIA Model Optimizer v0.43.0 → `modelopt_fp4` packaging
+# (NOT compressed-tensors — that's the RedHatAI W4A4 repack, a different
+# format + a measurable accuracy drop, e.g. AIME 82.8% recovery).
+#
+# Why nvidia over bg-digitalservices: identical recipe, but the official card
+# documents the parsers (gemma4 tool-call + reasoning) and reports ~BF16
+# parity (AIME 88.95→90.00, IFBench 77.77→78.1). Both load through our
+# validated flashinfer_cutlass FP4 path; this is the upstream of the shape we
+# already run.
+#
+# Quantization/runtime plumbing mirrors the validated bg-digitalservices
+# profile exactly. Throughput NOT yet measured on SM121 — rewrite with the
+# winner config once a matrix sweep runs.
+_model_profile:
+  "nvidia/Gemma-4-26B-A4B-NVFP4":
+    knowledge_cutoff: "2025-01"  # official HF/Google model card (Gemma 4 corpus); month precision
+    info_url: "https://huggingface.co/nvidia/Gemma-4-26B-A4B-NVFP4"
+    # NVFP4-quantized variant of google/gemma-4-26B-A4B-it. Multimodal (text+image,
+    # video as frame sequences). 26B total / ~3.8B active MoE.
+    # MoE: 128 routed experts, top_k=8, + 1 shared expert. moe_intermediate_size=704.
+    # 30 layers. num_attention_heads=16, num_key_value_heads=8 (2:1 GQA), head_dim=256.
+    # Hybrid attention 5:1 sliding-to-full (sliding_window=1024). Global layers:
+    # global_head_dim=512, num_global_kv_heads=2. Context: 262144 native (256K).
+    # vocab_size: 262144.
+    # NVFP4: MoE FFN weights are FP4; attention, router, lm_head remain BF16.
+    # ~13-15 GB total after quantization → ~3-4 GB/GPU at TP=4.
+    nccl_transport: "roce"
+    tp_size: 4
+    context_length: 262144
+    quantization: "modelopt_fp4"
+    trust_remote_code: true
+    moe_runner_backend: "cutlass"
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.90"
+    attention_backend: "flashinfer"
+    fp4_gemm_backend: "flashinfer_cutlass"
+    jit_max_jobs: 4
+    disable_piecewise_cuda_graph: true  # fp4_quantize has no fake-tensor impl
+    disable_cuda_graph: false
+    cuda_graph_max_bs: 8
+    pp_async_batch_depth: 0
+    disable_deep_gemm: true
+    num_experts: 128
+    ep_size: 1
+    # Parsers per the official model card / SGLang Gemma 4 cookbook:
+    #   sglang serve ... --reasoning-parser gemma4 --tool-call-parser gemma4
+    # (vLLM's --enable-auto-tool-choice has no SGLang equivalent — SGLang
+    #  enables tool parsing implicitly when tool_call_parser is set.)
+    # Built-in thinking mode → reasoning_parser gemma4. Required for Hermes
+    # tool/function calling behind hermes-default.
+    reasoning_parser: "gemma4"
+    tool_call_parser: "gemma4"
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 64
+    speculative_enabled: false
+    # sglang_image: "xomoxcc/dgx-spark-sglang:main-gemma4-sm121"
+    # sglang_image: "xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121"
+    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.13-gemma4-sm121"
