@@ -1,6 +1,6 @@
 # SGLang Test Log — Qwen3.5 397B-A17B NVFP4, 4 Nodes, TP=4 EP=1, v0.5.12 (base image)
 
-> ⏳ **RUN IN PROGRESS** — 15 / 21 cases complete as of 2026-06-19 ~14:41. trtllm-MoE probes 14 & 15 startup-crashed (as expected); case 16 (last trtllm probe) running, then the MTP block (17–21). Best so far: case 07/13 at 147.8 n=16.
+> ⏳ **RUN IN PROGRESS** — 17 / 21 cases complete as of 2026-06-19 ~15:07. All 3 trtllm probes (14–16) startup-crashed. MTP block started: 17 (s1/d2) = 31.4/82.2/109.7/144.5. Case 18 (cookbook s3/d4 — decisive vs cudnn Test 29) running. 18–21 pending.
 
 ## Environment
 
@@ -54,9 +54,9 @@ All cases: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4, kv
 | 13 | fi_cutlass | fi     | fi_cudnn   | on  | —       | **DONE** ⚠️ | 23.2     | 69.4     | 104.2    | 147.8     |
 | 14 | fi_trtllm  | fi     | fi_cutlass | on  | —       | **CRASH**   | —        | —        | —        | —         |
 | 15 | fi_trtllm  | fi     | fi_cutlass | pw  | —       | **CRASH**   | —        | —        | —        | —         |
-| 16 | fi_trtllm  | triton | fi_cutlass | on  | —       | ⏳ running ‡ | —        | —        | —        | —         |
-| 17 | fi_cutlass | triton | fi_cutlass | on  | s1/d2   | pending     | —        | —        | —        | —         |
-| 18 | fi_cutlass | triton | fi_cutlass | on  | s3/d4   | pending ★   | —        | —        | —        | —         |
+| 16 | fi_trtllm  | triton | fi_cutlass | on  | —       | **CRASH**   | —        | —        | —        | —         |
+| 17 | fi_cutlass | triton | fi_cutlass | on  | s1/d2   | **DONE**    | 31.4     | 82.2     | 109.7    | 144.5     |
+| 18 | fi_cutlass | triton | fi_cutlass | on  | s3/d4   | ⏳ running ★ | —        | —        | —        | —         |
 | 19 | fi_cutlass | triton | fi_cutlass | on  | s5/d5   | pending     | —        | —        | —        | —         |
 | 20 | fi_cutlass | triton | fi_cutlass | on  | s5/d7   | pending     | —        | —        | —        | —         |
 | 21 | triton     | triton | fi_cutlass | on  | s3/d4   | pending     | —        | —        | —        | —         |
