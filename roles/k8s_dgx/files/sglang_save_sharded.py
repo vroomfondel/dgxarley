@@ -164,7 +164,7 @@ def main() -> None:
     print(f"[rank {node_rank}] Model cached at: {local_path}", flush=True)
 
     # Create Engine with multi-node TP params
-    from sglang import Engine  # type: ignore[import-untyped]
+    from sglang import Engine
 
     # mem_fraction_static from env (set by Ansible from model profile), fallback 0.80.
     # The shard job only loads weights and saves — no inference. Use the same fraction
