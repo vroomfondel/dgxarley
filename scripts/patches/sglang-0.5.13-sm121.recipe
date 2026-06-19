@@ -40,9 +40,10 @@
 #     dockerfile-dsv4-nvfp4.patch an, das sglang-dsv4-nvfp4-pr25820.patch
 #     (PR #25820 rebased auf v0.5.13) in den sglang-Source einspielt.
 #     Auf 0/entfernen, sobald #25820 im gepinnten Tag enthalten ist.
-#   - FLASHINFER_VERSION bleibt 0.6.12 — das ist der upstream-Pin von
-#     v0.5.13 (python/pyproject.toml: flashinfer_python[cu13]==0.6.12).
-#     Offene 0.6.12-Punkte: FLASHINFER_0.6.12_TODO.md.
+#   - FLASHINFER_VERSION 0.6.12 (upstream-Pin von v0.5.13,
+#     python/pyproject.toml: flashinfer_python[cu13]==0.6.12) → override auf
+#     0.6.13rc2 für flashinfer PR #3576 (head_dim=512 / Gemma-4 SM120/121).
+#     Offene 0.6.12-Punkte + Bump-Rationale: FLASHINFER_0.6.12_TODO.md.
 #
 # RUNTIME CAVEAT: PR #25820 ist upstream nur auf B200 (SM100) validiert
 # und default-routet auf moe_runner_backend=flashinfer_trtllm_routed —
@@ -59,8 +60,15 @@ TARGET=runtime
 
 BASE_IMAGE=xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132
 
-# Upstream-Pin von v0.5.13 (identisch zum bisherigen lokalen Pin).
-FLASHINFER_VERSION=0.6.12
+# Override über den v0.5.13-Upstream-Pin (0.6.12) hinaus auf 0.6.13rc2:
+# v0.6.13rc2 (2026-06-17, GitHub "Latest") wurde nach dem Merge von
+# flashinfer PR #3576 (2026-06-15) getaggt und enthält damit den
+# head_dim=512-Support für Gemma-4 auf SM120/121 (Issue #3297) — anders als
+# 0.6.12 / v0.6.13rc1. Erst danach kann attention_backend=flashinfer auf den
+# Gemma-4-Profilen den triton-Workaround ablösen (siehe FLASHINFER_0.6.12_TODO.md §7).
+# Roll-back auf den Upstream-Pin: FLASHINFER_VERSION=0.6.12.
+# FLASHINFER_VERSION=0.6.12
+FLASHINFER_VERSION=0.6.13rc2
 
 # transformers 5.8.0 weiter pinning für Gemma-4-assistant-Drafter
 # (gemma4_assistant AutoConfig-Registrierung) — unverändert zu 0.5.12.

@@ -1,0 +1,74 @@
+#
+# Custom recipe: SGLang v0.5.13 + SM121 sgl-kernel patches + Gemma-4 NVFP4 source patches.
+#
+# ⚠️  Wie die 0.5.11-/0.5.12-gemma4-Recipes ist diese VORSICHTSHALBER vorhanden,
+#     aber sollte NICHT proaktiv gebaut werden, solange die SM120/121-Gemma-4-
+#     NVFP4-Upstream-PRs (#22929/#22928/#22927/#22615) blockiert/stale sind
+#     (Stand 2026-05-21, SGLANG_GEMMA4_UPSTREAM_BUG.md). v0.5.13 ändert daran
+#     nichts — ein Build reproduziert nur den blockierten Zustand auf
+#     aktuellerer SGLang-Basis. Bis dahin produktiv weiter
+#     `xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121`.
+#
+# WARUM diese Recipe trotzdem existiert: einziger Grund ist der flashinfer-Bump
+# auf 0.6.13rc2 (PR #3576, head_dim=512 / Gemma-4 Global-Attention auf
+# SM120/121) — der §7-Test in FLASHINFER_0.6.12_TODO.md betrifft die BF16-
+# Gemma-Profile (laufen auf dem LEAN 0.5.13-sm121, NICHT hier), aber falls die
+# NVFP4-Gemma-Profile (nvidia-gemma-4-31b-it-nvfp4 / bg-…-26b-a4b-it-nvfp4,
+# beide schon `attention_backend: flashinfer`) ebenfalls auf 0.6.13rc2 sollen,
+# ist DIES das passende Image. Dense BF16 Gemma-4 NICHT hierher hängen — das
+# gemma4-Image schleppt PR #22929 (`range(num_experts)`) mit, das auf dense
+# (num_experts=None) mit TypeError crasht; dafür ist das lean 0.5.13-sm121 da.
+#
+# Basiert auf sglang-0.5.13-sm121.recipe (gleicher SGLang-Ref, Base-Image,
+# sgl-kernel-Patches, flashinfer-0.6.13rc2-Override). v0.5.13 hat Gemma-4 BF16
+# nativ (seit 0.5.11) und Gemma-4 MTP nativ (PR #24436, ab 0.5.12) — die
+# `-gemma4-`-Variante ist daher NUR noch für die NVFP4-Patches relevant.
+#
+# Zwei SGLang-Python-Source-Patches stapeln auf (via RECIPE_NAME == *gemma4*
+# in build_sm121_image.sh::apply_patches):
+#   - sglang-gemma4-nvfp4-expert-loading.patch (PR #22929) — per-Expert
+#     NVFP4 Weight-Loading für Gemma-4 MoE
+#   - sglang-gemma4-geglu-nan-clamp.patch (PR #22928) — GEGLU-Aktivierung
+#     für cutlass_moe_fp4 + FP4-Block-Scale NaN-Clamp auf SM120/121
+#
+# Drift-Risiko (höher als bei 0.5.12): Die PRs sind gegen einen pre-v0.5.11-Tree
+# geschrieben; zwischen dort und v0.5.13 sind >600 PRs gemerged — patch-context-
+# Offsets KÖNNEN verschoben sein. Der in-container `patch --dry-run`-Step fängt
+# das früh ab. Bei Drift: `gh pr diff 22929 / 22928` re-exportieren und manuell
+# gegen v0.5.13-Source rebasen.
+#
+# DSV4 bewusst NICHT enthalten: APPLY_DSV4_NVFP4_PR25820 und die FlashMLA-/
+# DSV4-Kernel-Vars aus der lean 0.5.13-Recipe sind hier weggelassen — der
+# dockerfile-dsv4-nvfp4.patch ankert auf DERSELBEN Dockerfile-Region wie der
+# dockerfile-gemma4-nvfp4.patch und ist NICHT kombinierbar (build_sm121_image.sh
+# Kommentar 2c). Eine Recipe = entweder gemma4-NVFP4 ODER dsv4-NVFP4.
+#
+# Siehe SGLANG_GEMMA4_UPSTREAM_BUG.md (NVFP4-Root-Cause), FLASHINFER_0.6.12_TODO.md
+# (flashinfer-0.6.13rc2-Bump-Rationale, §7).
+#
+DOCKERFILE=Dockerfile.sglang-nightly
+TARGET=runtime
+
+BASE_IMAGE=xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132
+
+# Override über den v0.5.13-Upstream-Pin (0.6.12) hinaus auf 0.6.13rc2:
+# v0.6.13rc2 (2026-06-17, GitHub "Latest") wurde nach dem Merge von
+# flashinfer PR #3576 (2026-06-15) getaggt und enthält damit den
+# head_dim=512-Support für Gemma-4 auf SM120/121 (Issue #3297) — anders als
+# 0.6.12 / v0.6.13rc1. Identisch zur lean 0.5.13-sm121-Recipe.
+# Roll-back auf den Upstream-Pin: FLASHINFER_VERSION=0.6.12.
+# FLASHINFER_VERSION=0.6.12
+FLASHINFER_VERSION=0.6.13rc2
+
+# transformers 5.8.0 weiter pinning für Gemma-4-assistant-Drafter
+# (gemma4_assistant AutoConfig-Registrierung) — unverändert zu 0.5.13.
+TRANSFORMERS_VERSION=5.8.0
+
+# `kernels` <0.13 pin — transformers-5.x hub_kernels.py inkompatibel mit
+# kernels>=0.13. Gleicher Wert über alle 0.5.1x-Recipes.
+KERNELS_VERSION=0.12.3
+
+SGLANG_VERSION=0.5.13
+SGLANG_REF="v0.5.13"
+
+IMAGE_TAG=xomoxcc/dgx-spark-sglang:0.5.13-gemma4-sm121
