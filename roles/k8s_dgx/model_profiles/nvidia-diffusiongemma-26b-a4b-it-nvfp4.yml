@@ -1,0 +1,80 @@
+---
+# Model profile: nvidia/diffusiongemma-26B-A4B-it-NVFP4
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+#
+# Official NVIDIA ModelOpt NVFP4 quant of google/diffusiongemma-26B-A4B-it —
+# Google DeepMind's DISCRETE-DIFFUSION variant of Gemma 4 (released 2026-06-10,
+# Apache 2.0). Same Gemma 4 26B-A4B MoE on-device shape as the autoregressive
+# nvidia/Gemma-4-26B-A4B-NVFP4 sibling in this repo, BUT it does NOT decode
+# left-to-right: it iteratively denoises parallel 256-token "canvas" blocks.
+# 25.2B total / ~3.8B active. NVFP4 packaging = modelopt_fp4 (MoE expert FFN
+# weights FP4; attention/router/lm_head stay BF16), same recipe as the sibling.
+#
+# ── ENGINE CAVEAT — vLLM ONLY per the card ──────────────────────────────────
+# The NVIDIA NVFP4 card documents ONLY a vLLM serve command; it shows NO SGLang
+# command. The base google/diffusiongemma card claimed day-zero SGLang support,
+# but diffusion (block-denoising) decoding is a different runtime path than the
+# autoregressive Scheduler the rest of this repo's SGLang profiles assume — do
+# NOT assume the SGLang sidecar/HAProxy launch path works here unverified.
+# Recommended path on this cluster is the `vllm` tag (image
+# scitrera/dgx-spark-vllm) until SGLang diffusion support is confirmed.
+# Card's vLLM command (Blackwell/Hopper):
+#   vllm serve nvidia/diffusiongemma-26B-A4B-it-NVFP4 \
+#     --trust-remote-code --max-num-seqs 4 \
+#     --attention-backend TRITON_ATTN \
+#     --enable-auto-tool-choice --tool-call-parser gemma4 \
+#     --reasoning-parser gemma4
+#
+# ── VALIDATION STATUS: UNVALIDATED on this cluster ──────────────────────────
+# Never booted or swept on SM121/GB10. Backend values below are inherited from
+# the autoregressive sibling profile, NOT matrix winners, and the card pins
+# TRITON attention (not flashinfer) — so attention_backend is set to triton
+# here. head_dim=512 global-layer caveat from nvidia-gemma-4-31b-it-nvfp4.yml
+# applies. Re-run the matrix on the current image before trusting any of this.
+_model_profile:
+  "nvidia/diffusiongemma-26B-A4B-it-NVFP4":
+    knowledge_cutoff: "2025-01"  # official HF/Google card (Gemma 4 corpus); month precision
+    info_url: "https://huggingface.co/nvidia/diffusiongemma-26B-A4B-it-NVFP4"
+    # NVFP4 quant of google/diffusiongemma-26B-A4B-it. Discrete-diffusion Gemma 4.
+    # Multimodal (text+image, video as frame sequences). 25.2B total / ~3.8B active MoE.
+    # MoE: 128 routed experts, top_k=8, + 1 shared expert. moe_intermediate_size=704.
+    # 30 layers. num_attention_heads=16, num_key_value_heads=8 (2:1 GQA), head_dim=256.
+    # Hybrid attention 5:1 sliding-to-full (sliding_window=1024). Global layers:
+    # global_head_dim=512, num_global_kv_heads=2. Context: 262144 native (256K).
+    # vocab_size: 262144. 35+ languages.
+    # Diffusion decoding: parallel 256-token canvas blocks (block-by-block denoising),
+    # NOT autoregressive. Card recommends --max-num-seqs 4.
+    # NVFP4: MoE FFN weights are FP4; attention, router, lm_head remain BF16.
+    # ~13-15 GB total after quantization → ~3-4 GB/GPU at TP=4.
+    nccl_transport: "roce"
+    tp_size: 4
+    context_length: 262144
+    quantization: "modelopt_fp4"
+    trust_remote_code: true
+    moe_runner_backend: "cutlass"
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.90"
+    attention_backend: "triton"  # card pins TRITON_ATTN for the diffusion path; flashinfer unverified here
+    fp4_gemm_backend: "flashinfer_cutlass"
+    jit_max_jobs: 4
+    disable_piecewise_cuda_graph: true  # fp4_quantize has no fake-tensor impl
+    disable_cuda_graph: false
+    cuda_graph_max_bs: 8
+    pp_async_batch_depth: 0
+    disable_deep_gemm: true
+    num_experts: 128
+    ep_size: 1
+    # Card pins --max-num-seqs 4 for the diffusion path → SGLang --max-running-requests 4
+    # (wired via sglang_max_running_requests in defaults/main.yml).
+    max_running_requests: 4
+    # Parsers per the official NVFP4 card (same as autoregressive Gemma 4):
+    #   --reasoning-parser gemma4 --tool-call-parser gemma4
+    # Required for Hermes tool/function calling behind hermes-default.
+    reasoning_parser: "gemma4"
+    tool_call_parser: "gemma4"
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 64
+    speculative_enabled: false
+    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.13-gemma4-sm121"
