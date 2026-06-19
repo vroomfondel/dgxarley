@@ -1,6 +1,6 @@
 # SGLang Test Log — Qwen3.5 397B-A17B NVFP4, 4 Nodes, TP=4 EP=1, v0.5.12 (base image)
 
-> ⏳ **RUN IN PROGRESS** — 13 / 21 cases complete as of 2026-06-19 ~14:13. ⚠️ Surprise: the fi_cudnn FP4 probe (13) did NOT crash — it ran fine and ties for best (147.8 n=16). Case 14 (trtllm probe) running. Probes 14–16 + MTP 17–21 pending.
+> ⏳ **RUN IN PROGRESS** — 15 / 21 cases complete as of 2026-06-19 ~14:41. trtllm-MoE probes 14 & 15 startup-crashed (as expected); case 16 (last trtllm probe) running, then the MTP block (17–21). Best so far: case 07/13 at 147.8 n=16.
 
 ## Environment
 
@@ -52,9 +52,9 @@ All cases: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4, kv
 | 11 | fi_cutlass | triton | fi_cutlass | off | —       | **DONE**    | 21.0     | 67.2     | 100.9    | 144.7     |
 | 12 | fi_cutlass | triton | fi_cutlass | pw  | —       | **DONE**    | 20.8     | 70.7     | 105.4    | 145.7     |
 | 13 | fi_cutlass | fi     | fi_cudnn   | on  | —       | **DONE** ⚠️ | 23.2     | 69.4     | 104.2    | 147.8     |
-| 14 | fi_trtllm  | fi     | fi_cutlass | on  | —       | ⏳ running ‡ | —        | —        | —        | —         |
-| 15 | fi_trtllm  | fi     | fi_cutlass | pw  | —       | pending ‡   | —        | —        | —        | —         |
-| 16 | fi_trtllm  | triton | fi_cutlass | on  | —       | pending ‡   | —        | —        | —        | —         |
+| 14 | fi_trtllm  | fi     | fi_cutlass | on  | —       | **CRASH**   | —        | —        | —        | —         |
+| 15 | fi_trtllm  | fi     | fi_cutlass | pw  | —       | **CRASH**   | —        | —        | —        | —         |
+| 16 | fi_trtllm  | triton | fi_cutlass | on  | —       | ⏳ running ‡ | —        | —        | —        | —         |
 | 17 | fi_cutlass | triton | fi_cutlass | on  | s1/d2   | pending     | —        | —        | —        | —         |
 | 18 | fi_cutlass | triton | fi_cutlass | on  | s3/d4   | pending ★   | —        | —        | —        | —         |
 | 19 | fi_cutlass | triton | fi_cutlass | on  | s5/d5   | pending     | —        | —        | —        | —         |
