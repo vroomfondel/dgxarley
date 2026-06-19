@@ -1,25 +1,23 @@
-diff --git a/python/sglang/srt/layers/moe/cutlass_moe.py b/python/sglang/srt/layers/moe/cutlass_moe.py
-index 198599e437dd..28bc51e96f40 100755
 --- a/python/sglang/srt/layers/moe/cutlass_moe.py
 +++ b/python/sglang/srt/layers/moe/cutlass_moe.py
 @@ -19,7 +19,7 @@
          shuffle_rows,
      )
-
+ 
 -    from sglang.jit_kernel.activation import silu_and_mul
 +    from sglang.jit_kernel.activation import silu_and_mul, gelu_tanh_and_mul
      from sglang.jit_kernel.nvfp4 import (
          cutlass_fp4_group_mm,
          scaled_fp4_experts_quant,
-@@ -359,6 +360,7 @@ def cutlass_moe_fp4(
+@@ -359,6 +359,7 @@
      topk_ids: torch.Tensor,
      params: CutlassMoEParams,
      apply_router_weight_on_input: bool = False,
 +    activation: str = "silu",
+     no_combine: bool = False,
  ):
      """
-     MoE implementation for FP4 Inputs
-@@ -456,6 +458,8 @@ def cutlass_moe_fp4(
+@@ -457,6 +458,8 @@
          num_topk,
          expert_map=a_map,
      )
@@ -28,12 +26,7 @@ index 198599e437dd..28bc51e96f40 100755
      c1 = cutlass_fp4_group_mm(
          rep_a_fp4,
          w1_fp4,
-@@ -467,11 +471,14 @@ def cutlass_moe_fp4(
-     )
-     del rep_a_fp4, rep_a_blockscale
- 
--    # hidden size dimension is split to one halfpytho sized tensor.
-+    # hidden size dimension is split to one half sized tensor.
+@@ -472,7 +475,10 @@
      intermediate = torch.empty(
          (m_a * num_topk, w1_fp4.shape[1] // 2), device=device, dtype=out_dtype
      )
@@ -45,7 +38,7 @@ index 198599e437dd..28bc51e96f40 100755
  
      int_fp4, int_blockscale = scaled_fp4_experts_quant(
          intermediate,
-@@ -480,6 +487,8 @@ def cutlass_moe_fp4(
+@@ -481,6 +487,8 @@
          params.blockscale_offsets,
          num_topk,
      )

@@ -143,30 +143,22 @@ BRANCH_NAME="sm121"
 # pattern — see apply_patches().
 #RECIPE_NAME="sglang-0.5.13-sm121"
 #IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.13-sm121"
-#RECIPE_NAME="sglang-0.5.13-gemma4-sm121"
-#IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.13-gemma4-sm121"
+
+RECIPE_NAME="sglang-0.5.13-gemma4-sm121"
+IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.13-gemma4-sm121"
 
 # NemotronH MTP experiment: v0.5.13 + unmerged PR #27998 (MTP + radix cache).
 # Enables native speculative decoding for Nemotron-3-Super-120B-NVFP4 without
 # --disable-radix-cache. See that model profile's MTP block + the recipe header.
-RECIPE_NAME="sglang-0.5.13-dev-nemotronh-mtp-sm121"
-IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.13-dev-nemotronh-mtp-sm121"
+
+#RECIPE_NAME="sglang-0.5.13-dev-nemotronh-mtp-sm121"
+#IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.13-dev-nemotronh-mtp-sm121"
 
 #RECIPE_NAME="sglang-0.5.12-sm121"
 ## IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.12-sm121"
 #IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.12.post1-sm121"
 #RECIPE_NAME="sglang-0.5.12-gemma4-sm121"
 #IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.12.post1-gemma4-sm121"
-
-#RECIPE_NAME="sglang-0.5.11-sm121"
-#IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.11-sm121"
-#RECIPE_NAME="sglang-0.5.11-gemma4-sm121"
-#IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121"
-
-#RECIPE_NAME="sglang-gemma4-sm121-dev1"
-#IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.10-20260429-gemma4-sm121-dev1"
-#RECIPE_NAME="sglang-sm121-dev1"
-#IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.10-20260429-sm121-dev1"
 
 # Remote build host (spark4, arm64). Uses a registered podman connection
 # with a dedicated unencrypted SSH key. The connection name is derived from
@@ -213,25 +205,29 @@ PUSH_IMAGE=1
 NO_LOCAL_COPY=0
 
 # Base image selection. The recipe ships with a default BASE_IMAGE
-# (currently our custom xomoxcc 2.11/cu132 build); --base lets you swap
+# (currently our custom xomoxcc 2.12/cu132 build); --base lets you swap
 # it at build time without editing the recipe. Supported aliases:
 #
-#   xomoxcc   xomoxcc/dgx-spark-pytorch-dev:2.11.0-v1-cu132
-#             Our locally-built 2.11/cu132 base (scripts/build_pytorch_base_image.sh).
+#   xomoxcc   xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132
+#             Our locally-built 2.12/cu132 base (scripts/build_pytorch_base_image.sh).
 #             Only present on spark4's podman store — never published.
 #             This is the recipe default and what you want for performance.
 #
-#   scitrera  scitrera/dgx-spark-pytorch-dev:2.10.0-v2-cu131
+#   scitrera  scitrera/dgx-spark-pytorch-dev:2.12.0-v1-cu132
 #             scitrera's published upstream base. Pulled from Docker Hub.
-#             Produces a working build but ~45% slower end-to-end due to
-#             the torch 2.10/cu131 vs 2.11/cu132 codegen regression (see
-#             reference_sm121_build_base_regression memory). Use only for
-#             fallback / A/B comparison, not production.
+#             Bumped 2026-06-19 from 2.10.0-v2-cu131 → 2.12.0-v1-cu132
+#             (scitrera shipped 2.12/cu132 on 2026-06-09). Now the SAME
+#             torch/cuda as our xomoxcc base, so the old ~45% codegen
+#             regression (torch 2.10/cu131 vs 2.12/cu132,
+#             reference_sm121_build_base_regression memory) NO LONGER applies.
+#             Any residual delta vs xomoxcc would come from our custom build
+#             tuning (cuBLAS-Blackwell workspaces, SVE/CMake), NOT measured —
+#             xomoxcc stays the tested default; use scitrera for A/B only.
 #
 # Any other --base VALUE is passed through verbatim as the BASE_IMAGE.
 # BUILD_SM121_BASE_IMAGE env var overrides --base for scripting.
 BASE_XOMOXCC_IMAGE="xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132"
-BASE_SCITRERA_IMAGE="scitrera/dgx-spark-pytorch-dev:2.10.0-v2-cu131"
+BASE_SCITRERA_IMAGE="scitrera/dgx-spark-pytorch-dev:2.12.0-v1-cu132"
 BASE_IMAGE_ALIAS=""
 BASE_IMAGE_OVERRIDE="${BUILD_SM121_BASE_IMAGE:-}"
 EFFECTIVE_BASE_IMAGE=""
@@ -482,7 +478,6 @@ preflight() {
     if [[ "${RECIPE_NAME}" == *gemma4* ]]; then
         required_files+=(
             dockerfile-gemma4-nvfp4.patch
-            sglang-gemma4-nvfp4-expert-loading.patch
             sglang-gemma4-geglu-nan-clamp.patch
         )
     fi
@@ -829,7 +824,6 @@ apply_patches() {
         sglang-gemma4-mtp-pr24436.patch
     )
     local gemma4_source_patches=(
-        sglang-gemma4-nvfp4-expert-loading.patch
         sglang-gemma4-geglu-nan-clamp.patch
     )
     # DSV4 NVFP4 source patch (PR #25820 rebased onto v0.5.13) — copied only
@@ -929,14 +923,15 @@ apply_patches() {
     fi
 
     # 2b. Gemma-4 NVFP4 Dockerfile patch — only for the gemma4 recipe variant.
-    #     Adds COPY + apply steps for PR #22929 (per-expert weight loading) and
-    #     PR #22928 (GEGLU activation + NaN clamp). Stacks on top of the sm121 patch.
+    #     Adds COPY + apply step for PR #22928 (GEGLU activation + NaN clamp).
+    #     PR #22929 (per-expert weight loading) was dropped 2026-06-19 — landed
+    #     upstream. Stacks on top of the sm121 patch.
     if (( apply_gemma4_patches )); then
         echo "Applying dockerfile-gemma4-nvfp4.patch..."
         patch --dry-run -p1 < "${PATCHES_DIR}/dockerfile-gemma4-nvfp4.patch" \
             || die "Gemma4 Dockerfile patch dry-run failed — regenerate dockerfile-gemma4-nvfp4.patch"
         patch -p1 < "${PATCHES_DIR}/dockerfile-gemma4-nvfp4.patch"
-        grep -q 'sglang-gemma4-nvfp4-expert-loading.patch' container-build/Dockerfile.sglang-nightly \
+        grep -q 'sglang-gemma4-geglu-nan-clamp.patch' container-build/Dockerfile.sglang-nightly \
             || die "Gemma4 Dockerfile patch verification failed"
         echo "Gemma4 Dockerfile patched"
     else

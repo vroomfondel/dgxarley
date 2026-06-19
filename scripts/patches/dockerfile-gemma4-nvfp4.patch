@@ -1,35 +1,38 @@
-Gemma-4 NVFP4 patches for container-build/Dockerfile.sglang-nightly.
+Gemma-4 GEGLU + FP4 NaN-clamp patch for container-build/Dockerfile.sglang-nightly.
 
-Adds two patch-application steps for upstream PRs not yet merged:
-  - PR #22929: per-expert NVFP4 weight loading for Gemma-4 MoE
+Adds one patch-application step for an upstream PR not yet merged:
   - PR #22928: GEGLU activation + FP4 block scale NaN clamp (SM120/121)
 
-Both patches target the sglang Python source tree (python/sglang/srt/)
-and are applied AFTER the SM121 sgl-kernel patch but BEFORE `uv pip
-install ./python` so the installed package picks up the changes.
+PR #22929 (per-expert NVFP4 weight loading) was DROPPED 2026-06-19: it has
+landed upstream, so re-applying it duplicated a now-dead mapping block and its
+second hunk no longer matched the refactored load_weights loop.
+
+The patch targets the sglang Python source tree (python/sglang/srt/) and is
+applied AFTER the SM121 sgl-kernel patch but BEFORE `uv pip install ./python`
+so the installed package picks up the changes.
 
 Apply to: container-build/Dockerfile.sglang-nightly AFTER
 dockerfile-sm121.patch has been applied.
 
 --- a/container-build/Dockerfile.sglang-nightly
 +++ b/container-build/Dockerfile.sglang-nightly
-@@ -268,6 +268,20 @@
+@@ -278,6 +278,20 @@
          echo "=== Skipping sgl-kernel-sm121-debug.patch (APPLY_SGL_KERNEL_SM121_DEBUG=${APPLY_SGL_KERNEL_SM121_DEBUG}) ==="; \
      fi
-
-+# Gemma-4 NVFP4 patches (upstream PRs #22929 + #22928, not yet merged).
+ 
++# Gemma-4 GEGLU + FP4 NaN-clamp patch (PR #22928, not yet upstream).
++# PR #22929 (per-expert NVFP4 weight loading) was DROPPED 2026-06-19 — it landed
++# upstream (sglang main builds per_expert_params_mapping via
++# FusedMoE.make_expert_params_mapping() and load_weights handles the
++# nvidia/Gemma-4-*-NVFP4 per-expert layout natively).
 +# Applied to the sglang Python source before pip install so the installed
 +# dist-packages picks up the changes.
-+COPY patches/sglang-gemma4-nvfp4-expert-loading.patch /tmp/sglang-gemma4-nvfp4-expert-loading.patch
 +COPY patches/sglang-gemma4-geglu-nan-clamp.patch /tmp/sglang-gemma4-geglu-nan-clamp.patch
 +RUN set -e; cd /data/sglang && \
-+    echo "=== Applying sglang-gemma4-nvfp4-expert-loading.patch (PR #22929) ===" && \
-+    patch --dry-run -p1 < /tmp/sglang-gemma4-nvfp4-expert-loading.patch && \
-+    patch -p1 < /tmp/sglang-gemma4-nvfp4-expert-loading.patch && \
 +    echo "=== Applying sglang-gemma4-geglu-nan-clamp.patch (PR #22928) ===" && \
 +    patch --dry-run -p1 < /tmp/sglang-gemma4-geglu-nan-clamp.patch && \
 +    patch -p1 < /tmp/sglang-gemma4-geglu-nan-clamp.patch && \
-+    echo 'Gemma-4 NVFP4 patches applied successfully'
++    echo 'Gemma-4 NVFP4 patch applied successfully'
 +
  # Install sglang package (no deps, no build isolation since base has torch).
  # Moved here from its original early-stage location so the installed
