@@ -51,7 +51,7 @@ _model_profile:
     quantization: "modelopt_fp4"
     trust_remote_code: true
     kv_cache_dtype: "fp8_e4m3"
-    mem_fraction_static: "0.90"
+    mem_fraction_static: "0.7"
     # attention_backend=triton — SGLang hard-rejects flashinfer for Gemma4
     #   (allowlist: trtllm_mha | triton | intel_xpu; see header). triton is the
     #   proven head_dim=512 path used by the BF16 siblings.
@@ -78,7 +78,13 @@ _model_profile:
       temperature: 1.0  # card: temperature=1.0, top_p=0.95; top_k=64 is the Gemma default
       top_p: 0.95
       top_k: 64
-    speculative_enabled: false  # no public EAGLE3/MTP draft for the NVFP4 dense variant
+    speculative_enabled: true
+    speculative_algo: "NEXTN"  # auto-promoted to FROZEN_KV_MTP at runtime
+    speculative_draft_model_path: "google/gemma-4-31B-it-assistant"
+    speculative_num_steps: 4
+    speculative_num_draft_tokens: 5  # = num_steps + 1
+    speculative_eagle_topk: 1
+    enable_spec_v2: true  # auto-disabled by FROZEN_KV_MTP at runtime
     # ── Image: xomoxcc/dgx-spark-sglang:0.5.13-gemma4-sm121 ─────────────────
     # Why the gemma4 image (not lean): Gemma-4 NVFP4 has historically required
     #   the gemma4-image source patches (the 0.5.11 testlog ran on

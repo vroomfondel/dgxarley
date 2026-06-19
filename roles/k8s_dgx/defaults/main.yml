@@ -32,7 +32,7 @@ sglang_model: "nvidia/Gemma-4-31B-IT-NVFP4"                      # ACTIVE — 30
 # sglang_model: "google/gemma-4-31B-it"                          # 30.7B dense BF16, multimodal, 256K ctx
 # sglang_model: "nvidia/Gemma-4-26B-A4B-NVFP4"                   # 26B/3.8B-active MoE NVFP4, multimodal, 256K ctx
 # sglang_model: "google/gemma-4-26B-A4B-it"                      # 26B/3.8B-active MoE BF16, multimodal, 256K ctx
-# sglang_model: "nvidia/diffusiongemma-26B-A4B-it-NVFP4"         # 26B/3.8B MoE NVFP4, DISCRETE-DIFFUSION — vLLM-only per card, SGLang UNVERIFIED
+# sglang_model: "nvidia/diffusiongemma-26B-A4B-it-NVFP4"         # 26B/3.8B MoE NVFP4, DISCRETE-DIFFUSION — SGLang dLLM wired; needs 0.5.13-gemmadiffusion image (build pending)
 #
 # --- GLM ---
 # sglang_model: "zai-org/GLM-4.7-FP8"
@@ -372,6 +372,15 @@ sglang_schedule_policy: "lpm"
 # Attention backend: per-model in sglang_model_profiles, defaults to "flashinfer".
 # Set to "triton" for hybrid GDN models (MoE+Mamba) on Blackwell GPUs.
 sglang_attention_backend: "{{ sglang_model_profiles[_sglang_active_model].attention_backend | default('flashinfer') }}"
+# Diffusion-LLM (dLLM) algorithm. Empty ('') for normal autoregressive models;
+# set to a dLLM algorithm name (e.g. "Gemma4Renoise" for DiffusionGemma) to run
+# the block-diffusion decode path. SGLang's _handle_dllm_inference then auto-
+# forces triton attention + eager (cuda graph disabled) + unchunked prefill, so
+# the autoregressive knobs above are overridden internally. Wired to
+# --dllm-algorithm in sglang_launch.sh. Only the 0.5.13-gemmadiffusion image
+# (PR #28054 baked) ships the runtime for this; other images reject the flag.
+# See DIFFUSIONGEMMA_SGLANG_SCOPE.md.
+sglang_dllm_algorithm: "{{ sglang_model_profiles[_sglang_active_model].dllm_algorithm | default('') }}"
 
 # Chat template kwargs: passed as --chat-template-kwargs JSON to SGLang CLI.
 # Used for enable_thinking etc. — NOT for sampling params.
