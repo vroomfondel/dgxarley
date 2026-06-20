@@ -1,0 +1,99 @@
+---
+# Model profile: google/diffusiongemma-26B-A4B-it
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+#
+# Google DeepMind's DISCRETE-DIFFUSION variant of Gemma 4 (released 2026-06-10,
+# Apache 2.0) — the BF16 BASE that the NVFP4 sibling
+# (nvidia/diffusiongemma-26B-A4B-it-NVFP4) is quantized from. Same Gemma 4
+# 26B-A4B MoE shape, but does NOT decode left-to-right: it iteratively denoises
+# parallel 256-token "canvas" blocks. 25.2B total / ~3.8B active.
+#
+# ── WHY THIS PROFILE EXISTS: NVFP4 isolation smoke-test ──────────────────────
+# The NVFP4 sibling crashes on the first forward with a device-side assert in
+# torch.multinomial (gemma4_renoise.py:140). The renoise sampler is clean —
+# multinomial is just the first consumer of the model's logits, so a softmax
+# that trips the assert means full_logits is already NaN/Inf out of the first
+# forward. Prime suspect: eager cutlass_moe_fp4 NaN on SM121 (the dLLM handler
+# forces eager; moe_runner_backend triton → cutlass_moe_fp4 fallback), exactly
+# as the NVFP4 profile warned. This BF16 base has NO FP4 MoE path, so it is the
+# decisive discriminator:
+#   - boots + generates here → confirms the NVFP4 eager-cutlass NaN; there is
+#     no working eager NVFP4 MoE runner on SM121 (the TURBOQUANT dead-end).
+#   - asserts here TOO → genuine PR #28054 / renoise runtime bug, not the quant.
+#
+# ── ENGINE: SGLang dLLM path ─────────────────────────────────────────────────
+# Served via SGLang's diffusion-LLM (dLLM) path, NOT the autoregressive
+# Scheduler. Runtime support is upstream PR #28054 (OPEN/unmerged as of
+# 2026-06-19), baked into the gemmadiffusion image. Launch wires
+# dllm_algorithm → --dllm-algorithm Gemma4Renoise (via sglang_dllm_algorithm →
+# SGLANG_DLLM_ALGORITHM → sglang_launch.sh). SGLang's _handle_dllm_inference
+# AUTO-FORCES triton attn + eager (cuda graph off) + unchunked prefill for
+# Gemma4Renoise, so the autoregressive knobs below are overridden internally and
+# kept only as schema placeholders.
+# Full plan + open runtime questions: DIFFUSIONGEMMA_SGLANG_SCOPE.md.
+#
+# ── VALIDATION STATUS: deployable; first boot on this cluster not yet done ────
+# Set sglang_model + ansible-playbook k8s_dgx.yml --tags sglang. The base is
+# already in the hf_preload list. Streaming emits one fully-denoised canvas per
+# chunk (not token-by-token) — check OpenWebUI/Hermes rendering.
+_model_profile:
+  "google/diffusiongemma-26B-A4B-it":
+    knowledge_cutoff: "2025-01"  # official HF/Google card (Gemma 4 corpus); month precision
+    release_date: "2026-06-10"  # Google DeepMind release
+    info_url: "https://huggingface.co/google/diffusiongemma-26B-A4B-it"
+    # BF16 base of the discrete-diffusion Gemma 4. Multimodal (text+image, video
+    # as frame sequences). 25.2B total / ~3.8B active MoE.
+    # MoE: 128 routed experts, top_k=8, + 1 shared expert. moe_intermediate_size=704.
+    # 30 layers. num_attention_heads=16, num_key_value_heads=8 (2:1 GQA), head_dim=256.
+    # Hybrid attention 5:1 sliding-to-full (sliding_window=1024). Global layers:
+    # global_head_dim=512, num_global_kv_heads=2. Context: 262144 native (256K).
+    # vocab_size: 262144. 35+ languages.
+    # Diffusion decoding: parallel 256-token canvas blocks (block-by-block
+    # denoising), NOT autoregressive. Card recommends --max-num-seqs 4.
+    # BF16 weights ~52 GB total → TP=4 → ~13 GB/GPU, huge headroom on GB10.
+    nccl_transport: "roce"
+    tp_size: 4
+    context_length: 262144
+    quantization: ""  # native BF16 — no FP4 MoE path (the whole point of this profile)
+    trust_remote_code: true
+    # BF16 MoE → plain triton fused-MoE. No cutlass_moe_fp4, so the eager-NaN
+    # path the NVFP4 sibling hits does not exist here. ep_size=1 like the
+    # autoregressive BF16 sibling (google/gemma-4-26B-A4B-it): the gated-padding
+    # boot crash that forced EP=4 on the NVFP4 sibling is FP4-quant-specific.
+    moe_runner_backend: "triton"
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.85"  # the first NVFP4 boot OOM'd one rank at 0.90 — start conservative
+    attention_backend: "triton"  # forced anyway by SGLang's dLLM handler; also the only Gemma4 allowlist option
+    jit_max_jobs: 4
+    disable_piecewise_cuda_graph: false
+    disable_cuda_graph: false  # overridden to eager by _handle_dllm_inference
+    cuda_graph_max_bs: 8
+    pp_async_batch_depth: 0
+    disable_deep_gemm: false
+    num_experts: 128
+    ep_size: 1
+    # ── Diffusion-LLM (dLLM) ────────────────────────────────────────────────
+    # Selects SGLang's block-diffusion decode path → --dllm-algorithm Gemma4Renoise.
+    # REQUIRES the gemmadiffusion image (PR #28054); other images reject the flag.
+    # SGLang auto-forces triton attn + eager + unchunked prefill. Denoising params
+    # (max_denoising_steps=48, entropy_bound=0.1, canvas=256, temp 0.4..0.8) are
+    # MODEL-CONFIG defaults (hf_config), NOT CLI flags — not tunable from here.
+    dllm_algorithm: "Gemma4Renoise"
+    # Card pins --max-num-seqs 4 for the diffusion path → --max-running-requests 4.
+    max_running_requests: 4
+    # Parsers per the Gemma 4 family (same as autoregressive): required for Hermes
+    # tool/function calling behind hermes-default.
+    reasoning_parser: "gemma4"
+    tool_call_parser: "gemma4"
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 64
+    # No speculative decoding on the diffusion path — the MTP drafter
+    # (gemma-4-26B-A4B-it-assistant) is for autoregressive decode only.
+    speculative_enabled: false
+    # Image MUST be the gemmadiffusion build (bakes PR #28054 dLLM runtime); the
+    # plain gemma4 image rejects --dllm-algorithm Gemma4Renoise. Built from
+    # sglang-0.5.14-gemma4-diffusion-sm121.recipe (THE unified Gemma image — all
+    # five Gemma profiles share it) via scripts/build_sm121_image.sh.
+    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.14-gemmadiffusion-sm121"
