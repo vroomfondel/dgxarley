@@ -1,6 +1,6 @@
 # SGLang Test Log — Qwen3.5 122B-A10B NVFP4, 4 Nodes, TP=4 EP=1, v0.5.12 (base image)
 
-> 🔄 **RUN IN PROGRESS** (started 2026-06-20 12:01) — **14 / 21 cases done**. Block A (01–12) all clean. **Probe results:** case **13** (fi_cudnn FP4) ran CLEAN (16/16) — no crash, just like the 397B run, contradicting the "base image has no cuDNN-FP4 wheel → crash" expectation. Case **14** (fi_trtllm MoE) **CRASHED at boot** as predicted — trtllm FP4 block-scale-MoE GEMM kernel fails on GB10. Case **15** (trtllm piecewise) booting/restarting at 15:28 (likely same crash). **No-spec leader: case 09 — n=16 269.0.** Then 16 (trtllm) + Block C (17–21, MTP). Peak = sum-of-per-request tok/s (not the summary JSON's `aggregate_throughput`, which is total/wall). Updating this log as cases complete.
+> 🔄 **RUN IN PROGRESS** (started 2026-06-20 12:01) — **19 / 21 cases done**. Block A (01–12) all clean; Block B (14–16, trtllm) all crashed; probe 13 (fi_cudnn) clean. **Block C (MTP):** 17/18/19 all clean. 🏆 **Case 18 (s3/d4) remains the overall winner: 54.1 / 137.0 / 196.2 / 270.4.** Case **19 (s5/d5) REGRESSES vs s3/d4 everywhere** (50.0 / 116.3 / 175.5 / 249.0 — and below no-spec at concurrency), confirming the past-d4 falloff. Case **20** (s5/d7) benching at n=8 as of 16:28; then 21 (triton-MoE + s3/d4) closes the matrix. Peak = sum-of-per-request tok/s (not the summary JSON's `aggregate_throughput`, which is total/wall). Updating this log as cases complete.
 
 ## Environment
 
@@ -56,11 +56,11 @@ All cases: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4, kv
 | 12 | fi_cutlass | triton | fi_cutlass | pw  | —       | ✅ OK (16/16) | 33.3 | 115.9 | 182.1 | 264.1 |
 | 13 | fi_cutlass | fi     | fi_cudnn   | on  | —       | ✅ OK (16/16) ⚠️ | 34.7 | 115.4 | 179.2 | 262.6 |
 | 14 | fi_trtllm  | fi     | fi_cutlass | on  | —       | 💥 CRASH (boot) ‡ | —   | —   | —   | —    |
-| 15 | fi_trtllm  | fi     | fi_cutlass | pw  | —       | PENDING ‡     | —   | —   | —   | —    |
-| 16 | fi_trtllm  | triton | fi_cutlass | on  | —       | PENDING ‡     | —   | —   | —   | —    |
-| 17 | fi_cutlass | triton | fi_cutlass | on  | s1/d2   | PENDING       | —   | —   | —   | —    |
-| 18 | fi_cutlass | triton | fi_cutlass | on  | s3/d4   | PENDING ★     | —   | —   | —   | —    |
-| 19 | fi_cutlass | triton | fi_cutlass | on  | s5/d5   | PENDING       | —   | —   | —   | —    |
+| 15 | fi_trtllm  | fi     | fi_cutlass | pw  | —       | 💥 CRASH (boot) ‡ | —   | —   | —   | —    |
+| 16 | fi_trtllm  | triton | fi_cutlass | on  | —       | 💥 CRASH (boot) ‡ | —   | —   | —   | —    |
+| 17 | fi_cutlass | triton | fi_cutlass | on  | s1/d2   | ✅ OK (16/16) | 48.2 | 132.7 | 186.7 | 252.5 |
+| 18 | fi_cutlass | triton | fi_cutlass | on  | s3/d4   | ✅ OK (16/16) ★🏆 | 54.1 | 137.0 | 196.2 | 270.4 |
+| 19 | fi_cutlass | triton | fi_cutlass | on  | s5/d5   | ✅ OK (16/16) | 50.0 | 116.3 | 175.5 | 249.0 |
 | 20 | fi_cutlass | triton | fi_cutlass | on  | s5/d7   | PENDING       | —   | —   | —   | —    |
 | 21 | triton     | triton | fi_cutlass | on  | s3/d4   | PENDING       | —   | —   | —   | —    |
 
@@ -106,6 +106,12 @@ All cases: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4, kv
   (numBatches: 256, GemmMNK: 1 512 3072, Kernel: bmm_E2m1_..._sm100f)
   ```
   in `flashinfer/fused_moe/core.py → trtllm_fp4_block_scale_moe`. The kernel is compiled for `sm100` (datacenter Blackwell); GB10 is `sm121`, and the batched-GEMM runner errors out at autotune. **`flashinfer_trtllm` MoE is unusable on this card** — confirms the 397B run's behaviour. (Distinct from the gated-MoE *padding* assert that trtllm normally avoids; here it's a kernel-exec failure.) Cases 15–16 (same runner) expected to crash identically.
+- **Cases 15 & 16 (fi_trtllm MoE, piecewise / triton-attn):** both **CRASHED at boot** (`startup_crash`, pod restarts), identical trtllm GEMM-kernel failure as case 14. **All three trtllm probes (14–16) = Block B is a uniform recorded crash on GB10.** CG-mode (full/piecewise) and attn-backend make no difference — the runner itself can't initialize. Takeaway: **never select `flashinfer_trtllm` MoE for NVFP4 on these sparks.**
+
+### Block C — MTP / NEXTN speculative decoding (17–21)
+- **Case 17 (fi_cutlass-MoE, triton-attn, full-CG, MTP s1/d2):** clean boot, **16/16 ok** — first MTP gate passed (NVFP4 ships the MTP layer; `mem_fraction_static=0.75` + `extra_buffer` + spec_v2 boot clean, no OOM). Peak **48.2 / 132.7 / 186.7 / 252.5**. vs the matching no-spec config (case 10, fi_cutlass+triton-attn+full-CG: 33.5 / 117.3 / 177.5 / 264.0): **n=1 +44% (48.2 vs 33.5), n=4 +13%, n=8 +5%, n=16 −4%.** Textbook speculative-decoding profile: big single-stream win, benefit erodes as batch fills the GPU, slight net loss once saturated (draft/verify overhead > acceptance gain at n=16). Even a shallow s1/d2 chain nearly **1.5×** at n=1.
+- **Case 18 (MTP s3/d4 — SEED/cookbook config, pinned in the profile) 🏆:** clean boot, **16/16 ok**. Peak **54.1 / 137.0 / 196.2 / 270.4** — **the overall winner of the entire matrix, best at every concurrency.** vs best no-spec (case 09): **n=1 +56% (54.1 vs 34.6), n=4 +16%, n=8 +8%, n=16 +0.5%.** vs the shallower s1/d2 (case 17): better everywhere — n=1 +12%, n=8 +5%, and crucially **n=16 +7% (270.4 vs 252.5)**, i.e. the deeper s3/d4 chain does NOT regress at saturation the way s1/d2 did; it stays the top config even at n=16. Confirms the "s3/d4 sweet spot" hypothesis. (Cross-model: the 397B winner at s3/d4 was 40.1 / 95.1 / 125.4 / 172.6 — this 122B model is ~1.35–1.6× faster, consistent with its smaller active size.)
+- **Case 19 (MTP s5/d5):** clean boot, **16/16 ok**. Peak **50.0 / 116.3 / 175.5 / 249.0** — **regresses vs s3/d4 (case 18) at every concurrency** (n=1 −8%, n=4 −15%, n=8 −11%, n=16 −8%), and at n≥4 it even drops **below the best no-spec** (case 09: 117.9 / 180.9 / 269.0). Confirms the **monotonic falloff past d4**: a 5-step/5-draft chain spends more on draft+verify than its acceptance rate repays. s5/d5 is worse than the much cheaper s1/d2 at concurrency too. **Draft depth d4 is the ceiling; beyond it MTP is net-negative here.**
 
 ## Refresh
 
