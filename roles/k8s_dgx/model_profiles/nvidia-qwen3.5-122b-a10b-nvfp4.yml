@@ -50,7 +50,7 @@ _model_profile:
     disable_cuda_graph: false
     disable_piecewise_cuda_graph: true
     pp_async_batch_depth: 0
-    cuda_graph_max_bs: 16
+    cuda_graph_max_bs: 32
     jit_max_jobs: 4
     num_experts: 256
     # EP=1 required for the NVFP4 family: flashinfer_cutlass/triton/cutlass MoE
