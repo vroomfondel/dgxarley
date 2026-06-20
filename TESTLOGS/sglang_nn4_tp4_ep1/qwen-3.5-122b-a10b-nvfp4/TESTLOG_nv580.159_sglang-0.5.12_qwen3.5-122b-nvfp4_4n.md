@@ -1,6 +1,13 @@
 # SGLang Test Log — Qwen3.5 122B-A10B NVFP4, 4 Nodes, TP=4 EP=1, v0.5.12 (base image)
 
-> 🔄 **RUN IN PROGRESS** (started 2026-06-20 12:01) — **20 / 21 cases done**. Block A (01–12) all clean; Block B (14–16, trtllm) all crashed; probe 13 (fi_cudnn) clean. **Block C (MTP):** 17/18/19/20 all clean. 🏆 **Case 18 (s3/d4) is the overall winner: 54.1 / 137.0 / 196.2 / 270.4.** Both deeper chains regress vs s3/d4: s5/d5 (19) and s5/d7 (20: 51.4 / 127.4 / 180.4 / 246.0) — d4 is the ceiling. Last case **21** (triton-MoE + s3/d4 cross-runner) benching at n=8 as of 16:44. Peak = sum-of-per-request tok/s (not the summary JSON's `aggregate_throughput`, which is total/wall). One case to go, then RUN COMPLETE.
+> ✅ **RUN COMPLETE** (2026-06-20 12:01 → 16:49, ~4h45m) — **21 / 21 cases done: 18 passed, 3 failed** (the trtllm probes 14–16, expected). Peak = sum-of-per-request tok/s (not the summary JSON's `aggregate_throughput`, which is total/wall; all peaks below are 16/16 ok, no failed requests).
+>
+> 🏆 **Overall winner: case 18 — fi_cutlass-MoE + triton-attn + full-CG + MTP s3/d4 (the pinned profile config) — 54.1 / 137.0 / 196.2 / 270.4** (n=1/4/8/16), best at every concurrency.
+> - **Best no-spec: case 09** (fi_cutlass-MoE + fi-attn + piecewise) — 34.6 / 117.9 / 180.9 / 269.0. MTP s3/d4 beats it by **+56% / +16% / +8% / +0.5%**.
+> - **MoE runner:** fi_cutlass > triton (~+4% at concurrency). **Attn backend (fi vs triton):** near-zero lever, fi marginally better at n=1. **CG-mode:** full-CG ≈ piecewise > eager; eager penalty large on triton-MoE (n=1 −54%), small on fi_cutlass-MoE (n=1 −21%).
+> - **MTP depth:** s3/d4 is the unambiguous sweet spot; s1/d2 weaker, s5/d5 & s5/d7 regress past d4 (the 5-step depth, not draft-token count, is the problem).
+> - **Crashes:** all 3 `flashinfer_trtllm` MoE probes (14–16) crash at boot (sm100 GEMM kernel unrunnable on GB10 sm121). `fi_cudnn` FP4 probe (13) ran CLEAN — base-image "no cuDNN wheel → crash" expectation refuted (same as 397B run).
+> - **Note:** the summary JSON's own `winner` field names case 09 — it ranks by n=16 `aggregate_throughput` only, where 09 (no-spec, 269.0 agg) edges 18; by our peak metric and across all concurrencies, **case 18 wins**.
 
 ## Environment
 
@@ -40,29 +47,29 @@ Key structural points:
 
 All cases: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4, kv_cache_dtype=fp8_e4m3, cuda_graph_max_bs=32, fp4_gemm=flashinfer_cutlass` (except 13), MTP cases add `mem_fraction_static=0.75, mamba_scheduler_strategy=extra_buffer, SGLANG_ENABLE_SPEC_V2=1`. n=X = aggregate (sum per-request) tok/s at concurrency X.
 
-| #  | moe_runner | attn   | fp4_gemm   | cg  | mtp     | Status        | n=1 | n=4 | n=8 | n=16 |
-|----|------------|--------|------------|-----|---------|---------------|-----|-----|-----|------|
-| 01 | triton     | fi     | fi_cutlass | on  | —       | ✅ OK (16/16) | 34.3 | 112.6 | 176.0 | 259.8 |
-| 02 | triton     | fi     | fi_cutlass | off | —       | ✅ OK (16/16) | 15.8 | 96.1 | 161.2 | 248.8 |
-| 03 | triton     | fi     | fi_cutlass | pw  | —       | ✅ OK (16/16) | 30.7 | 110.1 | 169.8 | 254.6 |
-| 04 | triton     | triton | fi_cutlass | on  | —       | ✅ OK (16/16) | 31.7 | 113.4 | 175.3 | 259.3 |
-| 05 | triton     | triton | fi_cutlass | off | —       | ✅ OK (16/16) | 15.7 | 95.5 | 167.2 | 251.9 |
-| 06 | triton     | triton | fi_cutlass | pw  | —       | ✅ OK (16/16) | 31.6 | 111.2 | 176.3 | 259.9 |
-| 07 | fi_cutlass | fi     | fi_cutlass | on  | —       | ✅ OK (16/16) † | 33.8 | 117.7 | 183.7 | 266.5 |
-| 08 | fi_cutlass | fi     | fi_cutlass | off | —       | ✅ OK (16/16) | 26.8 | 108.3 | 172.4 | 258.1 |
-| 09 | fi_cutlass | fi     | fi_cutlass | pw  | —       | ✅ OK (16/16) | 34.6 | 117.9 | 180.9 | 269.0 |
-| 10 | fi_cutlass | triton | fi_cutlass | on  | —       | ✅ OK (16/16) | 33.5 | 117.3 | 177.5 | 264.0 |
-| 11 | fi_cutlass | triton | fi_cutlass | off | —       | ✅ OK (16/16) | 26.5 | 107.8 | 173.2 | 257.1 |
-| 12 | fi_cutlass | triton | fi_cutlass | pw  | —       | ✅ OK (16/16) | 33.3 | 115.9 | 182.1 | 264.1 |
-| 13 | fi_cutlass | fi     | fi_cudnn   | on  | —       | ✅ OK (16/16) ⚠️ | 34.7 | 115.4 | 179.2 | 262.6 |
-| 14 | fi_trtllm  | fi     | fi_cutlass | on  | —       | 💥 CRASH (boot) ‡ | —   | —   | —   | —    |
-| 15 | fi_trtllm  | fi     | fi_cutlass | pw  | —       | 💥 CRASH (boot) ‡ | —   | —   | —   | —    |
-| 16 | fi_trtllm  | triton | fi_cutlass | on  | —       | 💥 CRASH (boot) ‡ | —   | —   | —   | —    |
-| 17 | fi_cutlass | triton | fi_cutlass | on  | s1/d2   | ✅ OK (16/16) | 48.2 | 132.7 | 186.7 | 252.5 |
-| 18 | fi_cutlass | triton | fi_cutlass | on  | s3/d4   | ✅ OK (16/16) ★🏆 | 54.1 | 137.0 | 196.2 | 270.4 |
-| 19 | fi_cutlass | triton | fi_cutlass | on  | s5/d5   | ✅ OK (16/16) | 50.0 | 116.3 | 175.5 | 249.0 |
-| 20 | fi_cutlass | triton | fi_cutlass | on  | s5/d7   | ✅ OK (16/16) | 51.4 | 127.4 | 180.4 | 246.0 |
-| 21 | triton     | triton | fi_cutlass | on  | s3/d4   | PENDING       | —   | —   | —   | —    |
+| #  | moe_runner | attn   | fp4_gemm   | cg  | mtp   | Status            | n=1  | n=4   | n=8   | n=16  |
+|----|------------|--------|------------|-----|-------|-------------------|------|-------|-------|-------|
+| 01 | triton     | fi     | fi_cutlass | on  | —     | ✅ OK (16/16)      | 34.3 | 112.6 | 176.0 | 259.8 |
+| 02 | triton     | fi     | fi_cutlass | off | —     | ✅ OK (16/16)      | 15.8 | 96.1  | 161.2 | 248.8 |
+| 03 | triton     | fi     | fi_cutlass | pw  | —     | ✅ OK (16/16)      | 30.7 | 110.1 | 169.8 | 254.6 |
+| 04 | triton     | triton | fi_cutlass | on  | —     | ✅ OK (16/16)      | 31.7 | 113.4 | 175.3 | 259.3 |
+| 05 | triton     | triton | fi_cutlass | off | —     | ✅ OK (16/16)      | 15.7 | 95.5  | 167.2 | 251.9 |
+| 06 | triton     | triton | fi_cutlass | pw  | —     | ✅ OK (16/16)      | 31.6 | 111.2 | 176.3 | 259.9 |
+| 07 | fi_cutlass | fi     | fi_cutlass | on  | —     | ✅ OK (16/16) †    | 33.8 | 117.7 | 183.7 | 266.5 |
+| 08 | fi_cutlass | fi     | fi_cutlass | off | —     | ✅ OK (16/16)      | 26.8 | 108.3 | 172.4 | 258.1 |
+| 09 | fi_cutlass | fi     | fi_cutlass | pw  | —     | ✅ OK (16/16)      | 34.6 | 117.9 | 180.9 | 269.0 |
+| 10 | fi_cutlass | triton | fi_cutlass | on  | —     | ✅ OK (16/16)      | 33.5 | 117.3 | 177.5 | 264.0 |
+| 11 | fi_cutlass | triton | fi_cutlass | off | —     | ✅ OK (16/16)      | 26.5 | 107.8 | 173.2 | 257.1 |
+| 12 | fi_cutlass | triton | fi_cutlass | pw  | —     | ✅ OK (16/16)      | 33.3 | 115.9 | 182.1 | 264.1 |
+| 13 | fi_cutlass | fi     | fi_cudnn   | on  | —     | ✅ OK (16/16) ⚠️   | 34.7 | 115.4 | 179.2 | 262.6 |
+| 14 | fi_trtllm  | fi     | fi_cutlass | on  | —     | 💥 CRASH (boot) ‡ | —    | —     | —     | —     |
+| 15 | fi_trtllm  | fi     | fi_cutlass | pw  | —     | 💥 CRASH (boot) ‡ | —    | —     | —     | —     |
+| 16 | fi_trtllm  | triton | fi_cutlass | on  | —     | 💥 CRASH (boot) ‡ | —    | —     | —     | —     |
+| 17 | fi_cutlass | triton | fi_cutlass | on  | s1/d2 | ✅ OK (16/16)      | 48.2 | 132.7 | 186.7 | 252.5 |
+| 18 | fi_cutlass | triton | fi_cutlass | on  | s3/d4 | ✅ OK (16/16) ★🏆  | 54.1 | 137.0 | 196.2 | 270.4 |
+| 19 | fi_cutlass | triton | fi_cutlass | on  | s5/d5 | ✅ OK (16/16)      | 50.0 | 116.3 | 175.5 | 249.0 |
+| 20 | fi_cutlass | triton | fi_cutlass | on  | s5/d7 | ✅ OK (16/16)      | 51.4 | 127.4 | 180.4 | 246.0 |
+| 21 | triton     | triton | fi_cutlass | on  | s3/d4 | ✅ OK (16/16)      | 44.0 | 134.4 | 192.9 | 261.9 |
 
 - **cg**: `on` = full CUDA graphs; `off` = eager; `pw` = piecewise. **mtp**: NEXTN `steps/draft`, `—` = off.
 - **† Case 07** = the designated no-spec serving reference (fi_cutlass-MoE + fi-attn + full-CG).
@@ -113,6 +120,13 @@ All cases: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4, kv
 - **Case 18 (MTP s3/d4 — SEED/cookbook config, pinned in the profile) 🏆:** clean boot, **16/16 ok**. Peak **54.1 / 137.0 / 196.2 / 270.4** — **the overall winner of the entire matrix, best at every concurrency.** vs best no-spec (case 09): **n=1 +56% (54.1 vs 34.6), n=4 +16%, n=8 +8%, n=16 +0.5%.** vs the shallower s1/d2 (case 17): better everywhere — n=1 +12%, n=8 +5%, and crucially **n=16 +7% (270.4 vs 252.5)**, i.e. the deeper s3/d4 chain does NOT regress at saturation the way s1/d2 did; it stays the top config even at n=16. Confirms the "s3/d4 sweet spot" hypothesis. (Cross-model: the 397B winner at s3/d4 was 40.1 / 95.1 / 125.4 / 172.6 — this 122B model is ~1.35–1.6× faster, consistent with its smaller active size.)
 - **Case 19 (MTP s5/d5):** clean boot, **16/16 ok**. Peak **50.0 / 116.3 / 175.5 / 249.0** — **regresses vs s3/d4 (case 18) at every concurrency** (n=1 −8%, n=4 −15%, n=8 −11%, n=16 −8%), and at n≥4 it even drops **below the best no-spec** (case 09: 117.9 / 180.9 / 269.0). Confirms the **monotonic falloff past d4**: a 5-step/5-draft chain spends more on draft+verify than its acceptance rate repays. s5/d5 is worse than the much cheaper s1/d2 at concurrency too. **Draft depth d4 is the ceiling; beyond it MTP is net-negative here.**
 - **Case 20 (MTP s5/d7):** clean boot, **16/16 ok**. Peak **51.4 / 127.4 / 180.4 / 246.0** — widening the draft window to 7 tokens at 5 steps recovers a little over s5/d5 at n≤8 (n=1 51.4 vs 50.0, n=4 127.4 vs 116.3) but is still **well below s3/d4** everywhere and worst-of-all at n=16 (246.0). Confirms: the 5-step depth is the problem, not the draft-token count — more draft tokens partially compensate but can't beat the shallower-step s3/d4. **MTP sweet spot is unambiguously s3/d4.**
+- **Case 21 (triton-MoE, triton-attn, full-CG, MTP s3/d4 — cross-runner):** clean boot, **16/16 ok**. Peak **44.0 / 134.4 / 192.9 / 261.9** — the triton-MoE counterpart to the winner (case 18, fi_cutlass-MoE + s3/d4). **fi_cutlass-MoE wins with MTP too**, and the gap is widest exactly where MTP matters most: **n=1 −19% (44.0 vs 54.1)**, then −2% / −2% / −3% at n=4/8/16. This **refutes** the pre-run hypothesis that triton-MoE+MTP might edge case 18 at n=1 — it's the opposite: the fi_cutlass runner's lower per-step latency compounds with speculative decoding's single-stream advantage. Confirms the profile's MoE-runner choice (fi_cutlass) holds under MTP.
+
+## Conclusion
+
+- **Ship config = case 18** (already pinned): `moe_runner_backend=flashinfer_cutlass`, `attention_backend=flashinfer`/triton (≈ equal), full CUDA graphs, MTP NEXTN `steps=3 / draft=4`, EP=1, TP=4, RoCE. Peak **54.1 / 137.0 / 196.2 / 270.4** tok/s at n=1/4/8/16.
+- **Matrix is a structural twin of the 397B-A17B base run and confirms every cross-model hypothesis** (fi_cutlass > triton MoE; attn-backend irrelevant; CG>eager; MTP s3/d4 sweet spot; trtllm crashes; fi_cudnn clean). This 122B-A10B model runs **~1.35–1.6× faster** than the 397B at identical parallelism, tracking its smaller active param count.
+- **Zero failed requests** in all 18 passing cases (all 16/16 at every concurrency); the 3 failures are the expected `flashinfer_trtllm` boot crashes. No OOM, no NEXTN init error, no radix-cache incompatibility — all four SEED first-boot gates passed.
 
 ## Refresh
 
