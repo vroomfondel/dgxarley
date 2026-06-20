@@ -1,6 +1,6 @@
 # SGLang Test Log — Qwen3.5 122B-A10B NVFP4, 4 Nodes, TP=4 EP=1, v0.5.12 (base image)
 
-> 🔄 **RUN IN PROGRESS** (started 2026-06-20 12:01) — **11 / 21 cases done**. Matrix is running in numeric order. Cases **01–11** complete and clean (16/16 ok at every concurrency, no boot crash). **No-spec leader: case 09 (fi_cutlass-MoE + piecewise) — n=16 269.0, n=1 34.6.** Case **12** (fi_cutlass-MoE + triton-attn + piecewise — last Block-A case) benching at n=8 as of 14:57. Next come the crash-probes: 13 (fi_cudnn FP4) + 14–16 (trtllm MoE). Peak = sum-of-per-request tok/s (not the summary JSON's `aggregate_throughput`, which is total/wall). Updating this log as cases complete.
+> 🔄 **RUN IN PROGRESS** (started 2026-06-20 12:01) — **12 / 21 cases done**. **Entire Block A (01–12, no-spec) complete and uniformly crash-free** (16/16 ok everywhere). **No-spec leader: case 09 (fi_cutlass-MoE + fi-attn + piecewise) — n=16 269.0, n=1 34.6.** SURPRISE: case **13** (fi_cudnn FP4 EXPECT-CRASH-PROBE) is benching at n=8 as of 15:12 → did NOT crash on the base image (same as the 397B run). Then 14–16 (trtllm MoE probe) and Block C (17–21, MTP). Peak = sum-of-per-request tok/s (not the summary JSON's `aggregate_throughput`, which is total/wall). Updating this log as cases complete.
 
 ## Environment
 
@@ -53,7 +53,7 @@ All cases: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4, kv
 | 09 | fi_cutlass | fi     | fi_cutlass | pw  | —       | ✅ OK (16/16) | 34.6 | 117.9 | 180.9 | 269.0 |
 | 10 | fi_cutlass | triton | fi_cutlass | on  | —       | ✅ OK (16/16) | 33.5 | 117.3 | 177.5 | 264.0 |
 | 11 | fi_cutlass | triton | fi_cutlass | off | —       | ✅ OK (16/16) | 26.5 | 107.8 | 173.2 | 257.1 |
-| 12 | fi_cutlass | triton | fi_cutlass | pw  | —       | PENDING       | —   | —   | —   | —    |
+| 12 | fi_cutlass | triton | fi_cutlass | pw  | —       | ✅ OK (16/16) | 33.3 | 115.9 | 182.1 | 264.1 |
 | 13 | fi_cutlass | fi     | fi_cudnn   | on  | —       | PENDING ⚠️    | —   | —   | —   | —    |
 | 14 | fi_trtllm  | fi     | fi_cutlass | on  | —       | PENDING ‡     | —   | —   | —   | —    |
 | 15 | fi_trtllm  | fi     | fi_cutlass | pw  | —       | PENDING ‡     | —   | —   | —   | —    |
@@ -96,6 +96,7 @@ All cases: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4, kv
 - **Case 09 (fi_cutlass-MoE, fi-attn, piecewise):** clean boot, **16/16 ok**. Peak **34.6 / 117.9 / 180.9 / 269.0** — **new overall no-spec leader**, edging case 07 (full-CG) at n=1 (34.6 vs 33.8) and n=16 (269.0 vs 266.5); n=8 a hair behind (180.9 vs 183.7). Within-noise tie with full-CG, but **piecewise is at least as good as full-CG on the fi_cutlass runner** — unlike the triton-MoE half where full-CG was strictly best. (n=1 single-request `finish_reason=stop`, so slightly shorter generation; rate still comparable.)
 - **Case 10 (fi_cutlass-MoE, triton-attn, full-CG):** clean boot, **16/16 ok**. Peak **33.5 / 117.3 / 177.5 / 264.0** — vs case 07 (fi-attn, same MoE+CG): n=1/4 tied, n=8 −3.4% (177.5 vs 183.7), n=16 −0.9% (264.0 vs 266.5). Reconfirms **fi-attn ≥ triton-attn marginally**, now on the fi_cutlass runner too. attn-backend remains a near-zero throughput lever.
 - **Case 11 (fi_cutlass-MoE, triton-attn, eager):** clean boot, **16/16 ok** — second confirmation that **cutlass-eager does not crash** here (independent of attn backend). Peak **26.5 / 107.8 / 173.2 / 257.1** — mirrors case 08 (fi-attn eager) to within noise. **Block A no-spec sweep (01–12, bar 12 still running) is uniformly crash-free; fi_cutlass-MoE wins, attn-backend ≈ irrelevant, eager penalty small on fi_cutlass / large on triton.**
+- **Case 12 (fi_cutlass-MoE, triton-attn, piecewise):** clean boot, **16/16 ok**. Peak **33.3 / 115.9 / 182.1 / 264.1** — vs case 09 (fi-attn piecewise): triton-attn again a touch lower at n=1/4/16, dead-even at n=8. **Block A (01–12) DONE, zero crashes, zero failed requests.** No-spec ranking: **fi_cutlass-MoE + fi-attn + piecewise (09) ≈ full-CG (07) > triton-MoE equivalents > all eager.** Best no-spec n=16 = **269.0** (case 09).
 
 ## Refresh
 
