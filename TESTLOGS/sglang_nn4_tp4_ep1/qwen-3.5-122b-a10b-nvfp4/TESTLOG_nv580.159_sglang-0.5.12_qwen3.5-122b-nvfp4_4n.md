@@ -52,7 +52,7 @@ All cases: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4, kv
 | 08 | fi_cutlass | fi     | fi_cutlass | off | —       | ✅ OK (16/16) | 26.8 | 108.3 | 172.4 | 258.1 |
 | 09 | fi_cutlass | fi     | fi_cutlass | pw  | —       | ✅ OK (16/16) | 34.6 | 117.9 | 180.9 | 269.0 |
 | 10 | fi_cutlass | triton | fi_cutlass | on  | —       | ✅ OK (16/16) | 33.5 | 117.3 | 177.5 | 264.0 |
-| 11 | fi_cutlass | triton | fi_cutlass | off | —       | PENDING       | —   | —   | —   | —    |
+| 11 | fi_cutlass | triton | fi_cutlass | off | —       | ✅ OK (16/16) | 26.5 | 107.8 | 173.2 | 257.1 |
 | 12 | fi_cutlass | triton | fi_cutlass | pw  | —       | PENDING       | —   | —   | —   | —    |
 | 13 | fi_cutlass | fi     | fi_cudnn   | on  | —       | PENDING ⚠️    | —   | —   | —   | —    |
 | 14 | fi_trtllm  | fi     | fi_cutlass | on  | —       | PENDING ‡     | —   | —   | —   | —    |
@@ -95,6 +95,7 @@ All cases: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4, kv
 - **Case 08 (fi_cutlass-MoE, fi-attn, eager):** **booted and ran clean, 16/16 ok** — no crash. Peak **26.8 / 108.3 / 172.4 / 258.1**. Two findings: (1) **the "eager broken on `cutlass_moe_fp4`" caveat does NOT apply to the `flashinfer_cutlass` MoE runner** (different code path — the broken one is the now-removed standalone `cutlass` runner). (2) **fi_cutlass-MoE degrades far more gracefully under eager than triton-MoE**: n=1 only **−21%** vs its full-CG (26.8 vs 33.8), where triton-MoE eager lost **−54%** (case 02). At n≥8 fi_cutlass eager (172/258) still edges triton full-CG (176/260 ≈ tie). So on the fi_cutlass runner, the CUDA-graph penalty for eager is much smaller.
 - **Case 09 (fi_cutlass-MoE, fi-attn, piecewise):** clean boot, **16/16 ok**. Peak **34.6 / 117.9 / 180.9 / 269.0** — **new overall no-spec leader**, edging case 07 (full-CG) at n=1 (34.6 vs 33.8) and n=16 (269.0 vs 266.5); n=8 a hair behind (180.9 vs 183.7). Within-noise tie with full-CG, but **piecewise is at least as good as full-CG on the fi_cutlass runner** — unlike the triton-MoE half where full-CG was strictly best. (n=1 single-request `finish_reason=stop`, so slightly shorter generation; rate still comparable.)
 - **Case 10 (fi_cutlass-MoE, triton-attn, full-CG):** clean boot, **16/16 ok**. Peak **33.5 / 117.3 / 177.5 / 264.0** — vs case 07 (fi-attn, same MoE+CG): n=1/4 tied, n=8 −3.4% (177.5 vs 183.7), n=16 −0.9% (264.0 vs 266.5). Reconfirms **fi-attn ≥ triton-attn marginally**, now on the fi_cutlass runner too. attn-backend remains a near-zero throughput lever.
+- **Case 11 (fi_cutlass-MoE, triton-attn, eager):** clean boot, **16/16 ok** — second confirmation that **cutlass-eager does not crash** here (independent of attn backend). Peak **26.5 / 107.8 / 173.2 / 257.1** — mirrors case 08 (fi-attn eager) to within noise. **Block A no-spec sweep (01–12, bar 12 still running) is uniformly crash-free; fi_cutlass-MoE wins, attn-backend ≈ irrelevant, eager penalty small on fi_cutlass / large on triton.**
 
 ## Refresh
 
