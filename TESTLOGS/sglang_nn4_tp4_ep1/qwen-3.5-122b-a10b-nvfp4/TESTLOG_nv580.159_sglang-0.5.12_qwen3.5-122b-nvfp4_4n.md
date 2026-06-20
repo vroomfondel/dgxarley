@@ -1,6 +1,6 @@
 # SGLang Test Log — Qwen3.5 122B-A10B NVFP4, 4 Nodes, TP=4 EP=1, v0.5.12 (base image)
 
-> 🔄 **RUN IN PROGRESS** (started 2026-06-20 12:01) — **12 / 21 cases done**. **Entire Block A (01–12, no-spec) complete and uniformly crash-free** (16/16 ok everywhere). **No-spec leader: case 09 (fi_cutlass-MoE + fi-attn + piecewise) — n=16 269.0, n=1 34.6.** SURPRISE: case **13** (fi_cudnn FP4 EXPECT-CRASH-PROBE) is benching at n=8 as of 15:12 → did NOT crash on the base image (same as the 397B run). Then 14–16 (trtllm MoE probe) and Block C (17–21, MTP). Peak = sum-of-per-request tok/s (not the summary JSON's `aggregate_throughput`, which is total/wall). Updating this log as cases complete.
+> 🔄 **RUN IN PROGRESS** (started 2026-06-20 12:01) — **14 / 21 cases done**. Block A (01–12) all clean. **Probe results:** case **13** (fi_cudnn FP4) ran CLEAN (16/16) — no crash, just like the 397B run, contradicting the "base image has no cuDNN-FP4 wheel → crash" expectation. Case **14** (fi_trtllm MoE) **CRASHED at boot** as predicted — trtllm FP4 block-scale-MoE GEMM kernel fails on GB10. Case **15** (trtllm piecewise) booting/restarting at 15:28 (likely same crash). **No-spec leader: case 09 — n=16 269.0.** Then 16 (trtllm) + Block C (17–21, MTP). Peak = sum-of-per-request tok/s (not the summary JSON's `aggregate_throughput`, which is total/wall). Updating this log as cases complete.
 
 ## Environment
 
@@ -54,8 +54,8 @@ All cases: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4, kv
 | 10 | fi_cutlass | triton | fi_cutlass | on  | —       | ✅ OK (16/16) | 33.5 | 117.3 | 177.5 | 264.0 |
 | 11 | fi_cutlass | triton | fi_cutlass | off | —       | ✅ OK (16/16) | 26.5 | 107.8 | 173.2 | 257.1 |
 | 12 | fi_cutlass | triton | fi_cutlass | pw  | —       | ✅ OK (16/16) | 33.3 | 115.9 | 182.1 | 264.1 |
-| 13 | fi_cutlass | fi     | fi_cudnn   | on  | —       | PENDING ⚠️    | —   | —   | —   | —    |
-| 14 | fi_trtllm  | fi     | fi_cutlass | on  | —       | PENDING ‡     | —   | —   | —   | —    |
+| 13 | fi_cutlass | fi     | fi_cudnn   | on  | —       | ✅ OK (16/16) ⚠️ | 34.7 | 115.4 | 179.2 | 262.6 |
+| 14 | fi_trtllm  | fi     | fi_cutlass | on  | —       | 💥 CRASH (boot) ‡ | —   | —   | —   | —    |
 | 15 | fi_trtllm  | fi     | fi_cutlass | pw  | —       | PENDING ‡     | —   | —   | —   | —    |
 | 16 | fi_trtllm  | triton | fi_cutlass | on  | —       | PENDING ‡     | —   | —   | —   | —    |
 | 17 | fi_cutlass | triton | fi_cutlass | on  | s1/d2   | PENDING       | —   | —   | —   | —    |
@@ -97,6 +97,15 @@ All cases: `tp=4, pp=1, ep=1, nccl_transport=roce, quantization=modelopt_fp4, kv
 - **Case 10 (fi_cutlass-MoE, triton-attn, full-CG):** clean boot, **16/16 ok**. Peak **33.5 / 117.3 / 177.5 / 264.0** — vs case 07 (fi-attn, same MoE+CG): n=1/4 tied, n=8 −3.4% (177.5 vs 183.7), n=16 −0.9% (264.0 vs 266.5). Reconfirms **fi-attn ≥ triton-attn marginally**, now on the fi_cutlass runner too. attn-backend remains a near-zero throughput lever.
 - **Case 11 (fi_cutlass-MoE, triton-attn, eager):** clean boot, **16/16 ok** — second confirmation that **cutlass-eager does not crash** here (independent of attn backend). Peak **26.5 / 107.8 / 173.2 / 257.1** — mirrors case 08 (fi-attn eager) to within noise. **Block A no-spec sweep (01–12, bar 12 still running) is uniformly crash-free; fi_cutlass-MoE wins, attn-backend ≈ irrelevant, eager penalty small on fi_cutlass / large on triton.**
 - **Case 12 (fi_cutlass-MoE, triton-attn, piecewise):** clean boot, **16/16 ok**. Peak **33.3 / 115.9 / 182.1 / 264.1** — vs case 09 (fi-attn piecewise): triton-attn again a touch lower at n=1/4/16, dead-even at n=8. **Block A (01–12) DONE, zero crashes, zero failed requests.** No-spec ranking: **fi_cutlass-MoE + fi-attn + piecewise (09) ≈ full-CG (07) > triton-MoE equivalents > all eager.** Best no-spec n=16 = **269.0** (case 09).
+
+### Probes (13–16)
+- **Case 13 (fp4_gemm = `fi_cudnn`, EXPECT-CRASH-PROBE):** **ran CLEAN, 16/16 ok.** Peak **34.7 / 115.4 / 179.2 / 262.6** — statistically identical to the `fi_cutlass` FP4-GEMM cases (e.g. 07/09), so cuDNN-FP4 is either present in the base image or silently no-ops to the cutlass path. **Expectation refuted** (matrix note predicted "cuDNN is not available" crash); same surprise as the 397B base-image run. The ⚠️ probe is now a recorded *non*-crash.
+- **Case 14 (moe_runner = `flashinfer_trtllm`, PROBE):** **CRASHED at boot** (`outcome=startup_crash`, head pod +1 restart). Root cause — the trtllm NVFP4 block-scale MoE GEMM kernel fails to execute on GB10:
+  ```
+  RuntimeError: Error in function 'run' at trtllm_batched_gemm_runner.cu:278: Error occurred when running GEMM!
+  (numBatches: 256, GemmMNK: 1 512 3072, Kernel: bmm_E2m1_..._sm100f)
+  ```
+  in `flashinfer/fused_moe/core.py → trtllm_fp4_block_scale_moe`. The kernel is compiled for `sm100` (datacenter Blackwell); GB10 is `sm121`, and the batched-GEMM runner errors out at autotune. **`flashinfer_trtllm` MoE is unusable on this card** — confirms the 397B run's behaviour. (Distinct from the gated-MoE *padding* assert that trtllm normally avoids; here it's a kernel-exec failure.) Cases 15–16 (same runner) expected to crash identically.
 
 ## Refresh
 
