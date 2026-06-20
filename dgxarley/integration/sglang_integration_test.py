@@ -978,6 +978,7 @@ async def run_parallel_test(
     verbose: bool = False,
     thinking_budget: int | None = None,
     no_think: bool = False,
+    reasoning_effort: str | None = None,
     no_guard: str | None = None,
     result_file: str | None = None,
     extra_info: dict[str, object] | None = None,
@@ -1008,8 +1009,14 @@ async def run_parallel_test(
         thinking_budget: Maximum number of thinking tokens allowed, enforced
             via an SGLang custom logit processor. ``None`` means no cap
             beyond the model profile default.
-        no_think: If ``True``, set ``enable_thinking=False`` in
-            ``chat_template_kwargs`` to disable reasoning for all requests.
+        no_think: If ``True``, disable reasoning for all requests — sets
+            ``enable_thinking=False`` (Qwen family) AND ``reasoning_effort="none"``
+            (Mistral family) so the switch works regardless of model.
+        reasoning_effort: If set, ENABLE/level reasoning per request via SGLang's
+            native top-level ``reasoning_effort`` field (e.g. ``"high"`` for
+            Mistral Large-3 / Medium-3.5, which default to no reasoning). Mistral
+            accepts only ``"none"``/``"high"``; other families also take
+            ``low``/``medium``/``max``. Ignored when ``no_think`` is set.
     """
     # Build payload template
     presets = load_sampling_presets(model_id)
@@ -1038,7 +1045,16 @@ async def run_parallel_test(
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
         if no_think:
+            # Disable reasoning across families: Qwen reads enable_thinking,
+            # Mistral reads reasoning_effort. Set both — each model honours its
+            # own switch and ignores the other.
             payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False  # type: ignore[index]
+            payload["reasoning_effort"] = "none"
+        elif reasoning_effort is not None:
+            # Enable/level reasoning via SGLang's native top-level field;
+            # serving_chat maps it into the chat template's reasoning_effort kwarg
+            # (Mistral [THINK] blocks → reasoning_content via reasoning_parser=mistral).
+            payload["reasoning_effort"] = reasoning_effort
         # thinking_budget: CLI arg overrides profile default
         _profile = _dgx_defaults.get("sglang_model_profiles", {}).get(model_id, {})  # type: ignore[attr-defined]
         _effective_budget = thinking_budget if thinking_budget is not None else _profile.get("thinking_budget")
@@ -1059,11 +1075,14 @@ async def run_parallel_test(
 
     url = f"{sglang_url.rstrip('/')}/v1/chat/completions"
     console = Console()
-    think_info = (
-        " | Thinking: OFF"
-        if no_think
-        else (f" | Thinking budget: {thinking_budget}" if thinking_budget is not None else "")
-    )
+    if no_think:
+        think_info = " | Thinking: OFF"
+    elif reasoning_effort is not None:
+        think_info = f" | reasoning_effort: {reasoning_effort}"
+    elif thinking_budget is not None:
+        think_info = f" | Thinking budget: {thinking_budget}"
+    else:
+        think_info = ""
     _header_lines = [
         f"[bold]Starting {n} parallel requests to {url}[/]",
         f"[dim]Model: {model_id} | Preset: {preset} | Max tokens: {max_tokens}{think_info}[/]",
@@ -1317,7 +1336,16 @@ def main() -> None:
     parser.add_argument(
         "--no-think",
         action="store_true",
-        help="Disable thinking/reasoning (sets enable_thinking=false via chat_template_kwargs)",
+        help="Disable thinking/reasoning (Qwen: enable_thinking=false; Mistral: reasoning_effort=none)",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        type=str,
+        default=None,
+        choices=["none", "low", "medium", "high", "max"],
+        help="Enable/level reasoning per request via SGLang's native reasoning_effort field. "
+        "Required to turn ON reasoning for Mistral Large-3 / Medium-3.5 (use 'high'; they "
+        "default to no reasoning and accept only none/high). Ignored with --no-think.",
     )
     parser.add_argument(
         "--no-guard",
@@ -1358,6 +1386,7 @@ def main() -> None:
         "tests": sorted(tests),
         "verbose": verbose,
         "no_think": no_think,
+        "reasoning_effort": args.reasoning_effort,
         "max_tokens": args.max_tokens,
         "thinking_budget": args.thinking_budget,
         "num_requests": args.num_requests,
@@ -1401,6 +1430,7 @@ def main() -> None:
                 verbose=verbose,
                 thinking_budget=args.thinking_budget,
                 no_think=no_think,
+                reasoning_effort=args.reasoning_effort,
                 no_guard=args.no_guard,
                 result_file=args.result_file,
             )
