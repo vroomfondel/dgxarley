@@ -154,10 +154,16 @@ _model_profile:
     cuda_graph_max_bs: 32
     # CONCURRENCY CEILING on this hybrid model is the Mamba state-cache pool, NOT
     # KV/cuda_graph: SGLang clamps max_running_requests = max_mamba_cache_size //
-    # mamba_ratio (ratio≈3, ~3 reserved slots/req). Without an explicit pool the
-    # auto-fit can land far lower (Ultra sibling booted at pool=18 → 6 parallel),
-    # which would make cuda_graph_max_bs:32 inert. 96//3 = 32 matches the CG cap
-    # above exactly. Two levers (both OFF=auto-fit):
+    # mamba_ratio. Without an explicit pool the auto-fit can land far lower (Ultra
+    # sibling booted at pool=18 → 6 parallel), which would make cuda_graph_max_bs:32
+    # inert.
+    # ⚠️ 2026-06-20 boot reality: SGLang auto-enables --mamba-scheduler-strategy
+    # extra_buffer for NemotronH (MTP + radix cache), which reserves 2 ping-pong
+    # slots/req on top of the main slot → effective ratio ≈ 5, NOT the 3 assumed
+    # here. Observed pool=96 → max_running_requests=19 (96/19≈5.05). To hit the
+    # cuda_graph_max_bs:32 cap, pool must be 32×5 = 160 (set below). If you DON'T
+    # need MTP, speculative_enabled:false drops extra_buffer → ratio falls and 32
+    # comes at a much smaller pool. Two levers (both OFF=auto-fit):
     #   * mamba_full_memory_ratio (default 0.9 → mamba gets 47% of rest_memory):
     #     memory-checked KV→mamba shift, preferred in principle but UNTESTED on
     #     both Nemotron-3 profiles. Read the boot log's "max_mamba_cache_size:" line.
@@ -169,9 +175,13 @@ _model_profile:
     # STATUS: 48→16 is VALIDATED on the Ultra sibling (EP=4 matrix 2026-06-06);
     # 96 here is UNVALIDATED (the 2026-06-04 Super matrix winner ran
     # cuda_graph_max_bs:8 with auto-fit pool). On first boot verify the log lines
-    # "max_mamba_cache_size: 96" → "max_running_requests=32" and the ssm_state size.
+    # "max_mamba_cache_size: 160" → "max_running_requests=32" and the ssm_state size.
+    # ⚠️ Memory: 96 slots ≈ 7.02 GB (main 3.80 + spec-intermediate 3.01); 160 scales
+    # to ~11-12 GB. At ctx524288 there was 17.31 GB free → tight AFTER CG capture.
+    # If KV-profiling OOMs, drop mem_fraction_static below 0.75 or context below
+    # 524288. Was 96 (assumed ratio 3 → 32, but extra_buffer makes it ratio≈5 → 19).
     # mamba_full_memory_ratio: 3.0
-    max_mamba_cache_size: 96
+    max_mamba_cache_size: 160
     pp_async_batch_depth: 0
     # DeepGemm targets FP8/ue8m0 scale format; for NVFP4 (scale_fmt != ue8m0) its JIT
     # kernels aren't optimized, block the scheduler watchdog, and exhaust system RAM.
