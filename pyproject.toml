@@ -131,6 +131,7 @@ exclude = '''(?x)(
     | \.pyi$
     | ^roles/k8s_infra/files/hermes_email_gateway_patched\.py$
     | ^roles/k8s_infra/files/hindsight_tenant_keymap\.py$
+    | ^roles/k8s_infra/files/hermes_image_gen_comfyui/
     )'''
 
 [[tool.mypy.overrides]]

@@ -1,0 +1,10 @@
+name: comfyui
+version: 1.0.0
+description: "Local ComfyUI image generation backend (FLUX.1-schnell by default) — text-to-image via the ComfyUI REST API. Saves generated images to $HERMES_HOME/cache/images/."
+author: dgxarley
+kind: backend
+# No required env var: the server URL has a sane default (http://127.0.0.1:8188)
+# and is overridable via COMFYUI_URL or image_gen.comfyui.url in config.yaml.
+# (Listing a key here would make the picker treat the backend as unavailable
+# until that key is set — we don't want that for a URL-configured backend.)
+requires_env: []
