@@ -1,0 +1,107 @@
+---
+# Model profile: nvidia/Qwen3-Next-80B-A3B-Thinking-NVFP4 — FIRST CONTACT / UNVALIDATED
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles at runtime.
+#
+# WHAT — NVIDIA modelopt NVFP4 quant of Qwen/Qwen3-Next-80B-A3B-Thinking.
+# SAME ARCHITECTURE as the validated `qwen-qwen3-next-80b-a3b-instruct-fp8.yml`
+# and `qwen-qwen3-coder-next-80b-a3b-nvfp4.yml`: arch `Qwen3NextForCausalLM`,
+# hybrid Gated DeltaNet (linear attention) + Gated Attention, MoE 512 experts /
+# 10 active + 1 shared, 48 layers, hidden 2048, ~80B total / ~3B active, 262K
+# native context (card: extensible to ~1.01M via YaRN). This is the THINKING
+# post-train (emits <think> reasoning) — unlike the Instruct (non-thinking) and
+# Coder (no thinking) siblings.
+#
+# QUANT — NVIDIA package, NOT RedHatAI. Card: "Only the weights and activations
+# of the linear operators within transformer blocks are quantized" → NVIDIA
+# TensorRT-Model-Optimizer (quant_method "modelopt"), ~3.3x smaller than the
+# 16-bit baseline. So the SGLang loader MUST be told `quantization=modelopt_fp4`
+# (same loader path as nvidia/Qwen3.5-122B-A10B-NVFP4 / nvidia/Qwen3.5-397B-A17B-
+# NVFP4 / mmangkad NVFP4). Do NOT use `compressed-tensors` — that's the RedHatAI
+# packaging and would error on the quant-method mismatch.
+#
+# >>> UNVALIDATED on this cluster — no matrix run yet <<<
+# - tp_size: 4 from the NVIDIA card example (tensor_parallel_size=4). DeltaNet
+#   means only the Gated-Attention layers grow KV, so KV is cheap.
+# - attention_backend: triton = cluster-validated for THIS arch (Instruct-FP8
+#   sibling). Governs the Gated-Attention layers only; DeltaNet always uses
+#   linear_attn_backend=triton. flashinfer is a valid probe — A/B it.
+# - moe_runner_backend / fp4_gemm_backend: SM121/GB10 NVFP4 defaults by analogy
+#   (flashinfer_cutlass) — UNCONFIRMED for the Qwen3-Next arch; re-confirm on the
+#   first matrix run.
+# - tool_call_parser: qwen25 (hermes-style <tool_call>{json}</tool_call>, the
+#   ORIGINAL Qwen3 generation — NOT qwen3_coder). The qwen3_coder XML detector is
+#   for the Qwen3.5/3.6 family and Qwen3-Coder ONLY; Qwen3-Next (Sept-2025 gen)
+#   still uses the hermes JSON format. If tool tags leak into content behind
+#   hermes-default, A/B qwen3_coder. Required for tool-calling backends (Honcho/
+#   Hermes) — re-verify on first contact.
+# - MTP/NEXTN speculative decoding IS available: Qwen3-Next ships a native 1-layer
+#   MTP head and THIS NVFP4 quant keeps it (config.json ignore-list carries
+#   `mtp.layers.0*` → MTP head stays BF16). The NEXTN block is present below but
+#   speculative_enabled: false for first-contact boot safety (matches coder/instruct
+#   siblings). Flipping it on the hybrid-mamba arch REQUIRES the two extra knobs
+#   (mamba_scheduler_strategy=extra_buffer + enable_spec_v2=true) to avoid the
+#   spec-v2-vs-radix-cache boot crash — see the validated 122B/3.6 NVFP4 profiles.
+#   num_steps/draft_tokens below are a SEED (mirrors the 122B s3/d4 winner, closest
+#   sibling by size) — re-sweep depth on the first matrix run.
+_model_profile:
+  "nvidia/Qwen3-Next-80B-A3B-Thinking-NVFP4":
+    knowledge_cutoff: "2025-09"  # Qwen3-Next base; no separate cutoff published for the NVFP4 quant
+    release_date: "2025-09-10"  # Qwen3-Next-80B-A3B base; official Qwen blog. NVIDIA NVFP4 upload later.
+    info_url: "https://huggingface.co/nvidia/Qwen3-Next-80B-A3B-Thinking-NVFP4"
+    nccl_transport: "roce"
+    tp_size: 4
+    context_length_max: 262144
+    # 256K native, NO YaRN override — boot-safe first contact. Card claims
+    # extensible to ~1.01M via json_model_override_args, memory permitting (untested here).
+    context_length: 262144
+    # NVIDIA modelopt NVFP4 — must be told explicitly (auto-detect would pick the
+    # wrong loader). NOT compressed-tensors (that's RedHatAI packaging).
+    quantization: "modelopt_fp4"
+    trust_remote_code: true
+    kv_cache_dtype: "fp8_e4m3"
+    # triton = cluster-validated (Instruct-FP8 sibling). Governs Gated-Attention
+    # layers only; DeltaNet uses linear_attn_backend=triton always. Probe flashinfer.
+    attention_backend: "triton"
+    # NVFP4 MoE on SM121/GB10: flashinfer_cutlass is the cluster default — the
+    # standalone "cutlass" runner was REMOVED in 0.5.12 (NotImplementedError at
+    # load_model). UNVALIDATED for Qwen3-Next; re-confirm on first matrix run.
+    moe_runner_backend: "flashinfer_cutlass"
+    fp4_gemm_backend: "flashinfer_cutlass"
+    # NVFP4 scale_fmt != ue8m0 → DeepGemm JIT kernels not optimized; disable.
+    disable_deep_gemm: true
+    num_experts: 512
+    # EP=1 for the NVFP4 family: flashinfer_cutlass/triton/cutlass MoE all crash at
+    # EP>1 (StandardDispatcher EP combine bug). At EP=1 each GPU holds all experts
+    # (TP-sharded intermediate), no per-layer EP all-reduce.
+    ep_size: 1
+    enable_eplb: false
+    enable_expert_distribution_metrics: false
+    # Weights ~11–12 GB/GPU after TP=4 → massive headroom; 0.50 is the conservative
+    # first-contact start (matches Instruct-FP8 + coder NVFP4 siblings). DeltaNet
+    # keeps KV cheap — raise once a clean boot confirms headroom.
+    mem_fraction_static: "0.50"
+    # Thinking variant → <think> reasoning. qwen3 reasoning parser.
+    reasoning_parser: "qwen3"
+    # See header note — qwen25 (hermes JSON) is the Qwen3-Next generation's format,
+    # NOT qwen3_coder. A/B if tool tags leak.
+    tool_call_parser: "qwen25"
+    # Qwen3-Next-Thinking official recommended sampling (thinking mode).
+    recommended_sampling:
+      temperature: 0.6
+      top_p: 0.95
+      top_k: 20
+    # MTP / NEXTN speculative decoding. Native 1-layer MTP head present in this
+    # NVFP4 quant (config ignore-list `mtp.layers.0*`). ENABLED 2026-06-21 (user
+    # request) — UNVALIDATED: no clean boot / headroom check has run yet, so the
+    # FIRST boot IS the validation run. If it startup-crashes ("not compatible
+    # with radix cache" or NVFP4-MTP NaN) or repeats, set back to false.
+    # The two hybrid-mamba knobs are MANDATORY when enabled on this DeltaNet arch
+    # (else "not compatible with radix cache" boot crash — same as 122B/3.6 NVFP4).
+    # s3/d4 seeds from the 122B-NVFP4 winner (closest sibling); re-sweep depth.
+    speculative_enabled: true
+    speculative_algo: NEXTN
+    speculative_num_steps: 3
+    speculative_num_draft_tokens: 4
+    speculative_eagle_topk: 1
+    mamba_scheduler_strategy: "extra_buffer"
+    enable_spec_v2: true
