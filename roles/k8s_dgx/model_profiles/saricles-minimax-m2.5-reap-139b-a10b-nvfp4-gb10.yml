@@ -1,0 +1,103 @@
+# Model profile: saricles/MiniMax-M2.5-REAP-139B-A10B-NVFP4-GB10 — FIRST CONTACT / UNVALIDATED
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles at runtime.
+#
+# WHAT — a REAP-PRUNED + GB10-tuned community quant of MiniMax-M2.5. Same arch as
+# nvidia/MiniMax-M2.5-NVFP4 (minimax_m2 / MiniMaxM2ForCausalLM, 62 layers, hidden
+# 3072, 48 attn / 8 KV heads, sigmoid routing, native ctx 196608, MTP head present)
+# EXCEPT the MoE is pruned: REAP (Router-weighted Expert Activation Pruning) dropped
+# 256 → 154 experts (~40%), so 230B → 139B total / ~10B active. 8 experts/token still.
+#
+# >>> TWO things differ from the nvidia M2.5/M2.7 profiles — do not copy their knobs blindly <<<
+# 1. QUANT PACKAGING = compressed-tensors, NOT modelopt. Quantized with LLM Compressor
+#    (llmcompressor 0.10.0, format nvfp4-pack-quantized). So `quantization: compressed-tensors`
+#    — passing `modelopt_fp4` errors with the quant-method-mismatch ValueError (same as the
+#    RedHatAI Qwen3.6-35B-NVFP4 entry). SGLang also auto-detects this, but we set it explicit.
+# 2. MoE RUNNER = triton, NOT flashinfer_cutlass. SGLang's _handle_moe_kernel_config whitelist
+#    REJECTS flashinfer_cutlass/cutedsl for compressed-tensors (only modelopt_*/bf16 accepted) —
+#    18/18 broke that way on the RedHatAI Qwen3.6 compressed-tensors matrix. triton MoE was the
+#    validated winner there; cutlass-direct also worked but didn't beat triton. The fi_cutlass
+#    MoE that wins on the nvidia (modelopt) M2.5/M2.7 is simply NOT AVAILABLE for this package.
+#
+# GB10 notes from the (vLLM-centric) model card: "FlashInfer JIT fails on Spark SM121a" → the
+# card forces vLLM onto Marlin (VLLM_USE_FLASHINFER_MOE_FP4=0). That's the vLLM MoE path; our
+# SGLang route uses triton MoE anyway, and flashinfer_cutlass FP4 *GEMM* (fp4_gemm_backend) is
+# already proven on these GB10 sparks for compressed-tensors NVFP4 (RedHatAI Qwen3.6, sglang
+# 0.5.12). Card also: GPU_MEMORY_UTIL=0.93 (0.95 OOMs) + MAX_MODEL_LEN=131072 — but those are
+# for a SINGLE-GB10 vLLM deploy; the whole point of REAP-139B is "fits one Spark". See tp_size note.
+#
+# >>> UNVALIDATED on this cluster — no matrix run yet. Re-sweep moe(triton vs cutlass-direct)
+# >>> × attention × CG-variant, and probe a clean boot, before trusting any throughput.
+_model_profile:
+  "saricles/MiniMax-M2.5-REAP-139B-A10B-NVFP4-GB10":
+    knowledge_cutoff: null  # not disclosed (MiniMax-M2.5 base "Undisclosed"; saricles card silent)
+    release_date: "2026-02-12"  # MiniMax-M2.5 base; saricles REAP+NVFP4 repackage later
+    info_url: "https://huggingface.co/saricles/MiniMax-M2.5-REAP-139B-A10B-NVFP4-GB10"
+    nccl_transport: "roce"
+    # TP=4/PP=1 to match the M2.5/M2.7 siblings (drop-in, 8 KV heads / 4 = 2/rank clean).
+    # NOTE: at 139B NVFP4 (~70 GB weights) this REAP build is single-GB10-capable BY DESIGN
+    # — the card runs it on ONE Spark (TP=1). If you want to free the other 3 sparks, run it
+    # single-node (tp_size:1) and skip the per-layer RoCE all-reduce; ~70 GB weights fit one
+    # 128 GB Spark with ctx capped (~131K, the card's MAX_MODEL_LEN). TP=4 here is the
+    # throughput/KV-headroom choice, not a memory necessity.
+    tp_size: 4
+    # config.json max_position_embeddings = 196608. Card uses 131072 only for single-GB10
+    # memory headroom; at TP=4 there is room for the full native window.
+    context_length: 196608
+    # compressed-tensors (LLM Compressor), NOT modelopt — see header. modelopt_fp4 would error.
+    quantization: "compressed-tensors"
+    # trust_remote_code: MiniMax-M2.5 ships custom model code (minimax_m2.py, custom tokenizer).
+    trust_remote_code: true
+    kv_cache_dtype: "fp8_e4m3"
+    # triton MoE — MANDATORY for compressed-tensors NVFP4 (flashinfer_cutlass/cutedsl rejected by
+    # SGLang's moe-kernel whitelist; only modelopt_*/bf16 pass). Validated winner on the RedHatAI
+    # Qwen3.6 compressed-tensors matrix. Alt: cutlass-direct (worked there, didn't beat triton).
+    moe_runner_backend: "triton"
+    # flashinfer_cutlass FP4 GEMM — proven on GB10/SM121 for compressed-tensors NVFP4 (RedHatAI
+    # Qwen3.6, sglang 0.5.12). This is the GEMM path, distinct from the (vLLM) flashinfer MoE the
+    # card disables. If it JIT-fails at boot on SM121 (the card's vLLM experience), that's the
+    # first thing to bisect.
+    fp4_gemm_backend: "flashinfer_cutlass"
+    attention_backend: "flashinfer"
+    num_experts: 154  # REAP-pruned 256 → 154. EP>1 impossible anyway (154 % 4 != 0).
+    # EP=1: each rank holds all 154 experts, FFN intermediate TP-sharded. NVFP4 family also
+    # crashes at EP>1 (StandardDispatcher EP-combine / shuffle_rows OOB).
+    ep_size: 1
+    enable_eplb: false
+    enable_expert_distribution_metrics: false
+    # ~18 GB weights/GPU after TP=4 (139B NVFP4 / 4) → large KV headroom. Card's 0.93/OOM-at-
+    # 0.95 warning is SINGLE-GB10 — N/A at TP=4. Was 0.85; dropped to 0.55 because MTP is now
+    # enabled — the #20966 draft worker needs its own slice (see the spec block below). Raise
+    # back toward 0.85 if MTP is turned off.
+    mem_fraction_static: "0.55"
+    # Full CUDA graphs + piecewise ON — the compressed-tensors winner shape (RedHatAI Qwen3.6)
+    # and the M2.7 (same arch) finding. A/B full-CG vs piecewise on the matrix run.
+    disable_cuda_graph: false
+    disable_piecewise_cuda_graph: false
+    cuda_graph_max_bs: 16
+    jit_max_jobs: 4
+    # DeepGemm is FP8/ue8m0-only; NVFP4 scale_fmt != ue8m0 → JIT kernels unoptimized, block the
+    # scheduler watchdog, exhaust host RAM. Disabled; FP4 GEMM → fp4_gemm_backend.
+    disable_deep_gemm: true
+    # "minimax" → Qwen3Detector, separates <think>…</think> into reasoning_content. Card's
+    # "minimax_m2_append_think" is the vLLM name; A/B "minimax-append-think" if traces leak.
+    reasoning_parser: "minimax"
+    tool_call_parser: "minimax-m2"
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 40
+    # MTP / speculative decoding — ENABLED 2026-06-21 (user request). UNVALIDATED: no matrix
+    # run yet, so the FIRST boot IS the validation run. Arch HAS a native MTP head (config.json
+    # use_mtp=true, num_mtp_modules=3, mtp_transformer_layers=1) → NEXTN uses the BUILT-IN head,
+    # no external draft. #20966 mitigation APPLIED: mem_fraction_static dropped to 0.55 above
+    # (else the draft worker OOMs on the MiniMax-M2 lineage). ALSO recommended at launch:
+    # PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True. EXTRA UNKNOWN here: REAP pruned the MAIN
+    # experts but the card never says the MTP head was re-tuned to the pruned router, so draft
+    # ACCEPTANCE MAY BE POOR (or even net-negative) — measure accept_len on first boot, and set
+    # speculative_enabled back to false if it OOMs/crashes or the speedup isn't there.
+    speculative_enabled: true
+    speculative_algo: NEXTN
+    speculative_num_steps: 3
+    speculative_num_draft_tokens: 4
+    speculative_eagle_topk: 1
+    speculative_draft_model_path: ""  # empty = NEXTN uses the in-checkpoint MTP head
