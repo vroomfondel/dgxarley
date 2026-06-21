@@ -241,7 +241,7 @@
 # === DNS ===
 
 - name: Register DNS A records for k8s_infra ingress services
-  import_tasks: dns.yml
+  import_tasks: core/dns.yml
   tags: dns
   when:
     - isk3smaster is defined
