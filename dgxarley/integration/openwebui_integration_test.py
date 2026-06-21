@@ -80,6 +80,15 @@ _defaults_path: Path = Path(
     os.environ.get("DGXARLEY_DEFAULTS") or (_REPO_ROOT / "roles" / "k8s_dgx" / "defaults" / "main.yml")
 ).resolve()
 
+# Cluster-wide coordinates (sglang_model, sglang_namespace/port, litellm_*,
+# ollama_*, docling_port, traefik_internal_allowlist) were lifted from the
+# k8s_dgx role defaults to group_vars/all/main.yml. Load that too and merge it
+# over the role defaults (group_vars wins, mirroring Ansible precedence).
+# Override via DGXARLEY_GROUPVARS env var.
+_groupvars_path: Path = Path(
+    os.environ.get("DGXARLEY_GROUPVARS") or (_REPO_ROOT / "group_vars" / "all" / "main.yml")
+).resolve()
+
 # Load .env / .env.local from repo root (does not override existing env vars)
 _env_files: list[Path] = [_REPO_ROOT / ".env", _REPO_ROOT / ".env.local"]
 for _env_file in _env_files:
@@ -105,7 +114,15 @@ if not _defaults_path.is_file():
     _dgx_defaults: dict[str, object] = {}
 else:
     with open(_defaults_path) as _f:
-        _dgx_defaults = yaml.safe_load(_f)
+        _dgx_defaults = yaml.safe_load(_f) or {}
+
+# Merge group_vars/all over the role defaults so the lifted cluster coordinates
+# (sglang_model et al.) resolve. group_vars wins, mirroring Ansible precedence.
+if _groupvars_path.is_file():
+    with open(_groupvars_path) as _gf:
+        _group_vars = yaml.safe_load(_gf) or {}
+    if isinstance(_group_vars, dict):
+        _dgx_defaults.update(_group_vars)
 # YAML-loaded data has heterogeneous structure; annotated as dict[str, object]
 _MODEL_PROFILES: dict[str, object] = _dgx_defaults.get("sglang_model_profiles", {})  # type: ignore[assignment]
 
