@@ -1,8 +1,8 @@
 ---
-# DNS A records for k8s_dgx-owned (GPU/inference-layer) ingress services.
-# App/infra-layer records (openwebui, searxng, traefik, prometheus, promgrafana,
-# uptimekuma, policy-reporter, seafile) are registered by the k8s_infra role's
-# dns.yml.
+# DNS A records for k8s_infra-owned ingress services. GPU/inference-layer
+# records (ollama, sglang, vllm, docling, litellm) are registered by the
+# k8s_dgx role's dns.yml. Honcho/Hindsight/Hermes register their own records
+# inline in their task files.
 - name: Register DNS A records via nsupdate
   community.general.nsupdate:
     server: "{{ nsupdate_server }}"
@@ -16,11 +16,13 @@
     value: "{{ nsupdate_ingress_ip }}"
     state: present
   loop:
-    - ollama
-    - ollama-embed
-    - sglang
-    - vllm
-    - docling
-    - litellm
+    - openwebui
+    - searxng
+    - traefik
+    - prometheus
+    - promgrafana
+    - uptimekuma
+    - policy-reporter
+    - seafile
   loop_control:
     label: "{{ item }}.{{ dns_external_domain_suffix }}"

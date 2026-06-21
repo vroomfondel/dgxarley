@@ -14,7 +14,7 @@
 # gpu+instance, different pod/container labels → duplicate Grafana legend rows
 # ("GPU 0 (spark1)" twice) and sum() double-counting. Disabling it yields exactly
 # one series per physical GPU. Because the dcgm scrape job adds no `pod` label
-# (only node→instance/node, see kubectlstuff_prometheus.yml), the series identity is
+# (only node→instance/node, see prometheus.yml), the series identity is
 # also stable across exporter pod restarts. Trade-off: we lose GPU↔pod attribution
 # joins — not used by any dashboard/alert here; GPU hardware metrics are physical-GPU
 # properties. To re-enable, flip the env back to "true" (the pod-resources mount and
