@@ -419,6 +419,10 @@ sglang_port: 8000
 sglang_model: "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
 # sglang_model: "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4"
 #
+# --- Nex-N2 ---
+# sglang_model: "RazielXYZ/Nex-N2-Pro-NVFP4"                     # Qwen3.5-MoE class (512 exp/10 active), multimodal reasoning, modelopt-NVFP4 ~237 GB → ~59 GB/GPU TP4. UNVALIDATED first-contact; MTP staged-off
+# sglang_model: "r0b0tlab/nex-n2-mini-nvfp4"                     # Qwen3.5-MoE class (256 exp/8 active, 35B/A3B), multimodal reasoning, modelopt-NVFP4 ~24.8 GB → ~6.2 GB/GPU TP4 (tiny). UNVALIDATED first-contact; MTP staged-off
+#
 # --- Qwen2.5 ---
 # sglang_model: "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"           # 32B dense, AWQ 4-bit, coder, 32K ctx — ~9.7 GB/GPU TP2
 #

@@ -106,11 +106,13 @@ _model_profile:
     # MTP / speculative decoding — ENABLED 2026-06-21 (user request). UNVALIDATED: no
     # matrix run yet, so the FIRST boot IS the validation run. The arch HAS a native MTP
     # head (config.json use_mtp=true, num_mtp_modules=3, mtp_transformer_layers=1) kept
-    # BF16, so NEXTN uses the BUILT-IN head — no external draft model. #20966 mitigation
-    # APPLIED: mem_fraction_static dropped to 0.55 above (else the draft worker OOMs on the
-    # MiniMax-M2 lineage, even @ 0.7/0.8/0.85). ALSO recommended at launch:
-    # PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True. If it still OOMs/crashes on first
-    # boot, set speculative_enabled back to false. The fast EAGLE3 path needs an upstream
+    # BF16, so NEXTN uses the BUILT-IN head — no external draft model. ⚠️ sgl-project/
+    # sglang#20966 (the draft-worker OOM) is OPEN / inactive upstream — NO fix merged; the
+    # reporter OOMed at TP=4/EP=4/EAGLE even @ mem_fraction 0.7/0.8/0.85. Our mitigation is
+    # BEST-EFFORT, NOT a guaranteed fix: EP=1 (forced by the NVFP4 family → far smaller draft
+    # footprint than the report's EP=4) + mem_fraction_static 0.55 (above) +
+    # PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True at launch. It MAY STILL OOM on first
+    # boot — if it does, set speculative_enabled back to false. The fast EAGLE3 path needs an upstream
     # FORK (HF blog lujangusface/tw-eagle3-minimax); NEXTN is in-tree.
     speculative_enabled: true
     speculative_algo: NEXTN
