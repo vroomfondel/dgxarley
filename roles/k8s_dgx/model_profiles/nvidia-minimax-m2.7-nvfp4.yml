@@ -8,8 +8,9 @@
 # the sglang_nn4_tp4_ep1 matrix (2026-06-01, sglang-0.5.12.post1) — winner is
 # flashinfer_cutlass MoE + flashinfer attn + fi_cutlass FP4 + piecewise CUDA graph.
 # See TESTLOGS/sglang_nn4_tp4_ep1/minimax-m2.7-nvfp4/TESTLOG_nv580.159_sglang-0.5.12.post1_minimax-m2.7-nvfp4_4n.md.
-# The remaining values inherited from the M2.5 PP=4 logs (mem_fraction, cuda_graph_max_bs,
-# kv_cache_dtype) were NOT specifically swept and stand as reasonable defaults.
+# The remaining values inherited from the M2.5 PP=4 logs (cuda_graph_max_bs, kv_cache_dtype)
+# were NOT specifically swept and stand as reasonable defaults; mem_fraction_static was
+# bumped 0.80→0.85 best-guess (TP=4 leaves ample KV headroom — see its inline note).
 _model_profile:
   "nvidia/MiniMax-M2.7-NVFP4":
     knowledge_cutoff: null  # not disclosed (HF card/blog/OpenRouter/arXiv 2605.26494 silent)
@@ -38,7 +39,6 @@ _model_profile:
     #    the post-processing cost remains the same (~360s either way).
     # load_format: "sharded_state"
     nccl_transport: "roce"
-    #nccl_transport: "roce"
     tp_size: 4  # TP=4/PP=1 (PP = nnodes/tp = 4/4 = 1). 8 KV heads / 4 = 2 per rank — divides cleanly, no PP bubbles.
     # config.json max_position_embeddings = 196608 (identical to M2.5). The model
     # card's "204800" is its benchmark ISL, NOT the architectural context window —
@@ -63,13 +63,14 @@ _model_profile:
     # eager → 63.9 tok/s at 8∥.
     moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
-    mem_fraction_static: "0.80"
-    # mem_fraction_static: "0.40"  # for speculative_enabled=true
-    # PP=4 winner uses flashinfer attention (Test 2: 63.9 at 8∥).
-    # triton attention also stable (Test 5: 52.2 at 8∥, Test 13: 62.0 at 8∥).
+    # at TP=4 only ~35 GB weights/GPU, so KV headroom is large (higher = more KV reserve).
+    # Was 0.85; dropped to 0.55 because MTP is now enabled — the #20966 draft worker needs
+    # its own slice (see the spec block below). Raise back toward 0.85 if MTP is turned off.
+    mem_fraction_static: "0.55"
+    # flashinfer attention — used by the winning TP=4 matrix runs (Block A). fi-vs-triton
+    # ≈ irrelevant for the NVFP4 family; triton is the family default — A/B if needed.
     attention_backend: "flashinfer"
-    # flashinfer_cutlass fp4: stable on PP=4. fi_cudnn also works but slightly
-    # lower throughput (Test 9: 48.9 vs Test 1: 61.2 at 8∥).
+    # flashinfer_cutlass FP4 GEMM — the NVFP4-family default, stable across the TP=4 matrix.
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 4
     # Piecewise CUDA graph ENABLED — RESOLVED by the TP=4 matrix. The PP=4 OOM
@@ -102,8 +103,18 @@ _model_profile:
       temperature: 1.0
       top_p: 0.95
       top_k: 40
-    speculative_enabled: false
+    # MTP / speculative decoding — ENABLED 2026-06-21 (user request). UNVALIDATED: no
+    # matrix run yet, so the FIRST boot IS the validation run. The arch HAS a native MTP
+    # head (config.json use_mtp=true, num_mtp_modules=3, mtp_transformer_layers=1) kept
+    # BF16, so NEXTN uses the BUILT-IN head — no external draft model. #20966 mitigation
+    # APPLIED: mem_fraction_static dropped to 0.55 above (else the draft worker OOMs on the
+    # MiniMax-M2 lineage, even @ 0.7/0.8/0.85). ALSO recommended at launch:
+    # PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True. If it still OOMs/crashes on first
+    # boot, set speculative_enabled back to false. The fast EAGLE3 path needs an upstream
+    # FORK (HF blog lujangusface/tw-eagle3-minimax); NEXTN is in-tree.
+    speculative_enabled: true
     speculative_algo: NEXTN
     speculative_num_steps: 3
     speculative_num_draft_tokens: 4
-    speculative_draft_model_path: ""
+    speculative_eagle_topk: 1
+    speculative_draft_model_path: ""  # empty = NEXTN uses the in-checkpoint MTP head
