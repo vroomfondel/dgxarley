@@ -108,9 +108,9 @@ _model_profile:
     # card's parallelism, at the cost of pipeline bubbles (see nvidia-glm-5-nvfp4.yml).
     # Both paths are UNVALIDATED here.
     tp_size: 4
-    # context_length: 524288
-    # json_model_override_args: '{"max_position_embeddings": 524288}'
-    context_length: 262144
+    context_length: 524288
+    json_model_override_args: '{"max_position_embeddings": 524288}'
+    # context_length: 262144
     quantization: "modelopt_fp4"
     # trust_remote_code: required — NemotronH ships custom model + tokenizer code in
     # the HF repo that SGLang must execute. Safe: official nvidia/ repo.
