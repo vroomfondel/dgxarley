@@ -6,45 +6,45 @@
 
 # === CORE ===
 - name: config coredns
-  import_tasks: core/kubectlstuff_coredns.yml
+  import_tasks: core/coredns.yml
   tags:
     - coredns
   when:
     - isk3smaster is defined
     - isk3smaster
 
-- name: import kubectlstuff_certmanager.yml if isk3smaster is defined and true
-  import_tasks: core/kubectlstuff_certmanager.yml
+- name: import certmanager.yml if isk3smaster is defined and true
+  import_tasks: core/certmanager.yml
   tags: certmanager
   when:
     - isk3smaster is defined
     - isk3smaster
 
-- name: import kubectlstuff_traefikdashboard.yml if isk3smaster is defined and true
-  import_tasks: core/kubectlstuff_traefikdashboard.yml
+- name: import traefikdashboard.yml if isk3smaster is defined and true
+  import_tasks: core/traefikdashboard.yml
   tags: traefikdashboard
   when:
     - isk3smaster is defined
     - isk3smaster
 
 - name: config keel
-  import_tasks: core/kubectlstuff_keel.yml
+  import_tasks: core/keel.yml
   tags:
     - keel
   when:
     - isk3smaster is defined
     - isk3smaster
 
-- name: import kubectlstuff_eso_keyverno.yml if isk3smaster is defined and true
-  import_tasks: core/kubectlstuff_eso_keyverno.yml
+- name: import eso_keyverno.yml if isk3smaster is defined and true
+  import_tasks: core/eso_keyverno.yml
   tags:
     - eso
   when:
     - isk3smaster is defined
     - isk3smaster
 
-- name: import kubectlstuff_eso_secrets.yml if isk3smaster is defined and true
-  import_tasks: core/kubectlstuff_eso_secrets.yml
+- name: import eso_secrets.yml if isk3smaster is defined and true
+  import_tasks: core/eso_secrets.yml
   tags:
     - eso
     - eso_secrets
@@ -53,24 +53,24 @@
     - isk3smaster
 
 
-- name: import kubectlstuff_smarter_devices.yml if isk3smaster is defined and true
-  import_tasks: core/kubectlstuff_smarter_devices.yml
+- name: import smarter_devices.yml if isk3smaster is defined and true
+  import_tasks: core/smarter_devices.yml
   tags:
     - smarter_devices
   when:
     - isk3smaster is defined
     - isk3smaster
 
-- name: import kubectlstuff_nfd.yml if isk3smaster is defined and true
-  import_tasks: core/kubectlstuff_nfd.yml
+- name: import nfd.yml if isk3smaster is defined and true
+  import_tasks: core/nfd.yml
   tags:
     - nfd
   when:
     - isk3smaster is defined
     - isk3smaster
 
-- name: import kubectlstuff_sealed_secrets.yml if isk3smaster is defined and true
-  import_tasks: core/kubectlstuff_sealed_secrets.yml
+- name: import sealed_secrets.yml if isk3smaster is defined and true
+  import_tasks: core/sealed_secrets.yml
   tags: sealed_secrets
   when:
     - isk3smaster is defined
@@ -78,34 +78,42 @@
 
 # === DATABASES ===
 
-- name: import kubectlstuff_postgresql.yml if isk3smaster is defined and true
-  import_tasks: databases/kubectlstuff_postgresql.yml
+- name: import postgresql.yml if isk3smaster is defined and true
+  import_tasks: databases/postgresql.yml
   tags:
     - postgresql
   when:
     - isk3smaster is defined
     - isk3smaster
 
-- name: import kubectlstuff_postgresql_backup.yml if isk3smaster is defined and true
-  import_tasks: databases/kubectlstuff_postgresql_backup.yml
+- name: import postgresql_backup.yml if isk3smaster is defined and true
+  import_tasks: databases/postgresql_backup.yml
   tags:
     - postgresql_backup
   when:
     - isk3smaster is defined
     - isk3smaster
 
-- name: import kubectlstuff_redis.yml if isk3smaster is defined and true
-  import_tasks: databases/kubectlstuff_redis.yml
+- name: import redis.yml if isk3smaster is defined and true
+  import_tasks: databases/redis.yml
   tags:
     - redis
   when:
     - isk3smaster is defined
     - isk3smaster
 
-- name: import kubectlstuff_seafile.yml if isk3smaster is defined and true
-  import_tasks: databases/kubectlstuff_seafile.yml
+- name: import seafile.yml if isk3smaster is defined and true
+  import_tasks: databases/seafile.yml
   tags:
     - seafile
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: import forgejo.yml if isk3smaster is defined and true
+  import_tasks: databases/forgejo.yml
+  tags:
+    - forgejo
   when:
     - isk3smaster is defined
     - isk3smaster
@@ -113,56 +121,56 @@
 # === MONITORING ===
 
 - name: Create monitoring namespace and shared middlewares
-  import_tasks: monitoring/kubectlstuff_monitoring_core.yml
+  import_tasks: monitoring/monitoring_core.yml
   tags: [monitoring_core, promstack]
   when:
     - isk3smaster is defined
     - isk3smaster
 
 - name: Deploy kube-state-metrics
-  import_tasks: monitoring/kubectlstuff_ksm.yml
+  import_tasks: monitoring/ksm.yml
   tags: [ksm, promstack]
   when:
     - isk3smaster is defined
     - isk3smaster
 
 - name: Deploy node-exporter
-  import_tasks: monitoring/kubectlstuff_nodeexporter.yml
+  import_tasks: monitoring/nodeexporter.yml
   tags: [nodeexporter, promstack]
   when:
     - isk3smaster is defined
     - isk3smaster
 
 - name: Deploy Prometheus
-  import_tasks: monitoring/kubectlstuff_prometheus.yml
+  import_tasks: monitoring/prometheus.yml
   tags: [prometheus, promstack]
   when:
     - isk3smaster is defined
     - isk3smaster
 
 - name: Deploy Alertmanager
-  import_tasks: monitoring/kubectlstuff_alertmanager.yml
+  import_tasks: monitoring/alertmanager.yml
   tags: [alertmanager, promstack]
   when:
     - isk3smaster is defined
     - isk3smaster
 
 - name: Deploy Grafana
-  import_tasks: monitoring/kubectlstuff_grafana.yml
+  import_tasks: monitoring/grafana.yml
   tags: [grafana, promstack]
   when:
     - isk3smaster is defined
     - isk3smaster
 
-- name: import kubectlstuff_loki.yml if isk3smaster is defined and true
-  import_tasks: monitoring/kubectlstuff_loki.yml
+- name: import loki.yml if isk3smaster is defined and true
+  import_tasks: monitoring/loki.yml
   tags: loki
   when:
     - isk3smaster is defined
     - isk3smaster
 
-- name: import kubectlstuff_uptimekuma.yml if isk3smaster is defined and true
-  import_tasks: monitoring/kubectlstuff_uptimekuma.yml
+- name: import uptimekuma.yml if isk3smaster is defined and true
+  import_tasks: monitoring/uptimekuma.yml
   tags:
     - uptimekuma
   when:
@@ -170,7 +178,7 @@
     - isk3smaster
 
 - name: Deploy KCEVE KVM web control
-  import_tasks: core/kubectlstuff_kceve_kvm.yml
+  import_tasks: core/kceve_kvm.yml
   tags:
     - kceve_kvm
   when:
@@ -178,9 +186,63 @@
     - isk3smaster
 
 - name: Deploy NUT exporter for UPS monitoring
-  import_tasks: monitoring/kubectlstuff_nut_exporter.yml
+  import_tasks: monitoring/nut_exporter.yml
   tags: [nut_exporter, promstack]
   when:
     - isk3smaster is defined
     - isk3smaster
 
+# === APPS ===
+# User-facing app-layer services (moved here from the k8s_dgx role). Their
+# shared inference coordinates live in group_vars/all/main.yml.
+
+- name: Deploy SearXNG
+  import_tasks: apps/searxng.yml
+  tags: searxng
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: Deploy Open WebUI
+  import_tasks: apps/openwebui.yml
+  tags: openwebui
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: Deploy Pipelines
+  import_tasks: apps/pipelines.yml
+  tags: pipelines
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: Deploy Honcho AI memory backend
+  import_tasks: apps/honcho.yml
+  tags: honcho
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: Deploy Hindsight agent memory backend
+  import_tasks: apps/hindsight.yml
+  tags: hindsight
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: Deploy per-user Nous Hermes agents (agent + optional webui sidecar)
+  import_tasks: apps/hermes.yml
+  tags: hermes
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+# === DNS ===
+
+- name: Register DNS A records for k8s_infra ingress services
+  import_tasks: dns.yml
+  tags: dns
+  when:
+    - isk3smaster is defined
+    - isk3smaster

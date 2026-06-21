@@ -1,5 +1,5 @@
 ---
-# kubectlstuff_smarter_devices.yml
+# smarter_devices.yml
 #
 # SMARTER Device Manager — Kubernetes-native device scheduling
 # https://github.com/smarter-project/smarter-device-manager

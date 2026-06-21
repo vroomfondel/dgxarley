@@ -1,5 +1,5 @@
 ---
-# kubectlstuff_nfd.yml
+# nfd.yml
 # Node Feature Discovery v0.18.3 — auto-labels nodes with hardware capabilities
 # (CPU family, GPU vendor/device, instruction sets, etc.)
 # https://github.com/kubernetes-sigs/node-feature-discovery

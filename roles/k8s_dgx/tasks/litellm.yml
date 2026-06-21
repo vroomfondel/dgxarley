@@ -16,7 +16,7 @@
 # ============================================================================
 # PostgreSQL Database Check/Create (idempotent)
 # ============================================================================
-# The init-script in kubectlstuff_postgresql.yml (4_createdb_litellm.sh) only
+# The init-script in postgresql.yml (4_createdb_litellm.sh) only
 # runs on a fresh PG data dir. For existing clusters we ensure the litellm
 # role + DB exist at runtime — same pattern as windmill/openwebui.
 

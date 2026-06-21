@@ -1,5 +1,5 @@
 ---
-# kubectlstuff_postgresql_backup.yml
+# postgresql_backup.yml
 # CronJob to back up all PostgreSQL databases nightly via pg_dump
 
 - name: Create postgresql-backup-script ConfigMap

@@ -7,6 +7,7 @@ k8s_infra_data_base: "/var/lib/k8s-data"
 # Secrets (overridden by vault)
 postgresql_postgres_password: "changeme"
 postgresql_openwebui_password: "changeme"
+postgresql_forgejo_password: "changeme"
 grafana_admin_password: "changeme"
 grafana_root_url: "https://grafana.example.com"
 keel_basic_auth_password: "changeme"
@@ -31,7 +32,7 @@ kceve_kvm_serial_device: "/dev/ttyACM0"
 
 # === Seafile (CE) ===
 # Public hostname rendered into Ingress + SEAFILE_SERVER_HOSTNAME.
-# Storage layout (see kubectlstuff_seafile.yml header for rationale):
+# Storage layout (see seafile.yml header for rationale):
 #   data_base         — /shared content-addressed blobs, NFS-safe
 #   mariadb_data_base — InnoDB random I/O, MUST be local fast disk
 # Secrets (admin, db, jwt_secret) are overridden by vault.
@@ -61,3 +62,394 @@ seafile:
     mariadb:   { memory_request: "256Mi", memory_limit: "1Gi" }
     memcached: { memory_limit: "128Mi" }
 
+# === Forgejo (Gitea fork) ===
+# Self-hosted git forge. DB lives on the shared PostgreSQL (postgresql_forgejo_password
+# above); all other secrets are in this dict. With hash_behaviour=replace, vault.yml's
+# `forgejo:` REPLACES this whole block — keep all keys in sync across this file,
+# group_vars/all/main.yml and group_vars/all/vault.yml (same rule as seafile).
+#   data_base      — /data (git repos + app.ini), hostPath on the NFS pool
+#   disable_ssh    — true = HTTPS-only (Traefik can't proxy raw TCP SSH)
+#   secret_key / internal_token / *_jwt_secret — symmetric keys; MUST be stable
+#                    across restarts or encrypted data (2FA/OAuth/sessions) is lost.
+#   admin.*        — first admin, bootstrapped once via `forgejo admin user create`.
+forgejo:
+  data_base: "/mnt/nfs/forgejo-data"
+  namespace: "forgejo"
+  hostname: "forgejo.{{ dns_external_domain_suffix }}"
+  time_zone: "Europe/Berlin"
+  app_name: "Forgejo"
+  uid: 1000
+  gid: 1000
+  disable_ssh: true
+  disable_registration: true
+  # Traefik pods source X-Forwarded-For from the K3s pod CIDR.
+  trusted_proxies: "10.68.0.0/16,10.69.0.0/16"
+  secret_key: "CHANGEME_SECRET_KEY"
+  internal_token: "CHANGEME_INTERNAL_TOKEN"
+  oauth2_jwt_secret: "CHANGEME_OAUTH2_JWT"
+  lfs_jwt_secret: "CHANGEME_LFS_JWT"
+  admin:
+    username: "admin"
+    email: "admin@example.com"
+    password: "changeme"
+  images:
+    server: { repo: "codeberg.org/forgejo/forgejo", tag: "15.0.3" }
+  resources:
+    server: { memory_request: "256Mi", memory_limit: "1Gi" }
+
+
+# ============================================================================
+# App-layer services moved here from the k8s_dgx role
+# ----------------------------------------------------------------------------
+# openwebui, pipelines, searxng, hermes, honcho, hindsight. Their shared
+# inference coordinates (sglang_*, litellm_*, ollama_*, docling_port,
+# traefik_internal_allowlist) live in group_vars/all/main.yml.
+# ============================================================================
+
+openwebui_namespace: "openwebui"
+
+openwebui_image: "ghcr.io/open-webui/open-webui:main"
+pipelines_image: "ghcr.io/open-webui/pipelines:main"
+pipelines_port: 9099
+searxng_port: 8080
+# OpenWebUI configuration
+openwebui_secret_key: "CHANGEME_SECRET_KEY"
+openwebui_admin_name: "Admin User"
+openwebui_admin_email: "admin@example.com"
+openwebui_admin_password: "changeme"
+
+# Embedding engine: "openai" routes through LiteLLM (unified OpenAI-v1 interface).
+# Switch back to "ollama" + ollama_url for direct access without LiteLLM proxy.
+openwebui_embedding_engine: "openai"
+openwebui_embedding_openai_url: "http://litellm.{{ litellm_namespace }}.svc.cluster.local:4000/v1"
+# Bearer token for the embedding endpoint — override in group_vars/all/vault.yml.
+# Use a LiteLLM virtual key (scoped to the embedding model) in production.
+openwebui_embedding_openai_key: "CHANGEME_LITELLM_EMBED_KEY"
+openwebui_embedding_ollama_url: "http://ollama-embed.ollama.svc.cluster.local:{{ ollama_port }}"
+
+openwebui_embedding_chunk_size: 20000
+openwebui_embedding_chunk_overlap: 750
+openwebui_embedding_chunk_min_size: 100
+openwebui_embedding_batch_size: 16
+
+openwebui_content_extraction_engine: "docling"
+openwebui_docling_server_url: "http://docling.docling.svc.cluster.local:{{ docling_port }}"
+# openwebui_tei_openai_api_base_url: "http://tei.ollama.svc.cluster.local:8080/v1"
+openwebui_searxng_query_url: "http://searxng.searxng.svc.cluster.local:{{ searxng_port }}/search?q=<query>"
+openwebui_web_search_result_count: 5
+
+# Pipelines (filter/function plugins for OpenWebUI)
+# Master toggle — controls Deployment, Service, and OpenAI connection registration.
+pipelines_enabled: true
+# Which pipeline filter scripts to seed (files in roles/k8s_dgx/files/pipelines/)
+pipelines_filters:
+  - "pipelines_self_reflection_filter.py"
+
+# pipeline will be deployed, but this valve will disable it
+openwebui_self_reflection_enabled: false
+
+# OpenAI-compatible connections for OpenWebUI.
+# Pipelines URL is appended automatically when pipelines_enabled is true.
+# openwebui_connections_openai_keys must have the same length as
+# openwebui_connections_openai (positional mapping — keys[i] is the bearer
+# token for urls[i]). Override both in group_vars/all/vault.yml when the
+# endpoint requires auth (e.g. LiteLLM).
+openwebui_connections_openai:
+  - "http://sglang.{{ sglang_namespace }}.svc.cluster.local:{{ sglang_port }}/v1"
+openwebui_connections_openai_keys:
+  - "CHANGEME_LITELLM_CHAT_KEY"
+
+# === Nous Hermes Agent (per-user deployments) ===
+# Two independent Deployments per active user, both pinned to k3smaster:
+#   hermes-agent-<user>  → official nousresearch/hermes-agent (`hermes dashboard`)
+#   hermes-webui-<user>  → ghcr.io/nesquena/hermes-webui (alt browser UI)
+# They share /opt/data via the same hostPath subdir, so sessions/skills/configs
+# are identical across both UIs. Each one still spawns its own hermes processes
+# when chatting — Hermes is a CLI, not a daemon; there is no shared agent
+# process to multiplex onto.
+hermes_namespace: "hermes"
+# v2026.5.28 restructured the image: tini → s6-overlay (PID 1 = /init),
+# gosu → s6-setuidgid, node:22-bookworm-slim build stage (size 2.63 → 1.12 GB).
+# The pre-s6 entrypoint contract is preserved ("Architecture B"): default
+# ENTRYPOINT /init runs cont-init (stage2-hook.sh: usermod $HERMES_UID/$HERMES_GID
+# + chown), then our `args:` via docker/main-wrapper.sh → `s6-setuidgid hermes
+# hermes <args>`. We never hard-code command:, so the swap is transparent.
+# gateway/platforms/email.py is byte-identical across v2026.5.16..6.5 and main
+# (md5 318ae8f3e6d4b26718784e0c94bf8458) → the hermes_email_gateway_patched.py
+# patch needs NO re-sync. Verified 2026-06-08.
+hermes_image_tag: "v2026.6.19"
+# NFS-backed hostPath base on k3smaster — per-user subdirs <base>/<username>
+# are mounted as /opt/data inside the pod (subdir-only, no parent visibility).
+hermes_data_base: "/mnt/nfs/hermes"
+# Second NFS-backed hostPath base, mounted as /workspace inside the pod.
+# Intended as the user's input/output shelf: drop files from desktop NFS,
+# LLM reads/writes via the hermes-cli terminal toolset. Same per-user subdir
+# isolation pattern as hermes_data_base. Pre-req: NFS export mounted on
+# k3smaster at this path before the pod starts.
+hermes_files_base: "/mnt/nfs/hermes-files"
+hermes_default_model: "{{ litellm_hermes_alias_model }}"  # stable alias → current SGLang model
+hermes_litellm_url: "http://litellm.litellm.svc.cluster.local:4000"
+hermes_webui_image: "ghcr.io/nesquena/hermes-webui"
+hermes_webui_image_tag: "latest"
+hermes_webui_port: 8787
+# Caddy sidecar in front of the agent dashboard. Cookie-session auth (via the
+# caddy-security plugin) so WebSocket (TUI/PTY) and EventSource (events feed)
+# work — BasicAuth credentials are NOT auto-included by browsers on those
+# requests. oauth2-proxy v7 was tried first but rejects WS upgrades with 403
+# even with --skip-auth-route; caddy-security checks the cookie only on the
+# initial handshake and transparently passes the upgrade through. The image is
+# greenpau/caddy-security packaged as `authcrunch/authcrunch` (multi-arch).
+hermes_caddy_image: "ghcr.io/authcrunch/authcrunch"
+hermes_caddy_image_tag: "latest"
+hermes_agent_proxy_port: 9118
+# Per-user defaults — overridable per entry in hermes_users.
+hermes_dashboard_enabled_default: false
+# enables chat-interface if set to true IF hermes_dashboard_enabled is even enabled
+hermes_dashboard_tui_default: false
+# enables webui-interface (alternative interface to native hermes dashboard)
+hermes_webui_enabled_default: true
+# Sets logging.level=DEBUG in the rendered config.yaml (otherwise INFO).
+# Affects /opt/data/logs/agent.log — kubectl logs -c log-tail <pod> tails it.
+hermes_debug_default: false
+# Default for per-user email gateway. When true, the webui pod gets an extra
+# `hermes-email` sidecar running `hermes gateway run` against EMAIL_* vars in
+# /opt/data/.env. Off by default — needs IMAP/SMTP credentials per user, and
+# enabling it without those will just have the gateway log "no platforms
+# configured" and idle. Implies webui_enabled (sidecar lives in that pod).
+hermes_email_enabled_default: false
+# Seafile-backed /workspace. When true: (1) the hermes role provisions a
+# Seafile user (using <hermes_users[*].email> + seafile.web_password) and a
+# `hermes-workspace` library via the Seafile REST API, (2) a seadrive FUSE
+# sidecar is injected into both the agent and webui pods, which mounts that
+# library at /workspace via mountPropagation. When false (default), /workspace
+# stays on the hermes_files_base NFS subpath. Per-user override via
+# hermes_users[*].seafile.workspace_enabled.
+hermes_seafile_workspace_enabled_default: false
+# Seafile API + admin credentials used during provisioning. URL is the same
+# external hostname the seadrive sidecar will sync against. Admin comes from
+# the seafile_admin_* vars in k8s_infra's vault — re-declared here as a hint
+# for the provisioning task and to allow per-environment override.
+hermes_seafile_server_url: "https://seafile.{{ dns_external_domain_suffix }}"
+hermes_seafile_library_name: "hermes-workspace"
+# seadrive client image (official, FUSE-mode). amd64-only — fine since hermes
+# pods are pinned to k3smaster anyway.
+hermes_seadrive_image: "seafileltd/seadrive-fuse"
+hermes_seadrive_image_tag: "latest"
+# Per-user list — real entries in group_vars/all/vault.yml.
+# Schema: { username, uid, gid, litellm_token,
+#           litellm_model?, basicauth_password?, webui_password?,
+#           dashboard_enabled? (default true),
+#           dashboard_tui?     (default true),
+#           webui_enabled?     (default false),
+#           hermes_debug?      (default false),
+#           email?: {           (default disabled — omit block to skip)
+#               enabled,        (default hermes_email_enabled_default)
+#               address, password, imap_host, smtp_host,
+#               imap_port?      (default 993),
+#               smtp_port?      (default 587),
+#               poll_interval?  (default 15),
+#               home_address?,
+#               allow_all_users?, allowed_users?,
+#               skip_attachments?,
+#               cpu_limit?, memory_limit?
+#           },
+#           enabled }
+# Hostnames: <username>.hermes-dashboard.<dns> (original)  +  <username>.hermes.<dns> (webui)
+hermes_users: []
+
+
+
+# ============================================================================
+# Honcho — AI memory / ambient-agent personalization backend
+# ============================================================================
+# Deployed by roles/k8s_dgx/tasks/honcho.yml (tag: honcho). Two Deployments
+# from one pinned image (ghcr.io/plastic-labs/honcho, public multi-arch):
+#   honcho-api      — FastAPI on :8000 (/health), Alembic migrations run as an
+#                     initContainer (scripts/provision_db.py) before serving.
+#   honcho-deriver  — poll-based background worker (python -m src.deriver); no
+#                     HTTP port; derives memory + runs the periodic "dream"
+#                     consolidation against the LLM. Waits for honcho-api/health
+#                     via an initContainer so the schema is migrated first.
+# Postgres: dedicated `honcho` DB on the shared instance, pgvector enabled IN
+# that DB (VECTOR_STORE_TYPE=pgvector keeps embeddings in the app DB). Password
+# flows postgresql-secrets → k8s_info → app Secret, same as litellm.
+# Config: non-sensitive model routing lives in a mounted config.toml (ConfigMap);
+# only DB_CONNECTION_URI / LLM_OPENAI_API_KEY / AUTH_JWT_SECRET are env (Secret).
+# env overrides config.toml in Honcho's settings precedence.
+honcho_enabled: true
+honcho_namespace: "honcho"
+# PINNED — Honcho moves fast and auto-migrates the DB schema on api start, so a
+# pinned tag avoids surprise schema changes on pull. Bump deliberately; re-check
+# .env.template / config.toml.example for new/renamed keys when you do. No keel
+# auto-update annotations on this deployment by design.
+honcho_image: "ghcr.io/plastic-labs/honcho:v3.0.9"
+honcho_port: 8000
+# Number of deriver worker pods. Safe to scale >1 — derivers coordinate via the
+# Postgres job queue with startup jitter (no external broker).
+honcho_deriver_replicas: 1
+
+# Per-feature LLM endpoint routing — every Honcho feature (deriver, dialectic,
+# summary, dream, AND embedding) gets its OWN base_url + model + API key, broken
+# out explicitly so any single feature can be repointed at a different provider
+# WITHOUT touching the others. Replaces the old shared honcho_model /
+# honcho_litellm_base (split per-feature 2026-06).
+# The API KEYS are intentionally NOT here (sensitive): dummies live in
+# group_vars/all/main.yml, real values in group_vars/all/vault.yml. They are
+# injected per-feature into the honcho-env Secret and referenced from config.toml
+# via `api_key_env`, so credentials never land in this public file.
+#
+# Defaults below merely point at what the cluster runs today (text-gen → LiteLLM
+# hermes-default alias; embedding → ollama-embed). They are NOT hardwired — set
+# any *_base / *_model to another OpenAI-compatible endpoint and its key in vault.
+# NOTE: text-gen features need TOOL/FUNCTION-CALLING models — the SGLang model
+# behind hermes-default must have a working tool_call_parser, else the deriver
+# rejects/errors.
+
+# --- base URLs (OpenAI-compatible /v1) ---
+honcho_deriver_base: "http://litellm.{{ litellm_namespace }}.svc.cluster.local:{{ litellm_port }}/v1"
+honcho_dialectic_base: "http://litellm.{{ litellm_namespace }}.svc.cluster.local:{{ litellm_port }}/v1"
+honcho_summary_base: "http://litellm.{{ litellm_namespace }}.svc.cluster.local:{{ litellm_port }}/v1"
+honcho_dream_base: "http://litellm.{{ litellm_namespace }}.svc.cluster.local:{{ litellm_port }}/v1"
+# Embedding defaults to ollama-embed direct (the path OpenWebUI uses), NOT through
+# LiteLLM, to avoid OpenAI→Ollama param-translation surprises — but it's a plain
+# overridable endpoint like the rest: repoint it anywhere OpenAI-compatible.
+honcho_embedding_base: "{{ openwebui_embedding_ollama_url }}/v1"
+# --- models ---
+honcho_deriver_model: "{{ litellm_hermes_alias_model }}"
+honcho_dialectic_model: "{{ litellm_hermes_alias_model }}"
+honcho_summary_model: "{{ litellm_hermes_alias_model }}"
+honcho_dream_model: "{{ litellm_hermes_alias_model }}"
+honcho_embedding_model: "{{ ollama_embed_model }}"
+
+# --- per-feature API keys (DUMMIES) ---
+# Lowest-precedence dummies so the role is self-contained and never undefined.
+# Overridden by the public dummies in group_vars/all/main.yml and ultimately by
+# the REAL values in group_vars/all/vault.yml (defaults < group_vars main < vault).
+# Sensitive — never put a real key here. Referenced by api_key_env in config.toml
+# (HONCHO_<FEATURE>_API_KEY) via the honcho-env Secret.
+honcho_deriver_api_key: "sk-changeme"
+honcho_dialectic_api_key: "sk-changeme"
+honcho_summary_api_key: "sk-changeme"
+honcho_dream_api_key: "sk-changeme"
+honcho_embedding_api_key: "sk-changeme"
+
+# CRITICAL: must equal the embedding model's native dimension
+# (Qwen3-Embedding-4B = 2560; was 1024 for bge-m3 / Qwen3-Embedding-0.6B).
+# pgvector fixes the column dimension at the FIRST migration — changing this
+# later requires re-creating the honcho DB (wipe + re-provision).
+honcho_embedding_dimensions: 2560
+
+
+# ============================================================================
+# Hindsight — agent memory backend (vectorize-io/hindsight)
+# ============================================================================
+# Deployed by roles/k8s_dgx/tasks/hindsight.yml (tag: hindsight). Modelled on
+# honcho but Hindsight ships THREE components from TWO pinned images (per the
+# upstream helm/hindsight chart):
+#   hindsight-api           — FastAPI on :8888 (/health). Runs Alembic migrations
+#                             on startup (HINDSIGHT_API_RUN_MIGRATIONS_ON_STARTUP)
+#                             and, when the worker is disabled, an INTERNAL task
+#                             worker. Image ghcr.io/vectorize-io/hindsight-api.
+#   hindsight-worker        — OPTIONAL dedicated task worker on :8889 (same image,
+#                             internal api worker is disabled when it runs). Off
+#                             by default — the api's internal worker suffices for
+#                             a single-tenant cluster. Waits on api/health first.
+#   hindsight-control-plane — Next.js web UI on :3000. Image
+#                             ghcr.io/vectorize-io/hindsight-control-plane.
+# Postgres: dedicated `hindsight` DB on the shared instance, pgvector enabled IN
+# that DB (HINDSIGHT_API_VECTOR_EXTENSION=pgvector). Password flows
+# postgresql-secrets → k8s_info → app Secret, same as honcho/litellm.
+# Config: Hindsight is configured ENTIRELY via HINDSIGHT_* env vars (no config
+# file), so non-sensitive routing goes in a ConfigMap (hindsight-config) and
+# only credentials in a Secret (hindsight-env) — both injected via envFrom.
+# Reranker defaults to `rrf` (reciprocal rank fusion) so NO local cross-encoder
+# model is downloaded — keeps the pods stateless and airgap-friendly, matching
+# the no-PVC honcho design. Flip hindsight_reranker_provider to enable reranking.
+hindsight_enabled: true
+hindsight_namespace: "hindsight"
+# PINNED to the helm chart appVersion. Both images share this tag. Bump
+# deliberately — re-check helm/hindsight/values.yaml for new/renamed env keys
+# when you do. No keel auto-update annotations by design.
+hindsight_version: "0.8.2"
+hindsight_api_image: "ghcr.io/vectorize-io/hindsight-api:{{ hindsight_version }}"
+hindsight_cp_image: "ghcr.io/vectorize-io/hindsight-control-plane:{{ hindsight_version }}"
+hindsight_api_port: 8888
+hindsight_cp_port: 3000
+
+# Dedicated worker pods (StatefulSet upstream; a plain Deployment here as we keep
+# no per-replica model cache). OFF by default — the api runs an internal worker.
+hindsight_worker_enabled: false
+hindsight_worker_replicas: 1
+hindsight_worker_port: 8889
+
+# --- LLM (text-gen) → LiteLLM hermes-default alias, OpenAI-compatible ---
+# NOTE: Hindsight's retain/reflect/consolidate steps use tool/function calling —
+# the SGLang model behind hermes-default must have a working tool_call_parser.
+hindsight_llm_provider: "openai"
+hindsight_llm_base_url: "http://litellm.{{ litellm_namespace }}.svc.cluster.local:{{ litellm_port }}/v1"
+hindsight_llm_model: "{{ litellm_hermes_alias_model }}"
+
+# --- Embeddings → ollama-embed direct (same path OpenWebUI/honcho use) ---
+# Provider `openai` against ollama's OpenAI-compatible /v1 endpoint. Dimensions
+# are intentionally NOT sent (HINDSIGHT_API_EMBEDDINGS_OPENAI_DIMENSIONS unset):
+# ollama returns the model's native-dim vectors (Qwen3-Embedding-4B = 2560) and
+# rejecting an unsupported `dimensions` param is avoided. Hindsight fixes the
+# pgvector column on first migration — changing the embedding model later means
+# wiping the hindsight DB.
+hindsight_embeddings_provider: "openai"
+hindsight_embeddings_base_url: "{{ openwebui_embedding_ollama_url }}/v1"
+hindsight_embeddings_model: "{{ ollama_embed_model }}"
+
+# --- Reranker: `rrf` disables model-based reranking (no HF download). Set to
+# `litellm` / `cohere` / `local` etc. to enable; see configuration docs. ---
+hindsight_reranker_provider: "rrf"
+
+# Vector + text-search backends on the shared pgvector Postgres.
+hindsight_vector_extension: "pgvector"
+
+# Control-plane → dataplane wiring. The browser UI calls the api under /api on
+# the SAME public host (Traefik routes /api → hindsight-api), so the api runs
+# with a matching base path. Mirrors the upstream helm ingress mapping.
+hindsight_api_base_path: "/api"
+hindsight_cp_dataplane_api_url: "https://hindsight.{{ dns_external_domain_suffix }}{{ hindsight_api_base_path }}"
+
+# Tenant auth — ON by default, via our OWN TenantExtension (no Supabase/GoTrue).
+# roles/k8s_dgx/files/hindsight_tenant_keymap.py is shipped into the api/worker
+# containers via the hindsight-tenant-ext ConfigMap and loaded with
+# HINDSIGHT_API_TENANT_EXTENSION=hindsight_tenant_keymap:KeyMapTenantExtension
+# (PYTHONPATH=/opt/hindsight-ext). It maps each bearer key to its OWN Postgres
+# schema "<prefix>_<tenant>" → real per-user memory isolation with static keys.
+# Set false to fall back to the no-auth DefaultTenantExtension (open, single
+# schema, protected only by the Traefik ip-allowlist).
+hindsight_auth_enabled: true
+hindsight_tenant_extension_module: "hindsight_tenant_keymap:KeyMapTenantExtension"
+hindsight_tenant_ext_dir: "/opt/hindsight-ext"
+hindsight_tenant_schema_prefix: "tenant"
+
+# key -> tenant map (DUMMY) — the SINGLE source of truth for API auth. Each api
+# key authenticates a request and routes it to schema
+# "<hindsight_tenant_schema_prefix>_<tenant>"; unmapped keys are REJECTED (no
+# fallback tenant). Tenant names must be valid Postgres identifiers. SENSITIVE
+# (contains keys) — real map in group_vars/all/vault.yml; keys are NOT templated,
+# set literal strings.
+hindsight_tenant_keymap:
+  "changeme-hindsight-key": "admin"
+
+# Upstream-provider keys (DUMMIES; real in vault). hindsight_llm_api_key is the
+# text-gen key (LiteLLM master key here); hindsight_embeddings_api_key is sent to
+# ollama-embed, which ignores it.
+hindsight_llm_api_key: "sk-changeme"
+hindsight_embeddings_api_key: "sk-changeme"
+
+# Control-plane → which tenant the UI browses. NON-secret: just a tenant NAME
+# that must exist in hindsight_tenant_keymap; the actual bearer is looked up from
+# the keymap (so a key is never written twice). Empty (default) → the UI gets NO
+# dataplane key, i.e. it can't read the authenticated API and the UI login is
+# open behind the ip-allowlist. Set it to e.g. "admin" to point the UI at that
+# tenant. Override hindsight_cp_access_key to use a different UI-login password.
+hindsight_cp_tenant: ""
+hindsight_cp_dataplane_key: >-
+  {{ (hindsight_tenant_keymap | dict2items
+        | selectattr('value', 'equalto', hindsight_cp_tenant)
+        | map(attribute='key') | first) | default('', true) }}
+hindsight_cp_access_key: "{{ hindsight_cp_dataplane_key }}"

@@ -22,7 +22,7 @@
 # ============================================================================
 # PostgreSQL database check/create (idempotent) + pgvector
 # ============================================================================
-# The init-script 6_createdb_hindsight.sh (kubectlstuff_postgresql.yml) only runs
+# The init-script 6_createdb_hindsight.sh (postgresql.yml) only runs
 # on a fresh PG data dir. For existing clusters we ensure the role, DB and the
 # pgvector extension exist at runtime — same pattern as honcho. Hindsight keeps
 # its embeddings in this DB (VECTOR_EXTENSION=pgvector), hence CREATE EXTENSION.

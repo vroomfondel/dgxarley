@@ -1,4 +1,14 @@
 ---
+# openwebui (+ pipelines) live in the openwebui namespace. This namespace used
+# to be created by roles/k8s_dgx/tasks/namespace.yml; now that openwebui moved
+# to the k8s_infra role it creates its own namespace here.
+- name: Create openwebui namespace
+  kubernetes.core.k8s:
+    name: "{{ openwebui_namespace }}"
+    api_version: v1
+    kind: Namespace
+    state: present
+
 # --- PostgreSQL password lookup ---
 
 - name: Get openwebui database password from postgresql-secrets

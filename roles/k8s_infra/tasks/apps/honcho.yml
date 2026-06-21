@@ -16,7 +16,7 @@
 # ============================================================================
 # PostgreSQL database check/create (idempotent) + pgvector
 # ============================================================================
-# The init-script 5_createdb_honcho.sh (kubectlstuff_postgresql.yml) only runs
+# The init-script 5_createdb_honcho.sh (postgresql.yml) only runs
 # on a fresh PG data dir. For existing clusters we ensure the honcho role, DB
 # and the pgvector extension exist at runtime — same pattern as litellm, with
 # the added CREATE EXTENSION because Honcho keeps its embeddings in this DB.

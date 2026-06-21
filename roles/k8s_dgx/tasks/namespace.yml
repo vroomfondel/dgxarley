@@ -10,4 +10,5 @@
   loop:
     - "{{ sglang_namespace }}"
     - "{{ vllm_namespace }}"
-    - "{{ openwebui_namespace }}"
+    # openwebui_namespace moved to the k8s_infra role (apps/openwebui.yml
+    # creates the openwebui namespace itself now).

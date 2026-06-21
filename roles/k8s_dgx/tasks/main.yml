@@ -40,10 +40,6 @@
   ansible.builtin.import_tasks: multus.yml
   tags: multus
 
-- name: Deploy SearXNG
-  ansible.builtin.import_tasks: searxng.yml
-  tags: searxng
-
 - name: Deploy SGLang distributed inference
   ansible.builtin.import_tasks: sglang.yml
   tags: sglang
@@ -60,27 +56,9 @@
   ansible.builtin.import_tasks: docling.yml
   tags: docling
 
-- name: Deploy Open WebUI
-  ansible.builtin.import_tasks: openwebui.yml
-  tags: openwebui
-
-- name: Deploy Pipelines
-  ansible.builtin.import_tasks: pipelines.yml
-  tags: pipelines
-
-
-
 - name: Deploy LiteLLM proxy
   ansible.builtin.import_tasks: litellm.yml
   tags: litellm
-
-- name: Deploy Honcho AI memory backend
-  ansible.builtin.import_tasks: honcho.yml
-  tags: honcho
-
-- name: Deploy Hindsight agent memory backend
-  ansible.builtin.import_tasks: hindsight.yml
-  tags: hindsight
 
 - name: Deploy ComfyUI image generation playground
   ansible.builtin.import_tasks: comfyui.yml
@@ -123,10 +101,6 @@
   tags:
     - nccl_test
     - never
-
-- name: Deploy per-user Nous Hermes agents (agent + optional webui sidecar)
-  ansible.builtin.import_tasks: hermes.yml
-  tags: hermes
 
 - name: QSFP SR-IOV NCCL all_reduce benchmark (legacy 2-node)
   ansible.builtin.import_tasks: qsfp_nccl_test.yml

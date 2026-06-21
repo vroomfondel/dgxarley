@@ -23,6 +23,7 @@
         LITELLM_POSTGRES_PASSWORD: "{{ postgresql_litellm_password }}"
         HONCHO_POSTGRES_PASSWORD: "{{ postgresql_honcho_password }}"
         HINDSIGHT_POSTGRES_PASSWORD: "{{ postgresql_hindsight_password }}"
+        FORGEJO_POSTGRES_PASSWORD: "{{ postgresql_forgejo_password }}"
 
 
 - name: Create postgresql service
@@ -218,6 +219,22 @@
           # existing clusters by roles/k8s_dgx/tasks/hindsight.yml (k8s_exec block).
           psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "hindsight" <<-EOSQL
           	CREATE EXTENSION IF NOT EXISTS vector;
+          EOSQL
+
+          echo $0 done
+
+        7_createdb_forgejo.sh: |
+          #!/bin/bash
+          export TZ='Europe/Berlin'
+          export FORGEJO_POSTGRES_PASSWORD=${FORGEJO_POSTGRES_PASSWORD:-${POSTGRES_PASSWORD}}
+
+          # Plain relational DB — Forgejo needs no pgvector. Mirrored at runtime
+          # for existing clusters by roles/k8s_infra/tasks/databases/forgejo.yml
+          # (k8s_exec block).
+          psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+          	CREATE USER forgejo WITH PASSWORD '$FORGEJO_POSTGRES_PASSWORD';
+          	CREATE DATABASE forgejo owner forgejo;
+          	GRANT ALL PRIVILEGES ON DATABASE forgejo TO forgejo;
           EOSQL
 
           echo $0 done

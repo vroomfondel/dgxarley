@@ -147,7 +147,7 @@
 
 # coredns-extend.yaml removed: CoreDNS is a flat Addon, not a HelmChart.
 # HelmChartConfig has no effect. Replicas are managed via k8s_infra role
-# (kubectlstuff_coredns.yml), anti-affinity is upstream topologySpreadConstraints.
+# (coredns.yml), anti-affinity is upstream topologySpreadConstraints.
 
 - name: slurp node-token from k3s-master
   slurp:

@@ -121,6 +121,7 @@ postgresql_openwebui_password: "changeme"
 postgresql_litellm_password: "changeme"
 postgresql_honcho_password: "changeme"
 postgresql_hindsight_password: "changeme"
+postgresql_forgejo_password: "changeme"
 
 # Honcho (AI memory backend) — dummy values; override the real ones in
 # group_vars/all/vault.yml. honcho_jwt_secret signs the API's bearer JWTs
@@ -215,6 +216,37 @@ seafile:
     server:    { memory_request: "512Mi", memory_limit: "2Gi" }
     mariadb:   { memory_request: "256Mi", memory_limit: "1Gi" }
     memcached: { memory_limit: "128Mi" }
+
+# Forgejo (Gitea fork) — dummy values; real secrets in group_vars/all/vault.yml.
+# hash_behaviour=replace: vault.yml's `forgejo:` overrides this entirely, so the
+# operational keys are duplicated. Keep in sync with vault.yml and
+# roles/k8s_infra/defaults/main.yml. DB password = postgresql_forgejo_password.
+# secret_key/internal_token/*_jwt_secret are Forgejo's symmetric keys (generate
+# with `forgejo generate secret <NAME>` or `openssl rand -hex 32`); rotating them
+# loses all encrypted data (2FA/OAuth/sessions). admin is bootstrapped once.
+forgejo:
+  data_base: "/mnt/nfs/forgejo-data"
+  namespace: "forgejo"
+  hostname: "forgejo.{{ dns_external_domain_suffix }}"
+  time_zone: "Europe/Berlin"
+  app_name: "Forgejo"
+  uid: 1000
+  gid: 1000
+  disable_ssh: true
+  disable_registration: true
+  trusted_proxies: "10.68.0.0/16,10.69.0.0/16"
+  secret_key: "CHANGEME_SECRET_KEY"
+  internal_token: "CHANGEME_INTERNAL_TOKEN"
+  oauth2_jwt_secret: "CHANGEME_OAUTH2_JWT"
+  lfs_jwt_secret: "CHANGEME_LFS_JWT"
+  admin:
+    username: "admin"
+    email: "admin@example.com"
+    password: "changeme"
+  images:
+    server: { repo: "codeberg.org/forgejo/forgejo", tag: "15.0.3" }
+  resources:
+    server: { memory_request: "256Mi", memory_limit: "1Gi" }
 
 # Keel
 keel_basic_auth_password: "changeme"
@@ -331,3 +363,104 @@ hermes_users:
       check_for_updates: true          # "Check for updates"            (upstream: true)
       whats_new_summary_enabled: false # "Summarize What's New with AI" (upstream: false)
     enabled: false
+
+# ============================================================================
+# Cluster-wide service coordinates (shared between the k8s_dgx and k8s_infra
+# roles)
+# ----------------------------------------------------------------------------
+# These namespaces / ports / model selectors are referenced by BOTH the
+# inference layer (k8s_dgx: sglang, vllm, ollama, litellm, docling) AND the
+# app/infra layer (k8s_infra: openwebui, pipelines, searxng, honcho, hindsight,
+# hermes). Since k8s_dgx.yml and k8s_infra.yml are SEPARATE playbook runs, role
+# defaults do NOT cross over — so the shared coordinates live here in
+# group_vars/all where both roles resolve them. (traefik_internal_allowlist is
+# defined further up; default_sglang_image / sglang_nnodes stay in
+# roles/k8s_dgx/defaults as they're only used by the inference layer.)
+# ============================================================================
+
+# --- SGLang coordinates ---
+sglang_namespace: "sglang"
+sglang_port: 8000
+# Select the active model — parameters are pulled from sglang_model_profiles
+# Sorted by model family; exactly ONE line uncommented = the active model.
+#
+# --- DeepSeek-V4 ---
+sglang_model: "nvidia/DeepSeek-V4-Flash-NVFP4"                 # 284B/13B MoE, NVFP4 experts + FP8 base, 1M ctx — ~42 GB/GPU TP4; needs SGLang #25820 + v0.5.13 sm121 image
+# sglang_model: "nvidia/DeepSeek-V4-Pro-NVFP4"                   # 1.6T/49B MoE, NVFP4 experts + FP8 base — STAGING ONLY, does NOT fit on 4× GB10 (~225 GB/GPU TP4)
+#
+# --- Gemma-4 ---
+# sglang_model: "nvidia/Gemma-4-31B-IT-NVFP4"                        # 30.7B dense NVFP4, multimodal, 256K ctx (FROZEN_KV_MTP debug)
+# sglang_model: "google/gemma-4-31B-it"                          # 30.7B dense BF16, multimodal, 256K ctx
+#sglang_model: "nvidia/Gemma-4-26B-A4B-NVFP4"                   # 26B/3.8B-active MoE NVFP4, multimodal, 256K ctx
+# sglang_model: "google/gemma-4-26B-A4B-it"                      # 26B/3.8B-active MoE BF16, multimodal, 256K ctx
+# sglang_model: "nvidia/diffusiongemma-26B-A4B-it-NVFP4"         # 26B/3.8B MoE NVFP4, DISCRETE-DIFFUSION (dLLM Gemma4Renoise) — pins 0.5.14-gemmadiffusion image
+# sglang_model: "google/diffusiongemma-26B-A4B-it"              # 26B/3.8B MoE BF16, DISCRETE-DIFFUSION (dLLM Gemma4Renoise) — NVFP4 isolation smoke-test, pins 0.5.14-gemmadiffusion image
+#
+# --- GLM ---
+# sglang_model: "zai-org/GLM-4.7-FP8"
+# sglang_model: "nvidia/GLM-4.7-NVFP4"
+# sglang_model: "nvidia/GLM-5-NVFP4"
+#
+# --- MiniMax ---
+# sglang_model: "nvidia/MiniMax-M2.5-NVFP4"
+# sglang_model: "nvidia/MiniMax-M2.7-NVFP4"
+# sglang_model: "sparkarena/Minimax-M3-v0-NVFP4"
+#
+# --- Mistral (NVFP4; reasoning OFF by default, per-request reasoning_effort=high) ---
+# sglang_model: "RecViking/Mistral-Medium-3.5-128B-NVFP4"        # 128B DENSE, multimodal, HF-format → ~20 GB/GPU TP4 (easy fit). EAGLE-MTP pre-staged/off
+# sglang_model: "mistralai/Mistral-Large-3-675B-Instruct-2512-NVFP4"  # 675B MLA-MoE, multimodal, mistral-NATIVE (name-loaded) → ~101 GB/GPU TP4 (TIGHT, start ctx 64K)
+#
+# --- Nemotron-3 ---
+# sglang_model: "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
+# sglang_model: "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4"
+#
+# --- Qwen3 ---
+# sglang_model: "nvidia/Qwen3-235B-A22B-NVFP4"
+# sglang_model: "QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ"
+# sglang_model: "QuantTrio/Qwen3-235B-A22B-Thinking-2507-AWQ"
+# sglang_model: "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
+# sglang_model: "Qwen/Qwen3-Next-80B-A3B-Instruct-FP8"
+# --- Qwen3.5 ---
+# sglang_model: "Qwen/Qwen3.5-35B-A3B-FP8"
+# sglang_model: "Qwen/Qwen3.5-122B-A10B-FP8"
+# sglang_model: "nvidia/Qwen3.5-122B-A10B-NVFP4"
+# sglang_model: "nvidia/Qwen3.5-397B-A17B-NVFP4"
+# --- Qwen3.6 ---
+# sglang_model: "Qwen/Qwen3.6-27B-FP8"
+# sglang_model: "Qwen/Qwen3.6-35B-A3B-FP8"
+# sglang_model: "RedHatAI/Qwen3.6-35B-A3B-NVFP4"
+
+# --- LiteLLM coordinates ---
+litellm_namespace: "litellm"
+litellm_port: 4000
+# Stable LiteLLM alias for Hermes (and any other client that needs a session-
+# durable model name). Routes to whatever SGLang currently serves.
+litellm_hermes_alias_model: "hermes-default"
+
+# --- Ollama embedding coordinates ---
+ollama_port: 11434
+# Active ollama embedding model — parameters pulled from ollama_embed_model_profiles
+#ollama_embed_model: "bge-m3"
+ollama_embed_model: "qwen3-embedding:4b-q8_0"
+# Ollama embedding model profiles
+ollama_embed_model_profiles:
+  "qwen3-embedding:4b-q8_0":
+    info_url: "https://ollama.com/library/qwen3-embedding"
+    # Qwen3-Embedding-4B q8_0 (~4.3 GB). Native 2560-dim (set
+    # honcho_embedding_dimensions: 2560 to match), Qwen3 decoder w/ last-token
+    # pooling, multilingual + code, up to 32K context. q8_0 ≈ fp16 quality for
+    # embeddings at ~half the VRAM. NOTE :latest = 8B (4096-dim) — always pin
+    # the explicit tag here. 0.6b alternative: "qwen3-embedding:0.6b-fp16" (1024-dim).
+    context_length: 32768
+  # Previous default — BAAI BGE-M3 multilingual embedding (~1.2 GB), 1024-dim,
+  # XLM-RoBERTa. Kept as a fallback profile; switch ollama_embed_model back to
+  # "bge-m3" to restore. (Note: bge-m3 hits sglang#7590 on Blackwell, but works
+  # fine under Ollama.)
+  "bge-m3":
+    info_url: "https://ollama.com/library/bge-m3"
+    context_length: 8192
+ollama_embedding_model: "{{ ollama_embed_model }}"
+ollama_embedding_model_max_ctx: "{{ ollama_embed_model_profiles[ollama_embed_model].context_length }}"
+
+# --- Docling coordinate ---
+docling_port: 5001
