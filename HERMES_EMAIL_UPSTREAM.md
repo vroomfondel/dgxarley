@@ -138,7 +138,7 @@ The `env -u VIRTUAL_ENV` prefix is required because the parent shell's
 
 ### When upstream merges one of our PRs
 
-1. Bump `hermes_image_tag` in `roles/k8s_dgx/defaults/main.yml` to a
+1. Bump `hermes.image_tag` in `roles/k8s_dgx/defaults/main.yml` to a
    release tag that contains the merge.
 2. Remove the corresponding `[PATCH-N]` section(s) from
    `roles/k8s_dgx/files/hermes_email_gateway_patched.py`. The
@@ -149,7 +149,7 @@ The `env -u VIRTUAL_ENV` prefix is required because the parent shell's
    trim the `email.*_folder` / `email.process_existing` fields back to
    plain env values in the secret.
 
-### When `hermes_image_tag` is bumped before a PR merges
+### When `hermes.image_tag` is bumped before a PR merges
 
 > **2026-05-31 check:** Latest upstream release is now **v2026.5.29.2 (v0.15.2)**.
 > `gateway/platforms/email.py` blob SHA is still `0fffb82…` (the same commit as
@@ -159,10 +159,10 @@ The `env -u VIRTUAL_ENV` prefix is required because the parent shell's
 > 163/NetEase mailbox` — but they live outside `gateway/platforms/email.py`, so
 > the blob SHA is unchanged and the patch stays clean.) All three PRs (#28697,
 > #28699, #28702) are still open/unmerged (last activity 2026-05-19). The repo
-> is still pinned at `hermes_image_tag: v2026.5.16` — if bumping to v2026.5.29.2,
+> is still pinned at `hermes.image_tag: v2026.5.16` — if bumping to v2026.5.29.2,
 > re-check the email.py SHA at that tag first.
 
-> **2026-06-08 check:** Repo is now pinned at `hermes_image_tag: v2026.6.5`
+> **2026-06-08 check:** Repo is now pinned at `hermes.image_tag: v2026.6.5`
 > (**v0.16.0**, released 2026-06-06). `gateway/platforms/email.py` is still
 > **byte-identical** across `v2026.5.16 .. v2026.6.5` and `main` (blob SHA
 > `0fffb82d0b949820c380019de646a46a0a6de678`, md5 `318ae8f3e6d4b26718784e0c94bf8458`,
@@ -189,7 +189,7 @@ The `env -u VIRTUAL_ENV` prefix is required because the parent shell's
 >
 > **Gepinnte Version v2026.6.5 ist nicht betroffen** (Blob dort weiterhin
 > `0fffb82d`) — kein sofortiger Handlungsbedarf. Beim nächsten Bump von
-> `hermes_image_tag` auf einen Release, der `f03f161b` enthält, muss die
+> `hermes.image_tag` auf einen Release, der `f03f161b` enthält, muss die
 > neue DOCUMENT-Klassifizierung in
 > `roles/k8s_dgx/files/hermes_email_gateway_patched.py` eingearbeitet werden
 > (Schritt 2 der Re-Sync-Prozedur unten). Alle drei PRs (#28697, #28699,
@@ -229,7 +229,7 @@ The `env -u VIRTUAL_ENV` prefix is required because the parent shell's
 > `v2026.6.19` (2026-06-19) carries the divergence flagged on 06-12/06-14.
 > `gateway/platforms/email.py` is now blob `d2f7e64a` (md5
 > `a3f7dc61f40388bf806481b189b48e00`, 32908 bytes; +3811 vs `0fffb82d`).
-> `hermes_image_tag` bumped `v2026.6.5` → `v2026.6.19`, and the patch in
+> `hermes.image_tag` bumped `v2026.6.5` → `v2026.6.19`, and the patch in
 > `roles/k8s_dgx/files/hermes_email_gateway_patched.py` was re-synced against
 > the new baseline. Folded-in upstream changes (all upstream-only, none
 > collided with a `[PATCH-N]` section):

@@ -3,7 +3,7 @@
 A custom Hermes `ImageGenProvider` that routes the `image_generate` tool to our
 in-cluster **ComfyUI** (FLUX.1-schnell) instead of a cloud provider
 (FAL / OpenAI / xAI). Written against the `agent.image_gen_provider` interface
-of `nousresearch/hermes-agent` (pinned tag in `hermes_image_tag`).
+of `nousresearch/hermes-agent` (pinned tag in `hermes.image_tag`).
 
 ## STATUS: created but DISABLED
 
@@ -70,7 +70,7 @@ Cross-namespace `hermes` → `comfyui` over ClusterIP DNS needs no extra wiring.
 
 ## Re-sync note
 
-`agent.image_gen_provider` is upstream API. If you bump `hermes_image_tag`,
+`agent.image_gen_provider` is upstream API. If you bump `hermes.image_tag`,
 re-check the base class (`generate()` signature, `success_response` /
 `save_url_image` helpers, `register(ctx)` contract) against the new tag and
 re-apply any drift here. Reference siblings: `plugins/image_gen/{openai,xai,fal}`

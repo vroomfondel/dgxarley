@@ -4,7 +4,7 @@
 
 > **Update 2026-06-22 — pinned image is now `v2026.6.19` (v0.17.0); the
 > version references in the older blocks below (v2026.6.5 / v2026.5.16) are
-> STALE.** `hermes_image_tag` in `roles/k8s_infra/defaults/main.yml` is
+> STALE.** `hermes.image_tag` in `roles/k8s_infra/defaults/main.yml` is
 > **`v2026.6.19`** (verified in-repo), i.e. **v0.17.0**, currently the latest
 > upstream release (published 2026-06-19). Consequences:
 > - **`--tui` removal (PR #38591, merged 2026-06-04, shipped v0.16.0 /
@@ -25,7 +25,7 @@
 >    (merged 2026-06-04, shipped in **v0.16.0 / v2026.6.5**) removed the
 >    `--tui` flag from `hermes dashboard`. Passing it now aborts with
 >    `unrecognized arguments: --tui` → pod crash-loop. This repo's
->    `hermes_image_tag` is now **`v2026.6.5`**, so any user with
+>    `hermes.image_tag` is now **`v2026.6.5`**, so any user with
 >    `dashboard_tui: true` in vault would crash-loop. **Fixed in
 >    `hermes_agent_deployment.yaml.j2`**: the template no longer emits `--tui`
 >    (the `dashboard_tui` gate is now a documented no-op until an upstream
@@ -48,8 +48,8 @@
 > $INSTALL_DIR/node_modules` **after** the `usermod` UID remap — exactly the
 > "condition (a)" this doc was waiting for (entrypoint-level chown after
 > remap). **Practical consequence:** the `copy-ui-tui` initContainer can be
-> dropped **once `hermes_image_tag` is bumped to v2026.5.28+**. The repo is
-> currently still pinned at `hermes_image_tag: "v2026.5.16"` (v0.14.0), which
+> dropped **once `hermes.image_tag` is bumped to v2026.5.28+**. The repo is
+> currently still pinned at `hermes.image_tag: "v2026.5.16"` (v0.14.0), which
 > does NOT contain #33045, so the initContainer remains mandatory for now.
 > Latest upstream release is **v2026.5.29.2 / v0.15.2** (2026-05-29).
 > Trigger 2 (workspace-link entries) is structurally neutralised at build time
@@ -80,7 +80,7 @@
   (2026-05-07T13:17 UTC) and 3 days after PR #19520 (2026-05-04). Both fixes are
   in this tag. **Current latest release: v2026.5.29.2 / v0.15.2 (2026-05-29)** (re-checked 2026-05-31).
   Note: **PR #33045 (entrypoint chown after UID remap) merged 2026-05-27, in v0.15.0 / v2026.5.28** —
-  see the Status update at the top; once we bump `hermes_image_tag` to v2026.5.28+ the initContainer
+  see the Status update at the top; once we bump `hermes.image_tag` to v2026.5.28+ the initContainer
   is removable. Trigger 2 (workspace-link entries) is **still not fixed in the reinstall logic** in v0.15.x — only
   Trigger 1 is fixed by #19520; no follow-up issue specifically for Trigger 2 has been
   filed (two adjacent open issues #20739 and #25351 cover other TUI chat-tab bugs, not
@@ -212,7 +212,7 @@ reinstall never fires.
 > 2026-05-27, in v0.15.0 / v2026.5.28) adds exactly `chown -R hermes:hermes
 > $INSTALL_DIR/ui-tui $INSTALL_DIR/node_modules` to `docker/stage2-hook.sh`
 > **after** the UID remap. So on v2026.5.28+ the initContainer is removable.
-> We are still pinned at `hermes_image_tag: "v2026.5.16"` (v0.14.0), so it
+> We are still pinned at `hermes.image_tag: "v2026.5.16"` (v0.14.0), so it
 > stays mandatory until that bump. The deployment comment "only chowns
 > $HERMES_HOME, not /opt/hermes/" is correct for v0.14.0 but will be stale
 > once we move to v0.15.0+.
@@ -291,7 +291,7 @@ small (~50 MB) and the node has fast local storage.
   — merged 2026-05-27, shipped in **v0.15.0 / v2026.5.28**. Adds
   `chown -R hermes:hermes $INSTALL_DIR/ui-tui $INSTALL_DIR/node_modules` to
   `docker/stage2-hook.sh` **after** the UID remap → satisfies condition (a).
-  `copy-ui-tui` initContainer becomes removable once `hermes_image_tag` ≥ v2026.5.28.
+  `copy-ui-tui` initContainer becomes removable once `hermes.image_tag` ≥ v2026.5.28.
 - Our Trigger 2 report (workspace-link entries) posted 2026-05-04 as
   comment on #18800:
   [#issuecomment-4371280956](https://github.com/NousResearch/hermes-agent/issues/18800#issuecomment-4371280956).
@@ -314,7 +314,7 @@ small (~50 MB) and the node has fast local storage.
 
 ## Action Items
 
-> **2026-06-11 — NOW ACTIONABLE.** `hermes_image_tag` is pinned to
+> **2026-06-11 — NOW ACTIONABLE.** `hermes.image_tag` is pinned to
 > **v2026.6.5**, which contains **both** PR #33045 (entrypoint chowns
 > `$INSTALL_DIR/ui-tui` + `node_modules` after UID remap, merged 2026-05-27,
 > shipped v0.15.0) **and** the build-time `npm_config_install_links=false`
