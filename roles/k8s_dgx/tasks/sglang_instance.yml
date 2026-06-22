@@ -520,6 +520,12 @@
             labels:
               app: "{{ inst.prefix }}"
               role: head
+              # Instance name (sglang_instances key, default "default"). Flows to
+              # the scraped /metrics series as the `sglang_instance` label via the
+              # kubernetes-pods labelmap → Grafana shows the instance NAME instead
+              # of the pod IP:port. NOT in selector.matchLabels (immutable), pod
+              # template only.
+              sglang_instance: "{{ _inst_key }}"
             annotations:
               k8s.v1.cni.cncf.io/networks: "{{ '[{\"name\":\"qsfp-vf' ~ qsfp_sriov_assignments[_sglang_active_sriov_key].vf ~ '\",\"ips\":[\"' ~ _sglang_qsfp_ips[0] ~ '/24\"]}]' if qsfp_sriov_enabled | default(false) else 'qsfp-direct' }}"
               kubectl.kubernetes.io/default-container: sglang
