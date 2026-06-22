@@ -1,6 +1,21 @@
 # NousResearch/hermes-agent Upstream Bug: Spurious npm install at every `dashboard --tui` launch breaks chat tab in non-root containers
 
-## Status (re-verified 2026-06-08)
+## Status (re-verified 2026-06-22)
+
+> **Update 2026-06-22 — pinned image is now `v2026.6.19` (v0.17.0); the
+> version references in the older blocks below (v2026.6.5 / v2026.5.16) are
+> STALE.** `hermes_image_tag` in `roles/k8s_infra/defaults/main.yml` is
+> **`v2026.6.19`** (verified in-repo), i.e. **v0.17.0**, currently the latest
+> upstream release (published 2026-06-19). Consequences:
+> - **`--tui` removal (PR #38591, merged 2026-06-04, shipped v0.16.0 /
+>   v2026.6.5) is fully active** in the pinned image — the deployment template
+>   must not emit `--tui` (it doesn't; `dashboard_tui` is a documented no-op).
+> - **Entrypoint chown (PR #33045, v0.15.0 / v2026.5.28)** and the build-time
+>   `npm_config_install_links=false` are both present in v2026.6.19, so the
+>   `copy-ui-tui` initContainer-removal action items (§1–4) remain **actionable
+>   but still pending** as of 2026-06-22 — not yet executed.
+> - Trigger 2 (workspace-link entries) still unfixed in the reinstall logic
+>   upstream; no follow-up issue filed (Action Item §5 still pending).
 
 > **Update 2026-06-08 — the `--tui` flag itself was REMOVED upstream, and the
 > repo is now pinned past the chown fix.** Two material changes since the
