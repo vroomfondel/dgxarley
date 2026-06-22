@@ -222,7 +222,14 @@ hermes_debug_default: false
 # /opt/data/.env. Off by default — needs IMAP/SMTP credentials per user, and
 # enabling it without those will just have the gateway log "no platforms
 # configured" and idle. Implies webui_enabled (sidecar lives in that pod).
-hermes_email_enabled_default: false
+hermes_email_enabled_default: true
+# Matrix gateway. When true (per-user via hermes_users[*].matrix.enabled), the
+# SAME hermes-gateway sidecar in the webui pod also serves Matrix — no extra
+# pod/process: `hermes gateway run` auto-starts every platform with creds in
+# /opt/data/.env. Pure-env (MATRIX_*), no source patch. E2EE deps (mautrix
+# [encryption], olm) ship in the agent image; the crypto store persists under
+# /opt/data (NFS) keyed by a stable MATRIX_DEVICE_ID. Off by default.
+hermes_matrix_enabled_default: false
 # Seafile-backed /workspace. When true: (1) the hermes role provisions a
 # Seafile user (using <hermes_users[*].email> + seafile.web_password) and a
 # `hermes-workspace` library via the Seafile REST API, (2) a seadrive FUSE
@@ -258,6 +265,21 @@ hermes_seadrive_image_tag: "latest"
 #               allow_all_users?, allowed_users?,
 #               skip_attachments?,
 #               cpu_limit?, memory_limit?
+#           },
+#           matrix?: {          (default disabled — omit block to skip)
+#               enabled,        (default hermes_matrix_enabled_default)
+#               homeserver,     (e.g. https://matrix.example.org)
+#               access_token?   OR  user_id? + password?  (both allowed;
+#                               access_token wins in matrix.py — user/pass is
+#                               the way to bootstrap a token on first login),
+#               device_id?      (default 'hermes-<username>', stable for E2EE),
+#               e2ee_mode?      (off|optional|required, default required),
+#               allowed_users?, allowed_rooms?,  (lists or comma strings)
+#               home_room?      (room for cron/notification delivery)
+#           },
+#           gateway?: {         (optional sidecar resource override; falls
+#               cpu_limit?,     back to email.cpu_limit/memory_limit, then
+#               memory_limit?   '500m'/'512Mi')
 #           },
 #           enabled }
 # Hostnames: <username>.hermes-dashboard.<dns> (original)  +  <username>.hermes.<dns> (webui)

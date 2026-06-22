@@ -344,6 +344,22 @@ hermes_users:
       process_existing: true           # true (default) → process pre-existing UNSEEN INBOX backlog on start. Rendered into config.yaml (platforms.email.extra.process_existing), not .env — mirrors upstream PR #28699
       cpu_limit: "500m"                # sidecar caps; defaults 500m / 512Mi
       memory_limit: "512Mi"
+    matrix:                            # omit block or set enabled:false to skip
+      enabled: false                   # true → same hermes-gateway sidecar also serves Matrix (no extra pod)
+      homeserver: "https://matrix.example.org"
+      access_token: "syt-REPLACE-OR-USE-USER-ID-AND-PASSWORD"  # access_token wins; OR set user_id + password instead
+      # user_id: "@hermes-example:example.org"   # alternative to access_token (bootstraps a token on first login)
+      # password: "matrix-account-password"
+      device_id: ""                    # "" → 'hermes-<username>' (stable across restarts for E2EE)
+      e2ee_mode: "required"            # off|optional|required — image ships mautrix[encryption]; crypto.db persists on /opt/data NFS
+      allowed_users:                   # who may trigger the agent (list or comma string)
+        - "@owner:example.org"
+      allowed_rooms:                   # rooms the bot responds in (list or comma string)
+        - "!roomid:example.org"
+      home_room: "!roomid:example.org" # room for cron/notification delivery
+    # gateway:                         # optional sidecar resource override (falls back to email.* then 500m/512Mi)
+    #   cpu_limit: "500m"
+    #   memory_limit: "512Mi"
     # Ops-managed overrides for the webui Preferences panel. Merged into
     # /opt/data/.webui/settings.json on every pod start — the keys listed
     # here ALWAYS win, any other keys the user has set via the UI

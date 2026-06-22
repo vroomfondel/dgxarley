@@ -24,3 +24,33 @@ EMAIL_ALLOWED_USERS={{ email.allowed_users | join(',') if email.allowed_users is
    roles/k8s_dgx/files/hermes_email_gateway_patched.py), mirroring upstream PRs
    #28697 / #28699 / #28702. #}
 {% endif %}
+{# Matrix gateway — read by `hermes gateway run` (platforms/matrix.py, mautrix
+   SDK). Pure-env, no source patch. Both auth methods are allowed: an
+   access_token takes precedence in matrix.py; user_id+password is the
+   alternative (and the way to bootstrap a token on first login). E2EE
+   (mautrix[encryption], present in the image) persists its crypto.db under
+   HERMES_HOME=/opt/data (NFS), keyed by the stable MATRIX_DEVICE_ID. #}
+{% set matrix = item.matrix | default({}) %}
+{% if matrix.get('enabled', hermes_matrix_enabled_default) %}
+MATRIX_HOMESERVER={{ matrix.homeserver }}
+{% if matrix.access_token is defined %}
+MATRIX_ACCESS_TOKEN={{ matrix.access_token }}
+{% endif %}
+{% if matrix.user_id is defined %}
+MATRIX_USER_ID={{ matrix.user_id }}
+{% endif %}
+{% if matrix.password is defined %}
+MATRIX_PASSWORD={{ matrix.password }}
+{% endif %}
+MATRIX_DEVICE_ID={{ matrix.device_id | default('hermes-' ~ item.username) }}
+MATRIX_E2EE_MODE={{ matrix.e2ee_mode | default('required') }}
+{% if matrix.allowed_users is defined %}
+MATRIX_ALLOWED_USERS={{ matrix.allowed_users | join(',') if matrix.allowed_users is iterable and matrix.allowed_users is not string else matrix.allowed_users }}
+{% endif %}
+{% if matrix.allowed_rooms is defined %}
+MATRIX_ALLOWED_ROOMS={{ matrix.allowed_rooms | join(',') if matrix.allowed_rooms is iterable and matrix.allowed_rooms is not string else matrix.allowed_rooms }}
+{% endif %}
+{% if matrix.home_room is defined %}
+MATRIX_HOME_ROOM={{ matrix.home_room }}
+{% endif %}
+{% endif %}

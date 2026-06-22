@@ -4,14 +4,23 @@
    The WebUI still spawns its own `hermes` subprocesses for chat/tools (see
    upstream limitation #681); the agent pod's running process is independent.
 
-   Optional `hermes-email` sidecar (gated on item.email.enabled): runs
-   `hermes gateway run` from the agent image to poll IMAP for incoming mail
-   and dispatch it through Hermes' messaging pipeline. Outbound mail goes
-   through tool-calls inside webui-spawned hermes subprocesses, which inherit
-   the same /opt/data/.env — no extra wiring needed.
+   Optional `hermes-gateway` sidecar (gated on _gateway_enabled = any platform
+   enabled): runs `hermes gateway run` from the agent image, which auto-starts
+   EVERY messaging platform whose credentials are present in /opt/data/.env —
+   one process serves Email (EMAIL_*) AND Matrix (MATRIX_*) etc. simultaneously.
+   Outbound mail/messages also work through tool-calls inside webui-spawned
+   hermes subprocesses, which inherit the same /opt/data/.env — no extra wiring.
 #}
 {%- set _email = item.email | default({}) -%}
 {%- set _email_enabled = _email.get('enabled', hermes_email_enabled_default) -%}
+{#- Matrix gateway gate (env-driven: MATRIX_* in .env, no source patch needed,
+    unlike email which overlays platforms/email.py). E2EE crypto store lives on
+    the /opt/data NFS subdir so device keys persist across restarts. -#}
+{%- set _matrix = item.matrix | default({}) -%}
+{%- set _matrix_enabled = _matrix.get('enabled', hermes_matrix_enabled_default) -%}
+{#- The gateway sidecar (+ state refresher) runs whenever ANY platform is on.
+    Extend this OR-chain when adding further platforms (telegram, slack, …). -#}
+{%- set _gateway_enabled = (_email_enabled or _matrix_enabled) -%}
 {#- /workspace gate: seadrive-mounted Seafile library vs NFS subdir hostPath.
     When enabled, the `files` volume becomes an emptyDir + a privileged
     seadrive FUSE sidecar bind-mounts the user's `hermes-workspace` lib onto
@@ -72,6 +81,8 @@ spec:
         # Auto-roll when the gateway/platforms/email.py patch changes —
         # subPath ConfigMap mounts don't surface updates without a pod restart.
         checksum/email-patch: "{{ lookup('file', 'hermes_email_gateway_patched.py') | hash('sha256') }}"
+{% endif %}
+{% if _gateway_enabled %}
         # Auto-roll when the gateway-state refresher script changes.
         checksum/gw-refresh:  "{{ lookup('file', 'hermes_gateway_state_refresher.py') | hash('sha256') }}"
 {% endif %}
@@ -83,11 +94,11 @@ spec:
 {% endif %}
     spec:
       restartPolicy: Always
-      # MUST stay false: the hermes-email sidecar runs the agent image's
+      # MUST stay false: the hermes-gateway sidecar runs the agent image's
       # s6-overlay /init entrypoint (since v2026.5.28), and s6-overlay-suexec
       # refuses to start unless it is PID 1 ("fatal: can only run as pid 1").
       # shareProcessNamespace makes the pause-container PID 1, so enabling it
-      # crashloops the email sidecar. The two are mutually exclusive; s6 wins
+      # crashloops the gateway sidecar. The two are mutually exclusive; s6 wins
       # (it performs the hermes-user drop), so PID-namespace sharing is OFF.
       #
       # Trade-off: this disables the #1879 cross-container gateway-liveness fix
@@ -382,19 +393,21 @@ spec:
               port: {{ hermes_webui_port }}
             initialDelaySeconds: 30
             periodSeconds: 10
-{% if _email_enabled %}
-        # Email gateway sidecar — polls IMAP and dispatches via SMTP using the
-        # EMAIL_* vars from /opt/data/.env (merged by the merge-config init).
-        # Uses the agent image because the `hermes` CLI lives there. The image's
-        # /init (s6-overlay since v2026.5.28) usermod's the baked-in `hermes`
-        # user to HERMES_UID/GID via cont-init, then main-wrapper.sh
+{% if _gateway_enabled %}
+        # Messaging-gateway sidecar — runs `hermes gateway run`, which auto-starts
+        # EVERY platform whose credentials are present in /opt/data/.env (merged
+        # by the merge-config init): Email (EMAIL_*, IMAP poll + SMTP dispatch),
+        # Matrix (MATRIX_*, sync loop + optional E2EE), etc. — one process, all
+        # platforms. Uses the agent image because the `hermes` CLI lives there.
+        # The image's /init (s6-overlay since v2026.5.28) usermod's the baked-in
+        # `hermes` user to HERMES_UID/GID via cont-init, then main-wrapper.sh
         # `s6-setuidgid hermes`-drops before exec'ing `hermes gateway run`
         # (pre-s6 this was the entrypoint + gosu). No HTTP port — the gateway
         # is daemon-only; rely on K8s restart-on-crash for liveness.
         # Shares /opt/data with the webui container so both see the same
-        # sessions/skills/.env. Outbound mail from webui-spawned hermes
-        # subprocesses also works via the same .env, no extra wiring needed.
-        - name: hermes-email
+        # sessions/skills/.env. Outbound mail/messages from webui-spawned hermes
+        # subprocesses also work via the same .env, no extra wiring needed.
+        - name: hermes-gateway
           image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes_image_tag) }}"
           imagePullPolicy: Always
           args:
@@ -426,8 +439,8 @@ spec:
               cpu: "20m"
               memory: "128Mi"
             limits:
-              cpu: "{{ item.email.cpu_limit | default('500m') }}"
-              memory: "{{ item.email.memory_limit | default('512Mi') }}"
+              cpu: "{{ item.gateway.cpu_limit | default(item.email.cpu_limit | default('500m')) }}"
+              memory: "{{ item.gateway.memory_limit | default(item.email.memory_limit | default('512Mi')) }}"
           volumeMounts:
             - name: data
               mountPath: /opt/data
@@ -439,6 +452,7 @@ spec:
             - name: files
               mountPath: /workspace
 {% endif %}
+{% if _email_enabled %}
             # dgxarley local patch — overlays the upstream gateway/platforms/
             # email.py with the version under
             # roles/k8s_dgx/files/hermes_email_gateway_patched.py.  Adds
@@ -447,18 +461,20 @@ spec:
             # subPath gives us a single-file bind mount — the rest of
             # /opt/hermes (venv, ui-tui, hooks, etc.) stays untouched from
             # the image. Pin: file content must match the upstream source
-            # of hermes_image_tag; re-sync on image bump.
+            # of hermes_image_tag; re-sync on image bump. Matrix needs no
+            # equivalent patch (pure-env platform), so it's gated on email only.
             - name: hermes-email-patch
               mountPath: /opt/hermes/gateway/platforms/email.py
               subPath: email.py
               readOnly: true
+{% endif %}
         # Gateway-status refresher — keeps the WebUI "Gateway configured" badge
-        # green WHILE the email gateway genuinely runs. The agent only writes
+        # green WHILE the gateway genuinely runs (any platform). The agent only writes
         # gateway_state.json on lifecycle changes, so its updated_at goes stale
         # within 120 s and the WebUI's freshness check (api/agent_health.py)
         # flips to "not configured". We can't use the upstream cross-container
         # os.kill(pid,0) liveness because shareProcessNamespace must stay false
-        # (s6 in the email sidecar needs PID 1). Instead this sidecar bumps
+        # (s6 in the gateway sidecar needs PID 1). Instead this sidecar bumps
         # updated_at periodically, gated on the SAME crash-safe flock the gateway
         # holds for its lifetime (kernel auto-releases it on OOM/SIGKILL → we
         # stop refreshing → badge correctly goes stale). command: overrides the
@@ -535,6 +551,8 @@ spec:
             items:
               - key: email.py
                 path: email.py
+{% endif %}
+{% if _gateway_enabled %}
         - name: hermes-gw-refresh
           configMap:
             name: hermes-gw-refresh
