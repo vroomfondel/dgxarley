@@ -58,6 +58,7 @@ from .openwebui_integration_test import (
     _dgx_defaults,
     get_random_xkcd_image,
     get_random_xkcd_image_url,
+    litellm_api_key,
     load_sampling_presets,
     pick_default_preset,
     print_ascii_representation_of_image,
@@ -321,7 +322,9 @@ def validate_model(sglang_url: str, model_id: str) -> None:
         SystemExit: If the server responds but does not serve ``model_id``.
     """
     try:
-        resp = httplib.get(f"{sglang_url.rstrip('/')}/v1/models", timeout=5)
+        _key = litellm_api_key()
+        _hdrs = {"Authorization": f"Bearer {_key}"} if _key else None
+        resp = httplib.get(f"{sglang_url.rstrip('/')}/v1/models", timeout=5, headers=_hdrs)
         resp.raise_for_status()
         data = resp.json().get("data", [])
         served_ids = [m.get("id", "") for m in data]
@@ -491,6 +494,7 @@ async def stream_request(
     payload: dict[str, object],
     stats: RequestStats,
     no_guard: str | None = None,
+    headers: dict[str, str] | None = None,
 ) -> None:
     """Stream a single chat completion and update a RequestStats object in-place.
 
@@ -512,6 +516,10 @@ async def stream_request(
             vary by request; heterogeneous values are typed as ``object``.
         stats: The :class:`RequestStats` instance to update throughout
             streaming. Modified in place.
+        headers: Request headers to send. When ``None``, only
+            ``Content-Type: application/json`` is sent (SGLang direct, no auth).
+            Pass a dict carrying ``Authorization: Bearer …`` to reach the
+            auth-gated LiteLLM proxy.
     """
     _skip_content = no_guard in ("content", "both")
     _skip_reasoning = no_guard in ("reasoning", "both")
@@ -526,7 +534,7 @@ async def stream_request(
         async with session.post(
             url,
             json=payload,
-            headers={"Content-Type": "application/json"},
+            headers=headers or {"Content-Type": "application/json"},
             timeout=aiohttp.ClientTimeout(total=1800, connect=10),
         ) as resp:
             if resp.status != 200:
@@ -1078,6 +1086,12 @@ async def run_parallel_test(
         payloads.append(payload)
 
     url = f"{sglang_url.rstrip('/')}/v1/chat/completions"
+    # Auth header for the LiteLLM proxy (LITELLM_API_KEY / OPENAI_API_KEY);
+    # absent → plain Content-Type, i.e. the keyless SGLang-direct case.
+    req_headers = {"Content-Type": "application/json"}
+    _key = litellm_api_key()
+    if _key:
+        req_headers["Authorization"] = f"Bearer {_key}"
     console = Console()
     if no_think:
         think_info = " | Thinking: OFF"
@@ -1119,7 +1133,10 @@ async def run_parallel_test(
 
     try:
         async with aiohttp.ClientSession() as session:
-            tasks = [stream_request(session, url, payloads[i], all_stats[i], no_guard=no_guard) for i in range(n)]
+            tasks = [
+                stream_request(session, url, payloads[i], all_stats[i], no_guard=no_guard, headers=req_headers)
+                for i in range(n)
+            ]
 
             # Live display updates while requests stream
             with Live(

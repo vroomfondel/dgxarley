@@ -736,13 +736,37 @@ class OpenWebUIClient(LLMClient):
 # ---------------------------------------------------------------------------
 
 
+def _use_litellm() -> bool:
+    """Return whether the LiteLLM proxy is selected via ``USE_LITELLM``."""
+    return os.environ.get("USE_LITELLM", "").lower() in ("1", "true", "yes")
+
+
+def litellm_api_key() -> str:
+    """Return the bearer token for the LiteLLM proxy, or an empty string.
+
+    Gated on ``USE_LITELLM``: the key is only returned when the LiteLLM proxy is
+    selected. This way the bearer is attached exclusively in proxy mode — a
+    stray ``OPENAI_API_KEY`` in the shell is never leaked to a directly-served
+    SGLang endpoint (which needs no auth and may log headers).
+
+    Read from ``LITELLM_API_KEY`` first, then ``OPENAI_API_KEY`` as a fallback
+    (the conventional OpenAI-compatible name). The LiteLLM proxy rejects keyless
+    requests with HTTP 401 — set ``LITELLM_API_KEY`` to the master/virtual key.
+    """
+    if not _use_litellm():
+        return ""
+    return os.environ.get("LITELLM_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
+
+
 class SGLangClient(LLMClient):
-    """LLM client speaking directly to the SGLang server (no auth, flattened extra_body).
+    """LLM client speaking to SGLang directly or via the LiteLLM proxy (flattened extra_body).
 
     SGLang expects SGLang-native keys (``top_k``, ``min_p``, etc.) and
     ``chat_template_kwargs`` as top-level fields in the JSON body rather than
     nested under ``extra_body``.  This client flattens the ``extra_body`` dict
-    before sending.
+    before sending. When ``LITELLM_API_KEY`` (or ``OPENAI_API_KEY``) is set, a
+    ``Bearer`` token is attached so the same client works behind the
+    auth-gated LiteLLM proxy; SGLang direct simply ignores it.
     """
 
     def _endpoint(self) -> str:
@@ -792,6 +816,20 @@ class SGLangClient(LLMClient):
         # SGLang does not support OpenWebUI features
         payload.pop("features", None)
         return payload
+
+    def _headers(self) -> dict[str, str]:
+        """Return request headers, attaching a Bearer token when one is configured.
+
+        SGLang served directly needs no auth; the LiteLLM proxy does. The key is
+        read from ``LITELLM_API_KEY`` / ``OPENAI_API_KEY`` via
+        :func:`litellm_api_key`. When unset, only ``Content-Type`` is sent
+        (the SGLang-direct case, unchanged behaviour).
+        """
+        headers = {"Content-Type": "application/json"}
+        key = litellm_api_key()
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        return headers
 
 
 # ---------------------------------------------------------------------------
