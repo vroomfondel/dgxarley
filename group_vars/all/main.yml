@@ -314,7 +314,7 @@ hermes_users:
     uid: 1500
     gid: 1500
     litellm_token: "sk-REPLACE-WITH-PER-USER-LITELLM-VIRTUAL-KEY"
-    litellm_model: ""                  # empty → falls back to hermes_default_model
+    litellm_model: ""                  # empty → falls back to hermes.default_model
     basicauth_password: "changeme"     # defaults to litellm_token if unset
     webui_password: "changeme"         # defaults to basicauth_password if unset
     dashboard_enabled: false
