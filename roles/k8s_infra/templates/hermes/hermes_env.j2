@@ -1,7 +1,7 @@
 OPENAI_API_KEY={{ item.litellm_token }}
 SEARXNG_URL={{ hermes_searxng_url | default('http://searxng.searxng.svc.cluster.local:' ~ searxng_port) }}
 {% set email = item.email | default({}) %}
-{% if email.get('enabled', hermes_email_enabled_default) %}
+{% if email.get('enabled', hermes.email.enabled_default) %}
 EMAIL_ADDRESS={{ email.address }}
 EMAIL_PASSWORD={{ email.password }}
 EMAIL_IMAP_HOST={{ email.imap_host }}
@@ -31,7 +31,7 @@ EMAIL_ALLOWED_USERS={{ email.allowed_users | join(',') if email.allowed_users is
    (mautrix[encryption], present in the image) persists its crypto.db under
    HERMES_HOME=/opt/data (NFS), keyed by the stable MATRIX_DEVICE_ID. #}
 {% set matrix = item.matrix | default({}) %}
-{% if matrix.get('enabled', hermes_matrix_enabled_default) %}
+{% if matrix.get('enabled', hermes.matrix.enabled_default) %}
 MATRIX_HOMESERVER={{ matrix.homeserver }}
 {% if matrix.access_token is defined %}
 MATRIX_ACCESS_TOKEN={{ matrix.access_token }}

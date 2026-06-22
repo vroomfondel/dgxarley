@@ -6,7 +6,7 @@
      including WebSocket upgrades and EventSource — that's the whole reason
      we switched away from oauth2-proxy.
    - `flush_interval -1` is required so SSE responses aren't buffered.
-   - Listens cleartext on hermes_agent_proxy_port; Traefik in front terminates TLS.
+   - Listens cleartext on hermes.agent.proxy_port; Traefik in front terminates TLS.
 #}
 {
     admin off
@@ -50,7 +50,7 @@
     }
 }
 
-:{{ hermes_agent_proxy_port }} {
+:{{ hermes.agent.proxy_port }} {
     log {
         output stdout
         format console

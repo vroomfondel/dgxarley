@@ -12,12 +12,12 @@
    hermes subprocesses, which inherit the same /opt/data/.env — no extra wiring.
 #}
 {%- set _email = item.email | default({}) -%}
-{%- set _email_enabled = _email.get('enabled', hermes_email_enabled_default) -%}
+{%- set _email_enabled = _email.get('enabled', hermes.email.enabled_default) -%}
 {#- Matrix gateway gate (env-driven: MATRIX_* in .env, no source patch needed,
     unlike email which overlays platforms/email.py). E2EE crypto store lives on
     the /opt/data NFS subdir so device keys persist across restarts. -#}
 {%- set _matrix = item.matrix | default({}) -%}
-{%- set _matrix_enabled = _matrix.get('enabled', hermes_matrix_enabled_default) -%}
+{%- set _matrix_enabled = _matrix.get('enabled', hermes.matrix.enabled_default) -%}
 {#- The gateway sidecar (+ state refresher) runs whenever ANY platform is on.
     Extend this OR-chain when adding further platforms (telegram, slack, …). -#}
 {%- set _gateway_enabled = (_email_enabled or _matrix_enabled) -%}
@@ -26,12 +26,12 @@
     seadrive FUSE sidecar bind-mounts the user's `hermes-workspace` lib onto
     it. Per-user override via item.seafile.workspace_enabled. -#}
 {%- set _seafile = item.seafile | default({}) -%}
-{%- set _seafile_workspace = (_seafile.get('workspace_enabled', hermes_seafile_workspace_enabled_default)) | bool -%}
+{%- set _seafile_workspace = (_seafile.get('workspace_enabled', hermes.seafile.workspace_enabled_default)) | bool -%}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: "hermes-webui-{{ item.username }}"
-  namespace: "{{ hermes_namespace }}"
+  namespace: "{{ hermes.namespace }}"
   labels:
     app: hermes
     hermes-component: webui
@@ -90,7 +90,7 @@ spec:
         # Auto-roll when the user's Seafile credentials change so the seadrive
         # sidecar picks them up; the hermes-seafile-<user> Secret is loaded
         # via envFrom and only re-read on container start.
-        checksum/seafile:     "{{ (hermes_seafile_server_url ~ '|' ~ (item.email.address | default('?')) ~ '|' ~ (item.seafile.web_password | default('none'))) | hash('sha256') }}"
+        checksum/seafile:     "{{ (hermes.seafile.server_url ~ '|' ~ (item.email.address | default('?')) ~ '|' ~ (item.seafile.web_password | default('none'))) | hash('sha256') }}"
 {% endif %}
     spec:
       restartPolicy: Always
@@ -142,7 +142,7 @@ spec:
           image: busybox:latest
           env:
             - name: TZ
-              value: "{{ hermes_timezone }}"
+              value: "{{ hermes.timezone }}"
           command:
             - sh
             - -c
@@ -174,13 +174,13 @@ spec:
         # ConfigMap/Secret. UID/GID via env; WEBUI_SETTINGS_B64 additionally
         # drives the WebUI settings.json merge (agent pod omits it).
         - name: merge-config
-          image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes_image_tag) }}"
+          image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes.image_tag) }}"
           command:
             - /opt/hermes/.venv/bin/python
             - /opt/merge-config/hermes_merge_config.py
           env:
             - name: TZ
-              value: "{{ hermes_timezone }}"
+              value: "{{ hermes.timezone }}"
             - name: MERGE_UID
               value: "{{ item.uid }}"
             - name: MERGE_GID
@@ -211,10 +211,10 @@ spec:
         # contained (no cross-pod volume coupling). The webui's docker_init.bash
         # then runs `uv pip install <agent-src>[all]` against this dir.
         - name: copy-agent-src
-          image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes_image_tag) }}"
+          image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes.image_tag) }}"
           env:
             - name: TZ
-              value: "{{ hermes_timezone }}"
+              value: "{{ hermes.timezone }}"
           command:
             - sh
             - -c
@@ -225,7 +225,7 @@ spec:
             # the System page shows "Agent: not detected" even though the
             # agent code is fully present and functional. Use the resolved
             # image tag as the version label.
-            - "cp -a /opt/hermes/. /agent-src/ && printf '%s\\n' '{{ item.image_tag | default(hermes_image_tag) }}' > /agent-src/VERSION && chown -R {{ item.uid }}:{{ item.gid }} /agent-src"
+            - "cp -a /opt/hermes/. /agent-src/ && printf '%s\\n' '{{ item.image_tag | default(hermes.image_tag) }}' > /agent-src/VERSION && chown -R {{ item.uid }}:{{ item.gid }} /agent-src"
           securityContext:
             runAsUser: 0
             runAsNonRoot: false
@@ -249,7 +249,7 @@ spec:
         #      hermes-email containers as their /workspace contents.
         #   5. wait on the seadrive process; preStop unmounts cleanly.
         - name: seadrive
-          image: "{{ hermes_seadrive_image }}:{{ hermes_seadrive_image_tag }}"
+          image: "{{ hermes.seadrive.image }}:{{ hermes.seadrive.image_tag }}"
           imagePullPolicy: IfNotPresent
           securityContext:
             privileged: true
@@ -260,13 +260,13 @@ spec:
                 name: "hermes-seafile-{{ item.username }}"
           env:
             - name: TZ
-              value: "{{ hermes_timezone }}"
+              value: "{{ hermes.timezone }}"
             - name: WANTED_UID
               value: "{{ item.uid }}"
             - name: WANTED_GID
               value: "{{ item.gid }}"
             - name: SEAFILE_LIBRARY_NAME
-              value: "{{ hermes_seafile_library_name }}"
+              value: "{{ hermes.seafile.library_name }}"
           # Entrypoint script is shared with the agent pod's identical seadrive
           # sidecar — roles/k8s_dgx/files/hermes_seadrive_start.sh (ConfigMap
           # hermes-seadrive, mounted at /opt/seadrive).
@@ -296,17 +296,17 @@ spec:
               memory: "512Mi"
 {% endif %}
         - name: hermes-webui
-          image: "{{ hermes_webui_image }}:{{ item.webui_image_tag | default(hermes_webui_image_tag) }}"
+          image: "{{ hermes.webui.image }}:{{ item.webui_image_tag | default(hermes.webui.image_tag) }}"
           imagePullPolicy: IfNotPresent
           env:
             # Render server-side timestamps ("Last active" in System Status) in
             # local time. The image defaults to UTC → 2h off CEST without this.
             - name: TZ
-              value: "{{ hermes_timezone }}"
+              value: "{{ hermes.timezone }}"
             - name: HERMES_WEBUI_HOST
               value: "0.0.0.0"
             - name: HERMES_WEBUI_PORT
-              value: "{{ hermes_webui_port }}"
+              value: "{{ hermes.webui.port }}"
             - name: HERMES_HOME
               value: "/opt/data"
             - name: HERMES_WEBUI_AGENT_DIR
@@ -337,7 +337,7 @@ spec:
             # one. Empty would let the WebUI fall back to whatever provider
             # defaults exist (often an OpenAI model that's unavailable here, #646).
             - name: HERMES_WEBUI_DEFAULT_MODEL
-              value: "{{ (item.litellm_model | default('')) or hermes_default_model }}"
+              value: "{{ (item.litellm_model | default('')) or hermes.default_model }}"
             - name: WANTED_UID
               value: "{{ item.uid }}"
             - name: WANTED_GID
@@ -348,7 +348,7 @@ spec:
                   name: "hermes-env-{{ item.username }}"
                   key: WEBUI_PASSWORD
           ports:
-            - containerPort: {{ hermes_webui_port }}
+            - containerPort: {{ hermes.webui.port }}
               name: webui
           resources:
             requests:
@@ -383,14 +383,14 @@ spec:
           livenessProbe:
             httpGet:
               path: /health
-              port: {{ hermes_webui_port }}
+              port: {{ hermes.webui.port }}
             initialDelaySeconds: 90
             periodSeconds: 30
             failureThreshold: 5
           readinessProbe:
             httpGet:
               path: /health
-              port: {{ hermes_webui_port }}
+              port: {{ hermes.webui.port }}
             initialDelaySeconds: 30
             periodSeconds: 10
 {% if _gateway_enabled %}
@@ -408,7 +408,7 @@ spec:
         # sessions/skills/.env. Outbound mail/messages from webui-spawned hermes
         # subprocesses also work via the same .env, no extra wiring needed.
         - name: hermes-gateway
-          image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes_image_tag) }}"
+          image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes.image_tag) }}"
           imagePullPolicy: Always
           args:
             - "gateway"
@@ -420,7 +420,7 @@ spec:
           env:
             # Local time for gateway timestamps/logs (image defaults to UTC).
             - name: TZ
-              value: "{{ hermes_timezone }}"
+              value: "{{ hermes.timezone }}"
             - name: HERMES_UID
               value: "{{ item.uid }}"
             - name: HERMES_GID
@@ -461,7 +461,7 @@ spec:
             # subPath gives us a single-file bind mount — the rest of
             # /opt/hermes (venv, ui-tui, hooks, etc.) stays untouched from
             # the image. Pin: file content must match the upstream source
-            # of hermes_image_tag; re-sync on image bump. Matrix needs no
+            # of hermes.image_tag; re-sync on image bump. Matrix needs no
             # equivalent patch (pure-env platform), so it's gated on email only.
             - name: hermes-email-patch
               mountPath: /opt/hermes/gateway/platforms/email.py
@@ -482,7 +482,7 @@ spec:
         # directly as the per-user uid and only touches uid-owned /opt/data).
         # Purely cosmetic: the IMAP/SMTP gateway itself is unaffected either way.
         - name: gateway-state-refresh
-          image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes_image_tag) }}"
+          image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes.image_tag) }}"
           imagePullPolicy: Always
           command:
             - /opt/hermes/.venv/bin/python
@@ -493,7 +493,7 @@ spec:
             runAsNonRoot: true
           env:
             - name: TZ
-              value: "{{ hermes_timezone }}"
+              value: "{{ hermes.timezone }}"
             - name: HERMES_HOME
               value: "/opt/data"
             - name: REFRESH_INTERVAL_S
@@ -515,7 +515,7 @@ spec:
       volumes:
         - name: data
           hostPath:
-            path: "{{ hermes_data_base }}/{{ item.username }}"
+            path: "{{ hermes.data_base }}/{{ item.username }}"
             type: DirectoryOrCreate
 {% if _seafile_workspace %}
         # /workspace is FUSE-managed by the seadrive sidecar; the emptyDir
@@ -530,7 +530,7 @@ spec:
         # NFS subdir isolation as the data volume.
         - name: files
           hostPath:
-            path: "{{ hermes_files_base }}/{{ item.username }}"
+            path: "{{ hermes.files_base }}/{{ item.username }}"
             type: DirectoryOrCreate
 {% endif %}
         - name: agent-src

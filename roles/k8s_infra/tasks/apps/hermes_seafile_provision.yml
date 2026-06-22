@@ -1,7 +1,7 @@
 ---
 # Provision per-user Seafile resources (account + library + API token) for
 # every hermes_users entry that has seafile.workspace_enabled = true (or
-# inherits from hermes_seafile_workspace_enabled_default).
+# inherits from hermes.seafile.workspace_enabled_default).
 #
 # Result: one K8s Secret `hermes-seafile-<username>` in the hermes namespace,
 # consumed later by the seadrive sidecar in the agent + webui Deployments.
@@ -11,7 +11,7 @@
 # Seafile tokens don't auto-expire and the same Secret is rewritten in place.
 #
 # Prereq: k8s_infra `seafile` tag has been applied and seafile-server is
-# reachable at hermes_seafile_server_url. If the server is unreachable we
+# reachable at hermes.seafile.server_url. If the server is unreachable we
 # fail loudly rather than silently skipping — provisioning failure must not
 # go undetected.
 
@@ -29,14 +29,14 @@
   when:
     - (item.email | default({})).address is defined
     - (item.seafile | default({})).web_password is defined
-    - ((item.seafile | default({})).workspace_enabled | default(hermes_seafile_workspace_enabled_default)) | bool
+    - ((item.seafile | default({})).workspace_enabled | default(hermes.seafile.workspace_enabled_default)) | bool
 
 - name: Provision Seafile users and libraries
   when: (_hermes_seafile_users | default([])) | length > 0
   block:
     - name: Obtain Seafile admin auth token
       ansible.builtin.uri:
-        url: "{{ hermes_seafile_server_url }}/api2/auth-token/"
+        url: "{{ hermes.seafile.server_url }}/api2/auth-token/"
         method: POST
         body_format: form-urlencoded
         body:
@@ -56,7 +56,7 @@
 
     - name: Check if Seafile account exists for each hermes user
       ansible.builtin.uri:
-        url: "{{ hermes_seafile_server_url }}/api2/accounts/{{ item.email.address }}/"
+        url: "{{ hermes.seafile.server_url }}/api2/accounts/{{ item.email.address }}/"
         method: GET
         headers:
           Authorization: "Token {{ _seafile_admin_token }}"
@@ -69,7 +69,7 @@
 
     - name: Create missing Seafile accounts
       ansible.builtin.uri:
-        url: "{{ hermes_seafile_server_url }}/api2/accounts/{{ item.item.email.address }}/"
+        url: "{{ hermes.seafile.server_url }}/api2/accounts/{{ item.item.email.address }}/"
         method: PUT
         headers:
           Authorization: "Token {{ _seafile_admin_token }}"
@@ -88,7 +88,7 @@
 
     - name: Obtain per-user Seafile auth token
       ansible.builtin.uri:
-        url: "{{ hermes_seafile_server_url }}/api2/auth-token/"
+        url: "{{ hermes.seafile.server_url }}/api2/auth-token/"
         method: POST
         body_format: form-urlencoded
         body:
@@ -105,7 +105,7 @@
 
     - name: List repos owned by each hermes user
       ansible.builtin.uri:
-        url: "{{ hermes_seafile_server_url }}/api2/repos/"
+        url: "{{ hermes.seafile.server_url }}/api2/repos/"
         method: GET
         headers:
           Authorization: "Token {{ item.json.token }}"
@@ -123,8 +123,8 @@
             'user': item.0.item,
             'token': item.0.json.token,
             'existing_repo_id': (
-              (item.1.json | selectattr('name', 'equalto', hermes_seafile_library_name) | list | first).id
-              if (item.1.json | selectattr('name', 'equalto', hermes_seafile_library_name) | list | length) > 0
+              (item.1.json | selectattr('name', 'equalto', hermes.seafile.library_name) | list | first).id
+              if (item.1.json | selectattr('name', 'equalto', hermes.seafile.library_name) | list | length) > 0
               else None
             )
           }] }}
@@ -135,13 +135,13 @@
 
     - name: Create missing hermes-workspace libraries
       ansible.builtin.uri:
-        url: "{{ hermes_seafile_server_url }}/api2/repos/"
+        url: "{{ hermes.seafile.server_url }}/api2/repos/"
         method: POST
         headers:
           Authorization: "Token {{ item.token }}"
         body_format: form-urlencoded
         body:
-          name: "{{ hermes_seafile_library_name }}"
+          name: "{{ hermes.seafile.library_name }}"
         status_code: [200, 201]
       register: _seafile_repo_create
       loop: "{{ _seafile_user_state }}"
@@ -179,15 +179,15 @@
           kind: Secret
           metadata:
             name: "hermes-seafile-{{ item.user.username }}"
-            namespace: "{{ hermes_namespace }}"
+            namespace: "{{ hermes.namespace }}"
           type: Opaque
           stringData:
-            SEAFILE_SERVER: "{{ hermes_seafile_server_url }}"
+            SEAFILE_SERVER: "{{ hermes.seafile.server_url }}"
             SEAFILE_USER: "{{ item.user.email.address }}"
             SEAFILE_PASSWORD: "{{ item.user.seafile.web_password }}"
             SEAFILE_TOKEN: "{{ item.token }}"
             SEAFILE_REPO_ID: "{{ item.repo_id }}"
-            SEAFILE_REPO_NAME: "{{ hermes_seafile_library_name }}"
+            SEAFILE_REPO_NAME: "{{ hermes.seafile.library_name }}"
       loop: "{{ _seafile_user_final }}"
       loop_control:
         label: "{{ item.user.username }}"

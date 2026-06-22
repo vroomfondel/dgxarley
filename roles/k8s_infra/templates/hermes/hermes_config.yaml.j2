@@ -10,8 +10,8 @@
 #}
 model:
   provider: "custom"
-  default: "{{ (item.litellm_model | default('')) or hermes_default_model }}"
-  base_url: "{{ hermes_litellm_url }}/v1"
+  default: "{{ (item.litellm_model | default('')) or hermes.default_model }}"
+  base_url: "{{ hermes.litellm_url }}/v1"
 
 terminal:
   backend: "local"
@@ -28,9 +28,9 @@ web:
 # initContainer always rewrites this on pod start, so toggling
 # `hermes_debug` on a user entry and rolling the pod is enough — ops wins.
 logging:
-  level: "{{ 'DEBUG' if (item.hermes_debug | default(hermes_debug_default)) else 'INFO' }}"
+  level: "{{ 'DEBUG' if (item.hermes_debug | default(hermes.debug_default)) else 'INFO' }}"
 {% set email = item.email | default({}) %}
-{% if email.get('enabled', hermes_email_enabled_default) %}
+{% if email.get('enabled', hermes.email.enabled_default) %}
 
 # Email gateway (IMAP/SMTP) — credentials live in /opt/data/.env as EMAIL_*.
 # The hermes-email sidecar in the webui pod runs `hermes gateway run` to poll
