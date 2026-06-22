@@ -939,23 +939,33 @@ _litellm_model_list_base:
       input_cost_per_token: "{{ litellm_default_input_cost_per_token }}"
       output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
 
-  # Stable alias → current SGLang model. Same params as above; only model_name
-  # differs. Set litellm_hermes_alias_model: "" to disable.
-  - model_name: "{{ litellm_hermes_alias_model }}"
-    litellm_params:
-      model: "openai/{{ sglang_served_model_name }}"
-      api_base: "http://sglang.{{ sglang_namespace }}.svc.cluster.local:{{ sglang_port }}/v1"
-      api_key: "none"
-      temperature: "{{ _sglang_sampling_defaults.temperature | default(omit) }}"
-      top_p: "{{ _sglang_sampling_defaults.top_p | default(omit) }}"
-      top_k: "{{ _sglang_sampling_defaults.top_k | default(omit) }}"
-      presence_penalty: "{{ _sglang_sampling_defaults.presence_penalty | default(omit) }}"
-      frequency_penalty: "{{ _sglang_sampling_defaults.frequency_penalty | default(omit) }}"
-      repetition_penalty: "{{ _sglang_sampling_defaults.repetition_penalty | default(omit) }}"
-      min_p: "{{ _sglang_sampling_defaults.min_p | default(omit) }}"
-      extra_body: "{{ _sglang_extra_body_defaults if _sglang_extra_body_defaults else omit }}"
-      input_cost_per_token: "{{ litellm_default_input_cost_per_token }}"
-      output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
+  # NOTE: the stable "hermes-default" alias is NO LONGER a second model_list
+  # entry. A duplicate deployment pointing at the same SGLang backend produced
+  # two identical litellm_deployment_state series (same backend
+  # litellm_model_name, differing only in the opaque model_id) → two "healthy"
+  # tiles on the LiteLLM Grafana panel. It is now a router model_group_alias
+  # (see litellm_router_settings below): one deployment, alias resolves to the
+  # live model group, still listed in /v1/models and resumable across swaps.
+  # The original duplicate-deployment form is kept commented out below in case
+  # a future LiteLLM behaviour change makes the alias-as-deployment preferable:
+  #
+  # # Stable alias → current SGLang model. Same params as above; only model_name
+  # # differs. Set litellm_hermes_alias_model: "" to disable.
+  # - model_name: "{{ litellm_hermes_alias_model }}"
+  #   litellm_params:
+  #     model: "openai/{{ sglang_served_model_name }}"
+  #     api_base: "http://sglang.{{ sglang_namespace }}.svc.cluster.local:{{ sglang_port }}/v1"
+  #     api_key: "none"
+  #     temperature: "{{ _sglang_sampling_defaults.temperature | default(omit) }}"
+  #     top_p: "{{ _sglang_sampling_defaults.top_p | default(omit) }}"
+  #     top_k: "{{ _sglang_sampling_defaults.top_k | default(omit) }}"
+  #     presence_penalty: "{{ _sglang_sampling_defaults.presence_penalty | default(omit) }}"
+  #     frequency_penalty: "{{ _sglang_sampling_defaults.frequency_penalty | default(omit) }}"
+  #     repetition_penalty: "{{ _sglang_sampling_defaults.repetition_penalty | default(omit) }}"
+  #     min_p: "{{ _sglang_sampling_defaults.min_p | default(omit) }}"
+  #     extra_body: "{{ _sglang_extra_body_defaults if _sglang_extra_body_defaults else omit }}"
+  #     input_cost_per_token: "{{ litellm_default_input_cost_per_token }}"
+  #     output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
 
   # Ollama models via native LiteLLM providers (ollama/ for embeddings,
   # ollama_chat/ for chat). LiteLLM's ollama provider forces TLS on all
@@ -980,6 +990,17 @@ _litellm_model_list_base:
 
 # litellm_enable_metrics / litellm_metrics_require_auth live in group_vars/all/main.yml
 # (shared with k8s_infra's prometheus.yml, like litellm_port / litellm_master_key).
+
+# router_settings: rendered as the router_settings block in config.yaml.
+# model_group_alias maps the stable hermes-default name onto the live SGLang
+# model group (sglang_served_model_name) WITHOUT a duplicate model_list
+# deployment — keeps saved Hermes sessions resumable across SGLang model swaps
+# while leaving a SINGLE litellm_deployment_state series (one Grafana tile).
+# The alias stays visible in /v1/models so clients can still select it.
+# Empty (litellm_hermes_alias_model: "") → empty dict → block omitted, no alias.
+litellm_router_settings: >-
+  {{ {'model_group_alias': {litellm_hermes_alias_model: sglang_served_model_name}}
+     if litellm_hermes_alias_model else {} }}
 
 # litellm_settings: rendered as the litellm_settings block in config.yaml
 litellm_settings:

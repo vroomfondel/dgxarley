@@ -443,6 +443,10 @@
           #   input + a stray uid "ad8llmv" → all rewritten to our uid "prometheus",
           #   then the now-unused "datasource" var is dropped (no empty picker).
           # - Drop __inputs/__requires; id:null + stable uid so provisioning owns it.
+          # NOTE: no per-panel dedup needed — the hermes-default alias is a router
+          # model_group_alias (see litellm_router_settings), NOT a duplicate
+          # model_list deployment, so litellm_deployment_state has one series per
+          # real backend (the "LLM Deployment Analytics" panel shows one tile).
           fresh litellm-24965.json || curl -fsS --connect-timeout 5 --max-time 60 "https://grafana.com/api/dashboards/24965/revisions/latest/download" \
             | sed 's/${datasource}/prometheus/g; s/${DS_PROMETHEUS}/prometheus/g; s/ad8llmv/prometheus/g' \
             | jq '

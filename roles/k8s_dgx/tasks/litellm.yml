@@ -139,6 +139,16 @@
             # master_key is sourced from LITELLM_MASTER_KEY env (see Secret).
             # store_model_in_db mirrors STORE_MODEL_IN_DB — belt & suspenders.
             store_model_in_db: true
+          {% if litellm_router_settings %}
+
+          # router_settings — model_group_alias maps the stable hermes-default
+          # name onto the live SGLang model group WITHOUT a second deployment
+          # (rendered from litellm_router_settings; empty → block omitted).
+          router_settings:
+          {% for key, value in litellm_router_settings.items() %}
+            {{ key }}: {{ value | to_json }}
+          {% endfor %}
+          {% endif %}
           {% if litellm_guardrails | length > 0 %}
 
           # Guardrails — rendered only when litellm_guardrails is non-empty.
@@ -205,7 +215,7 @@
             labels:
               app: litellm
             annotations:
-              checksum/config: "{{ (litellm_model_list | string ~ (litellm_settings | string) ~ (litellm_enable_metrics | string) ~ (litellm_metrics_require_auth | string)) | hash('sha256') }}"
+              checksum/config: "{{ (litellm_model_list | string ~ (litellm_settings | string) ~ (litellm_router_settings | string) ~ (litellm_enable_metrics | string) ~ (litellm_metrics_require_auth | string)) | hash('sha256') }}"
               # LiteLLM Prometheus annotation scrape — only when metrics are ON and
               # /metrics is OPEN (auth off). With auth on, the annotation job can't
               # send a bearer, so a dedicated scrape_config in prometheus.yml takes
