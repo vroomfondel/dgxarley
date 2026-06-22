@@ -84,18 +84,56 @@
 
           mkdir -p /var/lib/grafana/dashboards
 
+          # --- Persistent dashboard cache -------------------------------------
+          # The grafana-dashboards volume is a hostPath that survives pod restarts.
+          # These helpers turn it into a real cache: a failed/offline pull (the
+          # cluster is partly airgapped) never clobbers a good copy, and warm
+          # dashboards are not re-fetched on every start.
+          DASH_DIR=/var/lib/grafana/dashboards
+          # Re-fetch a cached dashboard only if older than this many days.
+          #   N>0 : refresh after N days  |  0 : always re-fetch  |  -1 : cache forever
+          CACHE_TTL_DAYS="${GRAFANA_DASHBOARD_CACHE_TTL_DAYS:-7}"
+
+          # fresh <file>: returns 0 (skip download) if a valid cached copy exists
+          # within TTL. Used as `fresh X.json || curl ... | commit X.json`.
+          fresh() {
+            _f="$DASH_DIR/$1"
+            [ "$CACHE_TTL_DAYS" = "0" ] && return 1
+            [ -s "$_f" ] && jq empty "$_f" >/dev/null 2>&1 || return 1
+            [ "$CACHE_TTL_DAYS" = "-1" ] && return 0
+            [ -z "$(find "$_f" -mtime +"$CACHE_TTL_DAYS" 2>/dev/null)" ]
+          }
+
+          # commit <file>: read a freshly-built dashboard from stdin, validate it is
+          # non-empty valid JSON, then atomically replace the cached copy. On any
+          # failure the existing cached file is kept — a bad pull never wins. Always
+          # returns 0 so `set -e` and the pipeline don't abort on a fetch failure.
+          commit() {
+            _f="$DASH_DIR/$1"; _t="$DASH_DIR/.$1.$$.tmp"
+            cat > "$_t"
+            if [ -s "$_t" ] && jq empty "$_t" >/dev/null 2>&1; then
+              mv -f "$_t" "$_f"; echo "  updated $1"
+            else
+              rm -f "$_t"
+              [ -s "$_f" ] && echo "  WARN: fetch of $1 failed/invalid — keeping cached copy" \
+                           || echo "  ERROR: fetch of $1 failed and no cached copy exists"
+            fi
+            return 0
+          }
+          # --------------------------------------------------------------------
+
           # Dashboard downloads with datasource variable replacements
           # https://github.com/dotdc/grafana-dashboards-kubernetes?tab=readme-ov-file#install-manually
 
           # CronJobs dashboard (14279)
-          curl -s https://grafana.com/api/dashboards/14279/revisions/latest/download \
+          fresh cronjobs-14279.json || curl -fsS --connect-timeout 5 --max-time 60 https://grafana.com/api/dashboards/14279/revisions/latest/download \
             | sed 's/${DS_PROMETHEUS}/Prometheus/g' \
-            > /var/lib/grafana/dashboards/cronjobs-14279.json
+            | commit cronjobs-14279.json
 
           # Kubernetes dashboard (15661)
-          curl -s https://grafana.com/api/dashboards/15661/revisions/latest/download \
+          fresh kubernetes-15661.json || curl -fsS --connect-timeout 5 --max-time 60 https://grafana.com/api/dashboards/15661/revisions/latest/download \
             | sed 's/${DS__VICTORIAMETRICS-PROD-ALL}/Prometheus/g' \
-            > /var/lib/grafana/dashboards/kubernetes-15661.json
+            | commit kubernetes-15661.json
 
           # https://github.com/dotdc/grafana-dashboards-kubernetes?tab=readme-ov-file#install-manually
           # Additional dashboards from dotdc/grafana-dashboards-kubernetes
@@ -122,21 +160,21 @@
               # 2. Replace node="$node" with instance="$node" for kubelet_volume_stats metrics (PV panels)
               #    Our kubelet metrics have instance label with hostname, but dashboard queries use node
               # JSON contains escaped quotes: =\"$var\"
-              curl -s "https://grafana.com/api/dashboards/${id}/revisions/latest/download" \
+              fresh "${name}-${id}.json" || curl -fsS --connect-timeout 5 --max-time 60 "https://grafana.com/api/dashboards/${id}/revisions/latest/download" \
                 | sed 's/${DS_PROMETHEUS}/Prometheus/g' \
                 | sed 's/instance=\\"$instance\\"/node=\\"$node\\"/g' \
                 | sed 's/kubelet_volume_stats_\([a-z_]*\){node=\\"$node\\"/kubelet_volume_stats_\1{instance=\\"$node\\"/g' \
                 | sed 's/cluster=\\"$cluster\\", //g' \
                 | sed 's/, cluster=\\"$cluster\\"//g' \
-                > "/var/lib/grafana/dashboards/${name}-${id}.json"
+                | commit "${name}-${id}.json"
             else
               # Strip cluster="$cluster" filter — single-cluster setup has no cluster label.
               # Handle both mid-selector (with trailing comma) and end-of-selector (with leading comma).
-              curl -s "https://grafana.com/api/dashboards/${id}/revisions/latest/download" \
+              fresh "${name}-${id}.json" || curl -fsS --connect-timeout 5 --max-time 60 "https://grafana.com/api/dashboards/${id}/revisions/latest/download" \
                 | sed 's/${DS_PROMETHEUS}/Prometheus/g' \
                 | sed 's/cluster=\\"$cluster\\", //g' \
                 | sed 's/, cluster=\\"$cluster\\"//g' \
-                > "/var/lib/grafana/dashboards/${name}-${id}.json"
+                | commit "${name}-${id}.json"
             fi
           done
 
@@ -150,7 +188,7 @@
           # - ups template variable: enable includeAll + multi for "All" dropdown option
           # - Query selectors: ups="$ups" → ups=~"$ups" for multi-value/All regex matching
           #   The ups label is injected by Prometheus via per-UPS scrape jobs.
-          curl -s https://grafana.com/api/dashboards/19308/revisions/latest/download \
+          fresh nut-ups-19308.json || curl -fsS --connect-timeout 5 --max-time 60 https://grafana.com/api/dashboards/19308/revisions/latest/download \
             | sed 's/ups=\\"$ups\\"/ups=~\\"$ups\\"/g; s/ups=\\"${ups}\\"/ups=~\\"${ups}\\"/g' \
             | jq '
               .panels |= map(
@@ -212,7 +250,7 @@
                     "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "area", "textMode": "auto", "orientation": "auto", "justifyMode": "auto"}
                   }
                 ]
-            ' > /var/lib/grafana/dashboards/nut-ups-19308.json
+            ' | commit nut-ups-19308.json
 
           # NVIDIA DCGM Exporter dashboard (12239)
           # Patches:
@@ -245,7 +283,7 @@
           #   The old `,container="dcgm-exporter"` selector injection is REMOVED — with
           #   K8s integration off there is no `container` label, so that filter would
           #   match nothing and blank every panel.
-          curl -s https://grafana.com/api/dashboards/12239/revisions/latest/download \
+          fresh dcgm-exporter-12239.json || curl -fsS --connect-timeout 5 --max-time 60 https://grafana.com/api/dashboards/12239/revisions/latest/download \
             | sed 's/${DS_PROMETHEUS}/Prometheus/g' \
             | jq '
               def migrate_graph:
@@ -340,7 +378,7 @@
                     else . end
                   )
                 )
-            ' > /var/lib/grafana/dashboards/dcgm-exporter-12239.json
+            ' | commit dcgm-exporter-12239.json
 
           # SGLang inference dashboard (official, from the SGLang repo:
           # examples/monitoring/grafana/dashboards/json/sglang-dashboard.json).
@@ -359,7 +397,7 @@
           # - instance/model_name template vars: scope label_values() to a real
           #   metric (bare label_values() returns empty in Grafana 12) + includeAll
           #   + multi so the "All" option works.
-          curl -s https://raw.githubusercontent.com/sgl-project/sglang/v0.5.12/examples/monitoring/grafana/dashboards/json/sglang-dashboard.json \
+          fresh sglang-dashboard.json || curl -fsS --connect-timeout 5 --max-time 60 https://raw.githubusercontent.com/sgl-project/sglang/v0.5.12/examples/monitoring/grafana/dashboards/json/sglang-dashboard.json \
             | sed 's/ddyfngn31dg5cf/prometheus/g' \
             | jq '
               .panels |= map(
@@ -386,7 +424,24 @@
                     | .includeAll = true | .multi = true | .current = {"text":"All","value":"$__all"}
                   else . end
                 )
-            ' > /var/lib/grafana/dashboards/sglang-dashboard.json
+            ' | commit sglang-dashboard.json
+
+          # LiteLLM proxy dashboard (official, grafana.com 24965).
+          # Panels: request volume, spend, tokens, deployment success/failure +
+          # latency, TTFT. Template vars: job / instance / model. Patches:
+          # - Datasource: the dashboard parameterises via a "datasource" template
+          #   var referenced as ${datasource} (uid form) + the ${DS_PROMETHEUS}
+          #   input + a stray uid "ad8llmv" → all rewritten to our uid "prometheus",
+          #   then the now-unused "datasource" var is dropped (no empty picker).
+          # - Drop __inputs/__requires; id:null + stable uid so provisioning owns it.
+          fresh litellm-24965.json || curl -fsS --connect-timeout 5 --max-time 60 "https://grafana.com/api/dashboards/24965/revisions/latest/download" \
+            | sed 's/${datasource}/prometheus/g; s/${DS_PROMETHEUS}/prometheus/g; s/ad8llmv/prometheus/g' \
+            | jq '
+              del(.__inputs, .__requires)
+              | .id = null
+              | .uid = "litellm-24965"
+              | .templating.list |= map(select(.name != "datasource"))
+            ' | commit litellm-24965.json
 
           echo "Dashboards downloaded successfully."
   register: grafana_dashboards_script
@@ -433,6 +488,9 @@
             - name: download-dashboards
               image: alpine:latest
               command: ["/bin/sh", "/scripts/download-dashboards.sh"]
+              env:
+                - name: GRAFANA_DASHBOARD_CACHE_TTL_DAYS
+                  value: "{{ grafana_dashboard_cache_ttl_days | default(7) | string }}"
               volumeMounts:
               - name: download-script
                 mountPath: /scripts

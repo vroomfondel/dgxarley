@@ -128,6 +128,9 @@
           {% for key, value in litellm_settings.items() %}
             {{ key }}: {{ value | to_json }}
           {% endfor %}
+          {% if litellm_enable_metrics %}
+            callbacks: ["prometheus"]   # Prometheus /metrics — gated by litellm_enable_metrics
+          {% endif %}
 
           general_settings:
             # master_key is sourced from LITELLM_MASTER_KEY env (see Secret).
@@ -199,7 +202,11 @@
             labels:
               app: litellm
             annotations:
-              checksum/config: "{{ litellm_model_list | string | hash('sha256') }}"
+              checksum/config: "{{ (litellm_model_list | string ~ (litellm_settings | string) ~ (litellm_enable_metrics | string)) | hash('sha256') }}"
+              # LiteLLM Prometheus scrape (gated; "false" → kubernetes-pods job drops it).
+              prometheus.io/scrape: "{{ litellm_enable_metrics | string | lower }}"
+              prometheus.io/port: "{{ litellm_port | string }}"
+              prometheus.io/path: "/metrics"
           spec:
             nodeSelector:
               kubernetes.io/arch: amd64

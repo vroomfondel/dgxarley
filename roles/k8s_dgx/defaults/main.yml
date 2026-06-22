@@ -967,6 +967,17 @@ _litellm_model_list_base:
       output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
 
 
+# LiteLLM built-in Prometheus exporter (/metrics on the proxy port). Gated,
+# default ON. Adds `callbacks: ["prometheus"]` to litellm_settings and a
+# prometheus.io/scrape annotation on the litellm pod (single pod, no HAProxy —
+# simpler than SGLang). No enterprise license needed: the proxy mounts /metrics
+# unconditionally on the prometheus callback (verified in proxy_server.py main).
+# Metrics carry model/key/team/deployment labels (e.g. per-backend success +
+# latency for the hermes-default alias). /metrics is unauthenticated but sits
+# behind the cluster + Traefik allowlist. Single uvicorn worker, so no
+# PROMETHEUS_MULTIPROC_DIR needed.
+litellm_enable_metrics: true
+
 # litellm_settings: rendered as the litellm_settings block in config.yaml
 litellm_settings:
   num_retries: 2
