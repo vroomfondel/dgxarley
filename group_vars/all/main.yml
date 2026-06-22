@@ -482,6 +482,9 @@ sglang_model: "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
 # sglang_model: "Qwen/Qwen3.6-35B-A3B-FP8"
 # sglang_model: "RedHatAI/Qwen3.6-35B-A3B-NVFP4"
 # sglang_model: "mmangkad/Qwen3.6-35B-A3B-NVFP4"                 # 35B/3B MoE NVFP4 (modelopt) — fallback to the RedHatAI compressed-tensors variant above
+#
+# --- Xiaomi MiMo ---
+# sglang_model: "lukealonso/MiMo-V2.5-NVFP4"                     # 179B MoE (256 exp/8 active, no shared), OMNI-multimodal (text/img/audio/video), hybrid-SWA GQA, NVFP4 (modelopt) → ~25 GB/GPU TP4. UNVALIDATED first-contact; b12x-fork kernels mapped to stock; spec OFF
 
 # --- LiteLLM coordinates ---
 litellm_namespace: "litellm"

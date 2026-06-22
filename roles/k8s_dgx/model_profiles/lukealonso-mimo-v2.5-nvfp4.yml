@@ -1,0 +1,145 @@
+# Model profile: lukealonso/MiMo-V2.5-NVFP4 — FIRST CONTACT / HIGHLY SPECULATIVE
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles at runtime.
+#
+# WHAT — community NVFP4 quant (by lukealonso, same author as the GLM-5.2-NVFP4
+# entry) of XiaomiMiMo/MiMo-V2.5. Card: "179B params". OMNI-MULTIMODAL —
+# text + images + audio + video (config carries both vision_config AND
+# audio_config). Architecture: `MiMoV2ForCausalLM` / model_type `mimo_v2` — a
+# BRAND-NEW Xiaomi arch, NOT a GLM/Qwen/MiniMax derivative.
+#
+# Geometry verified against config.json:
+#   num_hidden_layers=48, hidden_size=4096.
+#   MoE: n_routed_experts=256, num_experts_per_tok=8, moe_intermediate_size=2048,
+#     n_shared_experts=null (NO shared experts). moe_layer_freq=[0,1,1,...] →
+#     layer 0 is DENSE, layers 1-47 are MoE (first_k_dense_replace == 1 effectively).
+#   Routing: scoring_func=sigmoid, topk_method=noaux_tc, n_group=1, topk_group=1,
+#     norm_topk_prob=true (DeepSeek-style aux-loss-free sigmoid routing).
+#   Attention = GQA + HYBRID sliding-window (NOT MLA — there is no q_lora/kv_lora):
+#     full attention every 6th layer (layer_types full at 0,5,11,17,23,29,35,41,47),
+#     all others sliding_attention with sliding_window=128 + SWA attention-sink bias.
+#     Full: num_attention_heads=64, num_key_value_heads=4, head_dim=192,
+#       v_head_dim=128, rope_theta=1e7, partial_rotary_factor=0.334.
+#     SWA:  swa_num_attention_heads=64, swa_num_key_value_heads=8, swa_head_dim=192,
+#       swa_v_head_dim=128, swa_rope_theta=1e4. fused_qkv layout, attention_value_scale=0.707.
+#   No num_nextn_predict_layers / MTP head in the checkpoint (see speculative note).
+#   max_position_embeddings=1048576 (1M); upstream serves 131072 on its 2x box.
+#
+# TP CONSTRAINT — full-attn num_key_value_heads=4 → TP must divide 4 → TP ∈ {1,2,4}.
+# TP=4 (one rank per spark) is the natural mapping and matches the upstream "4x" config
+# (1 full-KV head + 2 SWA-KV heads + 16 attn heads per rank, all clean). 48 layers also
+# divide by PP=4 if you ever go pipeline.
+#
+# QUANT — NVIDIA Model Optimizer, NVFP4 (quant_method=modelopt, group_size=16, weights
+# AND input_activations 4-bit float, scale_fmt=null/not-ue8m0). ONLY the non-shared MoE
+# expert MLP projections (gate/up/down) are quantized; attention, dense MLPs (layers 0-3),
+# lm_head, embeddings, norms, gate, and the WHOLE vision/audio stack stay BF16 (ignore-list:
+# audio_encoder*, speech_embeddings*, visual*, lm_head, embed_tokens, norm, rotary_emb*).
+# → quantization: modelopt_fp4 (NOT compressed-tensors; that would error on quant-method mismatch).
+#
+# STOCK SUPPORT — VERIFIED against sgl-project/sglang v0.5.12 server_args.py:
+#   - MiMoV2ForCausalLM is a FIRST-CLASS arch (explicit handling: on speculative
+#     EAGLE it auto-sets enable_multi_layer_eagle "for MiMoV2 model"; hierarchical
+#     cache resets swa_full_tokens_ratio→1.0 + disables hybrid SWA memory for MiMoV2).
+#   - The `mimo` reasoning parser (_MimoDetector, a Qwen3Detector needing
+#     enable_thinking=true) AND `mimo` tool-call parser (MiMoDetector) are both registered.
+#   So this loads on our stock scitrera/xomoxcc 0.5.12 — NO author-fork image required.
+#
+# WHAT IS fork-only (the `b12x` build) and CANNOT be reproduced on stock — the backend
+# values below are the STOCK-EQUIVALENT GB10/SM121 NVFP4 mapping (flashinfer_cutlass /
+# flashinfer), NOT the card's `b12x`:
+#   --moe-runner-backend b12x / --attention-backend b12x / --mm-attention-backend b12x /
+#   --fp4-gemm-backend b12x   → mapped to flashinfer_cutlass / flashinfer / (mm default).
+#   --enable-pcie-oneshot-allreduce  → no such flag in stock 0.5.12 (custom PCIe allreduce);
+#     not wireable, dropped — our RoCE/JIT-allreduce path applies instead.
+#   --enable-multi-layer-eagle  → NOT a manual knob here: stock 0.5.12 sets it AUTOMATICALLY
+#     for MiMoV2 when speculative_algorithm==EAGLE. (Speculative is off below anyway.)
+# The card's `--page-size 64` and `--swa-full-tokens-ratio 0.3` ARE stock flags and are now
+# wired (page_size / swa_full_tokens_ratio keys below).
+#
+# >>> UNVALIDATED on this cluster — no matrix run yet; treat every value as a seed.
+# >>> Residual unknowns: do the stock flashinfer_cutlass MoE / flashinfer attention kernels
+# >>> handle hybrid-SWA-with-sink + asymmetric head_dim=192/v_head_dim=128 on SM121, and
+# >>> does the omni (vision+audio) stack load cleanly? Bisect mm_attention_backend /
+# >>> attention_backend → triton_attn / triton if the encoder or SWA path errors. <<<
+_model_profile:
+  "lukealonso/MiMo-V2.5-NVFP4":
+    knowledge_cutoff: null  # not disclosed for MiMo-V2.5 base nor the quant
+    release_date: null      # XiaomiMiMo/MiMo-V2.5 base date not on the quant card; community NVFP4 quant ~2026-06
+    info_url: "https://huggingface.co/lukealonso/MiMo-V2.5-NVFP4"
+    # Stock 0.5.12 supports the arch + mimo parsers (verified) → no image override needed.
+    # The author's fork only adds the b12x kernels; if the stock NVFP4 kernels below fail to
+    # handle the hybrid-SWA / omni path on SM121, the author's image is the fallback:
+    # sglang_image: "docker.io/lukealonso/sglang-cuda13-b12x"
+    nccl_transport: "roce"
+    tp_size: 4  # one rank per spark; matches upstream 4x. KV-head divisibility forces TP ∈ {1,2,4}.
+    # config max_position_embeddings = 1048576 (1M). Upstream serves 131072; we cap further for
+    # first-contact KV safety on the hybrid-SWA KV layout. Raise once a clean boot confirms headroom.
+    context_length: 32768
+    quantization: "modelopt_fp4"  # NVIDIA modelopt NVFP4; NOT compressed-tensors.
+    # trust_remote_code: MiMoV2 ships custom model code (modeling_mimo_v2 / custom processor) in the repo.
+    trust_remote_code: true
+    kv_cache_dtype: "fp8_e4m3"  # upstream uses --kv-cache-dtype fp8_e4m3.
+    # GB10/SM121 NVFP4 stock defaults — the b12x equivalents. UNCONFIRMED for the mimo_v2 arch:
+    # the standalone "cutlass" MoE runner was removed in 0.5.12, flashinfer_cutlass is the
+    # cluster NVFP4 default. Re-confirm / A/B on the first matrix run.
+    moe_runner_backend: "flashinfer_cutlass"
+    fp4_gemm_backend: "flashinfer_cutlass"
+    # flashinfer attention is the stock equivalent of `b12x` attention. Hybrid SWA + attention-sink
+    # bias + asymmetric head/v dims may NOT be supported here — bisect to triton if it errors.
+    attention_backend: "flashinfer"
+    # Multimodal (vision/audio) encoder attention. Card uses b12x (fork-only); stock choices are
+    # sdpa/fa3/fa4/triton_attn/ascend_attn/aiter_attn/flashinfer_cudnn. Left empty → SGLang default;
+    # set to "triton_attn" if the encoder errors on SM121. Wired via --mm-attention-backend.
+    mm_attention_backend: ""
+    # KV-cache page size — card uses 64. Wired via --page-size.
+    page_size: 64
+    # Hybrid-SWA KV budget: SWA-layer KV tokens / full-layer KV tokens — card uses 0.3 (SWA layers
+    # are 39/48 and only need a 128-token window, so a small ratio saves KV). Wired via
+    # --swa-full-tokens-ratio. NOTE: SGLang forces this to 1.0 if hierarchical cache is on.
+    swa_full_tokens_ratio: 0.3
+    num_experts: 256
+    # EP=1: the NVFP4 family crashes at EP>1 on this cluster (flashinfer_cutlass/triton/cutlass
+    # MoE all hit the StandardDispatcher EP-combine bug). Each rank holds all 256 experts,
+    # FFN intermediate TP-sharded. (256 % 4 == 0, so EP=4 is geometrically possible — but don't.)
+    ep_size: 1
+    enable_eplb: false
+    enable_expert_distribution_metrics: false
+    # 179B NVFP4 ≈ ~25 GB weights/GPU after TP=4 → large headroom, and hybrid SWA keeps KV
+    # cheap (window 128 on 39/48 layers, full attn only every 6th). 0.60 is a conservative
+    # first-contact start; raise once a clean boot confirms.
+    mem_fraction_static: "0.60"
+    disable_cuda_graph: false
+    disable_piecewise_cuda_graph: true  # mirrors the GLM/cutlass-NVFP4 shape (eager broken on cutlass_moe_fp4 paths)
+    cuda_graph_max_bs: 8
+    chunked_prefill_size: 8192  # upstream 4x value.
+    max_running_requests: 8     # upstream 4x value.
+    jit_max_jobs: 4
+    # DeepGemm is FP8/ue8m0-only; this NVFP4 scale_fmt != ue8m0 → JIT kernels unoptimized,
+    # block the scheduler watchdog, exhaust host RAM. Disabled; FP4 GEMM → fp4_gemm_backend.
+    disable_deep_gemm: true
+    # Card: `--reasoning-parser mimo --tool-call-parser mimo`. BOTH registered in stock 0.5.12
+    # (reasoning _MimoDetector — a Qwen3Detector that needs enable_thinking=true to emit <think>;
+    # tool-call MiMoDetector). Since the reasoning detector gates on enable_thinking, pass it via
+    # sglang_chat_template_kwargs (e.g. {"enable_thinking": true}) if you want reasoning_content split.
+    reasoning_parser: "mimo"
+    tool_call_parser: "mimo"
+    # NOT from the card (card gives no sampling). Conservative MiMo-family thinking seed — re-check.
+    recommended_sampling:
+      temperature: 0.6
+      top_p: 0.95
+    # Speculative decoding OFF for first contact. The checkpoint has NO num_nextn_predict_layers
+    # (no in-weight MTP head), and the upstream EAGLE recipe relies on `--enable-multi-layer-eagle`,
+    # a custom multi-layer-EAGLE in the author's b12x fork with no external draft path — not
+    # reproducible on stock SGLang. Revisit only after a clean baseline boot.
+    speculative_enabled: false
+    # UPSTREAM-FLAG DISPOSITION (card recipe → this profile):
+    #   --page-size 64            → WIRED (page_size: 64 above).
+    #   --swa-full-tokens-ratio   → WIRED (swa_full_tokens_ratio: 0.3 above).
+    #   --mm-attention-backend    → WIRED knob (mm_attention_backend above; left empty = stock default,
+    #                               b12x value is fork-only).
+    #   --enable-multi-layer-eagle→ NOT a manual flag: stock 0.5.12 auto-enables it for MiMoV2 when
+    #                               speculative_algorithm==EAGLE (speculative is off here).
+    #   --enable-pcie-oneshot-allreduce → NOT WIREABLE: no such flag in stock 0.5.12 (custom b12x PCIe
+    #                               allreduce). Our RoCE / JIT-allreduce path applies instead.
+    #   --moe-runner/-attention/-fp4-gemm b12x → fork-only kernels; mapped to flashinfer_cutlass /
+    #                               flashinfer above.

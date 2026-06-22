@@ -1277,6 +1277,24 @@ fi
 if [ -n "$SGLANG_ATTENTION_BACKEND" ]; then
   args+=(--attention-backend "$SGLANG_ATTENTION_BACKEND")
 fi
+# Multimodal (vision/audio) attention backend. Empty → no flag → SGLang default.
+# Choices (0.5.12): sdpa, fa3, fa4, triton_attn, ascend_attn, aiter_attn,
+# flashinfer_cudnn. Only relevant for multimodal models (e.g. MiMoV2 omni).
+if [ -n "$SGLANG_MM_ATTENTION_BACKEND" ]; then
+  args+=(--mm-attention-backend "$SGLANG_MM_ATTENTION_BACKEND")
+fi
+# KV-cache page size (tokens per page). Empty/0 → no flag → SGLang default.
+# Some attention backends / hybrid-SWA paths want a larger page (MiMoV2 card: 64).
+if [ -n "$SGLANG_PAGE_SIZE" ] && [ "$SGLANG_PAGE_SIZE" != "0" ]; then
+  args+=(--page-size "$SGLANG_PAGE_SIZE")
+fi
+# Hybrid-SWA KV budget: ratio of SWA-layer KV tokens to full-layer KV tokens
+# (SGLang default 0.8). Empty → no flag → SGLang default. Only meaningful on
+# hybrid sliding-window models (MiMoV2, Gemma, Llama4). For MiMoV2 + hierarchical
+# cache SGLang internally resets this to 1.0.
+if [ -n "$SGLANG_SWA_FULL_TOKENS_RATIO" ]; then
+  args+=(--swa-full-tokens-ratio "$SGLANG_SWA_FULL_TOKENS_RATIO")
+fi
 # Diffusion-LLM (dLLM) decode path — when SGLANG_DLLM_ALGORITHM is set (e.g.
 # "Gemma4Renoise" for DiffusionGemma) launch_server runs the block-diffusion
 # scheduler instead of the autoregressive one. SGLang's _handle_dllm_inference

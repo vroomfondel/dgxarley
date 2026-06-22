@@ -346,6 +346,17 @@ sglang_schedule_policy: "lpm"
 # Attention backend: per-model in sglang_model_profiles, defaults to "flashinfer".
 # Set to "triton" for hybrid GDN models (MoE+Mamba) on Blackwell GPUs.
 sglang_attention_backend: "{{ sglang_model_profiles[_sglang_active_model].attention_backend | default('flashinfer') }}"
+# Multimodal (vision/audio) attention backend. Empty → SGLang default. Choices:
+# sdpa, fa3, fa4, triton_attn, ascend_attn, aiter_attn, flashinfer_cudnn. Only
+# relevant for multimodal models (e.g. MiMoV2 omni). Wired to --mm-attention-backend.
+sglang_mm_attention_backend: "{{ sglang_model_profiles[_sglang_active_model].mm_attention_backend | default('') }}"
+# KV-cache page size (tokens per page). Empty/0 → SGLang default. Some attention
+# backends / hybrid-SWA paths want a larger page (MiMoV2 card uses 64). Wired to --page-size.
+sglang_page_size: "{{ sglang_model_profiles[_sglang_active_model].page_size | default(0) }}"
+# Hybrid-SWA KV budget: ratio of SWA-layer KV tokens to full-layer KV tokens
+# (SGLang default 0.8). Empty → no flag. Only meaningful on hybrid sliding-window
+# models (MiMoV2, Gemma, Llama4). Wired to --swa-full-tokens-ratio.
+sglang_swa_full_tokens_ratio: "{{ sglang_model_profiles[_sglang_active_model].swa_full_tokens_ratio | default('') }}"
 # Diffusion-LLM (dLLM) algorithm. Empty ('') for normal autoregressive models;
 # set to a dLLM algorithm name (e.g. "Gemma4Renoise" for DiffusionGemma) to run
 # the block-diffusion decode path. SGLang's _handle_dllm_inference then auto-
