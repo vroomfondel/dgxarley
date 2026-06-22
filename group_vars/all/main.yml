@@ -439,6 +439,7 @@ sglang_port: 8000
 # sglang_model: "zai-org/GLM-4.7-FP8"
 # sglang_model: "nvidia/GLM-4.7-NVFP4"
 # sglang_model: "nvidia/GLM-5-NVFP4"
+# sglang_model: "lukealonso/GLM-5.2-NVFP4"                       # 744B/40B MoE (256 exp/8 active +1 shared), GlmMoeDsa (MLA+DSA), NVFP4 (modelopt, community) → PP=4/TP=1 (EP4/TP4 OOMs); 1M ctx. UNVALIDATED first-contact
 #
 # --- MiniMax ---
 # sglang_model: "nvidia/MiniMax-M2.5-NVFP4"
