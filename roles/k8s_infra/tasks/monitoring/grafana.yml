@@ -342,6 +342,52 @@
                 )
             ' > /var/lib/grafana/dashboards/dcgm-exporter-12239.json
 
+          # SGLang inference dashboard (official, from the SGLang repo:
+          # examples/monitoring/grafana/dashboards/json/sglang-dashboard.json).
+          # Panels: E2E latency (+heatmap), TTFT (+heatmap), running reqs, gen
+          # throughput, cache hit rate, queued reqs. Pinned to v0.5.12 (matches
+          # default_sglang_image); SGLang metric names are stable — re-check on a
+          # major bump. Patches:
+          # - Datasource: upstream hardcodes uid "ddyfngn31dg5cf" → our "prometheus".
+          # - id:null so file-provisioning owns it (stable uid "sglang-dashboard").
+          # - Every panel expr gets an {instance=~"$instance",model_name=~"$model_name"}
+          #   selector so the template vars actually FILTER (model_name is auto-
+          #   stamped by SGLang = served model → models served on one instance over
+          #   time stay separable). First gsub widens the heatmaps' existing
+          #   model_name selector to add instance; second adds the full selector to
+          #   bare metrics (handles the [rate-interval] and end-of-expr cases).
+          # - instance/model_name template vars: scope label_values() to a real
+          #   metric (bare label_values() returns empty in Grafana 12) + includeAll
+          #   + multi so the "All" option works.
+          curl -s https://raw.githubusercontent.com/sgl-project/sglang/v0.5.12/examples/monitoring/grafana/dashboards/json/sglang-dashboard.json \
+            | sed 's/ddyfngn31dg5cf/prometheus/g' \
+            | jq '
+              .panels |= map(
+                if .targets then
+                  .targets |= map(
+                    .expr |= (
+                      gsub("\\{model_name=~\"\\$model_name\"\\}";
+                           "{instance=~\"$instance\", model_name=~\"$model_name\"}")
+                      | gsub("(?<m>sglang_[a-z0-9_]+)(?<a>[^{a-z0-9_]|$)";
+                             .m + "{instance=~\"$instance\", model_name=~\"$model_name\"}" + .a)
+                    )
+                  )
+                else . end
+              )
+              | .id = null
+              | .templating.list |= map(
+                  if .name == "instance" then
+                    .query = {"qryType":1,"query":"label_values(sglang_num_running_reqs, instance)","refId":"PrometheusVariableQueryEditor-VariableQuery"}
+                    | .definition = "label_values(sglang_num_running_reqs, instance)"
+                    | .includeAll = true | .multi = true | .current = {"text":"All","value":"$__all"}
+                  elif .name == "model_name" then
+                    .query = {"qryType":1,"query":"label_values(sglang_num_running_reqs, model_name)","refId":"PrometheusVariableQueryEditor-VariableQuery"}
+                    | .definition = "label_values(sglang_num_running_reqs, model_name)"
+                    | .includeAll = true | .multi = true | .current = {"text":"All","value":"$__all"}
+                  else . end
+                )
+            ' > /var/lib/grafana/dashboards/sglang-dashboard.json
+
           echo "Dashboards downloaded successfully."
   register: grafana_dashboards_script
 
