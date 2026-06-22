@@ -63,6 +63,14 @@
   Keine dieser Fixes ist in v0.5.13 (letztes Release 2026-06-13). SM121-Validierung
   von Gemma-4 NVFP4 bleibt ausstehend. Stand unverändert zu 2026-06-14.
 
+  **Re-verifiziert 2026-06-22:** PRs #22929/#22928/#22927 (SM121 NaN-clamp)
+  weiterhin **offen und unverändert**; keiner in v0.5.13 (weiterhin letztes
+  Release, 2026-06-13 — kein v0.5.14). **Neu bei PR #22615 (fp8 KV cache +
+  KV-shared layers): erste Aktivität seit 2026-05-23** — am **2026-06-20**
+  untersucht der Autor einen CI-Fehler und Maintainer `ianliuy` wurde zur
+  Review getaggt. Noch **nicht gemerged** (REVIEW_REQUIRED), aber nicht mehr
+  vollständig stillgelegt. SM121-Validierung von Gemma-4 NVFP4 bleibt ausstehend.
+
 The original v0.5.10 blockers (Transformers fallback, dual head_dim, top_k_experts
 naming) are no longer relevant for our deployment because we build the image
 from SGLang main, not from the v0.5.10 release — and they are also fixed in
@@ -176,7 +184,7 @@ Last `gh pr view` check: 2026-06-19. PRs #22929/#22928/#22927 still open and sta
 | [#22929](https://github.com/sgl-project/sglang/pull/22929) | Add NVFP4 per-expert weight loading for Gemma 4 MoE | **open** | — | Per-expert → fused weight mapping for NVFP4 MoE checkpoints. **No movement since 2026-04-16 (8 weeks).** Weight-loading concern partially superseded by #25054 (merged 2026-05-21) which uses `FusedMoE.make_expert_params_mapping`; SM121-specific NaN-clamp portion remains unmerged. |
 | [#22928](https://github.com/sgl-project/sglang/pull/22928) | fix(sm120): MoE GEGLU activation + FP4 block scale NaN clamp | **open** | — | GEGLU activation for `cutlass_moe_fp4()` + E4M3 NaN clamp. SM120/121 critical. **No movement since 2026-04-16 (8 weeks).** GEGLU concern partially superseded by #25054 (merged 2026-05-21); SM121 NaN-clamp portion still unmerged. |
 | [#22927](https://github.com/sgl-project/sglang/pull/22927) | fix(sm120): NVFP4 NaN from E4M3 scale overflow + 3D tensor shape crashes | **open** | — | Sister PR to #22928, also SM120/121-specific. Affects NVFP4 dense + MoE both. **No movement since 2026-04-16 (8 weeks).** SM121 NaN/scale-overflow portion still unmerged. |
-| [#22615](https://github.com/sgl-project/sglang/pull/22615) | Fix fp8 KV cache crash with KV-shared layers in triton backend | **open** | — | fp8 kv cache + `num_kv_shared_layers > 0` (Gemma-4 has KV-shared layers). Open since 2026-04-12. Approved by `kpham-sgl` 2026-04-22, rebased onto main 2026-04-30. **2026-05-23 push invalidated the approval** — `reviewDecision` is now `REVIEW_REQUIRED`. Re-verified 2026-06-11: still open, REVIEW_REQUIRED. |
+| [#22615](https://github.com/sgl-project/sglang/pull/22615) | Fix fp8 KV cache crash with KV-shared layers in triton backend | **open** | — | fp8 kv cache + `num_kv_shared_layers > 0` (Gemma-4 has KV-shared layers). Open since 2026-04-12. Approved by `kpham-sgl` 2026-04-22, rebased onto main 2026-04-30. **2026-05-23 push invalidated the approval** — `reviewDecision` is now `REVIEW_REQUIRED`. Re-verified 2026-06-11: still open, REVIEW_REQUIRED. **2026-06-20: first activity since 2026-05-23 — author investigating a CI failure, maintainer `ianliuy` tagged to review; still not merged.** |
 | [#25054](https://github.com/sgl-project/sglang/pull/25054) | Support Gemma4 MoE NVFP4 | **merged** | 2026-05-21 | Fixes NVFP4 per-expert weight loading (`FusedMoE.make_expert_params_mapping` replaces regex-based per-expert code in `gemma4_causal.py`/`gemma4_mm.py`) and the GEGLU activation issue in `modelopt_quant.py`. Partially supersedes #22929/#22928 weight-loading/GEGLU concerns. **Benchmarked only on B200, NOT on SM121/GB10.** In v0.5.13 (GitHub Release 2026-06-13). |
 | [#26791](https://github.com/sgl-project/sglang/pull/26791) | Fix Gemma4 NVFP4 MoE default attention backend | **merged** | 2026-06-09 | Fixes `trtllm_mha` default causing MMLU 0.037 on Gemma4-26B-NVFP4 (completely broken output quality). Cherry-picked to `release/v0.5.13`. In v0.5.13 (GitHub Release 2026-06-13). |
 | [#22408](https://github.com/sgl-project/sglang/pull/22408) | [CI] Adding Gemma 4 to Nightly CI | **merged** | 2026-04-17 | Adds Gemma-4 to nightly accuracy tests. Increases pressure on the open NVFP4 PRs to land cleanly but doesn't itself fix anything for us. |
