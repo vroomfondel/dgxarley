@@ -161,6 +161,25 @@ hindsight_embeddings_api_key: "sk-changeme"
 
 # LiteLLM
 litellm_master_key: "sk-changeme"
+# LiteLLM built-in Prometheus exporter (/metrics on the proxy port). Gated,
+# default ON. Renders `callbacks: ["prometheus"]` into litellm_settings. No
+# enterprise license needed (proxy_server.py mounts /metrics unconditionally on
+# the prometheus callback). Metrics carry model/key/team/deployment labels (e.g.
+# per-backend success + latency for the hermes-default alias). Single uvicorn
+# worker, so no PROMETHEUS_MULTIPROC_DIR needed. In group_vars/all so k8s_infra's
+# prometheus.yml can see it for the auth-gated scrape job below.
+litellm_enable_metrics: true
+# Gate /metrics behind auth. LiteLLM's own default is require_auth=TRUE (verified
+# in litellm/__init__.py: require_auth_for_metrics_endpoint=True), so an open
+# annotation scrape would 401. We default this to FALSE (open) so the
+# kubernetes-pods annotation scrape works out of the box — /metrics stays behind
+# the litellm-ip-allowlist externally, open in-cluster (same posture as SGLang).
+#   false → require_auth_for_metrics_endpoint: false + annotation scrape.
+#   true  → keep LiteLLM auth on; annotation scrape is dropped and Prometheus
+#           authenticates with litellm_master_key via a dedicated scrape_config
+#           (prometheus.yml). NOTE: any valid LiteLLM key can read /metrics — not
+#           scoped (issue #13644); prefer a dedicated virtual key in production.
+litellm_metrics_require_auth: false
 litellm_salt_key: "changeme-salt-key"
 litellm_ui_username: "admin"
 litellm_ui_password: "changeme"

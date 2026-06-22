@@ -307,6 +307,22 @@
                 - action: labelmap
                   regex: __meta_kubernetes_pod_label_(.+)
 
+            {% if litellm_enable_metrics | default(false) and litellm_metrics_require_auth | default(false) %}
+            # LiteLLM /metrics with auth ON: the annotation job can't send a bearer,
+            # so scrape the service directly with a LiteLLM key. (Default gate is
+            # open — litellm_metrics_require_auth=false — and uses kubernetes-pods.)
+            # NOTE: any valid LiteLLM key can read /metrics (not scoped, issue #13644)
+            # and the key is rendered into this ConfigMap — prefer a scoped virtual
+            # key in production rather than litellm_master_key.
+            - job_name: 'litellm'
+              metrics_path: /metrics
+              authorization:
+                type: Bearer
+                credentials: "{{ litellm_master_key }}"
+              static_configs:
+                - targets: ['litellm.litellm.svc.cluster.local:{{ litellm_port }}']
+            {% endif %}
+
             # NUT exporter — multi-target scrape (one target per UPS)
             # druggeri/nut_exporter doesn't emit a ups label natively,
             # so we pass ?ups=<name> per target and inject the label via static_configs.

@@ -130,6 +130,9 @@
           {% endfor %}
           {% if litellm_enable_metrics %}
             callbacks: ["prometheus"]   # Prometheus /metrics — gated by litellm_enable_metrics
+            # LiteLLM default is auth-on (require_auth=True). false → open for the
+            # annotation scrape; true → keep auth, Prometheus scrapes with a key.
+            require_auth_for_metrics_endpoint: {{ litellm_metrics_require_auth | string | lower }}
           {% endif %}
 
           general_settings:
@@ -202,9 +205,12 @@
             labels:
               app: litellm
             annotations:
-              checksum/config: "{{ (litellm_model_list | string ~ (litellm_settings | string) ~ (litellm_enable_metrics | string)) | hash('sha256') }}"
-              # LiteLLM Prometheus scrape (gated; "false" → kubernetes-pods job drops it).
-              prometheus.io/scrape: "{{ litellm_enable_metrics | string | lower }}"
+              checksum/config: "{{ (litellm_model_list | string ~ (litellm_settings | string) ~ (litellm_enable_metrics | string) ~ (litellm_metrics_require_auth | string)) | hash('sha256') }}"
+              # LiteLLM Prometheus annotation scrape — only when metrics are ON and
+              # /metrics is OPEN (auth off). With auth on, the annotation job can't
+              # send a bearer, so a dedicated scrape_config in prometheus.yml takes
+              # over and this is "false" (kubernetes-pods job drops it).
+              prometheus.io/scrape: "{{ (litellm_enable_metrics and not litellm_metrics_require_auth) | string | lower }}"
               prometheus.io/port: "{{ litellm_port | string }}"
               prometheus.io/path: "/metrics"
           spec:
