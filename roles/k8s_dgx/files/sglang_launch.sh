@@ -1150,6 +1150,11 @@ fi
 if [ "$SGLANG_ENABLE_EXPERT_DISTRIBUTION_METRICS" = "true" ]; then
   args+=(--enable-expert-distribution-metrics)
 fi
+# Prometheus exporter: serves /metrics on the HTTP server port (only effective on
+# the head; workers run no HTTP server). Gated per-instance via SGLANG_ENABLE_METRICS.
+if [ "$SGLANG_ENABLE_METRICS" = "true" ]; then
+  args+=(--enable-metrics)
+fi
 if [ -n "$SGLANG_HOST" ]; then
   args+=(--host "$SGLANG_HOST")
 fi

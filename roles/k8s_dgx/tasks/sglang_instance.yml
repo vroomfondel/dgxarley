@@ -155,6 +155,7 @@
         SGLANG_EP: "{{ sglang_ep | string }}"
         SGLANG_ENABLE_EPLB: "{{ sglang_enable_eplb | string | lower }}"
         SGLANG_ENABLE_EXPERT_DISTRIBUTION_METRICS: "{{ sglang_enable_expert_distribution_metrics | string | lower }}"
+        SGLANG_ENABLE_METRICS: "{{ inst.enable_metrics | string | lower }}"
         SGLANG_CHUNKED_PREFILL_SIZE: "{{ sglang_chunked_prefill_size | string }}"
         SGLANG_ENABLE_JIT_DEEPGEMM: "{{ 'false' if sglang_disable_deep_gemm | bool else 'true' }}"
         # Flash Attention 4 CuTe DSL JIT: enable persistent disk cache so compiled
@@ -519,6 +520,12 @@
             annotations:
               k8s.v1.cni.cncf.io/networks: "{{ '[{\"name\":\"qsfp-vf' ~ qsfp_sriov_assignments[_sglang_active_sriov_key].vf ~ '\",\"ips\":[\"' ~ _sglang_qsfp_ips[0] ~ '/24\"]}]' if qsfp_sriov_enabled | default(false) else 'qsfp-direct' }}"
               kubectl.kubernetes.io/default-container: sglang
+              # SGLang Prometheus scrape — HEAD only (workers run no HTTP server).
+              # Port = inst.port (HAProxy-fronted; /metrics passes through the L4 TCP
+              # forward to uvicorn). scrape="false" → kubernetes-pods job drops it.
+              prometheus.io/scrape: "{{ inst.enable_metrics | string | lower }}"
+              prometheus.io/port: "{{ inst.port | string }}"
+              prometheus.io/path: "/metrics"
               checksum/launch-script: "{{ (lookup('file', role_path ~ '/files/sglang_launch.sh') ~ lookup('file', role_path ~ '/files/dsv4_memprobe.py')) | hash('sha256') }}"
               checksum/config: "{{ _sglang_configmap.result.data | to_json(sort_keys=True) | hash('sha256') }}"  # hash of the WHOLE rendered sglang-config ConfigMap (omit-stripped by k8s, sort_keys-stable) → rolls pods on ANY config/knob change (cuda_graph_max_bs, moe_runner_backend, mamba_*, …), not a hand-picked field subset
           spec:

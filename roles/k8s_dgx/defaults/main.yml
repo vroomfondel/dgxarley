@@ -424,6 +424,9 @@ sglang_moe_config_dir: "/root/.cache/huggingface/moe_configs"
 #   port / internal_port / nccl_port: pod-netns-local (each pod has its own
 #                  network namespace), so these can stay identical across
 #                  instances even when co-located. Override only if needed.
+#   enable_metrics: SGLang Prometheus exporter (--enable-metrics, /metrics on the
+#                  head's HTTP port). Default: global sglang_enable_metrics (on).
+#                  Set false to silence a noisy/ephemeral instance's scrape.
 #
 # Node sharing: nodes lists MAY overlap (GPU time-slicing — needs enough
 # nvidia_gpu_timeslice_replicas) or be disjoint (partitioning). Overlap requires
@@ -466,6 +469,20 @@ sglang_instances:
 # key of the current instance, set by the loop in sglang.yml. Defaults that
 # reference sglang_model / sglang_nnodes use the GLOBAL (never-overridden) vars
 # so there is no recursion with the _sglang_active_* indirection.
+# SGLang built-in Prometheus exporter (--enable-metrics → /metrics on the HTTP
+# server port). Gated, default ON, and INSTANCE-bound (not model-bound): general
+# engine metrics (running/waiting reqs, gen throughput, cache hit rate, TTFT /
+# e2e-latency / inter-token histograms) are an observability concern per
+# deployment. Distinct from enable_expert_distribution_metrics, which is NOT a
+# Prometheus exporter at all: it dumps per-expert .pt files via the
+# /{start,stop,dump}_expert_distribution_record API (EP-balance analysis, model-
+# bound) and never reaches /metrics. Every SGLang metric is auto-labelled
+# model_name=<served_model_name> (= inst.model here), so a single instance that
+# swaps models over time keeps its time-series separable by model.
+# Per-instance override via sglang_instances.<key>.enable_metrics. Only the HEAD
+# pod serves /metrics (workers run no HTTP server), so only the head is scraped.
+sglang_enable_metrics: true
+
 _sglang_instance_defaults:
   nodes: "{{ range(1, (sglang_nnodes | int) + 1) | list }}"
   model: "{{ sglang_model }}"
@@ -475,6 +492,7 @@ _sglang_instance_defaults:
   port: "{{ sglang_port }}"
   internal_port: "{{ sglang_internal_port }}"
   nccl_port: "{{ nccl_bootstrap_port }}"
+  enable_metrics: "{{ sglang_enable_metrics }}"
 
 # ============================================================================
 # vLLM — drop-in alternative to SGLang for distributed LLM inference.
