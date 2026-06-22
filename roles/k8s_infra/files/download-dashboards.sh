@@ -361,6 +361,11 @@ raw dcgm-exporter-12239.json "https://grafana.com/api/dashboards/12239/revisions
 # - UNITS: latency panels (E2E/TTFT + heatmaps) → "s" (metric is _seconds);
 #   running/queued/throughput → "short"; cache hit rate → "percentunit"
 #   (SGLang emits a 0–1 fraction; observed peak 0.6 = 60%).
+# - Rename "End-to-End Request Latency" (+ Heatmap) → "Total Request Duration":
+#   sglang:e2e_request_latency_seconds is the FULL request duration (queue +
+#   prefill + complete decode), dominated by output length — a response time,
+#   not a latency. TTFT panels keep their name (that IS the latency). Rename
+#   runs LAST so the unit/legend stages above still match the original titles.
 raw sglang-dashboard.json "https://raw.githubusercontent.com/sgl-project/sglang/v0.5.12/examples/monitoring/grafana/dashboards/json/sglang-dashboard.json" \
   | sed 's/ddyfngn31dg5cf/prometheus/g' \
   | jq '
@@ -370,7 +375,7 @@ raw sglang-dashboard.json "https://raw.githubusercontent.com/sgl-project/sglang/
           .expr |= (
             gsub("\\{model_name=~\"\\$model_name\"\\}";
                  "{sglang_instance=~\"$instance\", model_name=~\"$model_name\"}")
-            | gsub("(?<m>sglang_[a-z0-9_]+)(?<a>[^{a-z0-9_]|$)";
+            | gsub("(?<m>sglang_[a-z0-9_]+)(?<a>[^={a-z0-9_]|$)";
                    .m + "{sglang_instance=~\"$instance\", model_name=~\"$model_name\"}" + .a)
             | gsub("sglang_(?<name>[a-z0-9_]+)\\{(?<sel>[^}]*)\\}";
                    "{__name__=~\"sglang[:_]" + .name + "\", " + .sel + "}")
@@ -406,6 +411,8 @@ raw sglang-dashboard.json "https://raw.githubusercontent.com/sgl-project/sglang/
           then .targets |= map(.legendFormat = "{{sglang_instance}}")
         else . end
       )
+    | (.. | objects | select(.title == "End-to-End Request Latency") | .title) |= "Total Request Duration"
+    | (.. | objects | select(.title == "End-to-End Request Latency(s) Heatmap") | .title) |= "Total Request Duration Heatmap"
   ' | commit sglang-dashboard.json
 
 # LiteLLM proxy dashboard (official, grafana.com 24965).
@@ -421,6 +428,11 @@ raw sglang-dashboard.json "https://raw.githubusercontent.com/sgl-project/sglang/
 #   IP:port (a replica discriminator); LiteLLM runs a single replica, so the
 #   picker only ever showed one real pod (+ a stale one during rollover) and
 #   added no value. Re-add if LiteLLM is ever scaled to multiple replicas.
+# - Rename "Models Latency" → "Total Request Duration": the panel uses
+#   litellm_llm_api_latency_metric = the FULL upstream call duration (queue +
+#   prefill + complete decode), dominated by output length — a response time,
+#   not a latency. The actual latency is the TTFT panel
+#   (litellm_llm_api_time_to_first_token_metric), left as-is.
 # NOTE: no per-panel dedup needed — the hermes-default alias is a router
 # model_group_alias (see litellm_router_settings), NOT a duplicate
 # model_list deployment, so litellm_deployment_state has one series per
@@ -432,10 +444,12 @@ raw litellm-24965.json "https://grafana.com/api/dashboards/24965/revisions/lates
     | .id = null
     | .uid = "litellm-24965"
     | .templating.list |= map(select(.name != "datasource" and .name != "instance"))
-    | (.. | objects | select(has("expr")) | .expr) |=
-        (gsub(", instance=~\"\\$instance\""; "")
-         | gsub("instance=~\"\\$instance\", "; "")
-         | gsub("\\{instance=~\"\\$instance\"\\}"; "{}"))
+    | walk(if type == "string" then
+             (gsub(", instance=~\"\\$instance\""; "")
+              | gsub("instance=~\"\\$instance\", "; "")
+              | gsub("\\{instance=~\"\\$instance\"\\}"; "{}"))
+           else . end)
+    | (.. | objects | select(.title == "Models Latency") | .title) |= "Total Request Duration"
   ' | commit litellm-24965.json
 
 echo "Dashboards downloaded successfully."
