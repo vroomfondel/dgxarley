@@ -433,6 +433,12 @@ raw sglang-dashboard.json "https://raw.githubusercontent.com/sgl-project/sglang/
 #   prefill + complete decode), dominated by output length — a response time,
 #   not a latency. The actual latency is the TTFT panel
 #   (litellm_llm_api_time_to_first_token_metric), left as-is.
+# - Spend tied to the time range: the "Total Spend per Team/User/Model/User
+#   Agent" panels summed the bare litellm_spend_metric_total COUNTER → the
+#   all-time cumulative spend, ignoring the dashboard time range. Wrap the metric
+#   in increase(…[$__range]) so they show spend WITHIN the selected window (and
+#   it's counter-reset-safe across pod restarts). "Spend Rate" is left untouched
+#   (already a rate()); only titles starting "Total Spend per" are rewritten.
 # NOTE: no per-panel dedup needed — the hermes-default alias is a router
 # model_group_alias (see litellm_router_settings), NOT a duplicate
 # model_list deployment, so litellm_deployment_state has one series per
@@ -450,6 +456,8 @@ raw litellm-24965.json "https://grafana.com/api/dashboards/24965/revisions/lates
               | gsub("\\{instance=~\"\\$instance\"\\}"; "{}"))
            else . end)
     | (.. | objects | select(.title == "Models Latency") | .title) |= "Total Request Duration"
+    | (.. | objects | select((.title? // "") | startswith("Total Spend per")) | .targets[]?.expr) |=
+        gsub("(?<m>litellm_spend_metric_total\\{[^}]*\\})"; "increase(" + .m + "[$__range])")
   ' | commit litellm-24965.json
 
 echo "Dashboards downloaded successfully."
