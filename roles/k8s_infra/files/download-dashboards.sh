@@ -458,6 +458,24 @@ raw litellm-24965.json "https://grafana.com/api/dashboards/24965/revisions/lates
     | (.. | objects | select(.title == "Models Latency") | .title) |= "Total Request Duration"
     | (.. | objects | select((.title? // "") | startswith("Total Spend per")) | .targets[]?.expr) |=
         gsub("(?<m>litellm_spend_metric_total\\{[^}]*\\})"; "increase(" + .m + "[$__range])")
+    | ([.panels[] | select(.title == "Total Spend per Team" or .title == "Total Spend per User" or .title == "Total Spend per Model")]) as $spend
+    | .panels |= map(if .gridPos.y >= 21 then (.gridPos.y += 9) else . end)
+    | .panels += ($spend | map(
+        (.title |= sub("Total Spend per"; "Total Tokens per"))
+        | (.id = ((.id // 0) + 5000))
+        | (.gridPos.y = 21)
+        | (.fieldConfig.defaults.unit = "short")
+        | (.fieldConfig.defaults.decimals = 0)
+        | (.targets |= map(.expr |= gsub("litellm_spend_metric_total"; "litellm_total_tokens_metric_total")))
+      ))
+    | .panels += [{
+        "id": 5100, "type": "stat", "title": "Total Tokens (range)",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "gridPos": {"h": 9, "w": 6, "x": 18, "y": 21},
+        "targets": [{"datasource": {"type": "prometheus", "uid": "prometheus"}, "expr": "sum(increase(litellm_total_tokens_metric_total{job=~\"$job\", model=~\"$model\"}[$__range]))", "refId": "A", "instant": true}],
+        "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "blue", "value": null}]}}, "overrides": []},
+        "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "colorMode": "value", "graphMode": "none", "textMode": "auto", "orientation": "auto", "justifyMode": "auto"}
+      }]
   ' | commit litellm-24965.json
 
 echo "Dashboards downloaded successfully."
