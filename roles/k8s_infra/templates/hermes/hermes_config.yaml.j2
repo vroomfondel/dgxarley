@@ -12,6 +12,25 @@ model:
   provider: "custom"
   default: "{{ (item.litellm_model | default('')) or hermes.default_model }}"
   base_url: "{{ hermes.litellm_url }}/v1"
+{% set vision_model = (item.vision_model | default('')) or hermes.vision_model %}
+{% if vision_model %}
+
+# Auxiliary VISION model for image tasks (vision_analyze). The main model
+# (hermes-default → SGLang) is text-only, so Hermes routes image description to
+# this aux model. No `provider:` — for auxiliary slots `base_url` takes
+# precedence over provider (upstream docs), and the documented custom-endpoint
+# form is base_url + api_key + model only; `provider: custom` is the main-model
+# (model:) idiom, not the auxiliary one. The model is a LiteLLM alias
+# (vision-default → sglang-vision companion). api_key is NOT set here (non-secret
+# ConfigMap) — the merge-config initContainer patches auxiliary.vision.api_key
+# from the Secret-backed .env (OPENAI_API_KEY = the per-user litellm_token), same
+# reason as model.api_key (Hermes host-gates OPENAI_API_KEY to openai.com/azure,
+# so an env fallback would not authenticate against our litellm.* base_url).
+auxiliary:
+  vision:
+    model: "{{ vision_model }}"
+    base_url: "{{ hermes.litellm_url }}/v1"
+{% endif %}
 
 terminal:
   backend: "local"

@@ -210,6 +210,12 @@ hermes:
   # k3smaster at this path before the pod starts.
   files_base: "/mnt/nfs/hermes-files"
   default_model: "{{ litellm_hermes_alias_model }}"  # stable alias → current SGLang model
+  # Auxiliary VISION model for image tasks (vision_analyze). The main model
+  # behind hermes-default is text-only, so Hermes falls back to this aux model to
+  # describe images. Stable LiteLLM alias → the sglang-vision companion. Empty
+  # ("") → no auxiliary.vision block rendered (image tasks then route to the
+  # text-only main model and fail). Per-user override via item.vision_model.
+  vision_model: "{{ litellm_vision_alias_model | default('') }}"
   litellm_url: "http://litellm.litellm.svc.cluster.local:4000"
   # Timezone for the hermes pods. The container images default to UTC (no TZ),
   # so the WebUI "System Status" / dashboard render timestamps (e.g. "Last

@@ -71,6 +71,13 @@ ops_env = parse_env("/seed-secret/.env")
 _openai_key = (ops_env.get("OPENAI_API_KEY") or "").strip()
 if _openai_key:
     user.setdefault("model", {})["api_key"] = _openai_key
+    # Same patch for the auxiliary vision model (image tasks) — ONLY when the
+    # seed config actually declares auxiliary.vision (custom provider → our
+    # litellm base_url). Hermes host-gates OPENAI_API_KEY to openai.com/azure,
+    # so the aux vision client also needs cfg_api_key set explicitly. Guarded so
+    # we never invent an auxiliary block when no vision model is configured.
+    if isinstance(user.get("auxiliary"), dict) and isinstance(user["auxiliary"].get("vision"), dict):
+        user["auxiliary"]["vision"]["api_key"] = _openai_key
 with open("/opt/data/config.yaml", "w") as f:
     yaml.safe_dump(user, f, sort_keys=False)
 os.chown("/opt/data/config.yaml", UID, GID)
