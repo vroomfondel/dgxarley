@@ -28,6 +28,8 @@ NVCC_GENCODE/sm121 fix committed as of 2026-05-31. The workaround in
 
 > **Update 2026-06-12 — scitrera/cuda-containers opt-in `b12x` variant added, but broken default persists.** Commit `44a9e8b5` (2026-06-09, "feat: add CUDA_VARIANT argument to Dockerfiles and update installation scripts for optional b12x support") introduced an opt-in `b12x` build variant. However, the default `NVCC_GENCODE="-gencode=arch=compute_121,code=sm_121"` in `container-build/Dockerfile.base` (lines ~6 and ~80) is **unchanged** — the broken sm_121-only gencode persists in the default path. Users who don't explicitly pass `CUDA_VARIANT=b12x` will still get the broken default. No public issue has been filed against scitrera/cuda-containers as of 2026-06-12; the issue-filing prompt below remains valid.
 
+> **Update 2026-06-24 — broken default still present; TORCH_VERSION bumped to 2.9.1.** Verified against scitrera/cuda-containers HEAD: `container-build/Dockerfile.base` still ships `NVCC_GENCODE="-gencode=arch=compute_121,code=sm_121"` (sm_121-only) as the default. The opt-in `b12x` `CUDA_VARIANT` from commit `44a9e8b5` remains the only way to get a correct gencode; the default path is unchanged. New fact: the scitrera recipe has bumped `TORCH_VERSION` to **2.9.1** — the broken-default finding holds for any new scitrera image built from the default path, regardless of the PyTorch version. **Production cluster (`xomoxcc/*`) is unaffected** — our recipes continue to use the corrected `TORCH_CUDA_ARCH_LIST="12.0;12.1"` gencode (see 2026-05-31 note above).
+
 ---
 
 ## Verified scope
