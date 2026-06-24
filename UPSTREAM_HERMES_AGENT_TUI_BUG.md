@@ -283,10 +283,10 @@ small (~50 MB) and the node has fast local storage.
   Adds `chown -R hermes:hermes /opt/hermes/ui-tui /opt/hermes/node_modules`
   to the Dockerfile. Validated with `tests/tools/test_dockerfile_node_modules_perms.py`.
 - First release containing both fixes: **v2026.5.7 / v0.13.0** (2026-05-07,
-  "The Tenacity Release"). Current latest release: **v2026.6.5 / v0.16.0
-  (2026-06-06)** — Trigger 2 still unfixed in the reinstall logic, but
+  "The Tenacity Release"). Current latest release: **v2026.6.19 / v0.17.0
+  (2026-06-19)** — Trigger 2 still unfixed in the reinstall logic, but
   neutralised at build time by `npm_config_install_links=false` (unchanged).
-  Re-checked 2026-06-11.
+  Re-checked 2026-06-24.
 - **Entrypoint chown fix:** [hermes-agent#33045](https://github.com/NousResearch/hermes-agent/pull/33045)
   — merged 2026-05-27, shipped in **v0.15.0 / v2026.5.28**. Adds
   `chown -R hermes:hermes $INSTALL_DIR/ui-tui $INSTALL_DIR/node_modules` to
@@ -311,6 +311,9 @@ small (~50 MB) and the node has fast local storage.
   #38591, #19520, #21267 merged; #18800 closed) still hold. The `copy-ui-tui`
   initContainer-removal action item (Action Items §1–4) remains pending —
   not yet executed.
+- **Re-verified 2026-06-24:** latest release is now **v2026.6.19 / v0.17.0** (2026-06-19);
+  PR #38591 (`--tui` removal) and PR #33045 (entrypoint chown) confirmed merged; action
+  items §1–5 remain pending.
 
 ## Action Items
 
