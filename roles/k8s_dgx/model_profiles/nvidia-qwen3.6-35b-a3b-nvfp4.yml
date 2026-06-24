@@ -46,20 +46,30 @@
 # 35B total / ~3B active, Gated-DeltaNet hybrid-mamba MoE → SGLang routes it
 # through the mamba scheduler path (hence the spec-v2 + extra_buffer knobs below).
 #
-# ── VALIDATION STATUS: UNVALIDATED — first boot is first-contact for modelopt_mixed
-#    on this Qwen arch + SM121/GB10. The launch.sh patch clears the config-dispatch
-#    walls; it does NOT guarantee a clean weight-load / CUDA-graph capture. ──
-# The values below are NOT a fresh matrix winner:
-#   * MODEL-INTRINSIC knobs taken from the RedHatAI VALIDATED winner (0.5.12 matrix,
-#     Test 45, n=8 peak 438.07 tok/s — best ever on this cluster): context, MTP
-#     depth (NEXTN s=2 / draft=3, the validated sweet spot — s=3/4/5 all decayed),
-#     sampling, parsers. These are model properties, carry across to this upload.
-#   * mem 0.6 conservative first-contact (matches both uniform-NVFP4 siblings).
-# NOTE: the two uniform-NVFP4 siblings (redhatai = validated winner, mmangkad = seed)
-# already cover this base model and DON'T need the patch — prefer them unless you
-# specifically want this first-party mixed-precision upload. Re-run the focused sweep
-# (matrixtest_matrices/sglang_nn4_tp4_ep1/qwen-3.6-35b-a3b-nvfp4-...) and rewrite with
-# measured numbers once it boots clean.
+# ── VALIDATION STATUS: VALIDATED & SERVING (2026-06-24) on the PRODUCTION image
+#    xomoxcc/dgx-spark-sglang:0.5.13-sm121 with PR #27906 baked in (recipe gate
+#    APPLY_QWEN36_MIXED_NVFP4_PR27906=1), 4 nodes TP=4 EP=1, RoCE. ──
+# Boot: head 2/2 Ready in ~4 min, 0 restarts; all former walls gone (w4afp8 verify
+# mismatch → w2_weight_scale_2 KeyError → lm_head KeyError). modelopt_mixed loads
+# W4A16_NVFP4 experts/shared/lm_head via #27906's dedicated ModelOptNvFp4A16LinearMethod.
+# Functional: reasoning, tool-calling (qwen3_coder parser → Honcho/Hermes-OK),
+# streaming, and NEXTN/MTP all work (idle spec_accept_length ~2.65, drops to ~2.15
+# under batch load — normal).
+# Throughput (sglang-test parallel, peak = sum of per-request tok/s, 0 failures):
+#   * n=8  → 8/8 ok,  PEAK 491.4 tok/s (per-req median 58.8), TTFT ~0.70s, wall 109.5s
+#   * n=16 → 16/16 ok, PEAK 693.0 tok/s (per-req median 42.6), TTFT ~0.81s, wall 138.4s
+#   Scales cleanly to n=16 (max_running_requests=32, not saturated). For reference the
+#   RedHatAI uniform-NVFP4 winner hit n=8 peak 438.07 on 0.5.12 — this upload is in the
+#   same band (the ~12% n=8 edge is most likely 0.5.13/backend progress, not the
+#   checkpoint; matches the PR author's "no serving advantage over a regular NVFP4 export").
+# These numbers replaced the original first-contact estimates. Knob provenance:
+#   * MODEL-INTRINSIC knobs from the RedHatAI winner: context, MTP depth (NEXTN s=2 /
+#     draft=3 — the validated sweet spot, s=3/4/5 all decayed), sampling, parsers.
+#   * mem 0.6 (matches both uniform-NVFP4 siblings).
+# NOTE: the two uniform-NVFP4 siblings (redhatai = winner, mmangkad = seed) cover this
+# base model WITHOUT any patch — prefer them unless you specifically want this
+# first-party mixed-precision upload, which offers no measured advantage. To re-sweep:
+# matrixtest_matrices/sglang_nn4_tp4_ep1/qwen-3.6-35b-a3b-nvfp4-...
 _model_profile:
   "nvidia/Qwen3.6-35B-A3B-NVFP4":
     knowledge_cutoff: null  # not officially disclosed; community (Reddit r/Qwen_AI) claims ~mid-2024, unconfirmed
