@@ -19,6 +19,14 @@
 > `qwen3_5.py` still lacks `from_dict`/`__post_init__` upstream. Monkey-patch
 > in `sglang_launch.sh` still required.
 >
+> **Re-verified 2026-06-24:** PR #22839 still OPEN (no activity since
+> 2026-06-11); PR #22618 still OPEN (no activity since 2026-04-14).
+> `qwen3_5.py` on main unchanged — no `from_dict` / `__post_init__` added,
+> auto-generated `__init__` bypass still present. No fix in v0.5.13.
+> Monkey-patch in `sglang_launch.sh` still required.
+> Note: v0.5.13.post1 (2026-06-15) is a bare git tag with no GitHub Release
+> page and no scitrera Docker image — it is not a delivery vehicle.
+>
 > **Update 2026-06-12:** PR #22839 received a new third-party comment on
 > 2026-06-11T20:28Z (user `SeedSource`) confirming the bug is still present on
 > SGLang 0.5.13 and identifying a second broken sub-config in the same scope:
