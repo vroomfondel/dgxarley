@@ -25,6 +25,29 @@ version including v0.5.13. (b) **vLLM v0.23.0 released 2026-06-15** — release
 notes confirmed to contain no `moe_wna16` / qzeros / EP fix; vLLM PR #35598
 remains OPEN (last updated 2026-05-23); bug still unpatched in vLLM.
 
+**Clarification 2026-06-24 — EP input-scale slicing ("else-branch") NOT yet on main:**
+The 2026-06-19 update above says the EP input-scale slicing "is now on main"
+(carried by #20869/#21630). Source inspection of `modelopt_quant.py` on main
+(post-2026-06-22) contradicts this for the `else` branch: ~lines 2061-2062 still
+read `layer.w13_input_scale.max(dim=-1).values` with **no EP slicing**. The
+`_slice_scale()` helper and `moe_ep_rank` exist only inside the `elif` block
+(flashinfer_cutlass/trtllm path). What DID land on main via the closed PRs:
+`CutlassMoEParams num_local_experts` fix and SM120 MoE-backend auto-routing. The
+**`else`-branch `w13_input_scale` EP slice** (the fix tracked by PR #23531 and
+our monkey-patch) remains **absent from main and all releases** — the
+monkey-patch is still required. PR #23531 still OPEN.
+
+**Re-verified 2026-06-24 — SHARDED_STATE dispatch FIXED on main (NOT in v0.5.13):**
+PR #25820 ("[NVIDIA] Support NVFP4 MoE for DeepSeek-V4", merged 2026-06-22)
+fixes the `ModelOptModelLoader` SHARDED_STATE dispatch bug: `get_model_loader()`
+(`loader.py` ~line 3140) now short-circuits to `ShardedStateLoader` before
+`ModelOptModelLoader` is ever returned when `load_format==SHARDED_STATE`. The
+fix arrived via #25820, not via the long-open PR #21612 (which remains open).
+The fix is **not in v0.5.13** (tag cut 2026-06-11, before the 2026-06-22 merge).
+The loader-dispatch monkey-patch in `sglang_launch.sh` / `sglang_shard_launch.sh`
+is still required on any released image; it can be removed once a release or
+Docker image carries post-2026-06-22 main.
+
 - vLLM: [PR #35598](https://github.com/vllm-project/vllm/pull/35598) — open since 2026-02-28, not merged. Author rebased onto `main` on 2026-04-13 (commit `c56eae0e`, merge-from-main only, no code changes); prior rebase 2026-03-05. Still only the initial Gemini bot review from 2026-02-28 — no human reviewer has engaged (mergify[bot] flagged a merge conflict 2026-05-23; 5 reviewers requested, none engaged; re-verified 2026-06-11)
 - vLLM: [PR #36026](https://github.com/vllm-project/vllm/pull/36026) — fix wrong num_experts in moe_wna16 kernel dispatch. **Closed without merge 2026-04-25** by author (`weiguangli-io`) citing 8+ weeks with no maintainer review; offered to reopen if it becomes relevant. The sub-bug it fixed (kernel dispatch num_experts) remains unaddressed in vLLM `main`
 - SGLang: no upstream issue or PR filed
