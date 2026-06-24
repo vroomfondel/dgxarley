@@ -63,7 +63,11 @@
             disableDeletion: false
             editable: true
             options:
-              path: /var/lib/grafana/dashboards
+              # MUST be the provisioned/ SUBDIR, not the mount root. The file
+              # provider scans its path RECURSIVELY; pointing it at the root
+              # would also pick up the raw-upstream cache in src/ (same uids →
+              # duplicate/!wrong dashboards). See download-dashboards.sh.
+              path: /var/lib/grafana/dashboards/provisioned
   register: grafana_provisioning
 
 - name: Create grafana-download-dashboards-script ConfigMap

@@ -14,9 +14,22 @@ mkdir -p /var/lib/grafana/dashboards
 # guarded the post-jq file, so a patch change was silently ignored until
 # the cache expired.) A failed/offline pull (cluster is partly airgapped)
 # never clobbers a good cached raw or a good provisioned dashboard.
-DASH_DIR=/var/lib/grafana/dashboards
-SRC_DIR="$DASH_DIR/src"          # raw upstream JSON, pre-transform
-mkdir -p "$SRC_DIR"
+# The hostPath-backed mount root. Grafana's file provider scans its
+# configured path RECURSIVELY, so the committed dashboards and the raw cache
+# MUST live in SEPARATE subtrees — otherwise the provider also provisions the
+# src/ copies, which share each dashboard's uid → duplicate entries (when a
+# patch reassigns the uid) or the raw/unpatched version being served (when it
+# doesn't). The provider is pointed at $DASH_DIR (provisioned/); $SRC_DIR
+# (src/) is a sibling it never scans. Keep dashboards.yaml's `path` in sync.
+DASH_ROOT=/var/lib/grafana/dashboards
+DASH_DIR="$DASH_ROOT/provisioned"   # committed dashboards — provider scans THIS
+SRC_DIR="$DASH_ROOT/src"            # raw upstream JSON, pre-transform (NOT scanned)
+mkdir -p "$DASH_DIR" "$SRC_DIR"
+# One-time migration from the old flat layout: drop stale committed copies that
+# sat directly under $DASH_ROOT next to src/, where the recursive provider
+# scanned BOTH and produced the duplicates. They are rebuilt into $DASH_DIR
+# below; src/ is kept as the warm cache.
+find "$DASH_ROOT" -maxdepth 1 -type f -name '*.json' -delete 2>/dev/null || true
 # Re-fetch a cached RAW download only if older than this many days.
 #   N>0 : refresh after N days  |  0 : always re-fetch  |  -1 : cache forever
 CACHE_TTL_DAYS="${GRAFANA_DASHBOARD_CACHE_TTL_DAYS:-7}"
@@ -392,15 +405,21 @@ raw sglang-dashboard.json "https://raw.githubusercontent.com/sgl-project/sglang/
       else . end
     )
     | .id = null
+    # allValue=".*" so "All" expands to a wildcard regardless of what
+    # label_values() currently returns. The variable queries probe a live
+    # gauge (sglang:num_running_reqs); right after a head-pod restart that
+    # metric is briefly absent → without allValue, $__all would resolve to
+    # the empty alternation "()" → every selector matches nothing → every
+    # panel "No data" until the next manual refresh. ".*" is restart-proof.
     | .templating.list |= map(
         if .name == "instance" then
           .query = {"qryType":1,"query":"label_values({__name__=~\"sglang[:_]num_running_reqs\"}, sglang_instance)","refId":"PrometheusVariableQueryEditor-VariableQuery"}
           | .definition = "label_values({__name__=~\"sglang[:_]num_running_reqs\"}, sglang_instance)"
-          | .includeAll = true | .multi = true | .current = {"text":"All","value":"$__all"}
+          | .includeAll = true | .multi = true | .allValue = ".*" | .current = {"text":"All","value":"$__all"}
         elif .name == "model_name" then
           .query = {"qryType":1,"query":"label_values({__name__=~\"sglang[:_]num_running_reqs\"}, model_name)","refId":"PrometheusVariableQueryEditor-VariableQuery"}
           | .definition = "label_values({__name__=~\"sglang[:_]num_running_reqs\"}, model_name)"
-          | .includeAll = true | .multi = true | .current = {"text":"All","value":"$__all"}
+          | .includeAll = true | .multi = true | .allValue = ".*" | .current = {"text":"All","value":"$__all"}
         else . end
       )
     | .panels |= map(
