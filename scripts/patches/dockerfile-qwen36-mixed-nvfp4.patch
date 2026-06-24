@@ -1,0 +1,46 @@
+Qwen3.6 ModelOpt mixed NVFP4 (PR #27906) patch-application step for
+container-build/Dockerfile.sglang-nightly.
+
+Adds one COPY+RUN step that applies sglang-qwen36-mixed-nvfp4-pr27906.patch
+(upstream PR #27906 — modelopt_mixed + W4A16_NVFP4 support for
+nvidia/Qwen3.6-35B-A3B-NVFP4) to the sglang Python source AFTER the SM121
+sgl-kernel patches but BEFORE `uv pip install ./python`, so the installed
+package picks up the changes. Same pattern as dockerfile-dsv4-nvfp4.patch.
+
+Apply to: container-build/Dockerfile.sglang-nightly AFTER dockerfile-sm121.patch
+has been applied. Application is gated by build_sm121_image.sh on the recipe
+variable APPLY_QWEN36_MIXED_NVFP4_PR27906=1 (set in the production recipe
+sglang-0.5.13-sm121.recipe; remove the variable / set 0 once PR #27906 is merged
+into the pinned SGLANG_REF).
+
+STACKABLE: unlike the dsv4/nemotronh/gemma4 dockerfile patches (which anchor on
+the `echo Skipping ... / fi` lines), this hunk uses ONLY trailing context (the
+`# Install sglang package` comment block) with no leading context, so it inserts
+immediately before that comment regardless of whether another model patch (e.g.
+dsv4) already inserted its COPY+RUN block there first. build_sm121_image.sh
+applies the dsv4 step (2c) before this one (2f), so on the production recipe the
+order ends up: dsv4 block, then this qwen36 block, then `# Install sglang`.
+Works standalone too (no dsv4) — the trailing context is always present.
+
+--- a/container-build/Dockerfile.sglang-nightly
++++ b/container-build/Dockerfile.sglang-nightly
+@@ -293,3 +293,19 @@
++# Qwen3.6 ModelOpt mixed NVFP4 (upstream PR #27906, not yet merged).
++# Rebased onto v0.5.13 (see the source patch header). Adds modelopt_mixed
++# detection + W4A16_NVFP4 (weight-only) Linear/LMHead/MoE support + wrapper-
++# prefix name resolution + MTP path for nvidia/Qwen3.6-35B-A3B-NVFP4. Applied
++# to the sglang Python source before pip install so the installed dist-packages
++# picks up the changes. This COPY+RUN step only exists in builds whose recipe
++# sets APPLY_QWEN36_MIXED_NVFP4_PR27906=1 (the dockerfile patch adding this step
++# is gated by build_sm121_image.sh).
++COPY patches/sglang-qwen36-mixed-nvfp4-pr27906.patch /tmp/sglang-qwen36-mixed-nvfp4-pr27906.patch
++RUN set -e; cd /data/sglang && \
++    echo "=== Applying sglang-qwen36-mixed-nvfp4-pr27906.patch (PR #27906) ===" && \
++    patch --dry-run -p1 < /tmp/sglang-qwen36-mixed-nvfp4-pr27906.patch && \
++    patch -p1 < /tmp/sglang-qwen36-mixed-nvfp4-pr27906.patch && \
++    grep -q 'class ModelOptNvFp4A16LinearMethod' python/sglang/srt/layers/quantization/modelopt_quant.py && \
++    echo 'Qwen3.6 mixed NVFP4 PR #27906 patch applied successfully'
++
+ # Install sglang package (no deps, no build isolation since base has torch).
+ # Moved here from its original early-stage location so the installed
+ # dist-packages picks up the patched nvfp4_blockwise_moe.cuh above.

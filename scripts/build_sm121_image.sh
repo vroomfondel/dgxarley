@@ -80,16 +80,26 @@ BRANCH_NAME="sm121"
 # build steps and SM121 sgl-kernel patches are identical.
 #
 # Current set (v0.5.13 line — DEFAULT):
-#   sglang-0.5.13-sm121.recipe         — SGLang v0.5.13 + SM121 sgl-kernel
-#                                        patches + flashinfer 0.6.12 + the
-#                                        UNMERGED DeepSeek-V4 NVFP4 MoE PR
-#                                        #25820, rebased onto v0.5.13 and
-#                                        gated by the recipe variable
-#                                        APPLY_DSV4_NVFP4_PR25820=1. Drops the
-#                                        0xSero DSV4-FlashMLA kernel bake
-#                                        (native SM120/121 path via PR #24692
-#                                        in v0.5.13 — UPSTREAM_DSV4_BUGS.md §8).
-#                                        Target: nvidia/DeepSeek-V4-Flash-NVFP4.
+#   sglang-0.5.13-sm121.recipe         — THE production image. SGLang v0.5.13 +
+#                                        SM121 sgl-kernel patches + flashinfer
+#                                        0.6.13rc2 + TWO STACKED unmerged model
+#                                        PRs (each gated by its own APPLY_* var,
+#                                        disjoint model paths):
+#                                          · DeepSeek-V4 NVFP4 MoE PR #25820
+#                                            (APPLY_DSV4_NVFP4_PR25820=1) — drops
+#                                            the 0xSero DSV4-FlashMLA bake (native
+#                                            SM120/121 via PR #24692 in v0.5.13,
+#                                            UPSTREAM_DSV4_BUGS.md §8).
+#                                          · Qwen3.6 ModelOpt mixed NVFP4 PR #27906
+#                                            (APPLY_QWEN36_MIXED_NVFP4_PR27906=1,
+#                                            added 2026-06-24) — modelopt_mixed +
+#                                            W4A16_NVFP4 lm_head/MoE/linears +
+#                                            wrapper-prefix + MTP. Its dockerfile
+#                                            patch uses trailing-context-only so it
+#                                            STACKS after the DSV4 step.
+#                                        Both rebased onto v0.5.13. Targets:
+#                                        nvidia/DeepSeek-V4-Flash-NVFP4 +
+#                                        nvidia/Qwen3.6-35B-A3B-NVFP4.
 #                                        Tag: xomoxcc/dgx-spark-sglang:0.5.13-sm121
 #
 # Previous set (v0.5.12 line):
@@ -157,6 +167,11 @@ IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.13-sm121"
 
 #RECIPE_NAME="sglang-0.5.13-dev-nemotronh-mtp-sm121"
 #IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.13-dev-nemotronh-mtp-sm121"
+
+# NB: Qwen3.6 mixed-NVFP4 support (PR #27906) is NOT a separate recipe — it is
+# baked into the production sglang-0.5.13-sm121 recipe above (APPLY_QWEN36_MIXED_
+# NVFP4_PR27906=1), stacked on top of the DSV4 patch. Target:
+# nvidia/Qwen3.6-35B-A3B-NVFP4.
 
 #RECIPE_NAME="sglang-0.5.12-sm121"
 ## IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.12-sm121"
@@ -515,6 +530,15 @@ preflight() {
             sglang-nemotronh-mtp-pr27998.patch
         )
     fi
+    # Qwen3.6 mixed NVFP4 patches (PR #27906) are only required when the recipe
+    # opts in via APPLY_QWEN36_MIXED_NVFP4_PR27906=1. See apply_patches() for the gate.
+    if [[ -f "${PATCHES_DIR}/${RECIPE_NAME}.recipe" ]] \
+        && grep -qE '^APPLY_QWEN36_MIXED_NVFP4_PR27906=1' "${PATCHES_DIR}/${RECIPE_NAME}.recipe"; then
+        required_files+=(
+            dockerfile-qwen36-mixed-nvfp4.patch
+            sglang-qwen36-mixed-nvfp4-pr27906.patch
+        )
+    fi
 
     local missing=0
     for f in "${required_files[@]}"; do
@@ -818,6 +842,19 @@ apply_patches() {
         apply_nemotronh_mtp_patch=1
     fi
 
+    # Qwen3.6 ModelOpt mixed NVFP4 (PR #27906) — gated like DSV4 by an explicit
+    # recipe variable. Drop APPLY_QWEN36_MIXED_NVFP4_PR27906 the moment the PR
+    # lands in the pinned SGLANG_REF (re-applying a merged patch fails the
+    # in-container dry-run and aborts the build). UNLIKE the DSV4/NemotronH/gemma4
+    # patches, dockerfile-qwen36-mixed-nvfp4.patch uses trailing-context-only and
+    # therefore STACKS after them — the production recipe runs it together with
+    # DSV4 (qwen36 dockerfile step 2f applies after dsv4 step 2c).
+    local apply_qwen36_mixed_nvfp4_patch=0
+    if [[ -f "${PATCHES_DIR}/${RECIPE_NAME}.recipe" ]] \
+        && grep -qE '^APPLY_QWEN36_MIXED_NVFP4_PR27906=1' "${PATCHES_DIR}/${RECIPE_NAME}.recipe"; then
+        apply_qwen36_mixed_nvfp4_patch=1
+    fi
+
     # 1. Drop sgl-kernel source patches into the build context.
     # The Dockerfile COPY steps read from container-build/patches/ and the
     # in-container `patch` invocations are conditionally gated by the
@@ -874,6 +911,11 @@ apply_patches() {
     local nemotronh_mtp_source_patches=(
         sglang-nemotronh-mtp-pr27998.patch
     )
+    # Qwen3.6 mixed NVFP4 source patch (PR #27906) — copied only when the recipe
+    # opts in, same rationale as the dsv4/nemotronh patches.
+    local qwen36_mixed_nvfp4_source_patches=(
+        sglang-qwen36-mixed-nvfp4-pr27906.patch
+    )
     local patches_to_copy=( "${always_source_patches[@]}" )
     if (( apply_gemma4_mtp_patch )); then
         patches_to_copy+=( "${mtp_source_patches[@]}" )
@@ -889,6 +931,9 @@ apply_patches() {
     fi
     if (( apply_nemotronh_mtp_patch )); then
         patches_to_copy+=( "${nemotronh_mtp_source_patches[@]}" )
+    fi
+    if (( apply_qwen36_mixed_nvfp4_patch )); then
+        patches_to_copy+=( "${qwen36_mixed_nvfp4_source_patches[@]}" )
     fi
     # sgl-kernel patch variant: a main-ahead SGLANG_REF (post-v0.5.13) can drift
     # the sgl-kernel CMakeLists out from under the SM121 sgl-kernel patches (e.g.
@@ -1063,6 +1108,24 @@ apply_patches() {
         echo "DiffusionGemma Dockerfile patched"
     else
         echo "Skipping dockerfile-diffusiongemma.patch (recipe does not set APPLY_DIFFUSIONGEMMA_PR28054=1)"
+    fi
+
+    # 2f. Qwen3.6 mixed NVFP4 (PR #27906) Dockerfile patch — recipe-gated (see the
+    #     apply_qwen36_mixed_nvfp4_patch determination above). Adds the COPY + RUN
+    #     step that applies sglang-qwen36-mixed-nvfp4-pr27906.patch to the sglang
+    #     source before `uv pip install ./python`. This patch uses trailing-context-
+    #     only, so it STACKS after the dsv4 step (2c) when both are enabled in the
+    #     production recipe — and also applies standalone. Must run AFTER 2c.
+    if (( apply_qwen36_mixed_nvfp4_patch )); then
+        echo "Applying dockerfile-qwen36-mixed-nvfp4.patch..."
+        patch --dry-run -p1 < "${PATCHES_DIR}/dockerfile-qwen36-mixed-nvfp4.patch" \
+            || die "Qwen3.6 mixed NVFP4 Dockerfile patch dry-run failed — regenerate dockerfile-qwen36-mixed-nvfp4.patch"
+        patch -p1 < "${PATCHES_DIR}/dockerfile-qwen36-mixed-nvfp4.patch"
+        grep -q 'sglang-qwen36-mixed-nvfp4-pr27906.patch' container-build/Dockerfile.sglang-nightly \
+            || die "Qwen3.6 mixed NVFP4 Dockerfile patch verification failed"
+        echo "Qwen3.6 mixed NVFP4 Dockerfile patched"
+    else
+        echo "Skipping dockerfile-qwen36-mixed-nvfp4.patch (recipe does not set APPLY_QWEN36_MIXED_NVFP4_PR27906=1)"
     fi
 
     # 3. Drop in the recipe file. run_build() parses it inline and calls

@@ -1,10 +1,15 @@
 #
 # Custom recipe: SGLang v0.5.13 + our SM121 sgl-kernel patches
-#                + DeepSeek-V4 NVFP4 MoE (unmerged upstream PR #25820).
+#                + DeepSeek-V4 NVFP4 MoE (unmerged upstream PR #25820)
+#                + Qwen3.6 ModelOpt mixed NVFP4 (unmerged upstream PR #27906).
 #
-# PURPOSE: first build that can serve nvidia/DeepSeek-V4-Flash-NVFP4 —
-# see roles/k8s_dgx/model_profiles/nvidia-deepseek-v4-flash-nvfp4.yml
-# (BLOCKER section) and UPSTREAM_DSV4_BUGS.md §3/§5/§8. Created 2026-06-12.
+# This is THE production 0.5.13-sm121 image. It carries multiple unmerged
+# model-support PRs that STACK (each gated by its own APPLY_* var); they touch
+# disjoint model paths and don't affect other models, so one image serves all.
+#
+# PURPOSE: serve nvidia/DeepSeek-V4-Flash-NVFP4 (PR #25820) AND
+# nvidia/Qwen3.6-35B-A3B-NVFP4 (PR #27906, added 2026-06-24) — see the two model
+# profiles + UPSTREAM_DSV4_BUGS.md §3/§5/§8. Created 2026-06-12.
 #
 # Pinned to upstream tag `v0.5.13` (cut 2026-06-11T08:09Z; on PyPI since
 # 2026-06-11T10:16Z; bare tag, no GitHub release page at recipe-creation
@@ -113,5 +118,19 @@ DSV4_KERNEL_ARCH=
 # once PR #25820 is merged into the pinned SGLANG_REF — re-applying a merged
 # patch fails the in-container dry-run and aborts the build (by design).
 APPLY_DSV4_NVFP4_PR25820=1
+
+# ── Qwen3.6 ModelOpt mixed NVFP4: upstream PR #27906, rebased onto v0.5.13 ───
+# Gates dockerfile-qwen36-mixed-nvfp4.patch in build_sm121_image.sh::apply_patches,
+# which adds a COPY+RUN step applying sglang-qwen36-mixed-nvfp4-pr27906.patch to
+# the sglang source before `uv pip install ./python`. Target:
+# nvidia/Qwen3.6-35B-A3B-NVFP4 (modelopt MIXED_PRECISION → modelopt_mixed +
+# W4A16_NVFP4 lm_head/MoE/linears + wrapper-prefix + MTP). STACKS with the DSV4
+# patch above: the qwen36 dockerfile patch uses trailing-context-only so it
+# inserts after the DSV4 COPY+RUN block (build applies dsv4 step 2c before qwen36
+# step 2f). Neither patch affects other models (dsv4 gated by auto-backend,
+# qwen36 by MIXED_PRECISION checkpoints), so both ride the production image.
+# Set to 0 / delete once PR #27906 is merged into the pinned SGLANG_REF —
+# re-applying a merged patch fails the in-container dry-run and aborts the build.
+APPLY_QWEN36_MIXED_NVFP4_PR27906=1
 
 IMAGE_TAG=xomoxcc/dgx-spark-sglang:0.5.13-sm121
