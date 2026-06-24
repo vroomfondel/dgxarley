@@ -28,11 +28,17 @@
 #   * w4afp8 → passes verify, but W4AFp8Config is the W4A8 (int4 + per-group fp8-scale)
 #     loader — the WRONG weight encoding for NVFP4 (e2m1) experts.
 # The ModelOptMixedPrecisionConfig loader DOES compose per-layer NVFP4+FP8 correctly
-# but is unreachable for this arch upstream. The sglang_launch.sh
-# "_sgl_mixed_nvfp4_dispatch_" patch broadens the gate: any NVFP4-bearing
-# MIXED_PRECISION checkpoint → modelopt_mixed. With that patch + `quantization:
-# modelopt_mixed` below, detection matches, verify passes, and the mixed loader runs.
-# ⚠️ If that patch is ever dropped/reverted, this profile breaks again — they are paired.
+# but is unreachable for this arch upstream. TWO PAIRED sglang_launch.sh patches make
+# it work (⚠️ if either is dropped/reverted, this profile breaks again):
+#   1. "_sgl_mixed_nvfp4_dispatch_" — broadens the gate so any NVFP4-bearing
+#      MIXED_PRECISION checkpoint → modelopt_mixed (not just NemotronH). With this +
+#      `quantization: modelopt_mixed` below, detection matches and verify passes.
+#   2. "_sgl_mixed_nvfp4_variant_" — modelopt 0.44 labels the experts/shared-expert
+#      linears `quant_algo: W4A16_NVFP4` (weight-only NVFP4), but the mixed loader's
+#      per-layer get_quant_method does exact `== "NVFP4"` → W4A16_NVFP4 layers got NO
+#      quant method → built unquantized → KeyError on w*_weight_scale_2. The patch
+#      normalizes any *NVFP4* variant to NVFP4 so the real loader runs. The checkpoint
+#      ships the full NVFP4 tensor set (weight/weight_scale/weight_scale_2/input_scale).
 #
 #   architectures Qwen3_5MoeForConditionalGeneration, 40 layers, 256 experts /
 #   8 routed + 1 shared per token, max_position_embeddings 262144,
@@ -68,11 +74,11 @@ _model_profile:
     # experts + FP8 attn (~10–12 GB on-device vs ~35 GB FP8). 256 experts, 8 routed + 1 shared per token. Native 262K
     # context (extensible to ~1M via YaRN — not enabled here). MTP-trained → NEXTN.
     context_length: 262144
-    # MIXED_PRECISION modelopt checkpoint (W4A16_NVFP4 MoE + FP8 attn). REQUIRES the
-    # sglang_launch.sh "_sgl_mixed_nvfp4_dispatch_" patch: stock SGLang 0.5.12 gates
-    # MIXED_PRECISION→modelopt_mixed to NemotronH arch and routes this Qwen arch to
-    # w4afp8 (wrong loader for NVFP4 experts). The patch routes NVFP4-bearing mixed
-    # checkpoints to modelopt_mixed → this value matches detection and verify passes.
+    # MIXED_PRECISION modelopt checkpoint (W4A16_NVFP4 MoE + FP8 attn). REQUIRES BOTH
+    # sglang_launch.sh "_sgl_mixed_nvfp4_*" patches (see header): _dispatch_ routes this
+    # Qwen arch's MIXED_PRECISION → modelopt_mixed (stock gates it to NemotronH → w4afp8),
+    # and _variant_ makes the loader accept the W4A16_NVFP4 quant_algo string. Without
+    # them: verify-mismatch crash, then KeyError on w*_weight_scale_2.
     quantization: "modelopt_mixed"
     trust_remote_code: true
     kv_cache_dtype: "fp8_e4m3"

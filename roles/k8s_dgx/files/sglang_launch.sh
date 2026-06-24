@@ -195,6 +195,68 @@ else:
         print("Patched model_config.py: MIXED_PRECISION NVFP4 -> modelopt_mixed dispatch")
 PATCH_MIXED_NVFP4_DISPATCH_EOF
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Patch modelopt_quant.py: treat "W4A16_NVFP4" (and any *NVFP4* variant) as NVFP4
+# in the ModelOptMixedPrecisionConfig per-layer dispatch.
+#
+# modelopt 0.44 labels weight-only NVFP4 layers as quant_algo "W4A16_NVFP4"
+# (4-bit NVFP4 weights, higher-precision activations), NOT plain "NVFP4". SGLang's
+# ModelOptMixedPrecisionConfig.get_quant_method() does exact `quant_algo == "NVFP4"`
+# comparisons, so W4A16_NVFP4 experts/linears match NEITHER the FP8 nor the NVFP4
+# branch → get NO quant method → are built as unquantized → load_weights crashes on
+# the missing w*_weight_scale_2 params (KeyError model.layers.0.mlp.experts.w2_weight_scale_2).
+# The checkpoint ships the FULL NVFP4 tensor set per layer (weight, weight_scale,
+# weight_scale_2, input_scale) — exactly what ModelOptNvFp4FusedMoEMethod /
+# ModelOptFp4LinearMethod register — so normalizing the variant string to "NVFP4"
+# routes them to the right loader. Also fixes the from_config group_size probe (same
+# exact-match bug; harmless here since group_size is 16 either way, patched for
+# robustness). Pairs with the _sgl_mixed_nvfp4_dispatch_ patch above.
+# Target: nvidia/Qwen3.6-35B-A3B-NVFP4 (W4A16_NVFP4 MoE + shared-expert linears).
+# ─────────────────────────────────────────────────────────────────────────────
+python3 - <<'PATCH_MIXED_NVFP4_VARIANT_EOF'
+import pathlib
+p = pathlib.Path("/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/quantization/modelopt_quant.py")
+if not p.exists():
+    print("sglang/srt/layers/quantization/modelopt_quant.py: not found, skipping")
+else:
+    src = p.read_text()
+    marker = "# [patch] _sgl_mixed_nvfp4_variant_"
+    # Patch A: normalize the resolved quant_algo in get_quant_method.
+    old_a = (
+        '        quant_algo = self._resolve_quant_algo(prefix)\n'
+        '\n'
+        '        if isinstance(layer, LinearBase):\n'
+    )
+    new_a = (
+        '        quant_algo = self._resolve_quant_algo(prefix)\n'
+        '        ' + marker + '\n'
+        '        # modelopt 0.44 labels weight-only NVFP4 as "W4A16_NVFP4"; the exact\n'
+        '        # == "NVFP4" checks below would otherwise leave these layers unquantized.\n'
+        '        # The checkpoint ships the full NVFP4 tensor set, so route any *NVFP4*\n'
+        '        # variant through ModelOptNvFp4* / ModelOptFp4LinearMethod.\n'
+        '        if quant_algo and "NVFP4" in quant_algo:\n'
+        '            quant_algo = "NVFP4"\n'
+        '\n'
+        '        if isinstance(layer, LinearBase):\n'
+    )
+    # Patch B: group_size probe in from_config (exact-match → substring).
+    old_b = '            if layer_info.get("quant_algo", "").upper() == "NVFP4":\n'
+    new_b = '            if "NVFP4" in layer_info.get("quant_algo", "").upper():\n'
+
+    if marker in src:
+        print("modelopt_quant.py: NVFP4-variant normalization already patched, skipping")
+    elif old_a not in src:
+        print("modelopt_quant.py: get_quant_method resolve anchor not found, skipping")
+    else:
+        src = src.replace(old_a, new_a, 1)
+        if old_b in src:
+            src = src.replace(old_b, new_b, 1)
+            print("Patched modelopt_quant.py: NVFP4-variant dispatch + group_size probe")
+        else:
+            print("Patched modelopt_quant.py: NVFP4-variant dispatch (group_size probe anchor not found)")
+        p.write_text(src)
+PATCH_MIXED_NVFP4_VARIANT_EOF
+
 # Prime ARP table on the QSFP link before NCCL tries to connect.
 # Without this, the first TCP SYNs get dropped until ARP resolves,
 # causing ~230s delay in "Init torch distributed".
