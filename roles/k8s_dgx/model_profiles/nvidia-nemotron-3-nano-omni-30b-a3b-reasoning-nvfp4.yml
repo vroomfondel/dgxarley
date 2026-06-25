@@ -93,7 +93,7 @@ _model_profile:
     moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
     # Small model → lots of headroom. Card's Spark guidance: mem-fraction-static 0.70–0.80.
-    mem_fraction_static: "0.80"
+    mem_fraction_static: "0.60"
     # attention_backend MUST NOT be triton — SGLang's apply_nemotron_h_defaults hard-asserts
     # against it on NemotronHForCausalLM (first layer may be Mamba, not attention). flashinfer
     # works on the text core; Mamba2 SSM layers use their own kernels regardless. The VISION/
@@ -104,7 +104,7 @@ _model_profile:
     # NemotronH hybrid graph: the Super card sets --disable-piecewise-cuda-graph; mirror it.
     disable_piecewise_cuda_graph: true
     disable_cuda_graph: false
-    cuda_graph_max_bs: 32
+    cuda_graph_max_bs: 8
     pp_async_batch_depth: 0
     # NVFP4 scale_fmt != ue8m0 → DeepGemm JIT not optimized; disable (same as all NVFP4 here).
     disable_deep_gemm: true
@@ -113,7 +113,7 @@ _model_profile:
     # (full intermediate per rank dodges the gated-padding assert). 128 % 4 == 0. UNVALIDATED.
     # Dynamic-safe form if sglang_nnodes ever changes:
     #   ep_size: "{{ sglang_nnodes if (128 % (sglang_nnodes | int) == 0) else 1 }}"
-    ep_size: 4
+    ep_size: 1
     # reasoning-parser = nemotron_3 per the HF MODEL CARD (user choice 2026-06-24),
     # matching the validated Super-120B sibling. NOTE the conflict: SGLang's own cookbook
     # (§4.8) uses deepseek-r1 across all three quants — if <think> tags leak into content
