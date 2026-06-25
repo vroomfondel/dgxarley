@@ -518,6 +518,20 @@ litellm_hermes_alias_model: "hermes-default"
 #   Prometheus's ~5 min staleness window passes.
 enable_vision_model: true
 
+# === Coder model — MASTER SWITCH (default OFF) ============================
+# enable_coder_model is the exact analogue of enable_vision_model for the local
+# Qwen3-Coder-Next companion (sglang-coder instance, see roles/k8s_dgx/defaults/
+# main.yml). DEFAULT false — the instance is UNVALIDATED and memory-tight
+# (co-locates with the Nemotron default on all 4 sparks; needs SR-IOV + timeslice
+# + freeing the default's memory). Read the TUNE notes by _sglang_coder_instance
+# before flipping it true.
+#   true  → sglang-coder is deployed AND LiteLLM exposes the `coder-default` alias.
+#   false → dropped from the deploy loop, alias removed, and a `--tags sglang` run
+#           TEARS DOWN any running sglang-coder resources.
+# HOWTO (same as vision): set the flag, then
+#   ansible-playbook k8s_dgx.yml --tags sglang,litellm
+enable_coder_model: false
+
 # Qwen3-VL vision companion (sglang-vision instance), wired EXACTLY like
 # hermes-default: the backend is registered in model_list under its REAL served
 # name (litellm_vision_model) and litellm_vision_alias_model is a router
@@ -525,6 +539,10 @@ enable_vision_model: true
 # enable_vision_model above (alias "" → litellm_router_settings omits it).
 litellm_vision_alias_model: "{{ 'vision-default' if (enable_vision_model | default(true)) else '' }}"
 litellm_vision_model: "Qwen/Qwen3-VL-8B-Instruct-FP8"   # == served_model_name of the sglang-vision instance
+# Qwen3-Coder-Next companion (sglang-coder instance), wired the same way, gated on
+# enable_coder_model. litellm_coder_model == its served_model_name (the model id).
+litellm_coder_alias_model: "{{ 'coder-default' if (enable_coder_model | default(false)) else '' }}"
+litellm_coder_model: "RedHatAI/Qwen3-Coder-Next-NVFP4"   # == served_model_name of the sglang-coder instance
 # litellm_model_list_append / _exclude below are PUBLIC DUMMY values. The REAL
 # ones live in group_vars/all/vault.yml (its cloud entry carries a secret
 # api_key); vault.yml loads AFTER main.yml so it OVERRIDES these — the standard
@@ -545,8 +563,23 @@ _litellm_vision_model_list:
       input_cost_per_token: "{{ litellm_default_input_cost_per_token }}"
       output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
 
-# Dummy: vision-only (the non-secret subset). Real vault value = cloud + vision.
-litellm_model_list_append: "{{ _litellm_vision_model_list if (enable_vision_model | default(true)) else [] }}"
+# Coder fragment — same shape, points at the in-cluster sglang-coder Service.
+# Also non-secret; referenced by name from both the dummy below and the vault
+# combine (gated to [] when enable_coder_model is false).
+_litellm_coder_model_list:
+  - model_name: "{{ litellm_coder_model }}"
+    litellm_params:
+      model: "openai/{{ litellm_coder_model }}"
+      api_base: "http://sglang-coder.{{ sglang_namespace }}.svc.cluster.local:{{ sglang_port }}/v1"
+      api_key: "none"
+      input_cost_per_token: "{{ litellm_default_input_cost_per_token }}"
+      output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
+
+# Dummy: vision + coder (the non-secret subset). Real vault value = cloud + the
+# same two gated fragments.
+litellm_model_list_append: >-
+  {{ (_litellm_vision_model_list if (enable_vision_model | default(true)) else [])
+     + (_litellm_coder_model_list if (enable_coder_model | default(false)) else []) }}
 # Dummy: exclude nothing. Real vault value drops the local ollama chat model.
 litellm_model_list_exclude: []
 

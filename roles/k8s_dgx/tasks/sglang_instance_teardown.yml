@@ -1,0 +1,45 @@
+---
+# Delete all K8s resources for ONE gated SGLang companion instance that is
+# currently disabled. Included per-instance from sglang.yml with:
+#   _td.prefix  = inst.prefix (e.g. "sglang-vision" / "sglang-coder")
+#   _td.workers = number of worker Deployments (= node count - 1)
+# Ansible does NOT prune resources it no longer manages, so when an instance's
+# enable_*_model flag is flipped to false its entry leaves sglang_instances (the
+# deploy loop stops touching it) but the running pods/Service linger — holding a
+# time-sliced GPU share and showing up in the Grafana panel. This actively
+# removes them. state: absent is idempotent (no-op once gone); a graceful delete
+# (default grace period) releases the SR-IOV VF cleanly — we never force-delete a
+# VF-attached pod. Names mirror sglang_instance.yml's inst.prefix.
+- name: Delete {{ _td.prefix }} head / service / rbac / configmaps
+  kubernetes.core.k8s:
+    state: absent
+    api_version: "{{ item.api_version }}"
+    kind: "{{ item.kind }}"
+    namespace: "{{ sglang_namespace }}"
+    name: "{{ item.name }}"
+  loop:
+    - {api_version: apps/v1, kind: Deployment, name: "{{ _td.prefix }}-head"}
+    - {api_version: v1, kind: Service, name: "{{ _td.prefix }}"}
+    - {api_version: v1, kind: ServiceAccount, name: "{{ _td.prefix }}-head"}
+    - {api_version: rbac.authorization.k8s.io/v1, kind: RoleBinding, name: "{{ _td.prefix }}-head-pod-reader"}
+    - {api_version: v1, kind: ConfigMap, name: "{{ _td.prefix }}-config"}
+    - {api_version: v1, kind: ConfigMap, name: "{{ _td.prefix }}-launch-script"}
+    - {api_version: v1, kind: ConfigMap, name: "{{ _td.prefix }}-wait-script"}
+    - {api_version: v1, kind: ConfigMap, name: "{{ _td.prefix }}-model-download-script"}
+    - {api_version: v1, kind: ConfigMap, name: "{{ _td.prefix }}-haproxy-config"}
+  loop_control:
+    label: "{{ item.kind }}/{{ item.name }}"
+
+# One Deployment per worker rank (1..N-1 for an N-node instance). The pod-reader
+# Role is shared/unprefixed across instances — intentionally NOT deleted.
+- name: Delete {{ _td.prefix }} worker Deployments
+  kubernetes.core.k8s:
+    state: absent
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ sglang_namespace }}"
+    name: "{{ _td.prefix }}-worker-{{ item }}"
+  loop: "{{ range(1, _td.workers + 1) | list }}"
+  loop_control:
+    label: "Deployment/{{ _td.prefix }}-worker-{{ item }}"
+  when: _td.workers | int > 0

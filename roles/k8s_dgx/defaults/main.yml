@@ -482,18 +482,44 @@ _sglang_vision_instance:
   context_length: 65536    # per-request window (overrides the profile); keep == max_total_tokens
   external_enabled: false  # in-cluster only (ClusterIP for litellm); no external ingress/cert/DNS
 
-# `default` is ALWAYS present (whole cluster, active sglang_model); `vision` joins
-# only when enable_vision_model is true. To add MORE instances (e.g. a
-# Qwen3-Coder-Next instance over all 4 nodes, tp=4/ep=4/pp=1) define them like
-# _sglang_vision_instance above and combine() them in here. NAMING: the instance
-# KEY ("coder") → prefix/hostname "sglang-<key>", so it MUST be RFC1123-safe
-# (lowercase/digits/'-', NO underscore); sriov_key is only a
+# ---------------------------------------------------------------------------
+# enable_coder_model (group_vars/all/main.yml) is the MASTER SWITCH for the
+# Qwen3-Coder-Next companion, default OFF. Same machinery as vision: true → joins
+# the deploy loop (key `coder` → prefix "sglang-coder"); false → dropped from the
+# loop AND `--tags sglang` tears down any running sglang-coder resources.
+#
+# Qwen3-Coder-Next-80B-A3B (RedHatAI NVFP4), tp=4/ep=4/pp=1 over ALL 4 sparks —
+# CO-LOCATES with the `default` text instance (and vision on spark3+4) via GPU
+# time-slicing. UNVALIDATED ("first contact" profile) AND memory-tight: the
+# Nemotron default holds ~90 GB/spark, the 80B NVFP4 needs ~40 GB+ — it WON'T fit
+# until you free room (lower the default's mem_fraction_static). mem_fraction_static
+# is NOT a per-instance key (resolves from the model profile = 0.50); once you've
+# freed memory, PIN a co-located footprint via max_total_tokens here. Enabling
+# also needs qsfp_sriov_enabled + the `sglang_coder` qsfp_sriov_assignments entry
+# AND nvidia_gpu_timeslice_replicas high enough for the per-GPU stacking. TUNE
+# before flipping enable_coder_model true.
+_sglang_coder_instance:
+  model: "RedHatAI/Qwen3-Coder-Next-NVFP4"
+  nodes: [1, 2, 3, 4]      # all 4 sparks — co-locates with `default` (+ vision on 3,4) via timeslice
+  sriov_key: "sglang_coder"
+  tp_size: 4               # tensor-parallel across all 4 GPUs
+  ep_size: 4               # =tp → all-to-all expert parallelism for the MoE layers
+  pp_size: 1               # tp*pp == #nodes (4) ✓
+  external_enabled: false  # in-cluster only (ClusterIP for litellm); no external ingress/cert/DNS
+
+# `default` is ALWAYS present (whole cluster, active sglang_model); `vision` and
+# `coder` join only when their enable_*_model flag is true. To add MORE instances
+# define them like _sglang_vision_instance above and combine() them in here.
+# NAMING: the instance KEY ("coder") → prefix/hostname "sglang-<key>", so it MUST
+# be RFC1123-safe (lowercase/digits/'-', NO underscore); sriov_key is only a
 # qsfp_sriov_assignments lookup so it MAY contain underscores. Co-located
 # instances need qsfp_sriov_enabled + their own assignment AND timeslice ≥ 2.
 sglang_instances: >-
   {{ {'default': {}}
      | combine({'vision': _sglang_vision_instance}
-               if (enable_vision_model | default(true)) else {}) }}
+               if (enable_vision_model | default(true)) else {})
+     | combine({'coder': _sglang_coder_instance}
+               if (enable_coder_model | default(false)) else {}) }}
 
 # Merged UNDER each sglang_instances entry (entry wins). _inst_key is the dict
 # key of the current instance, set by the loop in sglang.yml. Defaults that
@@ -1030,17 +1056,22 @@ _litellm_model_list_base:
 # Grafana tile). Aliases stay visible in /v1/models so clients can select them.
 #   hermes-default  → sglang_served_model_name (the default/active SGLang model)
 #   vision-default  → litellm_vision_model     (the sglang-vision companion)
+#   coder-default   → litellm_coder_model      (the sglang-coder companion)
 # Each alias is gated independently: set its *_alias_model var to "" to omit it.
-# The vision alias additionally needs litellm_vision_model (its target group, the
-# real served name registered via litellm_model_list_append in group_vars).
+# The vision/coder aliases additionally need their *_model var (the target group,
+# the real served name registered via litellm_model_list_append in group_vars).
 litellm_router_settings: >-
   {{ {'model_group_alias':
         ({}
          | combine({litellm_hermes_alias_model: sglang_served_model_name}
                    if (litellm_hermes_alias_model | default('')) else {})
          | combine({litellm_vision_alias_model: litellm_vision_model}
-                   if ((litellm_vision_alias_model | default('')) and (litellm_vision_model | default(''))) else {}))}
-     if ((litellm_hermes_alias_model | default('')) or (litellm_vision_alias_model | default(''))) else {} }}
+                   if ((litellm_vision_alias_model | default('')) and (litellm_vision_model | default(''))) else {})
+         | combine({litellm_coder_alias_model: litellm_coder_model}
+                   if ((litellm_coder_alias_model | default('')) and (litellm_coder_model | default(''))) else {}))}
+     if ((litellm_hermes_alias_model | default(''))
+         or (litellm_vision_alias_model | default(''))
+         or (litellm_coder_alias_model | default(''))) else {} }}
 
 # litellm_settings: rendered as the litellm_settings block in config.yaml
 litellm_settings:
