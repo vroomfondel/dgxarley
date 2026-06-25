@@ -443,6 +443,29 @@ raw sglang-dashboard.json "https://raw.githubusercontent.com/sgl-project/sglang/
           then .targets |= map(.legendFormat = "{{sglang_instance}}")
         else . end
       )
+    # POD-ROLLOVER DEDUP: the gauge selectors above resolve to one series per
+    # (sglang_instance, model_name, instance=pod-IP, pod_template_hash). On a
+    # POD-ROLLOVER DEDUP NOTE: do NOT use apostrophes anywhere in this jq
+    # program (it is wrapped in shell single-quotes; a stray apostrophe
+    # terminates the quote and the rest of the line becomes shell words ->
+    # "Could not open file ..." jq errors). The gauge selectors above resolve
+    # to one series per
+    # (sglang_instance, model_name, instance=pod-IP, pod_template_hash). On a
+    # head-pod rollover Prometheus keeps the OLD pod series through its ~5min
+    # staleness window, so for the staleness overlap there are TWO series with
+    # the same sglang_instance but different pod IP — and legendFormat
+    # "{{sglang_instance}}" renders BOTH as the same name (e.g. "default" twice
+    # in the legend). Collapse to one line per (sglang_instance, model_name)
+    # with `max by (...)` (take the live pod, never double-count a gauge) —
+    # same dedup idea as the dcgm dashboard `max by (gpu, instance)`. Cache
+    # Hit Rate already aggregates via its full sum-by override below, so it is
+    # excluded here.
+    | .panels |= map(
+        if (.title == "Num Running Requests" or .title == "Number Queued Requests"
+            or .title == "Token Generation Throughput (Tokens / S)")
+          then .targets |= map(.expr |= "max by (sglang_instance, model_name) (" + . + ")")
+        else . end
+      )
     | (.. | objects | select(.title == "Cache Hit Rate") | .targets[0].expr) |=
         "sum by (sglang_instance, model_name) (rate({__name__=~\"sglang[:_]cached_tokens_total\", sglang_instance=~\"$instance\", model_name=~\"$model_name\"}[$__rate_interval])) / sum by (sglang_instance, model_name) (rate({__name__=~\"sglang[:_]prompt_tokens_total\", sglang_instance=~\"$instance\", model_name=~\"$model_name\"}[$__rate_interval]))"
     | (.. | objects | select(.title == "End-to-End Request Latency") | .title) |= "Total Request Duration"
