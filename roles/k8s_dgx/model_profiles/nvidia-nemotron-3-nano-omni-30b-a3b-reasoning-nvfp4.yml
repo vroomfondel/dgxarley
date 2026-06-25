@@ -104,7 +104,7 @@ _model_profile:
     # NemotronH hybrid graph: the Super card sets --disable-piecewise-cuda-graph; mirror it.
     disable_piecewise_cuda_graph: true
     disable_cuda_graph: false
-    cuda_graph_max_bs: 8
+    cuda_graph_max_bs: 32
     pp_async_batch_depth: 0
     # NVFP4 scale_fmt != ue8m0 → DeepGemm JIT not optimized; disable (same as all NVFP4 here).
     disable_deep_gemm: true
@@ -127,9 +127,20 @@ _model_profile:
     recommended_sampling:
       temperature: 1.0  # Nemotron-3 family default (mirrors Super); VERIFY against Omni card
       top_p: 0.95
-    # NO speculative decoding: config.json carries NO MTP / num_nextn_predict_layers head
-    # (unlike the Super, which has a built-in MTP layer). The card never mentions speculative
-    # decoding for any engine. Leave OFF — there is no native draft head to drive.
+    # NO speculative decoding — NO MTP. VERIFIED 2026-06-25 (three independent ways,
+    # no longer a first-contact guess):
+    #   1. The served checkpoint's own config.json (snapshot dc5f0b0…) has NO
+    #      num_nextn_predict_layers / nextn / mtp / draft key anywhere — neither
+    #      top-level nor in the nested llm_config (NemotronHForCausalLM).
+    #   2. The Nemotron-3 Nano Omni paper (arXiv 2604.24954) never mentions MTP /
+    #      multi-token prediction / speculative decoding / draft tokens at all.
+    #   3. MTP is a Nemotron-3 FAMILY technique, but only the SUPER ships a usable
+    #      MTP head (num_nextn_predict_layers in its config); the NVIDIA/vLLM MTP
+    #      writeups are all Super-scoped. No separate Nano/Omni MTP or draft
+    #      checkpoint was published.
+    # So there is no native draft head to drive, and no external draft exists.
+    # Leave OFF. (Speculative would only be possible via a separate EAGLE/draft
+    # model — neither provided nor trivial on the hybrid Mamba core.)
     speculative_enabled: false
     # CONCURRENCY note (deferred): NemotronH is a hybrid Mamba model, so max_running_requests
     # is clamped by the Mamba state-cache pool (max_mamba_cache_size // mamba_ratio), NOT by

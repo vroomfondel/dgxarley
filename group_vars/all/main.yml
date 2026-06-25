@@ -452,8 +452,8 @@ sglang_port: 8000
 # sglang_model: "mistralai/Mistral-Large-3-675B-Instruct-2512-NVFP4"  # 675B MLA-MoE, multimodal, mistral-NATIVE (name-loaded) → ~101 GB/GPU TP4 (TIGHT, start ctx 64K)
 #
 # --- Nemotron-3 ---
-# sglang_model: "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"  # 31B/3B MoE NVFP4 (modelopt mixed), OMNI-multimodal (text/img/video/audio), NemotronH hybrid; SGLang class NemotronH_Nano_Omni_Reasoning_V3 (in nano_nemotron_vl.py, >=0.5.12); AUDIO needs librosa baked into the 0.5.13-sm121 image (AUDIO_DEPS recipe var). UNVALIDATED first-contact
-sglang_model: "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
+sglang_model: "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"  # 31B/3B MoE NVFP4 (modelopt mixed), OMNI-multimodal (text/img/video/audio), NemotronH hybrid; SGLang class NemotronH_Nano_Omni_Reasoning_V3 (in nano_nemotron_vl.py, >=0.5.12); AUDIO needs librosa baked into the 0.5.13-sm121 image (AUDIO_DEPS recipe var). UNVALIDATED first-contact
+# sglang_model: "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
 # sglang_model: "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4"
 #
 # --- Nex-N2 ---
