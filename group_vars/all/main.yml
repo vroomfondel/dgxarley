@@ -499,14 +499,44 @@ litellm_port: 4000
 # durable model name). Routes to whatever SGLang currently serves.
 litellm_hermes_alias_model: "hermes-default"
 
+# === Vision model — MASTER SWITCH =========================================
+# enable_vision_model toggles the WHOLE Qwen3-VL vision companion in one place:
+#   true  → the sglang-vision SGLang instance is deployed (sglang_instances, see
+#           roles/k8s_dgx/defaults/main.yml) AND LiteLLM exposes the
+#           `vision-default` alias for it.
+#   false → the instance is dropped from the deploy loop, the LiteLLM alias is
+#           removed, AND a `--tags sglang` run TEARS DOWN the already-running
+#           vision pods/Service (teardown block in roles/k8s_dgx/tasks/sglang.yml).
+#
+# HOWTO disable (or re-enable) the vision model — that's all you do:
+#   1. set  enable_vision_model: false   (here)   [true to re-enable]
+#   2. ansible-playbook k8s_dgx.yml --tags sglang,litellm
+#        --tags sglang  → removes the sglang-vision Deployments + Service (or
+#                         redeploys them when re-enabling)
+#        --tags litellm → re-renders LiteLLM without (or with) the vision alias
+#   The vision series also disappears from the Grafana SGLang panel once
+#   Prometheus's ~5 min staleness window passes.
+enable_vision_model: true
+
 # Qwen3-VL vision companion (sglang-vision instance), wired EXACTLY like
 # hermes-default: the backend is registered in model_list under its REAL served
-# name (litellm_vision_model) — a single, distinct deployment, NOT a duplicate —
-# and litellm_vision_alias_model is a router model_group_alias onto it (see
-# litellm_router_settings). Set litellm_vision_alias_model: "" to drop the alias.
-litellm_vision_alias_model: "vision-default"
+# name (litellm_vision_model) and litellm_vision_alias_model is a router
+# model_group_alias onto it (see litellm_router_settings). Both are gated on
+# enable_vision_model above (alias "" → litellm_router_settings omits it).
+litellm_vision_alias_model: "{{ 'vision-default' if (enable_vision_model | default(true)) else '' }}"
 litellm_vision_model: "Qwen/Qwen3-VL-8B-Instruct-FP8"   # == served_model_name of the sglang-vision instance
-litellm_model_list_append:
+# litellm_model_list_append / _exclude below are PUBLIC DUMMY values. The REAL
+# ones live in group_vars/all/vault.yml (its cloud entry carries a secret
+# api_key); vault.yml loads AFTER main.yml so it OVERRIDES these — the standard
+# public-dummy / vault-real pattern used throughout this repo. Because lists
+# REPLACE (never merge), the real vault `litellm_model_list_append` assembles
+# BOTH fragments in one definition (its cloud fragment + the vision fragment
+# below). Keep exactly ONE `litellm_model_list_append:` PER FILE — the only
+# sanctioned duplicate is this main↔vault dummy/real pair, never two in the same
+# group_vars dir. _litellm_vision_model_list is NOT a dummy: it's the actual
+# (non-secret) vision fragment, referenced by name from both this dummy and the
+# vault combine (gated to [] when enable_vision_model is false).
+_litellm_vision_model_list:
   - model_name: "{{ litellm_vision_model }}"
     litellm_params:
       model: "openai/{{ litellm_vision_model }}"
@@ -514,6 +544,11 @@ litellm_model_list_append:
       api_key: "none"
       input_cost_per_token: "{{ litellm_default_input_cost_per_token }}"
       output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
+
+# Dummy: vision-only (the non-secret subset). Real vault value = cloud + vision.
+litellm_model_list_append: "{{ _litellm_vision_model_list if (enable_vision_model | default(true)) else [] }}"
+# Dummy: exclude nothing. Real vault value drops the local ollama chat model.
+litellm_model_list_exclude: []
 
 # --- Ollama embedding coordinates ---
 ollama_port: 11434

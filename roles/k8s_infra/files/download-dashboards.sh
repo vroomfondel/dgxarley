@@ -496,10 +496,12 @@ raw sglang-dashboard.json "https://raw.githubusercontent.com/sgl-project/sglang/
 #   in increase(…[$__range]) so they show spend WITHIN the selected window (and
 #   it's counter-reset-safe across pod restarts). "Spend Rate" is left untouched
 #   (already a rate()); only titles starting "Total Spend per" are rewritten.
-# NOTE: no per-panel dedup needed — the hermes-default alias is a router
-# model_group_alias (see litellm_router_settings), NOT a duplicate
-# model_list deployment, so litellm_deployment_state has one series per
-# real backend (the "LLM Deployment Analytics" panel shows one tile).
+# NOTE: the hermes-default alias is a router model_group_alias (see
+# litellm_router_settings), NOT a duplicate model_list deployment, so it adds no
+# extra litellm_deployment_state series. BUT a litellm POD ROLLOVER does: the old
+# pod's series lingers through Prometheus' staleness window, so the deployment-
+# state panel shows TWO "healthy" tiles per model during the lookback. That IS
+# deduped per-panel below (max by litellm_model_name, model_id, api_base).
 raw litellm-24965.json "https://grafana.com/api/dashboards/24965/revisions/latest/download" \
   | sed 's/${datasource}/prometheus/g; s/${DS_PROMETHEUS}/prometheus/g; s/ad8llmv/prometheus/g' \
   | jq '
@@ -512,6 +514,39 @@ raw litellm-24965.json "https://grafana.com/api/dashboards/24965/revisions/lates
               | gsub("instance=~\"\\$instance\", "; "")
               | gsub("\\{instance=~\"\\$instance\"\\}"; "{}"))
            else . end)
+    # POD-ROLLOVER DEDUP (panel id=1 "LLM Deployment Analytics"): litellm_deployment_state
+    # is one series per (litellm_model_name, model_id, api_base, instance=pod-IP,
+    # pod_template_hash). On a litellm pod rollover Prometheus keeps the OLD pod
+    # series through its staleness window, so within the panel lookback there are
+    # TWO series per model (same model_id, different pod_template_hash + instance)
+    # -> two "healthy" tiles. Collapse to one per real backend with max by
+    # (litellm_model_name, model_id, api_base) -> drops the pod-identity labels.
+    # Same dedup idea as the sglang/dcgm dashboards. (The instance selector was
+    # already stripped above; this wraps whatever expr remains.)
+    | .panels |= map(
+        if .id == 1 then
+          .targets |= map(.expr |= "max by (litellm_model_name, model_id, api_base) (" + . + ")")
+        else . end
+      )
+    # SECOND Y-AXIS (panel id=8 "Tokens Rate"): INPUT (refId A) and OUTPUT
+    # (refId B) differ by ~100x (huge prompts, short completions in agent
+    # traffic), so on a shared axis OUTPUT is an invisible sliver. Upstream ships
+    # a negative-Y transform on B (diverging view) which is useless at that
+    # ratio. Replace it: put OUTPUT on its OWN right axis (own scale, positive),
+    # label both axes. Overrides are REPLACED wholesale (upstream had only the
+    # negative-Y override on B), which also drops the now-unwanted transform.
+    | .panels |= map(
+        if .id == 8 then
+          .fieldConfig.defaults.custom.axisLabel = "input tokens/s"
+          | .fieldConfig.overrides = [
+              {"matcher": {"id": "byFrameRefID", "options": "B"},
+               "properties": [
+                 {"id": "custom.axisPlacement", "value": "right"},
+                 {"id": "custom.axisLabel", "value": "output tokens/s"}
+               ]}
+            ]
+        else . end
+      )
     | (.. | objects | select(.title == "Models Latency") | .title) |= "Total Request Duration"
     | (.. | objects | select((.title? // "") | startswith("Total Spend per")) | .targets[]?.expr) |=
         gsub("(?<m>litellm_spend_metric_total\\{[^}]*\\})"; "increase(" + .m + "[$__range])")

@@ -458,74 +458,42 @@ sglang_moe_config_dir: "/root/.cache/huggingface/moe_configs"
 # nvidia_gpu_timeslice_replicas) or be disjoint (partitioning). Overlap requires
 # SR-IOV with a distinct sriov_key per instance; PF mode has a single QSFP IP
 # per node, so overlap is impossible there.
-sglang_instances:
-  default: {}
-  # --- Example: a second instance serving Qwen3-Coder-Next over ALL 4 nodes,
-  # tp=4 / ep=4 / pp=1. Commented out — it CO-LOCATES with `default` on every
-  # spark, so before enabling it you MUST:
-  #   1. qsfp_sriov_enabled: true AND a dedicated qsfp_sriov_assignments entry
-  #      whose KEY equals sriov_key below ("sglang-coder" — its own VF + QSFP IP
-  #      block; real values live in group_vars/all/vault.yml). Then re-run
-  #      dgx.yml --tags qsfp_sriov and k8s_dgx.yml --tags multus.
-  #   2. nvidia_gpu_timeslice_replicas >= 2 so each GPU is allocatable twice
-  #      (default + coder pod share each spark).
-  # ep=4 (=tp) switches the MoE layers to all-to-all expert parallelism.
-  #
-  # NAMING — two distinct identifiers, don't conflate them:
-  #   * instance KEY ("coder") -> prefix/hostname "sglang-<key>" = "sglang-coder",
-  #     used for K8s resource names AND the DNS/cert hostname, so it MUST be
-  #     RFC1123/DNS-safe: lowercase + digits + '-' only, NO underscore (an '_'
-  #     key yields invalid object names and an invalid cert/DNS name). Hence the
-  #     key is "coder" (not "sglang_coder" / "sglang-coder", which would double
-  #     the prefix to "sglang-sglang-...").
-  #   * sriov_key ("sglang_coder") -> only a lookup into qsfp_sriov_assignments
-  #     (never a resource name), so it can be any string — it just has to match
-  #     that dict's key exactly (underscore here is fine, unlike the KEY above).
-#  coder:
-#    model: "RedHatAI/Qwen3-Coder-Next-NVFP4"
-#    nodes: [1, 2, 3, 4]
-#    sriov_key: "sglang_coder"
-#    tp_size: 4
-#    ep_size: 4
-#    pp_size: 1
-#    mem_fraction_static: 0.9
-#    max_total_tokens: 123456
+# ---------------------------------------------------------------------------
+# enable_vision_model (group_vars/all/main.yml) is the MASTER SWITCH for the
+# Qwen3-VL vision companion. true → `default` + `vision` are deployed; false →
+# ONLY `default`, and `k8s_dgx.yml --tags sglang` ALSO tears down any already-
+# running sglang-vision resources (teardown block at the end of sglang.yml).
+# Full enable/disable HOWTO lives next to the flag in group_vars/all/main.yml.
 #
-#  # --- Example: Qwen3-VL-8B-Instruct-FP8 as a single-node VISION COMPANION,
-#  # tp=1 on ONE spark, co-located with the 4-node text `default` instance via
-#  # GPU time-slicing. The 8B is ~9 GB → fits trivially alongside the Nemotron
-#  # share on that GPU. Commented out — before enabling it you MUST:
-#  #   1. nvidia_gpu_timeslice_replicas >= 2 so the chosen spark's GPU is
-#  #      allocatable twice (default Nemotron pod + this vision pod share it).
-#  #      (Already at 4 replicas on this cluster.)
-#  #   2. QSFP/SR-IOV: a tp=1 instance runs NO inter-node NCCL, but the head pod
-#  #      manifest still attaches a QSFP network. In PF mode there's ONE QSFP IP
-#  #      per node, already taken by the co-located Nemotron pod → conflict. So
-#  #      enable qsfp_sriov_enabled AND add a dedicated qsfp_sriov_assignments
-#  #      entry keyed "sglang_vision" (its own VF + a 1-IP block; head_ip only,
-#  #      no workers), then re-run dgx.yml --tags qsfp_sriov + k8s_dgx.yml --tags
-#  #      multus before deploying. (If SR-IOV stays off, place this on a spark NOT
-#  #      used by `default` — not possible here since default spans all 4.)
-#  #   3. Point LiteLLM at it (e.g. a `vision-default` alias → sglang-vision.<ns>.svc).
-#  #   4. MEMORY: measured 2026-06-24, the Nemotron default holds ~90 GB/spark
-#  #      (its mem_fraction_static 0.75) → only ~6 GB free. This 8B companion
-#  #      needs ~16–18 GB (weights ~11 + KV + overhead), so it WON'T fit until
-#  #      you free room: lower the Nemotron profile's mem_fraction_static (e.g.
-#  #      0.75 → ~0.61 frees ~18 GB, at the cost of Nemotron KV/context). Pin the
-#  #      companion's footprint deterministically via max_total_tokens below
-#  #      (absolute KV tokens) — do NOT rely on mem_fraction_static on the shared
-#  #      unified-memory GPU (it's a fraction of TOTAL, so it's start-order
-#  #      dependent). KV here is fp8 → 73,728 B/token: 65536 tok ≈ 4.8 GB pool.
-  vision:
-    model: "Qwen/Qwen3-VL-8B-Instruct-FP8"
-    nodes: [3, 4]          # spark3 (head/rank0) + spark4 (worker/rank1) — NCCL over the sglang_vision VF
-    sriov_key: "sglang_vision"
-    tp_size: 2             # weights+KV shard across 2 GPUs → ~10.5 GB/GPU (vs ~18 GB at tp=1)
-    pp_size: 1             # tp*pp == #nodes (2) ✓
-    ep_size: 1             # ep divides tp ✓ (dense model, no experts)
-    max_total_tokens: 65536  # absolute KV cap = deterministic footprint; KV is sharded → ~2.4 GB/GPU
-    context_length: 65536    # per-request window (overrides the profile); keep == max_total_tokens
-    external_enabled: false  # in-cluster only (ClusterIP for litellm); no external ingress/cert/DNS
+# The Qwen3-VL VISION COMPANION (tp=2 across spark3+spark4). Background that used
+# to be inline: the 8B (~9 GB) co-locates with the 4-node `default` text instance
+# via GPU time-slicing (nvidia_gpu_timeslice_replicas already 4 on this cluster).
+# KV is fp8 (73,728 B/token); max_total_tokens 65536 ≈ ~2.4 GB/GPU sharded. PIN
+# the footprint via max_total_tokens (absolute), NOT mem_fraction_static (a
+# fraction of TOTAL unified memory → start-order dependent on the shared GPU).
+_sglang_vision_instance:
+  model: "Qwen/Qwen3-VL-8B-Instruct-FP8"
+  nodes: [3, 4]          # spark3 (head/rank0) + spark4 (worker/rank1) — NCCL over the sglang_vision VF
+  sriov_key: "sglang_vision"
+  tp_size: 2             # weights+KV shard across 2 GPUs → ~10.5 GB/GPU (vs ~18 GB at tp=1)
+  pp_size: 1             # tp*pp == #nodes (2) ✓
+  ep_size: 1             # ep divides tp ✓ (dense model, no experts)
+  max_total_tokens: 65536  # absolute KV cap = deterministic footprint; KV is sharded → ~2.4 GB/GPU
+  context_length: 65536    # per-request window (overrides the profile); keep == max_total_tokens
+  external_enabled: false  # in-cluster only (ClusterIP for litellm); no external ingress/cert/DNS
+
+# `default` is ALWAYS present (whole cluster, active sglang_model); `vision` joins
+# only when enable_vision_model is true. To add MORE instances (e.g. a
+# Qwen3-Coder-Next instance over all 4 nodes, tp=4/ep=4/pp=1) define them like
+# _sglang_vision_instance above and combine() them in here. NAMING: the instance
+# KEY ("coder") → prefix/hostname "sglang-<key>", so it MUST be RFC1123-safe
+# (lowercase/digits/'-', NO underscore); sriov_key is only a
+# qsfp_sriov_assignments lookup so it MAY contain underscores. Co-located
+# instances need qsfp_sriov_enabled + their own assignment AND timeslice ≥ 2.
+sglang_instances: >-
+  {{ {'default': {}}
+     | combine({'vision': _sglang_vision_instance}
+               if (enable_vision_model | default(true)) else {}) }}
 
 # Merged UNDER each sglang_instances entry (entry wins). _inst_key is the dict
 # key of the current instance, set by the loop in sglang.yml. Defaults that

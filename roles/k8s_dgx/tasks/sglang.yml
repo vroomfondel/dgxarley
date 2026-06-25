@@ -28,3 +28,49 @@
     _sglang_active_ep: "{{ inst.ep_size | default('') }}"
     _sglang_active_max_total_tokens: "{{ inst.max_total_tokens | default('') }}"
     _sglang_active_context_length: "{{ inst.context_length | default('') }}"
+
+# ---------------------------------------------------------------------------
+# Vision teardown. When enable_vision_model is false the `vision` entry is absent
+# from sglang_instances (so the loop above never deploys it), but Ansible does
+# NOT prune resources it no longer manages — the running sglang-vision pods would
+# linger, holding their time-sliced GPU share and showing up in the Grafana
+# panel. Actively delete the sglang-vision objects so flipping the flag + a
+# `--tags sglang` run fully removes the instance. state: absent is idempotent
+# (no-op once gone) and a graceful delete (default grace period) releases the
+# SR-IOV VF cleanly — we never force-delete a VF-attached pod. Resource names
+# mirror sglang_instance.yml's inst.prefix = "sglang-vision".
+- name: Tear down the vision SGLang instance when disabled
+  when: not (enable_vision_model | default(true))
+  block:
+    - name: Delete vision head / service / rbac / configmaps
+      kubernetes.core.k8s:
+        state: absent
+        api_version: "{{ item.api_version }}"
+        kind: "{{ item.kind }}"
+        namespace: "{{ sglang_namespace }}"
+        name: "{{ item.name }}"
+      loop:
+        - {api_version: apps/v1, kind: Deployment, name: "sglang-vision-head"}
+        - {api_version: v1, kind: Service, name: "sglang-vision"}
+        - {api_version: v1, kind: ServiceAccount, name: "sglang-vision-head"}
+        - {api_version: rbac.authorization.k8s.io/v1, kind: RoleBinding, name: "sglang-vision-head-pod-reader"}
+        - {api_version: v1, kind: ConfigMap, name: "sglang-vision-config"}
+        - {api_version: v1, kind: ConfigMap, name: "sglang-vision-launch-script"}
+        - {api_version: v1, kind: ConfigMap, name: "sglang-vision-wait-script"}
+        - {api_version: v1, kind: ConfigMap, name: "sglang-vision-model-download-script"}
+        - {api_version: v1, kind: ConfigMap, name: "sglang-vision-haproxy-config"}
+      loop_control:
+        label: "{{ item.kind }}/{{ item.name }}"
+
+    # One Deployment per worker rank (1..N-1 for an N-node instance). pod-reader
+    # Role is shared/unprefixed across instances — intentionally NOT deleted.
+    - name: Delete vision worker Deployments
+      kubernetes.core.k8s:
+        state: absent
+        api_version: apps/v1
+        kind: Deployment
+        namespace: "{{ sglang_namespace }}"
+        name: "sglang-vision-worker-{{ item }}"
+      loop: "{{ range(1, _sglang_vision_instance.nodes | length) | list }}"
+      loop_control:
+        label: "Deployment/sglang-vision-worker-{{ item }}"
