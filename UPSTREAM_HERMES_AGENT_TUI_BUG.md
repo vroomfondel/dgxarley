@@ -301,6 +301,15 @@ small (~50 MB) and the node has fast local storage.
   filed upstream, **this report still needs to be re-filed as a fresh
   issue** if we want upstream to act on Trigger 2. Re-checked 2026-06-11:
   no matching open issue found — filing is still pending.
+  **Update 2026-06-26:** an adjacent OPEN issue now exists —
+  [#45657](https://github.com/NousResearch/hermes-agent/issues/45657)
+  "TUI and dashboard rebuild/reinstall on every launch — monorepo workspace
+  lockfile mismatch" (filed 2026-06-13 by Asanilo). It covers the same
+  `_tui_need_npm_install()` workspace-lockfile false-positive mechanism that is
+  the root of Trigger 2 (it quantifies ~490 "missing" packages across all
+  workspaces vs our 9 workspace-link entries — same function, different
+  scope). Filing a fresh Trigger 2 issue (Action Item §5) may now be redundant;
+  at minimum cross-reference our #18800 comment to #45657.
 - **PR #38591** (removes `--tui` flag from `hermes dashboard`) — merged
   2026-06-04, shipped in v0.16.0 / v2026.6.5. Re-verified 2026-06-11.
 - **PRs #19520 / #21267** — merged (2026-05-04 / 2026-05-07). Re-verified 2026-06-11.
@@ -314,6 +323,11 @@ small (~50 MB) and the node has fast local storage.
 - **Re-verified 2026-06-24:** latest release is now **v2026.6.19 / v0.17.0** (2026-06-19);
   PR #38591 (`--tui` removal) and PR #33045 (entrypoint chown) confirmed merged; action
   items §1–5 remain pending.
+- **Re-verified 2026-06-26:** still v2026.6.19 / v0.17.0 (no newer tag). New adjacent
+  upstream issue **#45657** (OPEN, filed 2026-06-13) covers the `_tui_need_npm_install()`
+  workspace-lockfile mismatch behind Trigger 2 — Action Item §5 (file a fresh Trigger 2
+  issue) may now be redundant; cross-reference instead. All other tracked merges/closures
+  still hold.
 
 ## Action Items
 
@@ -349,4 +363,7 @@ small (~50 MB) and the node has fast local storage.
    (lines ~172-181). Update this doc accordingly.
 5. Open a fresh upstream issue referencing this document for Trigger 2
    (since #18800 is closed and no follow-up issue has been filed as of
-   2026-06-11).
+   2026-06-11). **Update 2026-06-26:** adjacent OPEN issue #45657 (filed
+   2026-06-13) now covers the `_tui_need_npm_install()` workspace-lockfile
+   mismatch — prefer cross-referencing our #18800 comment to #45657 over
+   filing a duplicate.
