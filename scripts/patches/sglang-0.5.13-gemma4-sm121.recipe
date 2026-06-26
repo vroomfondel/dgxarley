@@ -10,17 +10,17 @@
 #     `xomoxcc/dgx-spark-sglang:0.5.11-gemma4-sm121`.
 #
 # WARUM diese Recipe trotzdem existiert: einziger Grund ist der flashinfer-Bump
-# auf 0.6.13rc2 (PR #3576, head_dim=512 / Gemma-4 Global-Attention auf
+# auf 0.6.13 (stable) (PR #3576, head_dim=512 / Gemma-4 Global-Attention auf
 # SM120/121) — der §7-Test in FLASHINFER_0.6.12_TODO.md betrifft die BF16-
 # Gemma-Profile (laufen auf dem LEAN 0.5.13-sm121, NICHT hier), aber falls die
 # NVFP4-Gemma-Profile (nvidia-gemma-4-31b-it-nvfp4 / bg-…-26b-a4b-it-nvfp4,
-# beide schon `attention_backend: flashinfer`) ebenfalls auf 0.6.13rc2 sollen,
+# beide schon `attention_backend: flashinfer`) ebenfalls auf 0.6.13 sollen,
 # ist DIES das passende Image. Dense BF16 Gemma-4 NICHT hierher hängen — das
 # gemma4-Image schleppt PR #22929 (`range(num_experts)`) mit, das auf dense
 # (num_experts=None) mit TypeError crasht; dafür ist das lean 0.5.13-sm121 da.
 #
 # Basiert auf sglang-0.5.13-sm121.recipe (gleicher SGLang-Ref, Base-Image,
-# sgl-kernel-Patches, flashinfer-0.6.13rc2-Override). v0.5.13 hat Gemma-4 BF16
+# sgl-kernel-Patches, flashinfer-0.6.13-Override). v0.5.13 hat Gemma-4 BF16
 # nativ (seit 0.5.11) und Gemma-4 MTP nativ (PR #24436, ab 0.5.12) — die
 # `-gemma4-`-Variante ist daher NUR noch für die NVFP4-Patches relevant.
 #
@@ -44,21 +44,21 @@
 # Kommentar 2c). Eine Recipe = entweder gemma4-NVFP4 ODER dsv4-NVFP4.
 #
 # Siehe SGLANG_GEMMA4_UPSTREAM_BUG.md (NVFP4-Root-Cause), FLASHINFER_0.6.12_TODO.md
-# (flashinfer-0.6.13rc2-Bump-Rationale, §7).
+# (flashinfer-0.6.13-Bump-Rationale, §7).
 #
 DOCKERFILE=Dockerfile.sglang-nightly
 TARGET=runtime
 
 BASE_IMAGE=xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132
 
-# Override über den v0.5.13-Upstream-Pin (0.6.12) hinaus auf 0.6.13rc2:
-# v0.6.13rc2 (2026-06-17, GitHub "Latest") wurde nach dem Merge von
-# flashinfer PR #3576 (2026-06-15) getaggt und enthält damit den
-# head_dim=512-Support für Gemma-4 auf SM120/121 (Issue #3297) — anders als
-# 0.6.12 / v0.6.13rc1. Identisch zur lean 0.5.13-sm121-Recipe.
+# Override über den v0.5.13-Upstream-Pin (0.6.12) hinaus auf 0.6.13 (stable):
+# flashinfer 0.6.13 stable (released 2026-06-24) enthält PR #3576 (gemergt nach
+# main 2026-06-15, bereits in v0.6.13rc2) — den head_dim=512-Support für Gemma-4
+# auf SM120/121 (Issue #3297), anders als 0.6.12 / v0.6.13rc1. Identisch zur lean
+# 0.5.13-sm121-Recipe.
 # Roll-back auf den Upstream-Pin: FLASHINFER_VERSION=0.6.12.
 # FLASHINFER_VERSION=0.6.12
-FLASHINFER_VERSION=0.6.13rc2
+FLASHINFER_VERSION=0.6.13
 
 # transformers 5.8.1 pinning — exakt SGLang v0.5.13s pyproject-Pin (==5.8.1),
 # deckt auch den Gemma-4-assistant-Drafter (gemma4_assistant AutoConfig) ab.

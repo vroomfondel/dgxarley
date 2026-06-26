@@ -55,10 +55,11 @@ TARGET=runtime
 
 BASE_IMAGE=xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132
 
-# 0.6.13rc2 — unchanged. NB: flashinfer-attn stays UNUSABLE for Gemma4 (SGLang
-# allowlist: trtllm_mha | triton | intel_xpu), so the PR #3576 head_dim=512 work
-# is moot for Gemma attention; the bump only matters for the NVFP4 quant kernels.
-FLASHINFER_VERSION=0.6.13rc2
+# 0.6.13 (stable, released 2026-06-24; was 0.6.13rc2 — stable carries the same
+# rc2 content). NB: flashinfer-attn stays UNUSABLE for Gemma4 (SGLang allowlist:
+# trtllm_mha | triton | intel_xpu), so the PR #3576 head_dim=512 work is moot for
+# Gemma attention; the bump only matters for the NVFP4 quant kernels.
+FLASHINFER_VERSION=0.6.13
 
 # 2026-06-20: auf 5.11.0 gehoben — 5.8.0 kennt model_type `diffusion_gemma` nicht
 # (transformers CONFIG_MAPPING KeyError → "does not recognize this architecture" bei
