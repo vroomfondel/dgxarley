@@ -1,5 +1,17 @@
 # FlashInfer Upstream Bug: head_dim=512 not supported (Gemma-4 global attention)
 
+## Status 2026-06-26 — flashinfer **v0.6.13 stable** released (2026-06-24T22:36Z); PR #3576 now in a STABLE release
+
+PR #3576 (merged to `main` 2026-06-15, present in v0.6.13rc2) is now also in
+**flashinfer 0.6.13 stable**, released 2026-06-24T22:36Z. v0.6.13 compares
+against v0.6.12rc3, so all rc2 content — including #3576 — is in stable. This
+**supersedes** the table entry below that listed "0.6.13 stable (bare tag) — not
+released yet" and the per-PR cell that said #3576 "first appears in nightly
+`v0.6.13-20260615`": #3576 is now shipped in a tagged stable release. The
+preferred bump target is now `FLASHINFER_VERSION=0.6.13` (stable) rather than the
+`0.6.13rc2` pin noted in the 2026-06-24 block. The `attention_backend: triton`
+workaround is still required on any image whose flashinfer pin is < 0.6.13rc2.
+
 ## Status 2026-06-24 — BF16 Gemma profiles now pin the 0.6.13rc2 image (PR #3576 present); attention_backend flipped triton → flashinfer (TESTWEISE)
 
 The two BF16 Gemma-4 profiles (`google-gemma-4-26b-a4b-it.yml`,
@@ -41,7 +53,7 @@ prefill/extend tuple (`NUM_MMA_KV=2, NUM_WARPS_Q=4, NUM_WARPS_KV=1`).
 | **0.6.13rc1** (2026-06-10) | ❌ |
 | Nightly **v0.6.13-20260615** and later (built off `main` post-merge) | ✅ |
 | **v0.6.13rc2** (2026-06-17, GitHub "Latest") | ✅ (tagged after 2026-06-15 merge) |
-| **0.6.13 stable** (bare tag) | not released yet |
+| **0.6.13 stable** (released 2026-06-24) | ✅ (includes rc2 content) |
 
 Our deployed images are further back still — the `0.5.12` image pins
 flashinfer **0.6.11.post1**, and the BF16 Gemma profiles run on
@@ -396,7 +408,7 @@ FlashInfer gains `head_dim=512` support.
 | flashinfer-ai/flashinfer | [#2959](https://github.com/flashinfer-ai/flashinfer/pull/2959)   | [Fmha] Add head_dim=512 support for trtllm attention kernels                                                                                                | **merged 2026-04-22** (in v0.6.10rc1 / v0.6.10 / v0.6.10.post1 / v0.6.11), but **incomplete** — covers neither the decode tuple `(NUM_MMA_KV=1, NUM_WARPS_Q=1, NUM_WARPS_KV=4)` nor the prefill/extend tuple `(NUM_MMA_KV=2, NUM_WARPS_Q=4, NUM_WARPS_KV=1)` (both `NUM_MMA_Q=1, head_dim=512`) |
 | sgl-project/sglang       | [#22079](https://github.com/sgl-project/sglang/pull/22079)       | [nvidia] Gemma4 nvfp4 fix                                                                                                                                   | **merged** (2026-04-10)                                                                                                                                                                      |
 | flashinfer-ai/flashinfer | [#3297](https://github.com/flashinfer-ai/flashinfer/issues/3297) | [Bug] head_dim=512 dispatch gap on SM121 (Gemma-4 global attention) — NUM_MMA_Q=1 NUM_MMA_KV=1 NUM_WARPS_Q=1 NUM_WARPS_KV=4 not instantiated after PR #2959 | **CLOSED as Done 2026-06-15** (filed 2026-05-12; closed by the merge of PR #3576). History: third-party repro 2026-06-03, our root-cause analysis 2026-06-04, maintainer @bkryu confirmation 2026-06-09 noting PR #2959 covers only trtllm kernels, @bkryu announcing PR #3576 2026-06-11. |
-| flashinfer-ai/flashinfer | [#3576](https://github.com/flashinfer-ai/flashinfer/pull/3576)   | feat(attention): head_dim=512 support for attention prefill & decode for Gemma 4 on SM120/121 | **MERGED into `main` 2026-06-15** by @bkryu (filed 2026-06-11T05:32Z). Scope: adds head_dim=512 to the `backend='fa2'` path for `BatchDecodeWithPagedKVCacheWrapper`, `BatchPrefillWithPagedKVCacheWrapper`, `BatchPrefillWithRaggedKVCacheWrapper` — prefill + decode; Q=bfloat16, KV=bfloat16 or fp8_e4m3; explicitly targets SM12x (RTX PRO 6000, DGX Spark / GB10); restricts the old persistent kernel to head_dim≤256 and adds new tile configs for hd=512. Benchmarks on DGX Spark/GB10 (SM121): prefill hd512 34.6 TFLOP/s @ s_qo=8192; decode KV-bandwidth-bound. Files: `include/flashinfer/attention/prefill.cuh`, `persistent.cuh`, `utils.cuh`, jinja kernel instantiations, `flashinfer/aot.py`, `test_fp8_prefill.py`, `test_batch_decode_kernels.py`. **Not yet in a stable release: absent from v0.6.12 / v0.6.13rc1; first appears in nightly `v0.6.13-20260615`. Workaround remains required until #3576 ships in a release (0.6.13 stable or a pinned nightly) AND our image's flashinfer pin is bumped — see the Follow-up section at the top.** |
+| flashinfer-ai/flashinfer | [#3576](https://github.com/flashinfer-ai/flashinfer/pull/3576)   | feat(attention): head_dim=512 support for attention prefill & decode for Gemma 4 on SM120/121 | **MERGED into `main` 2026-06-15** by @bkryu (filed 2026-06-11T05:32Z). Scope: adds head_dim=512 to the `backend='fa2'` path for `BatchDecodeWithPagedKVCacheWrapper`, `BatchPrefillWithPagedKVCacheWrapper`, `BatchPrefillWithRaggedKVCacheWrapper` — prefill + decode; Q=bfloat16, KV=bfloat16 or fp8_e4m3; explicitly targets SM12x (RTX PRO 6000, DGX Spark / GB10); restricts the old persistent kernel to head_dim≤256 and adds new tile configs for hd=512. Benchmarks on DGX Spark/GB10 (SM121): prefill hd512 34.6 TFLOP/s @ s_qo=8192; decode KV-bandwidth-bound. Files: `include/flashinfer/attention/prefill.cuh`, `persistent.cuh`, `utils.cuh`, jinja kernel instantiations, `flashinfer/aot.py`, `test_fp8_prefill.py`, `test_batch_decode_kernels.py`. **Absent from v0.6.12 / v0.6.13rc1; first appeared in nightly `v0.6.13-20260615`, then v0.6.13rc2 (2026-06-17), and is now in flashinfer 0.6.13 STABLE (released 2026-06-24). Workaround remains required until our image's flashinfer pin is bumped to ≥ 0.6.13rc2 — see the Follow-up section at the top.** |
 
 PR #22079 in SGLang fixed the **Triton attention** side of the `head_dim=512`
 problem (PTX register exhaustion on SM100a/GB200). The companion FlashInfer
