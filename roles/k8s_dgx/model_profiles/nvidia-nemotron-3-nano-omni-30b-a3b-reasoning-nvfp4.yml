@@ -126,10 +126,16 @@ _model_profile:
     # NVFP4 scale_fmt != ue8m0 → DeepGemm JIT not optimized; disable (same as all NVFP4 here).
     disable_deep_gemm: true
     num_experts: 128
-    # ep_size=1 is the VALIDATED default. EP=4 PROBE (case 11) CRASHED at CUDA-graph capture — but
-    # with NO EP-specific assert (no gated-padding/swizzle-pad/nx2), the SAME silent-at-capture
-    # signature as a transient GPU-state crash, so it's INCONCLUSIVE, not confirmed-broken. Retry
-    # `--start-at 11` before trusting EP=4. 128 % 4 == 0, so the layout is shardable in principle.
+    # ep_size=1 is the VALIDATED default. EP=4 is CONFIRMED-BROKEN here (reproduced ≥2× via Loki:
+    # a pre-matrix manual run 2026-06-25 14:39-14:45Z with EP2/EP3 rank labels, AND matrix case 11
+    # 17:11Z) — every ep>1 attempt dies DETERMINISTICALLY with the SAME stack:
+    #   cuda_graph_runner.py:543 → hybrid_linear_attn_backend init_cuda_graph_state →
+    #   flashinfer_backend.py:693  self.cuda_graph_kv_indices[i][0] = 0  → CUDA illegal memory access.
+    # It is NOT an OOM (35-44 GB free at capture) and NOT EP-specific kernel code — it's the FlashInfer
+    # attn CUDA-graph-capture path, the IDENTICAL crash as the rare ep=1 "transient" first-boot flake;
+    # ep>1 just makes it fire every time. WORKAROUND if EP is ever needed: pair ep>1 with
+    # disable_cuda_graph (eager) to skip init_cuda_graph_state — untested, and EP gives no expected
+    # throughput win on this small model anyway, so keep ep=1. 128 % 4 == 0 (shardable in principle).
     # Dynamic-safe form if sglang_nnodes ever changes:
     #   ep_size: "{{ sglang_nnodes if (128 % (sglang_nnodes | int) == 0) else 1 }}"
     ep_size: 1
