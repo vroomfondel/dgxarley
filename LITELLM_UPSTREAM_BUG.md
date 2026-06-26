@@ -77,9 +77,10 @@ See: `roles/k8s_dgx/tasks/ollama.yml` — ConfigMap `ollama-tls-haproxy-config`,
 
 ## Upstream Status
 
-**Still open** — re-verified 2026-06-22. No fix merged. LiteLLM has since
-advanced to **v1.89.3** (stable, latest as of 2026-06-22; published
-2026-06-20; v1.89.2 was 2026-06-18, v1.89.1 was 2026-06-16) and the bug is
+**Still open** — re-verified 2026-06-26. No fix merged. LiteLLM has since
+advanced to **v1.89.4** (stable, latest; published 2026-06-25 — backports only
+#31029 MCP key scoping + enterprise fixes, nothing ollama/ssl/embedding-related;
+v1.89.3 was 2026-06-20, v1.89.1 was 2026-06-16) and the bug is
 unchanged: `ollama_aembeddings()` in
 `litellm/llms/ollama/completion/handler.py` still calls
 `litellm.module_level_aclient.post(...)` without `ssl_verify`, and the
