@@ -995,6 +995,14 @@ _litellm_model_list_base:
       min_p: "{{ _sglang_sampling_defaults.min_p | default(omit) }}"
       # Reasoning defaults from _sglang_extra_body_defaults (chat_template_kwargs):
       extra_body: "{{ _sglang_extra_body_defaults if _sglang_extra_body_defaults else omit }}"
+      # Forward `reasoning_effort` to the SGLang backend. With drop_params:false
+      # LiteLLM otherwise 400s on it for any model whose static support-map lacks
+      # it (e.g. RecViking/Mistral-Medium-3.5: reasoning is OFF by default, turned
+      # ON per request via reasoning_effort=high). allowed_openai_params whitelists
+      # the passthrough WITHOUT dropping it (drop_params:true would silently
+      # discard it → thinking never activates). Harmless for non-reasoning models:
+      # it's forwarded and ignored by a chat template that doesn't read it.
+      allowed_openai_params: ["reasoning_effort"]
       # Spend tracking (nominal cost — edit litellm_default_*_cost_per_token above):
       input_cost_per_token: "{{ litellm_default_input_cost_per_token }}"
       output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
@@ -1024,6 +1032,7 @@ _litellm_model_list_base:
   #     repetition_penalty: "{{ _sglang_sampling_defaults.repetition_penalty | default(omit) }}"
   #     min_p: "{{ _sglang_sampling_defaults.min_p | default(omit) }}"
   #     extra_body: "{{ _sglang_extra_body_defaults if _sglang_extra_body_defaults else omit }}"
+  #     allowed_openai_params: ["reasoning_effort"]
   #     input_cost_per_token: "{{ litellm_default_input_cost_per_token }}"
   #     output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
 
