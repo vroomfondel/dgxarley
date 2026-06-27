@@ -177,6 +177,6 @@ _model_profile:
     # _sgl_eagle_fp8_out_dtype_fix in sglang_launch.sh stays as a belt-and-suspenders
     # safety net (only triggers on a non-half/bf16 fc input).
     speculative_draft_model_quantization: "fp8"
-    speculative_num_steps: 3
+    speculative_num_steps: 2
     speculative_eagle_topk: 1
-    speculative_num_draft_tokens: 4
+    speculative_num_draft_tokens: 3
