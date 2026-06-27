@@ -73,7 +73,15 @@ _model_profile:
     tp_size: 4
     # Native 262144 (config max_position_embeddings). Memory is NOT the constraint
     # here, so this can likely go to the YaRN-extended ceiling later if needed.
-    context_length: 262144
+    # >>> CAPPED TO 128K FOR MTP <<< The EAGLE draft (speculative_enabled below)
+    # derives only 128000 context from its config. With the target at 262144,
+    # SGLang's _derive_context_length aborts the draft-worker init with
+    # "Target context_length (262144) > derived (128000)" → head sigquits → the
+    # whole TP group crash-loops. Capping the target to the draft's 128K limit
+    # makes target == derived so the guard passes. Restore 262144 ONLY if
+    # speculative_enabled is set back to false (no draft → no 128K ceiling).
+    # context_length: 262144   # full 256K — requires speculative_enabled: false
+    context_length: 128000
     # compressed-tensors NVFP4 → SGLang AUTO-DETECTS from config.json. Do NOT set
     # `quantization: modelopt_fp4` (that's the ModelOpt packaging; this repo is
     # llm-compressor / compressed-tensors). Intentionally NO quantization key.
