@@ -122,9 +122,13 @@ APPLY_DSV4_NVFP4_PR25820=0
 # + W4A16_NVFP4 lm_head/MoE/linears + wrapper-prefix + MTP). The dockerfile patch
 # is trailing-context-only, so it still stacks cleanly with the DSV4 step now
 # DISABLED. Set to 0 / delete once PR #27906 is merged into the pinned SGLANG_REF.
-# ⚠️  The SOURCE patch (sglang-qwen36-mixed-nvfp4-pr27906.patch) is rebased onto
-#     v0.5.13; if the in-container apply fails against v0.5.14, re-export
-#     `gh pr diff 27906` and rebase onto v0.5.14.
+# NOTE: v0.5.14 NATIVELY merged the modelopt_mixed BASE class
+# (ModelOptMixedPrecisionConfig) but NOT the W4A16_NVFP4 path Qwen3.6 needs, so
+# the patch still applies but had to be reconciled against that native base. The
+# v0.5.14-rebased variant is sglang-qwen36-mixed-nvfp4-pr27906-mainahead.patch,
+# picked up automatically via SGL_KERNEL_MAINAHEAD=1 (verified git-apply clean,
+# zero-fuzz, against the v0.5.14 tag). The v0.5.13 recipe keeps the original.
+# Still pairs with the OPEN dispatch fix #28099 — re-validate on the live model.
 APPLY_QWEN36_MIXED_NVFP4_PR27906=1
 
 IMAGE_TAG=xomoxcc/dgx-spark-sglang:0.5.14-sm121
