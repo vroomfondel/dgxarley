@@ -50,6 +50,14 @@ therefore still required on v0.5.11 / v0.5.12 / v0.5.12.post1 / v0.5.13 / dev1 i
 > unaffected by these changes — the bug is upstream of the speculative
 > algorithm selection and is still unreported.
 
+> **Re-verified 2026-06-29:** SGLang **v0.5.14** released 2026-06-26. The v0.5.14
+> speculative decoding changes (PRs #28854, #28782, #26312, #28516, #27469, #24955,
+> #17260) contain no fix for `maybe_init_draft_worker` inheriting `load_format=sharded_state`
+> when `speculative_draft_load_format` is unset. Bug still unreported upstream (GitHub
+> search for "sharded_state speculative" / "speculative_draft_load_format sharded"
+> in `sgl-project/sglang` returns no issues or PRs). The `--speculative-draft-load-format auto`
+> workaround in `sglang_launch.sh` remains required and unchanged.
+
 - File: `sglang/srt/managers/scheduler.py`, method `maybe_init_draft_worker()`
 - Root cause in: `sglang/srt/managers/tp_worker.py`, method `_init_model_config()`
 
