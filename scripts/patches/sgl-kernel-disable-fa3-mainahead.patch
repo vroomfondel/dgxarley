@@ -1,0 +1,54 @@
+Disable FlashAttention-3 (Hopper) build in sgl-kernel for DGX Spark GB10.
+
+MAINAHEAD VARIANT — regenerated against SGLang tag v0.5.14.
+
+Why a separate file from sgl-kernel-disable-fa3.patch:
+  Upstream restructured the FA3 enablement between v0.5.13 and v0.5.14. The old
+  recipe dead-coded an UNCONDITIONAL `if ("${CUDA_VERSION}" VERSION_GREATER_EQUAL
+  "12.4")` block that force-set SGL_KERNEL_ENABLE_FA3 ON. That line no longer
+  exists. v0.5.14 (sgl-kernel/CMakeLists.txt ~line 108) now ships:
+
+      set(DEFAULT_SGL_KERNEL_ENABLE_FA3 OFF)
+      if (... aarch64|arm64 ...) message("For aarch64, disable FA3 by default")
+      if (CUDA >= 12.4 AND NOT aarch64) set(DEFAULT_SGL_KERNEL_ENABLE_FA3 ON)
+      ...
+      option(SGL_KERNEL_ENABLE_FA3 "Enable FA3" ${DEFAULT_SGL_KERNEL_ENABLE_FA3})
+
+  i.e. upstream ALREADY defaults FA3 OFF on aarch64. On our GB10 (aarch64) fleet
+  the canonical patch is therefore REDUNDANT — FA3 is off out of the box. This
+  variant keeps the build pipeline uniform (same APPLY_SGL_KERNEL_DISABLE_FA3
+  gate + the 'dgxarley sgl-kernel-disable-fa3.patch' marker grep) and adds
+  belt-and-suspenders by wrapping the only DEFAULT-ON setter (the non-aarch64
+  path) in `if (FALSE AND ...)`, so SGL_KERNEL_ENABLE_FA3 stays OFF on EVERY
+  arch this recipe is ever built on — not just aarch64. The downstream
+  `if (SGL_KERNEL_ENABLE_FA3)` build block (~line 393) and the sm_90a gencode
+  block (~line 233) then skip all ~475 hopper/instantiations/flash_fwd_*.cu
+  files and the sm_90a cubins.
+
+Selected automatically by build_sm121_image.sh when the recipe sets
+SGL_KERNEL_MAINAHEAD=1 (installed under the canonical name
+sgl-kernel-disable-fa3.patch). The v0.5.13 recipes keep the original.
+
+Apply to: sgl-kernel/CMakeLists.txt, AFTER sgl-kernel-arch-prune.patch (arch-prune
+edits lines ~136/~217, below this hunk, so there is no interaction).
+
+Upstream source: sgl-project/sglang tag v0.5.14
+
+diff --git a/sgl-kernel/CMakeLists.txt b/sgl-kernel/CMakeLists.txt
+index df8be77..5e20ddd 100644
+--- a/sgl-kernel/CMakeLists.txt
++++ b/sgl-kernel/CMakeLists.txt
+@@ -109,7 +109,12 @@ set(DEFAULT_SGL_KERNEL_ENABLE_FA3 OFF)
+ if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+     message(STATUS "For aarch64, disable FA3 by default")
+ endif()
+-if ("${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.4" AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
++# dgxarley sgl-kernel-disable-fa3.patch: FA3 is Hopper-only (SM90a) and can
++# never run on GB10 (SM121). v0.5.14 already defaults FA3 OFF on aarch64; this
++# wraps the only DEFAULT-ON setter (non-aarch64 path) in `FALSE AND ...` so the
++# option() default stays OFF on EVERY arch and the FA3 build block + sm_90a
++# gencode are skipped entirely. Structure kept byte-identical for easy diffing.
++if (FALSE AND "${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.4" AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+     set(DEFAULT_SGL_KERNEL_ENABLE_FA3 ON)
+ endif()
+ 
