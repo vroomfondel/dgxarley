@@ -443,31 +443,38 @@ raw sglang-dashboard.json "https://raw.githubusercontent.com/sgl-project/sglang/
           then .targets |= map(.legendFormat = "{{sglang_instance}}")
         else . end
       )
-    # POD-ROLLOVER DEDUP: the gauge selectors above resolve to one series per
-    # (sglang_instance, model_name, instance=pod-IP, pod_template_hash). On a
-    # POD-ROLLOVER DEDUP NOTE: do NOT use apostrophes anywhere in this jq
-    # program (it is wrapped in shell single-quotes; a stray apostrophe
-    # terminates the quote and the rest of the line becomes shell words ->
-    # "Could not open file ..." jq errors). The gauge selectors above resolve
-    # to one series per
-    # (sglang_instance, model_name, instance=pod-IP, pod_template_hash). On a
-    # head-pod rollover Prometheus keeps the OLD pod series through its ~5min
-    # staleness window, so for the staleness overlap there are TWO series with
-    # the same sglang_instance but different pod IP — and legendFormat
-    # "{{sglang_instance}}" renders BOTH as the same name (e.g. "default" twice
-    # in the legend). Collapse to one line per (sglang_instance, model_name)
-    # with `max by (...)` (take the live pod, never double-count a gauge) —
-    # same dedup idea as the dcgm dashboard `max by (gpu, instance)`. Cache
-    # Hit Rate already aggregates via its full sum-by override below, so it is
-    # excluded here.
+    # INSTANCE-LEVEL DEDUP — collapse to ONE line per sglang_instance.
+    # DEDUP NOTE: do NOT use apostrophes anywhere in this jq program (it is
+    # wrapped in shell single-quotes; a stray apostrophe terminates the quote
+    # and the rest of the line becomes shell words -> "Could not open file ..."
+    # jq errors).
+    # The gauge selectors above resolve to one series per
+    # (sglang_instance, model_name, instance=pod-IP, pod_template_hash). Two
+    # things split a single logical instance into multiple legend rows, and the
+    # legendFormat "{{sglang_instance}}" renders ALL of them with the same name
+    # (e.g. "default" two+ times):
+    #   1. POD ROLLOVER — Prometheus keeps the OLD pod series through its ~5min
+    #      staleness window, so the overlap has two pod IPs / pod_template_hash.
+    #   2. MODEL SWAP — serving a different model on the SAME instance changes
+    #      the model_name label (instance "default" served Super-120B then
+    #      Nano-Omni within the lookback), so the window holds two model_name
+    #      series, both sglang_instance="default".
+    # These are instance-level panels (legend = {{sglang_instance}}), so collapse
+    # by sglang_instance ALONE — `max by (sglang_instance)` takes the live pod
+    # and the currently-served model (one model per GPU-exclusive instance at a
+    # time), never double-counts a gauge, and renders a model swap as one
+    # continuous "default" line. The $model_name template selector still filters
+    # upstream, so picking a model in the dropdown narrows what is aggregated.
+    # Same dedup idea as the dcgm dashboard `max by (gpu, instance)`. Cache Hit
+    # Rate aggregates via its own sum-by override below (also sglang_instance only).
     | .panels |= map(
         if (.title == "Num Running Requests" or .title == "Number Queued Requests"
             or .title == "Token Generation Throughput (Tokens / S)")
-          then .targets |= map(.expr |= "max by (sglang_instance, model_name) (" + . + ")")
+          then .targets |= map(.expr |= "max by (sglang_instance) (" + . + ")")
         else . end
       )
     | (.. | objects | select(.title == "Cache Hit Rate") | .targets[0].expr) |=
-        "sum by (sglang_instance, model_name) (rate({__name__=~\"sglang[:_]cached_tokens_total\", sglang_instance=~\"$instance\", model_name=~\"$model_name\"}[$__rate_interval])) / sum by (sglang_instance, model_name) (rate({__name__=~\"sglang[:_]prompt_tokens_total\", sglang_instance=~\"$instance\", model_name=~\"$model_name\"}[$__rate_interval]))"
+        "sum by (sglang_instance) (rate({__name__=~\"sglang[:_]cached_tokens_total\", sglang_instance=~\"$instance\", model_name=~\"$model_name\"}[$__rate_interval])) / sum by (sglang_instance) (rate({__name__=~\"sglang[:_]prompt_tokens_total\", sglang_instance=~\"$instance\", model_name=~\"$model_name\"}[$__rate_interval]))"
     | (.. | objects | select(.title == "End-to-End Request Latency") | .title) |= "Total Request Duration"
     | (.. | objects | select(.title == "End-to-End Request Latency(s) Heatmap") | .title) |= "Total Request Duration Heatmap"
   ' | commit sglang-dashboard.json
