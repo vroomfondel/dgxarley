@@ -48,6 +48,19 @@ The loader-dispatch monkey-patch in `sglang_launch.sh` / `sglang_shard_launch.sh
 is still required on any released image; it can be removed once a release or
 Docker image carries post-2026-06-22 main.
 
+**Re-verified 2026-06-29 — SHARDED_STATE monkey-patch now REMOVABLE on v0.5.14+:**
+SGLang **v0.5.14** released 2026-06-26 and ships PR #25820 (merged 2026-06-22).
+The threshold stated in the 2026-06-24 update above ("can be removed once a release
+or Docker image carries post-2026-06-22 main") is now met. **Action item: the
+`ModelOptModelLoader` SHARDED_STATE loader-dispatch monkey-patch in `sglang_launch.sh`
+and `sglang_shard_launch.sh` can be removed on any image built from v0.5.14+.**
+All three remaining bugs — (a) `moe_wna16` qzeros EP (vLLM PR #35598 still open,
+vLLM still at v0.23.0), (b) NVFP4 input_scale `else`-branch EP slicing (SGLang
+PR #23531 still open), (c) `_shuffle_rows_torch` `a_map`/`c_map` OOB (separate
+doc `SGLANG_NVFP4_SHUFFLE_ROWS_OOB_UPSTREAM_BUG.md`) — remain unfixed in v0.5.14.
+PR #27588 ("[quantization] NVFP4 MoE: split fused w13 gate/up global scales",
+in v0.5.14) is a different correctness fix and does not address the EP slicing issue.
+
 - vLLM: [PR #35598](https://github.com/vllm-project/vllm/pull/35598) — open since 2026-02-28, not merged. Author rebased onto `main` on 2026-04-13 (commit `c56eae0e`, merge-from-main only, no code changes); prior rebase 2026-03-05. Still only the initial Gemini bot review from 2026-02-28 — no human reviewer has engaged (mergify[bot] flagged a merge conflict 2026-05-23; 5 reviewers requested, none engaged; re-verified 2026-06-11)
 - vLLM: [PR #36026](https://github.com/vllm-project/vllm/pull/36026) — fix wrong num_experts in moe_wna16 kernel dispatch. **Closed without merge 2026-04-25** by author (`weiguangli-io`) citing 8+ weeks with no maintainer review; offered to reopen if it becomes relevant. The sub-bug it fixed (kernel dispatch num_experts) remains unaddressed in vLLM `main`
 - SGLang: no upstream issue or PR filed
