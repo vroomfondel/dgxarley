@@ -55,6 +55,14 @@ triton`) stays in effect.
 kein Merge. Kein Fix in v0.5.13 (letztes SGLang-Release 2026-06-13). Workaround
 (`moe_runner_backend: triton`) unverändert aktiv. Stand identisch zu 2026-06-14.
 
+**Re-verified 2026-06-29:** v0.5.14 released 2026-06-26 (now the latest
+release). No `Fp8MoEMethod`/`flashinfer_cutlass` fix in v0.5.14; PR #27968
+still OPEN; Issue #27951 still OPEN; PR #21872 still OPEN; Issue #20719 still
+OPEN. Workaround (`moe_runner_backend: triton`) unchanged. Note: v0.5.14 adds
+a GB10-specific FP8 fused MoE Triton config (PR #25665), which tunes the
+Triton workaround path on our hardware but does not fix the underlying dispatch
+bug in `Fp8MoEMethod.create_moe_runner`.
+
 Adjacent open work:
 
 - [PR #21872](https://github.com/sgl-project/sglang/pull/21872)
