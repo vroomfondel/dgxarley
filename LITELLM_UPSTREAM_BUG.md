@@ -77,18 +77,18 @@ See: `roles/k8s_dgx/tasks/ollama.yml` — ConfigMap `ollama-tls-haproxy-config`,
 
 ## Upstream Status
 
-**Still open** — re-verified 2026-06-26. No fix merged. LiteLLM has since
-advanced to **v1.89.4** (stable, latest; published 2026-06-25 — backports only
-#31029 MCP key scoping + enterprise fixes, nothing ollama/ssl/embedding-related;
-v1.89.3 was 2026-06-20, v1.89.1 was 2026-06-16) and the bug is
+**Still open** — re-verified 2026-06-29. No fix merged. LiteLLM has since
+advanced to **v1.90.0** (stable, latest; published 2026-06-27 — contains no
+ollama/ssl/embedding-related fix; v1.89.4 was 2026-06-25, v1.89.3 was
+2026-06-20, v1.89.1 was 2026-06-16) and the bug is
 unchanged: `ollama_aembeddings()` in
 `litellm/llms/ollama/completion/handler.py` still calls
 `litellm.module_level_aclient.post(...)` without `ssl_verify`, and the
 `[TODO]: migrate embeddings to a base handler` comment is still at the top of
-the file. (Previously tracked at v1.89.1, 2026-06-16.)
+the file. (Previously tracked at v1.89.4, 2026-06-26.)
 The ollama embedding path has still not been migrated to the base handler;
 no PR addressing `ollama_aembeddings` + `ssl_verify` exists upstream as of
-today, and the v1.89.x release notes contain no
+today, and the v1.90.x release notes contain no
 ollama/ssl/embed-related entries.
 
 - Related issue: [#6499](https://github.com/BerriAI/litellm/issues/6499) ("How to disable ssl verification for ollama?", closed). Maintainer acknowledged the embedding path was not migrated, but the issue was closed after only the chat path was fixed.
