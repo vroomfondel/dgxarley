@@ -20,6 +20,11 @@
 > `kv_lora_rank: int = 512` unchanged in transformers main; no fix in v0.5.13.
 > v0.5.13.post1 is a bare git tag (no GitHub Release, no Docker image) — not a
 > delivery vehicle. Monkey-patch still required.
+>
+> **Re-verified 2026-06-29:** v0.5.14 released 2026-06-26 (now the latest
+> release). Release notes contain no `kv_lora_rank` / DSV4-Flash config-parse
+> fix; issues #25165 / #23743 still OPEN; `kv_lora_rank: int = 512` unchanged
+> in transformers main. Monkey-patch still required.
 
 
 ## Summary
