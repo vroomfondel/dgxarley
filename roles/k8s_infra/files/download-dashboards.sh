@@ -322,6 +322,13 @@ raw dcgm-exporter-12239.json "https://grafana.com/api/dashboards/12239/revisions
         if .name == "gpu" then
           .query = "label_values(DCGM_FI_DEV_GPU_TEMP, gpu)"
           | .definition = "label_values(DCGM_FI_DEV_GPU_TEMP, gpu)"
+        elif .name == "instance" then
+          # Upstream ships instance with includeAll:false, so the dashboard
+          # opens on a single/multi-select of explicit sparks. Add an "All"
+          # option (like gpu already has) and make it the default selection
+          # so the dashboard shows every node out of the box.
+          .includeAll = true
+          | .current = { "selected": true, "text": ["All"], "value": ["$__all"] }
         else . end
       )
     | .panels |= map(
