@@ -1,4 +1,4 @@
-# Qwen3.5 vision_config dict bug (transformers 5.x + SGLang ≤ 0.5.12)
+# Qwen3.5 vision_config dict bug (transformers 5.x + SGLang ≤ 0.5.14, unresolved upstream)
 
 > **Re-verified 2026-05-18:** v0.5.12 (released 2026-05-16) does **not** fix
 > this — release notes contain no vision_config / Qwen3.5 config fix. Code at
@@ -26,6 +26,13 @@
 > Monkey-patch in `sglang_launch.sh` still required.
 > Note: v0.5.13.post1 (2026-06-15) is a bare git tag with no GitHub Release
 > page and no scitrera Docker image — it is not a delivery vehicle.
+>
+> **Re-verified 2026-06-30:** SGLang **v0.5.14** (released 2026-06-26) contains
+> no upstream fix — `qwen3_5.py` still lacks `from_dict`/`__post_init__` on
+> main and `release/v0.5.14`. PR **#22839** still OPEN (no activity since
+> 2026-06-11); PR **#22618** still OPEN (no activity since 2026-04-14). Cluster
+> image bumped to `xomoxcc/dgx-spark-sglang:0.5.14-sm121` on 2026-06-29.
+> Monkey-patch (`PATCH_GET_CONFIG_EOF`) in `sglang_launch.sh` still required.
 >
 > **Update 2026-06-12:** PR #22839 received a new third-party comment on
 > 2026-06-11T20:28Z (user `SeedSource`) confirming the bug is still present on
@@ -94,7 +101,7 @@ print(config.vision_config.hidden_size)  # AttributeError!
 
 ## Affected versions
 
-- **SGLang:** 0.5.10 (and likely 0.5.10rc0 — any version with `Qwen3_5MoeConfig` in `_CONFIG_REGISTRY`)
+- **SGLang:** 0.5.10 through 0.5.14 (unresolved upstream; any version with `Qwen3_5MoeConfig` in `_CONFIG_REGISTRY`)
 - **Transformers:** 5.5.0 (any 5.x with auto-generated `__init__` for sub_configs)
 - **Models:** `nvidia/Qwen3.5-397B-A17B-NVFP4`, likely all Qwen3.5-MoE variants
 
@@ -155,6 +162,6 @@ PR opened 2026-04-12, status **OPEN** (re-verified 2026-06-11, last touched 2026
 
 ## Upstream references
 
-- [PR #22839](https://github.com/sgl-project/sglang/pull/22839) — "fix(config): Add from_dict() for Qwen3VL config classes" (opened 2026-04-15 by `libermeng`, **OPEN** as of 2026-06-11 — no movement since 2026-04-15 author push, not in v0.5.11/v0.5.12/v0.5.13). Addresses the same root cause this doc describes ("Transformers 5.5.0+ natively supports Qwen3-VL, causing `AutoConfig.from_pretrained()` to skip sglang's config conversion logic. This leaves nested `vision_config` and `text_config` as dicts instead of config objects."). Different fix vehicle than ours: adds a `from_dict()` classmethod to `Qwen3VLConfig`/`Qwen3VLMoeConfig`/`Qwen3_5Config`/`Qwen3_5MoeConfig` and registers them in `_CONFIG_REGISTRY`, instead of hooking `__post_init__`. Also fixes `Qwen3_5MoeTextConfig` MoE attributes. Includes 9 unit tests. CI re-run requested 2026-04-15 — no human review since. **Not yet merged → our monkey-patch is still required.**
+- [PR #22839](https://github.com/sgl-project/sglang/pull/22839) — "fix(config): Add from_dict() for Qwen3VL config classes" (opened 2026-04-15 by `libermeng`, **OPEN** as of 2026-06-11 — no movement since 2026-04-15 author push, not in v0.5.11/v0.5.12/v0.5.13/v0.5.14). Addresses the same root cause this doc describes ("Transformers 5.5.0+ natively supports Qwen3-VL, causing `AutoConfig.from_pretrained()` to skip sglang's config conversion logic. This leaves nested `vision_config` and `text_config` as dicts instead of config objects."). Different fix vehicle than ours: adds a `from_dict()` classmethod to `Qwen3VLConfig`/`Qwen3VLMoeConfig`/`Qwen3_5Config`/`Qwen3_5MoeConfig` and registers them in `_CONFIG_REGISTRY`, instead of hooking `__post_init__`. Also fixes `Qwen3_5MoeTextConfig` MoE attributes. Includes 9 unit tests. CI re-run requested 2026-04-15 — no human review since. **Not yet merged → our monkey-patch is still required.**
 - Related: transformers 5.x `PretrainedConfig.__init_subclass__` auto-init behavior
 - Related: sgl-project/sglang#20973 (different Qwen3.5 NVFP4 checkpoint, different bug)
