@@ -2,6 +2,8 @@
 
 **Status:** root cause identified by direct measurement; swap-free load achieved
 and confirmed. Verified 2026-06-01 on `xomoxcc/dgx-spark-sglang:0.5.12.post1-sm121`.
+Patch unchanged in `sglang_launch.sh`; re-confirmed valid on
+`xomoxcc/dgx-spark-sglang:0.5.14-sm121` by code inspection 2026-06-30.
 
 ## TL;DR
 
@@ -185,7 +187,7 @@ ansible-playbook k8s_dgx.yml --tags sglang -e sglang_memprobe=1 -e sglang_load_f
 ```
 
 To make it the default for this model, set `load_format: fastsafetensors` in
-`roles/k8s_dgx/model_profiles/sgl-project-deepseek-v4-flash-fp8.yml` (currently
+`roles/k8s_dgx/model_profiles/nvidia-deepseek-v4-flash-nvfp4.yml` (currently
 `auto`). Swap (KEP-2400) can stay as a safety margin — with this loader it is
 no longer exercised during load.
 
