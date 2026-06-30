@@ -1,6 +1,6 @@
 # Hermes email gateway — local patch and upstream PRs
 
-Status as of 2026-06-24.
+Status as of 2026-06-30.
 
 ## Why this exists
 
@@ -290,6 +290,16 @@ The `env -u VIRTUAL_ENV` prefix is required because the parent shell's
 > - **Re-sync note:** when bumping `hermes.image_tag` to any release that includes commit
 >   `56001054`, the patch target path changes from `gateway/platforms/email.py` to
 >   `plugins/platforms/email/adapter.py` (see "NEXT bump" note in the 2026-06-21 block above).
+
+> **2026-06-30 check — PRs updated 2026-06-29; v2026.6.19 still latest:**
+> - **Latest release:** `v2026.6.19` (v0.17.0, 2026-06-19) — unchanged; no new tag published.
+>   Pinned deployment remains unaffected.
+> - **PRs #28697 / #28699 / #28702** all received a simultaneous update at ~11:53–11:54 UTC on
+>   2026-06-29 (all three `updatedAt` timestamps coincide — consistent with a rebase / force-push
+>   across the three branches). Plausibly the author responding to the earlier ENV→`config.yaml`
+>   review feedback noted in the 2026-06-16 check. PRs remain open / unmerged.
+> - `gateway/platforms/email.py` at tag `v2026.6.19` is unchanged (blob `d2f7e64a`); our patch
+>   is still clean. No re-sync required.
 
 1. Download the new upstream file:
 
