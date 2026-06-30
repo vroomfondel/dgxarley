@@ -403,7 +403,7 @@ dynamo tracing.
 
 1. **Patch 1 (`get_cuda_version` subprocess bypass, `PATCH_FI_CUDA_VER_EOF` / `_fi_cuda_ver_subprocess_bypass_`) is CONFIRMED still required on flashinfer >= 0.6.12.** `cpp_ext.py:get_cuda_version()` still calls `subprocess.check_output([nvcc, "--version"])` in **flashinfer 0.6.12, 0.6.13rc2, AND 0.6.13 stable**. PR #3081 only wrapped `fp4_quantize` with `custom_op`/`register_fake` — it did NOT touch `get_cuda_version()`. The subprocess path in `flashinfer/jit/cpp_ext.py` is structurally unchanged. Patch 1 therefore remains necessary for any image that uses flashinfer, regardless of version.
 
-2. **SGLang release status:** the current SGLang GitHub Release is **v0.5.14** (2026-06-26T22:57Z — released after this entry was written). `v0.5.13` (2026-06-13) and the bare-tag-only `v0.5.13.post1` (2026-06-15) preceded it. Whether the cluster images have moved to a 0.5.14-based build, and whether v0.5.14's flashinfer pin differs from 0.6.13 in a way relevant to Patch 1, is TBD.
+2. **SGLang release status:** the current SGLang GitHub Release is **v0.5.14** (2026-06-26T22:57Z — released after this entry was written). `v0.5.13` (2026-06-13) and the bare-tag-only `v0.5.13.post1` (2026-06-15) preceded it. The cluster is now on `xomoxcc/dgx-spark-sglang:0.5.14-sm121` (recipe `scripts/patches/sglang-0.5.14-sm121.recipe`, `FLASHINFER_VERSION=0.6.13`). v0.5.14 contains no change to `get_cuda_version()`/subprocess handling, so Patch 1 (`PATCH_FI_CUDA_VER_EOF`) remains REQUIRED on 0.5.14/0.6.13.
 
 - **Issue #2999** ("fp4_quantize is incompatible with torch.compile (lazy JIT +
   raw data_ptr access)") was filed independently on 2026-04-15 and closed on
