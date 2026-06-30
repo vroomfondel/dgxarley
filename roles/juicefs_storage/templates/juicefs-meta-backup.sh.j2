@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Managed by Ansible (juicefs_storage) — do not edit.
+# Dump JuiceFS metadata and upload it to the external rasnas S3 (off the single
+# USB-SSD). Run from root's crontab.
+set -euo pipefail
+
+export HOME=/root  # so the rc CLI finds its alias config under cron
+# META_PASSWORD for `juicefs dump`.
+set -a
+# shellcheck disable=SC1091
+. /etc/juicefs/{{ juicefs_fs_name }}.env
+set +a
+
+TS="$(date +%Y%m%d-%H%M%S)"
+NAME="{{ juicefs_fs_name }}-meta-${TS}.json"
+TMP="/tmp/${NAME}"
+META="redis://{{ juicefs_storage_address }}:6379/{{ juicefs_meta_db }}"
+DEST="{{ rustfs_rc_alias }}/{{ juicefs_meta_backup_bucket }}/{{ juicefs_meta_backup_prefix }}"
+
+echo "[$(date -Is)] juicefs dump -> ${NAME}.gz"
+/usr/local/bin/juicefs dump "$META" "$TMP"
+gzip -f "$TMP"
+/usr/local/bin/rc cp "${TMP}.gz" "${DEST}/${NAME}.gz"
+rm -f "${TMP}.gz"
+echo "[$(date -Is)] uploaded ${DEST}/${NAME}.gz"
+
+# Best-effort retention: keep the newest {{ juicefs_meta_backup_keep }} dumps.
+{
+  KEEP={{ juicefs_meta_backup_keep }}
+  mapfile -t OLD < <(/usr/local/bin/rc ls "${DEST}/" 2>/dev/null | awk '{print $NF}' \
+                       | grep -E '\.json\.gz$' | sort | head -n "-${KEEP}")
+  for f in "${OLD[@]:-}"; do
+    [ -n "${f}" ] && /usr/local/bin/rc rm "${DEST}/${f}" && echo "pruned ${f}"
+  done
+} || echo "[$(date -Is)] retention step skipped (non-fatal)"

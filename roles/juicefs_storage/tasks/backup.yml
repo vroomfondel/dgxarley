@@ -1,0 +1,56 @@
+---
+# Metadata backup via root crontab (cron module — repo convention, not a systemd
+# timer). Dumps JuiceFS metadata and uploads it to the EXTERNAL rasnas S3 (off the
+# single USB-SSD) via the rc CLI. Insurance against the Valkey SPOF — data chunks
+# live in RustFS; the dump restores the directory tree (juicefs load).
+#
+# Depends on: the rc CLI + `{{ rustfs_rc_alias }}` alias from the k3sserver role.
+# Imported on all nodes; present on the backup node, absent everywhere else.
+
+- name: Configure JuiceFS metadata backup on the backup node
+  when: inventory_hostname == juicefs_meta_backup_node
+  block:
+    - name: Ensure /etc/juicefs exists (backup node)
+      ansible.builtin.file:
+        path: /etc/juicefs
+        state: directory
+        mode: "0750"
+
+    - name: Deploy the meta-backup env file (META_PASSWORD)
+      ansible.builtin.template:
+        src: juicefs-mount.env.j2
+        dest: "/etc/juicefs/{{ juicefs_fs_name }}.env"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+
+    - name: Deploy the meta-backup script
+      ansible.builtin.template:
+        src: juicefs-meta-backup.sh.j2
+        dest: /usr/local/sbin/juicefs-meta-backup.sh
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Schedule the meta-backup cron job
+      ansible.builtin.cron:
+        name: juicefs-meta-backup
+        minute: "{{ juicefs_meta_backup_minute }}"
+        hour: "{{ juicefs_meta_backup_hour }}"
+        weekday: "{{ juicefs_meta_backup_weekday }}"
+        job: "/usr/local/sbin/juicefs-meta-backup.sh >> {{ juicefs_meta_backup_log }} 2>&1"
+        disabled: "{{ not juicefs_meta_backup_enabled }}"
+
+- name: Remove JuiceFS metadata backup from non-backup nodes
+  when: inventory_hostname != juicefs_meta_backup_node
+  block:
+    - name: Remove the meta-backup cron job
+      ansible.builtin.cron:
+        name: juicefs-meta-backup
+        state: absent
+
+    - name: Remove the meta-backup script
+      ansible.builtin.file:
+        path: /usr/local/sbin/juicefs-meta-backup.sh
+        state: absent

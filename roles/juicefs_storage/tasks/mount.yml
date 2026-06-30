@@ -1,0 +1,63 @@
+---
+# Mount JuiceFS on each node in juicefs_mount_group, as a native systemd service
+# (foreground process; Restart=always reconnects after a crash). The mount talks
+# directly to the storage node's Valkey + RustFS.
+
+- name: Ensure FUSE is available
+  ansible.builtin.command: modprobe fuse
+  changed_when: false
+
+- name: Allow non-root access to FUSE mounts (user_allow_other)
+  ansible.builtin.lineinfile:
+    path: /etc/fuse.conf
+    line: user_allow_other
+    regexp: '^#?\s*user_allow_other'
+    state: present
+    create: true
+    mode: "0644"
+  when: juicefs_allow_other | bool
+
+- name: Create the JuiceFS cache dir
+  ansible.builtin.file:
+    path: "{{ juicefs_cache_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Create the mountpoint dir
+  ansible.builtin.file:
+    path: "{{ juicefs_mount_path }}"
+    state: directory
+    mode: "0755"
+
+- name: Ensure /etc/juicefs exists
+  ansible.builtin.file:
+    path: /etc/juicefs
+    state: directory
+    mode: "0750"
+
+- name: Deploy the mount credential env file (META_PASSWORD)
+  ansible.builtin.template:
+    src: juicefs-mount.env.j2
+    dest: "/etc/juicefs/{{ juicefs_fs_name }}.env"
+    owner: root
+    group: root
+    mode: "0600"
+  notify: restart juicefs mount
+  no_log: true
+
+- name: Deploy the JuiceFS mount systemd unit
+  ansible.builtin.template:
+    src: juicefs-mount.service.j2
+    dest: "/etc/systemd/system/juicefs-{{ juicefs_fs_name }}.service"
+    mode: "0644"
+  register: _mount_unit
+  notify:
+    - reload systemd
+    - restart juicefs mount
+
+- name: Enable and start the JuiceFS mount
+  ansible.builtin.systemd:
+    name: "juicefs-{{ juicefs_fs_name }}"
+    daemon_reload: "{{ _mount_unit is changed }}"
+    enabled: true
+    state: started

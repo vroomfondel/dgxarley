@@ -1,0 +1,49 @@
+---
+# Install the JuiceFS CE client binary (juicedata/juicefs release).
+# Multi-arch: juicefs-<ver>-linux-{amd64,arm64}.tar.gz. Idempotent via a marker.
+
+- name: Set JuiceFS arch
+  ansible.builtin.set_fact:
+    juicefs_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+- name: Ensure marker dir exists
+  ansible.builtin.file:
+    path: /var/lib/juicefs_storage
+    state: directory
+    mode: "0755"
+
+- name: Read installed juicefs version marker
+  ansible.builtin.command: cat /var/lib/juicefs_storage/juicefs.version
+  register: _jfs_marker
+  changed_when: false
+  failed_when: false
+
+- name: Install juicefs binary
+  when: (_jfs_marker.stdout | default('')) != juicefs_version
+  block:
+    - name: Download juicefs tarball
+      ansible.builtin.get_url:
+        url: "https://github.com/juicedata/juicefs/releases/download/v{{ juicefs_version }}/juicefs-{{ juicefs_version }}-linux-{{ juicefs_arch }}.tar.gz"
+        dest: /tmp/juicefs.tar.gz
+        mode: "0644"
+        force: true
+
+    - name: Extract juicefs binary
+      ansible.builtin.unarchive:
+        src: /tmp/juicefs.tar.gz
+        dest: /usr/local/bin/
+        remote_src: true
+        include:
+          - juicefs
+        mode: "0755"
+
+    - name: Record juicefs version marker
+      ansible.builtin.copy:
+        content: "{{ juicefs_version }}"
+        dest: /var/lib/juicefs_storage/juicefs.version
+        mode: "0644"
+
+    - name: Remove juicefs tarball
+      ansible.builtin.file:
+        path: /tmp/juicefs.tar.gz
+        state: absent

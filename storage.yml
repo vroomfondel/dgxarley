@@ -1,0 +1,17 @@
+---
+# JuiceFS distributed storage layer — host-level (systemd), OUTSIDE k3s.
+# Valkey + RustFS on the storage node; JuiceFS FUSE mount on the mount group.
+# Intentionally NOT part of site.yml — run deliberately, like k8s_dgx/k8s_infra.
+#
+#   ansible-playbook storage.yml
+#   ansible-playbook storage.yml --tags juicefs_mount   # mounts only
+#
+# Set the placement + secrets first (see roles/juicefs_storage/defaults/main.yml):
+#   juicefs_storage_node, juicefs_disk_path, juicefs_cache_size_mib, and the
+#   real credentials in group_vars/all/vault.yml.
+- name: JuiceFS distributed storage layer
+  hosts: k3sserver
+  become: true
+  roles:
+    - role: juicefs_storage
+      tags: juicefs

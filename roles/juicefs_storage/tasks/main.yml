@@ -1,0 +1,33 @@
+---
+# juicefs_storage — see defaults/main.yml for the architecture overview.
+# Tasks are host-gated so a single play over `k3sserver` configures every role:
+#   - JuiceFS binary    -> all nodes in the play
+#   - Valkey + RustFS   -> the storage node only
+#   - format (once)     -> the storage node only
+#   - FUSE mount        -> nodes in juicefs_mount_group
+#   - meta-backup timer -> the backup node (storage node by default)
+# Ansible runs each imported task across the batch in order, so the backend is
+# up before the format step, and the format is done before mount nodes mount.
+
+- name: Install the JuiceFS client binary
+  ansible.builtin.import_tasks: binaries_juicefs.yml
+  tags: [juicefs_bin]
+
+- name: Deploy metadata + object backend (Valkey + RustFS)
+  ansible.builtin.import_tasks: backend.yml
+  when: inventory_hostname == juicefs_storage_node
+  tags: [juicefs_backend]
+
+- name: Format the JuiceFS filesystem (idempotent, once)
+  ansible.builtin.import_tasks: format.yml
+  when: inventory_hostname == juicefs_storage_node
+  tags: [juicefs_format]
+
+- name: Mount JuiceFS on mount nodes
+  ansible.builtin.import_tasks: mount.yml
+  when: inventory_hostname in groups[juicefs_mount_group]
+  tags: [juicefs_mount]
+
+- name: Configure metadata-backup cron job
+  ansible.builtin.import_tasks: backup.yml
+  tags: [juicefs_backup]

@@ -1,0 +1,38 @@
+# Managed by Ansible (juicefs_storage) — do not edit.
+# Valkey as the JuiceFS metadata engine: AOF durability + noeviction + auth.
+
+bind 127.0.0.1 {{ juicefs_storage_address }}
+protected-mode yes
+port 6379
+tcp-backlog 511
+timeout 0
+tcp-keepalive 300
+
+daemonize no
+supervised systemd
+pidfile /run/valkey/valkey-server.pid
+loglevel notice
+logfile ""
+databases 16
+dir /var/lib/valkey
+
+# --- Persistence -----------------------------------------------------------
+# AOF is the primary durability mechanism for JuiceFS metadata (per JuiceFS
+# Redis best practices). everysec = at most 1s of metadata loss on crash.
+appendonly yes
+appendfsync everysec
+appendfilename "appendonly.aof"
+# RDB snapshots as a second safety net.
+save 900 1
+save 300 10
+save 60 10000
+rdbcompression yes
+rdbchecksum yes
+dbfilename dump.rdb
+
+# --- Memory ----------------------------------------------------------------
+# JuiceFS metadata must NEVER be evicted, or the filesystem corrupts.
+maxmemory-policy noeviction
+
+# --- Auth ------------------------------------------------------------------
+requirepass {{ juicefs_valkey_password }}

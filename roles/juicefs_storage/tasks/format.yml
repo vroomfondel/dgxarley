@@ -1,0 +1,61 @@
+---
+# One-time, idempotent JuiceFS format. Runs on the storage node so it reaches
+# Valkey + RustFS locally. Guarded by `juicefs status`: never re-initialises an
+# existing filesystem. Bucket is created first via the rc CLI (the rustfs/mc
+# client — avoids the `aws s3api create-bucket` 501 bug in RustFS beta).
+
+- name: Wait for the RustFS S3 endpoint to answer
+  ansible.builtin.uri:
+    url: "http://{{ juicefs_storage_address }}:{{ juicefs_rustfs_s3_port }}/"
+    method: GET
+    status_code: [200, 400, 403, 404]
+  register: _rustfs_up
+  retries: 30
+  delay: 2
+  until: _rustfs_up.status is defined and _rustfs_up.status > 0
+
+- name: Configure a local rc alias for the RustFS backend
+  ansible.builtin.command: >-
+    rc alias set jfsbackend
+    http://{{ juicefs_storage_address }}:{{ juicefs_rustfs_s3_port }}
+    {{ juicefs_rustfs_access_key }} {{ juicefs_rustfs_secret_key }}
+  changed_when: false
+  no_log: true
+
+- name: Check whether the JuiceFS bucket exists
+  ansible.builtin.command: "rc ls jfsbackend/{{ juicefs_rustfs_bucket }}"
+  register: _bucket_check
+  changed_when: false
+  failed_when: false
+
+- name: Create the JuiceFS bucket
+  ansible.builtin.command: "rc mb jfsbackend/{{ juicefs_rustfs_bucket }}"
+  when: _bucket_check.rc != 0
+
+- name: Check whether JuiceFS is already formatted
+  ansible.builtin.command: >-
+    /usr/local/bin/juicefs status
+    redis://{{ juicefs_storage_address }}:6379/{{ juicefs_meta_db }}
+  environment:
+    META_PASSWORD: "{{ juicefs_valkey_password }}"
+  register: _jfs_status
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Format the JuiceFS filesystem
+  ansible.builtin.command: >-
+    /usr/local/bin/juicefs format
+    --storage s3
+    --bucket http://{{ juicefs_storage_address }}:{{ juicefs_rustfs_s3_port }}/{{ juicefs_rustfs_bucket }}
+    --access-key {{ juicefs_rustfs_access_key }}
+    --secret-key {{ juicefs_rustfs_secret_key }}
+    --block-size {{ juicefs_block_size_kib }}
+    --compress {{ juicefs_compress }}
+    --trash-days {{ juicefs_trash_days }}
+    redis://{{ juicefs_storage_address }}:6379/{{ juicefs_meta_db }}
+    {{ juicefs_fs_name }}
+  environment:
+    META_PASSWORD: "{{ juicefs_valkey_password }}"
+  when: _jfs_status.rc != 0
+  no_log: true

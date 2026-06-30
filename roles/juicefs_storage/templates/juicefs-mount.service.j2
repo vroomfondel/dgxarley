@@ -1,0 +1,24 @@
+# Managed by Ansible (juicefs_storage) — do not edit.
+[Unit]
+Description=JuiceFS mount {{ juicefs_mount_path }} ({{ juicefs_fs_name }})
+After=network-online.target
+Wants=network-online.target
+{% if inventory_hostname == juicefs_storage_node %}
+# On the storage node the backend is local — order after it.
+After={{ juicefs_valkey_apt_package }}.service rustfs.service
+{% endif %}
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/juicefs/{{ juicefs_fs_name }}.env
+# Clear any stale FUSE mount left by an unclean exit before remounting.
+ExecStartPre=-/bin/umount -l {{ juicefs_mount_path }}
+ExecStart=/usr/local/bin/juicefs mount --cache-dir {{ juicefs_cache_dir }} --cache-size {{ juicefs_cache_size_mib }}{% if juicefs_writeback %} --writeback{% endif %}{% if juicefs_allow_other %} -o allow_other{% endif %} redis://{{ juicefs_storage_address }}:6379/{{ juicefs_meta_db }} {{ juicefs_mount_path }}
+ExecStop=/bin/umount {{ juicefs_mount_path }}
+Restart=always
+RestartSec=10s
+# Never give up restarting (storage node may come back later).
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target

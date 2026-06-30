@@ -1,0 +1,21 @@
+---
+- name: reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart valkey
+  ansible.builtin.systemd:
+    name: "{{ juicefs_valkey_apt_package }}"
+    state: restarted
+
+- name: restart rustfs
+  ansible.builtin.systemd:
+    name: rustfs
+    state: restarted
+
+# NOTE: restarting the mount briefly breaks the FUSE mountpoint (ENOTCONN until
+# the new process is up). Only triggered on unit/env change.
+- name: restart juicefs mount
+  ansible.builtin.systemd:
+    name: "juicefs-{{ juicefs_fs_name }}"
+    state: restarted

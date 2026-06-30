@@ -1,0 +1,102 @@
+---
+# ============================================================================
+# juicefs_storage — distributed JuiceFS storage layer, host-level (systemd)
+# ============================================================================
+# Runs ENTIRELY outside k3s as native systemd services, so the storage layer is
+# independent of the k3s lifecycle (no FUSE-pod-restart fragility, no kubelet
+# OOM). JuiceFS has NO master: every mount talks DIRECTLY to Valkey (metadata)
+# and RustFS (S3 object store). One "storage node" holds the USB-SSD and runs
+# Valkey + RustFS; every node in juicefs_mount_group runs the FUSE mount.
+#
+# Deploy order is handled within the role (binaries -> backend -> format ->
+# mount -> backup). Run via: ansible-playbook storage.yml
+
+# --- Topology ---------------------------------------------------------------
+# inventory_hostname of the node the USB-SSD is attached to (runs Valkey+RustFS).
+# May be the k3s master OR any spark — this is THE placement knob.
+juicefs_storage_node: spark2
+
+# Inventory group whose hosts get the JuiceFS mount.
+juicefs_mount_group: dgxsparks
+
+# Address mount clients use to reach Valkey + RustFS on the storage node.
+# Default: the storage node's QSFP IP (200GbE mesh) if it has one (= a spark),
+# else its k3s VLAN IP (= the master, which is NOT on the QSFP mesh).
+# Override if a mount node cannot route to that address (e.g. master mounting a
+# spark-hosted backend — master has no QSFP path).
+juicefs_storage_address: >-
+  {{ hostvars[juicefs_storage_node].qsfp_ip
+     | default(hostvars[juicefs_storage_node].k3s_node_ip) }}
+
+# Safety: refuse to deploy RustFS unless juicefs_disk_path is a real mountpoint
+# (so RustFS data never lands on the OS disk by accident). Override only for tests.
+juicefs_require_disk_mount: true
+
+# --- Disk / paths -----------------------------------------------------------
+# Mountpoint of the USB-SSD on the storage node. You mount the SSD here yourself
+# (fstab / systemd.mount); this role does NOT partition or format the SSD.
+juicefs_disk_path: /mnt/jfs-ssd
+# RustFS object data dir on the USB-SSD.
+juicefs_rustfs_data_dir: "{{ juicefs_disk_path }}/rustfs"
+
+# Host mountpoint of the shared FS on every mount node.
+juicefs_mount_path: /mnt/jfs
+# Per-node local read cache on the NVMe.
+juicefs_cache_dir: /var/lib/jfs-cache
+# Per-node cache size in MiB (JuiceFS unit is MiB). Keep well below free NVMe.
+# NOTE: today /var/lib/hf-cache holds a ~1.2 TiB per-spark full HF copy; free
+# space is only ~200 GiB until that is migrated into JuiceFS and removed. Size
+# this conservatively until the old local cache is gone, then raise it.
+juicefs_cache_size_mib: 100000  # ~98 GiB
+
+# --- Filesystem format (set once at format time, immutable afterwards) -------
+juicefs_fs_name: dgxfs
+juicefs_meta_db: 1               # Valkey logical DB index
+juicefs_block_size_kib: 4096     # object size in KiB; 4096 = 4 MiB (the default)
+juicefs_compress: none           # LLM weights are effectively incompressible
+juicefs_trash_days: 0            # no trash (reproducible data)
+
+# --- Mount-time options -----------------------------------------------------
+# Buffer writes locally and flush async to S3 (faster ingest, small durability
+# window — acceptable for reproducible weights). Off by default.
+juicefs_writeback: false
+# allow_other so non-root processes / containers (via hostPath) can read it.
+juicefs_allow_other: true
+
+# --- Versions ---------------------------------------------------------------
+juicefs_version: "1.3.1"                 # juicedata/juicefs release (arm64+amd64)
+juicefs_rustfs_version: "1.0.0-beta.8"   # rustfs/rustfs release
+juicefs_rustfs_libc: musl                # musl (static) or gnu
+juicefs_valkey_apt_package: valkey-server  # noble: 7.2.x — sufficient for JuiceFS
+
+# --- RustFS server ----------------------------------------------------------
+juicefs_rustfs_s3_port: 9000
+juicefs_rustfs_console_port: 9001
+juicefs_rustfs_console_enable: true
+juicefs_rustfs_bucket: juicefs
+juicefs_rustfs_user: rustfs              # native system user (NOT the container's 10001)
+# Optional cgroup page-cache containment. RECOMMENDED on a spark storage node,
+# where page cache competes with GPU unified memory. Empty = unlimited.
+# Example: "16G". Uses MemoryHigh (soft reclaim) not MemoryMax (hard OOM).
+juicefs_rustfs_memory_high: ""
+
+# --- Credentials — DUMMIES. Real values go in group_vars/all/vault.yml ------
+# RustFS S3 root creds (RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY; secret >= 8 chars).
+juicefs_rustfs_access_key: "changeme-access-key"
+juicefs_rustfs_secret_key: "changeme-secret-key-min8"
+# Valkey requirepass == JuiceFS META_PASSWORD.
+juicefs_valkey_password: "changeme-valkey-password"
+
+# --- Metadata backup (systemd timer -> external rasnas S3 via the rc CLI) ----
+# Insurance against the Valkey SPOF: a juicefs dump uploaded off the single disk.
+# Reuses the existing rustfs_rc_* alias (rasnas) from the k3sserver role.
+juicefs_meta_backup_enabled: true
+juicefs_meta_backup_node: "{{ juicefs_storage_node }}"
+# Schedule (root crontab, cron module — matches the repo convention).
+juicefs_meta_backup_minute: "30"
+juicefs_meta_backup_hour: "3"
+juicefs_meta_backup_weekday: "*"
+juicefs_meta_backup_bucket: "{{ rustfs_rc_backup_bucket | default('dgx-backups') }}"
+juicefs_meta_backup_prefix: "juicefs-meta"
+juicefs_meta_backup_keep: 14                        # retained dumps in the bucket
+juicefs_meta_backup_log: /var/log/juicefs-meta-backup.log

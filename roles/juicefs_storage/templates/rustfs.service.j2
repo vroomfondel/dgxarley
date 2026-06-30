@@ -1,0 +1,24 @@
+# Managed by Ansible (juicefs_storage) — do not edit.
+[Unit]
+Description=RustFS S3 object store (JuiceFS backend)
+After=network-online.target
+Wants=network-online.target
+# Data dir lives on the USB-SSD; require it to be mounted.
+RequiresMountsFor={{ juicefs_disk_path }}
+
+[Service]
+Type=simple
+User={{ juicefs_rustfs_user }}
+Group={{ juicefs_rustfs_user }}
+EnvironmentFile=/etc/rustfs/rustfs.env
+ExecStart=/usr/local/bin/rustfs {{ juicefs_rustfs_data_dir }}
+Restart=always
+RestartSec=5s
+LimitNOFILE=1048576
+{% if juicefs_rustfs_memory_high %}
+# Soft page-cache containment (relevant on a unified-memory spark).
+MemoryHigh={{ juicefs_rustfs_memory_high }}
+{% endif %}
+
+[Install]
+WantedBy=multi-user.target

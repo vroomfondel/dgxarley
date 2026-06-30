@@ -1,0 +1,178 @@
+---
+# Deploys the metadata + object backend on the storage node only.
+#   Valkey  : apt package, managed valkey.conf (AOF + requirepass + noeviction)
+#   RustFS  : native binary, dedicated system user, data dir on the USB-SSD
+
+# --- Disk safety ------------------------------------------------------------
+- name: Verify the USB-SSD is mounted at the storage path
+  ansible.builtin.command: "mountpoint -q {{ juicefs_disk_path }}"
+  register: _disk_mp
+  changed_when: false
+  failed_when: false
+
+- name: Fail if the storage disk is not a separate mountpoint
+  ansible.builtin.fail:
+    msg: >-
+      {{ juicefs_disk_path }} is not a mountpoint. Mount the USB-SSD there first —
+      this role refuses to write RustFS object data onto the OS disk. Override
+      with juicefs_require_disk_mount=false only for throwaway tests.
+  when:
+    - juicefs_require_disk_mount | bool
+    - _disk_mp.rc != 0
+
+# --- Valkey (metadata engine) ----------------------------------------------
+- name: Install Valkey
+  ansible.builtin.apt:
+    name: "{{ juicefs_valkey_apt_package }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Deploy managed valkey.conf
+  ansible.builtin.template:
+    src: valkey.conf.j2
+    dest: /etc/valkey/valkey.conf
+    owner: valkey
+    group: valkey
+    mode: "0640"
+  notify: restart valkey
+  no_log: true  # contains requirepass
+
+- name: Enable and start Valkey
+  ansible.builtin.systemd:
+    name: "{{ juicefs_valkey_apt_package }}"
+    enabled: true
+    state: started
+
+# --- RustFS (S3 object store) ----------------------------------------------
+- name: Create rustfs system group
+  ansible.builtin.group:
+    name: "{{ juicefs_rustfs_user }}"
+    system: true
+
+- name: Create rustfs system user
+  ansible.builtin.user:
+    name: "{{ juicefs_rustfs_user }}"
+    group: "{{ juicefs_rustfs_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    home: /var/lib/rustfs
+    create_home: false
+
+- name: Ensure RustFS data dir exists on the USB-SSD
+  ansible.builtin.file:
+    path: "{{ juicefs_rustfs_data_dir }}"
+    state: directory
+    owner: "{{ juicefs_rustfs_user }}"
+    group: "{{ juicefs_rustfs_user }}"
+    mode: "0750"
+
+- name: Set rustfs arch
+  ansible.builtin.set_fact:
+    juicefs_rustfs_arch: "{{ 'aarch64' if ansible_architecture == 'aarch64' else 'x86_64' }}"
+
+- name: Read installed rustfs version marker
+  ansible.builtin.command: cat /var/lib/juicefs_storage/rustfs.version
+  register: _rustfs_marker
+  changed_when: false
+  failed_when: false
+
+- name: Install rustfs binary
+  when: (_rustfs_marker.stdout | default('')) != juicefs_rustfs_version
+  block:
+    - name: Ensure unzip is present
+      ansible.builtin.apt:
+        name: unzip
+        state: present
+
+    - name: Download rustfs zip
+      ansible.builtin.get_url:
+        url: "https://github.com/rustfs/rustfs/releases/download/{{ juicefs_rustfs_version }}/rustfs-linux-{{ juicefs_rustfs_arch }}-{{ juicefs_rustfs_libc }}-v{{ juicefs_rustfs_version }}.zip"
+        dest: /tmp/rustfs.zip
+        mode: "0644"
+        force: true
+
+    - name: Prepare rustfs unzip dir
+      ansible.builtin.file:
+        path: /tmp/rustfs-unzip
+        state: directory
+        mode: "0755"
+
+    - name: Unzip rustfs
+      ansible.builtin.unarchive:
+        src: /tmp/rustfs.zip
+        dest: /tmp/rustfs-unzip
+        remote_src: true
+
+    - name: Locate the rustfs binary in the archive
+      ansible.builtin.find:
+        paths: /tmp/rustfs-unzip
+        patterns: rustfs
+        file_type: file
+        recurse: true
+      register: _rustfs_found
+
+    - name: Fail if rustfs binary not found in archive
+      ansible.builtin.fail:
+        msg: "rustfs binary not found inside the downloaded archive — check the asset name/version."
+      when: _rustfs_found.files | length == 0
+
+    - name: Install rustfs binary
+      ansible.builtin.copy:
+        src: "{{ _rustfs_found.files[0].path }}"
+        dest: /usr/local/bin/rustfs
+        remote_src: true
+        mode: "0755"
+
+    - name: Record rustfs version marker
+      ansible.builtin.copy:
+        content: "{{ juicefs_rustfs_version }}"
+        dest: /var/lib/juicefs_storage/rustfs.version
+        mode: "0644"
+
+    - name: Clean up rustfs download artifacts
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/rustfs.zip
+        - /tmp/rustfs-unzip
+
+- name: Ensure /etc/rustfs exists
+  ansible.builtin.file:
+    path: /etc/rustfs
+    state: directory
+    mode: "0750"
+
+- name: Deploy RustFS credential env file
+  ansible.builtin.template:
+    src: rustfs.env.j2
+    dest: /etc/rustfs/rustfs.env
+    owner: root
+    group: "{{ juicefs_rustfs_user }}"
+    mode: "0640"
+  notify: restart rustfs
+  no_log: true
+
+- name: Deploy rustfs systemd unit
+  ansible.builtin.template:
+    src: rustfs.service.j2
+    dest: /etc/systemd/system/rustfs.service
+    mode: "0644"
+  register: _rustfs_unit
+  notify:
+    - reload systemd
+    - restart rustfs
+
+- name: Enable and start RustFS
+  ansible.builtin.systemd:
+    name: rustfs
+    daemon_reload: "{{ _rustfs_unit is changed }}"
+    enabled: true
+    state: started
+
+# Apply pending Valkey/RustFS config restarts NOW, before the format step runs —
+# otherwise a freshly apt-installed Valkey is still on its default config (no
+# requirepass) and `juicefs format` (which authenticates) would fail.
+- name: Apply backend config before formatting
+  ansible.builtin.meta: flush_handlers
