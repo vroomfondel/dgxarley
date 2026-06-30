@@ -10,8 +10,15 @@
 > defense-in-depth for older pins. Removable as cleanup, but harmless.
 >
 > **2026-06-14:** Still fixed — PR #23467 still merged; fix present in the current
-> default image `scitrera/dgx-spark-sglang:0.5.12`. Monkey-patch remains a
+> default image `xomoxcc/dgx-spark-sglang:0.5.14-sm121`. Monkey-patch remains a
 > confirmed no-op (sentinel `def _module_path_match` already in `utils.py`).
+>
+> **2026-06-30:** Still fixed — PR #23467 present in v0.5.14; the `PATCH_QUANT_UTILS_EOF`
+> block in `sglang_launch.sh` remains a guarded no-op on
+> `xomoxcc/dgx-spark-sglang:0.5.14-sm121` (v0.5.14 ships `def _module_path_match`).
+> NOTE: unrelated to commit d31d672's W4A16\_NVFP4 path for
+> `nvidia/Qwen3.6-35B-A3B-NVFP4` — that is a separate runtime patch for a different
+> model (mixed-precision quant) and does not affect this FP8 `is_layer_skipped` fix.
 
 - **`Qwen/Qwen3.6-27B-FP8` — BROKEN** on `scitrera/dgx-spark-sglang:0.5.10`. Model
   loads and decode runs, but every request produces multilingual token salad with
