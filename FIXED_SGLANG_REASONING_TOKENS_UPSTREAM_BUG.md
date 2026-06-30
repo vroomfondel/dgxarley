@@ -2,7 +2,7 @@
 
 ## Status
 
-**Fixed upstream** as of 2026-04-05. Merged by maintainer `hnyls2002`. Re-verified 2026-04-16: fix still in place in current `main`, included in our v0.5.10 image. Re-verified 2026-05-31: PR #15562 predates v0.5.10 and is in the current default image `0.5.12.post1-sm121`; no workaround needed. Re-verified 2026-06-14: PR #15562 still merged, fix present in `scitrera/dgx-spark-sglang:0.5.12`.
+**Fixed upstream** as of 2026-04-05. Merged by maintainer `hnyls2002`. Re-verified 2026-04-16: fix still in place in current `main`, included in our v0.5.10 image. Re-verified 2026-05-31: PR #15562 predates v0.5.10 and is in the current default image `0.5.12.post1-sm121`; no workaround needed. Re-verified 2026-06-30: PR #15562 still merged, fix present in `xomoxcc/dgx-spark-sglang:0.5.14-sm121`.
 
 - Issue: [#15660](https://github.com/sgl-project/sglang/issues/15660) (closed 2025-12-29, but bug persisted until fix)
 - Fix PR: [#15562](https://github.com/sgl-project/sglang/pull/15562) — **merged 2026-04-04**. Re-tokenizes reasoning content at the API layer to compute `reasoning_tokens` and populates it into `UsageInfo`
