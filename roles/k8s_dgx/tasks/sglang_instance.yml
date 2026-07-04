@@ -621,10 +621,17 @@
                     value: "{{ sglang_ep | string }}"
                   - name: NNODES
                     value: "{{ _sglang_active_nnodes | string }}"
+                  # QSFP/NCCL peer IPs are meaningless for a single-node embed
+                  # instance (no workers, no NCCL), AND its sriov_key ("embed") is
+                  # absent from qsfp_sriov_assignments, so evaluating _sglang_qsfp_ips
+                  # would fail ("dict has no attribute 'embed'"). Guard with
+                  # is_embedding — the lazy `X if cond else Y` never evaluates the
+                  # _sglang_qsfp_ips branch when embedding. The embed launcher
+                  # ignores these vars anyway. Same guard as the QSFP annotation above.
                   - name: QSFP_IP_SPARK1
-                    value: "{{ _sglang_qsfp_ips[0] }}"
+                    value: "{{ '127.0.0.1' if (inst.is_embedding | default(false)) else _sglang_qsfp_ips[0] }}"
                   - name: QSFP_PEER_IPS
-                    value: "{{ _sglang_qsfp_ips[1:] | join(',') }}"
+                    value: "{{ '' if (inst.is_embedding | default(false)) else (_sglang_qsfp_ips[1:] | join(',')) }}"
                   - name: NCCL_PORT
                     value: "{{ inst.nccl_port | string }}"
                   - name: SGLANG_PORT
