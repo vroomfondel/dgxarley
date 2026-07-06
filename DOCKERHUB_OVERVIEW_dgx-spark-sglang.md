@@ -111,9 +111,9 @@ kernels for.
   and uses the `-mainahead` sgl-kernel patch variants (one day of main drift
   shifted the mscclpp link lines). **First-contact / main-ahead, not a
   tagged release.**
-- Built on a CUDA 13.2 + PyTorch 2.12 + NCCL 2.30.4 base for the GB10 codegen
+- Built on a CUDA 13.2 + PyTorch 2.12 + NCCL 2.30.7 base for the GB10 codegen
   path (CUDA 13.1 / PyTorch 2.10 fallback is ~45 % slower end-to-end). **Known
-  issue:** NCCL 2.30.4 has an NVLS-path regression that can silently hang
+  issue:** the NCCL 2.30.x NVLS path has a regression that can silently hang
   high-expert-count MoE weight loads (≥256 experts) on GB10/RoCE
   ([NVIDIA/nccl#2167](https://github.com/NVIDIA/nccl/issues/2167)) — set
   `NCCL_NVLS_ENABLE=0` when running these (free on non-NVLink hardware; the
