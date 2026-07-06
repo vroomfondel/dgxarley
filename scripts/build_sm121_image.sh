@@ -532,6 +532,19 @@ preflight() {
             sglang-tilelang-018-indexer-compat.patch
         )
     fi
+    # DSV4 EAGLE-MTP marlin branch + TileLang 0.1.8 compat — the v0.5.14+
+    # remainder of the above once PR #25820's base NVFP4-MoE support went
+    # native (APPLY_DSV4_NVFP4_PR25820=0). Gated by its own recipe variable
+    # so the two states (pre-merge cherry-pick vs. post-merge remainder) never
+    # collide. See apply_patches() for the matching gate.
+    if [[ -f "${PATCHES_DIR}/${RECIPE_NAME}.recipe" ]] \
+        && grep -qE '^APPLY_DSV4_MTP_MARLIN_TILELANG=1' "${PATCHES_DIR}/${RECIPE_NAME}.recipe"; then
+        required_files+=(
+            dockerfile-dsv4-mtp-marlin-tilelang.patch
+            sglang-dsv4-mtp-marlin-v0.5.14.patch
+            sglang-tilelang-018-indexer-compat.patch
+        )
+    fi
     # DiffusionGemma patches (PR #28054) — only when the recipe opts in via
     # APPLY_DIFFUSIONGEMMA_PR28054=1. See apply_patches() for the matching gate.
     if [[ -f "${PATCHES_DIR}/${RECIPE_NAME}.recipe" ]] \
@@ -839,6 +852,17 @@ apply_patches() {
         apply_dsv4_nvfp4_patch=1
     fi
 
+    # DSV4 EAGLE-MTP marlin branch + TileLang 0.1.8 compat — gated separately
+    # from apply_dsv4_nvfp4_patch (mutually exclusive: this fires once the base
+    # NVFP4-MoE class is native and only the GB10-specific MTP/indexer
+    # remainder still needs patching). Drop APPLY_DSV4_MTP_MARLIN_TILELANG once
+    # the marlin branch and the TileLang 0.1.8 fix both land upstream.
+    local apply_dsv4_mtp_marlin_patch=0
+    if [[ -f "${PATCHES_DIR}/${RECIPE_NAME}.recipe" ]] \
+        && grep -qE '^APPLY_DSV4_MTP_MARLIN_TILELANG=1' "${PATCHES_DIR}/${RECIPE_NAME}.recipe"; then
+        apply_dsv4_mtp_marlin_patch=1
+    fi
+
     # DiffusionGemma (PR #28054) — gated like DSV4 by an explicit recipe
     # variable. Adds the dLLM Gemma4Renoise model/sampler. The matching
     # dockerfile-diffusiongemma.patch ANCHORS AFTER the gemma4-nvfp4 block, so
@@ -1092,6 +1116,25 @@ apply_patches() {
         echo "DSV4 NVFP4 Dockerfile patched"
     else
         echo "Skipping dockerfile-dsv4-nvfp4.patch (recipe does not set APPLY_DSV4_NVFP4_PR25820=1)"
+    fi
+
+    # 2c-bis. DSV4 EAGLE-MTP marlin + TileLang 0.1.8 compat Dockerfile patch —
+    #     recipe-gated (see the apply_dsv4_mtp_marlin_patch determination
+    #     above). v0.5.14+ remainder of 2c above: applies the small marlin
+    #     draft-MoE branch on top of the now-native HybridFp8NvFp4Config, plus
+    #     the still-needed TileLang 0.1.8 indexer compat fix. Same anchor as
+    #     2c/2b — not combinable with a gemma4 or the pre-merge DSV4 recipe
+    #     without regenerating context (the dry-run below catches it).
+    if (( apply_dsv4_mtp_marlin_patch )); then
+        echo "Applying dockerfile-dsv4-mtp-marlin-tilelang.patch..."
+        patch --dry-run -p1 < "${PATCHES_DIR}/dockerfile-dsv4-mtp-marlin-tilelang.patch" \
+            || die "DSV4 MTP marlin/tilelang Dockerfile patch dry-run failed — regenerate dockerfile-dsv4-mtp-marlin-tilelang.patch"
+        patch -p1 < "${PATCHES_DIR}/dockerfile-dsv4-mtp-marlin-tilelang.patch"
+        grep -q 'sglang-dsv4-mtp-marlin-v0.5.14.patch' container-build/Dockerfile.sglang-nightly \
+            || die "DSV4 MTP marlin/tilelang Dockerfile patch verification failed"
+        echo "DSV4 MTP marlin/tilelang Dockerfile patched"
+    else
+        echo "Skipping dockerfile-dsv4-mtp-marlin-tilelang.patch (recipe does not set APPLY_DSV4_MTP_MARLIN_TILELANG=1)"
     fi
 
     # 2d. NemotronH MTP (PR #27998) Dockerfile patch — recipe-gated (see the

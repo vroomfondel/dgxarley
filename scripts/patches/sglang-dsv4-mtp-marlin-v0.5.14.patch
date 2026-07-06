@@ -1,0 +1,42 @@
+# Marlin draft-MoE branch for DeepSeek-V4 EAGLE-MTP on SM121/GB10.
+#
+# nvidia/DeepSeek-V4-Flash-NVFP4's MTP/nextn draft head has its own MoE layers,
+# excluded from the main NVFP4 quant (they stay MXFP4). HybridFp8NvFp4Config
+# (SGLang's native NVFP4-MoE dispatch for DSV4, upstream PR #25820, merged
+# 2026-06-22, shipping natively since v0.5.14) hardcodes those MTP MoE layers to
+# Mxfp4FlashinferTrtllmMoEMethod, an SM100-only TVM kernel (bmm_..._sm100f) that
+# crashes on GB10:
+#   tvm.error.InternalError: Check failed: ... sm100f kernel not supported on sm121
+#
+# Fix: add a marlin branch (SM80+, correct on GB10) selected via
+# --speculative-moe-runner-backend marlin, i.e. the DSV4 profile's
+# speculative_moe_runner_backend: marlin knob. Without this patch that knob is
+# silently dead on the native v0.5.14 dispatch — EAGLE-MTP crashes at draft MoE
+# regardless of the setting.
+#
+# Superscedes the marlin-branch hunk that used to ride inside
+# sglang-dsv4-nvfp4-pr25820.patch (pre-v0.5.14, when the whole HybridFp8NvFp4Config
+# class was unmerged and had to be cherry-picked). That patch is retired on
+# v0.5.14 (APPLY_DSV4_NVFP4_PR25820=0 — the base class is now native); this patch
+# is the standalone remainder needed for MTP, rebased against the native class.
+#
+# Apply with `patch -p1` in /data/sglang (before the sglang install), same as
+# sglang-tilelang-018-indexer-compat.patch.
+--- a/python/sglang/srt/layers/quantization/modelopt_quant.py
++++ b/python/sglang/srt/layers/quantization/modelopt_quant.py
+@@ -1446,5 +1446,15 @@ class HybridFp8NvFp4Config(Fp8Config):
+             if self.is_fp4_experts:
+                 from sglang.srt.layers.quantization.fp8 import Fp8MoEMethod
++
++                # SM121/GB10: the trtllm path below is an SM100-only kernel that
++                # crashes the MTP/nextn draft MoE. Route to marlin (SM80+) when
++                # selected via --speculative-moe-runner-backend marlin.
++                if get_moe_runner_backend().is_marlin():
++                    from sglang.srt.layers.quantization.mxfp4_marlin_moe import (
++                        Mxfp4MarlinMoEMethod,
++                    )
++
++                    return Mxfp4MarlinMoEMethod(Fp8MoEMethod(self), prefix=prefix)
+                 from sglang.srt.layers.quantization.mxfp4_flashinfer_trtllm_moe import (
+                     Mxfp4FlashinferTrtllmMoEMethod,
+                 )

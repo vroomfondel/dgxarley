@@ -1,7 +1,9 @@
 # TileLang 0.1.8 compat fix for SGLang's DSV4 DSA paged-MQA indexer kernel.
 #
 # Without this, `tilelang_fp8_paged_mqa_logits` (the SGLANG_OPT_USE_TILELANG_INDEXER
-# path) fails to COMPILE on TileLang 0.1.8 (bundled in 0.5.13-sm121): its
+# path) fails to COMPILE on TileLang 0.1.8 (bundled in 0.5.13-sm121 AND 0.5.14-sm121
+# — verified 2026-07-06 that dsa/tilelang_kernel.py is byte-identical at this
+# function between the two SGLang versions, so this patch applies unchanged): its
 # `inject_permuted_layout` LowerTileOp pass asserts shared buffers are >=2D, but
 # the kernel allocates two 1D shared buffers (k_smem_u8, k_s_smem_u8). TileLang
 # 0.1.6/0.1.7 was permissive. 0.1.8 also strict-typechecks kernel arg dtypes, so
@@ -14,7 +16,8 @@
 # floor on GB10 (the native DeepGEMM kernel has no sm121 support).
 #
 # Apply with `patch -p1` in /data/sglang (before the sglang install), same as
-# sglang-dsv4-nvfp4-pr25820.patch.
+# sglang-dsv4-mtp-marlin-v0.5.14.patch (the old sglang-dsv4-nvfp4-pr25820.patch
+# is retired on v0.5.14 — its base NVFP4-MoE content is now native).
 --- a/python/sglang/srt/layers/attention/dsa/tilelang_kernel.py
 +++ b/python/sglang/srt/layers/attention/dsa/tilelang_kernel.py
 @@ -1459,10 +1459,10 @@

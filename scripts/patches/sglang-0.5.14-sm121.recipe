@@ -26,6 +26,14 @@
 #      rebase onto v0.5.14 before rebuilding.
 #   4. KERNELS_VERSION 0.12.3 → 0.14.1 — see the KERNELS_VERSION block below.
 #   5. SGL_KERNEL_MAINAHEAD=1 — see the SGL_KERNEL_MAINAHEAD block below.
+#   6. [2026-07-06] Added APPLY_DSV4_MTP_MARLIN_TILELANG=1 — DSV4 EAGLE-MTP on
+#      this image was left non-functional by point 2 above: the marlin
+#      draft-MoE branch and the TileLang 0.1.8 indexer compat fix both used to
+#      ride inside sglang-dsv4-nvfp4-pr25820.patch, so retiring that patch also
+#      silently dropped them. Verified via in-image source read on the running
+#      0.5.14-sm121 pod (no GPU needed — pure source inspection) that neither
+#      fix is present natively. Non-spec DSV4 serving is unaffected either way.
+#      See the APPLY_DSV4_MTP_MARLIN_TILELANG block below for details.
 #
 # ⚠️  v0.5.14 is a tagged release but it is 248 commits past v0.5.13, well past
 #     the 3a1417a commit the gemma-diffusion recipe was pinned to. The SM121
@@ -115,6 +123,23 @@ DSV4_KERNEL_ARCH=
 # the build. The DSV4 profiles still serve off this image natively. (Was =1 on
 # the 0.5.13 recipe, where the PR was unmerged.)
 APPLY_DSV4_NVFP4_PR25820=0
+
+# ── DeepSeek-V4 EAGLE-MTP marlin branch + TileLang 0.1.8 indexer compat → ON ─
+# Verified 2026-07-06 (in-image source read on the running 0.5.14-sm121 pod):
+# the now-native HybridFp8NvFp4Config.get_quant_method hardcodes the MTP/nextn
+# draft MoE layers to Mxfp4FlashinferTrtllmMoEMethod (an SM100-only TVM
+# kernel) — no marlin branch — so nvidia/DeepSeek-V4-Flash-NVFP4's
+# speculative_enabled: true / speculative_moe_runner_backend: marlin crashes
+# on GB10 as shipped. Same verification found dsa/tilelang_kernel.py's 1D
+# alloc_shared bug (breaks SGLANG_OPT_USE_TILELANG_INDEXER on TileLang 0.1.8)
+# is UNCHANGED from 0.5.13. Both are small, GB10-only remainders of the old
+# (now-retired) sglang-dsv4-nvfp4-pr25820.patch — rebased as standalone patches
+# since the base NVFP4-MoE class they used to ship inside is native now. Gates
+# dockerfile-dsv4-mtp-marlin-tilelang.patch in build_sm121_image.sh::apply_patches.
+# Non-spec (no MTP) DSV4 serving is UNAFFECTED either way (native, no gate).
+# Drop to 0 / delete once both fixes land upstream (marlin branch in SGLang,
+# TileLang >=0.1.9 with the inject_permuted_layout 1D-shared fix).
+APPLY_DSV4_MTP_MARLIN_TILELANG=1
 
 # ── Qwen3.6 ModelOpt mixed NVFP4: upstream PR #27906, STILL OPEN → ON ────────
 # Gates dockerfile-qwen36-mixed-nvfp4.patch in build_sm121_image.sh::apply_patches.

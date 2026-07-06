@@ -40,12 +40,22 @@
 #   Non-spec boot VALIDATED 2026-06-20 (head Ready, coherent output) — the
 #   known-good baseline; the profile pins that image below and is ready to
 #   serve, NOT a preload-only staging target.
-#   ⚠ MTP caveat: the marlin draft-MoE branch AND the tilelang-0.1.8 indexer
-#   compat both rode ON the now-disabled #25820 cherry-pick, so they are NOT in
-#   the 0.5.14 image unless re-added — i.e. speculative_moe_runner_backend=marlin
-#   and opt_use_tilelang_indexer (below) may lack image support on 0.5.14.
-#   Re-verify EAGLE-MTP + the TileLang indexer on the current image; if MTP
-#   crashes, set speculative_enabled: false (native non-spec is unaffected).
+#   ⚠ MTP caveat, CONFIRMED via in-image source read 2026-07-06 (debug pod on
+#   the running xomoxcc/dgx-spark-sglang:0.5.14-sm121 image, no GPU needed):
+#   the marlin draft-MoE branch and the tilelang-0.1.8 indexer compat both used
+#   to ride ON the now-disabled #25820 cherry-pick, so BOTH are confirmed
+#   ABSENT from the currently-deployed 0.5.14-sm121 image — MTP as configured
+#   below WILL crash on it (HybridFp8NvFp4Config still hardcodes the SM100-only
+#   Mxfp4FlashinferTrtllmMoEMethod for the draft MoE; dsa/tilelang_kernel.py
+#   still has the 1D alloc_shared TileLang-0.1.8 incompatibility).
+#   FIX PREPARED, NOT YET BUILT: scripts/patches/sglang-dsv4-mtp-marlin-v0.5.14
+#   .patch (new, minimal marlin-branch insertion against the native class) +
+#   the existing sglang-tilelang-018-indexer-compat.patch (applies unchanged)
+#   are wired into scripts/build_sm121_image.sh + sglang-0.5.14-sm121.recipe
+#   via APPLY_DSV4_MTP_MARLIN_TILELANG=1. Until that image is actually rebuilt
+#   + pushed + redeployed, keep speculative_enabled: false here (native
+#   non-spec is unaffected and is the validated baseline) — flip to true only
+#   after the rebuilt image is running.
 #
 # Architecture (DeepseekV4ForCausalLM, model_type=deepseek_v4) — identical to
 # the other Flash checkpoints: 43 layers, hidden=4096, MQA (num_attention_heads
@@ -190,11 +200,22 @@ _model_profile:
     # env SGLANG_ENABLE_SPEC_V2=1; balanced preset = steps 1 / draft-tokens 2.
     # 2026-06-20: NON-spec boot VALIDATED on this cluster (head Ready, coherent
     # output) once the #25820 patch IndentationError was fixed + image rebuilt.
-    # NOW ENABLING EAGLE-MTP (first-contact for the MTP path on SM121). NOTE
-    # #25704: V4-Pro NVFP4 on B200 produced NaN/garbage in NON-spec decode and
-    # only EAGLE worked — here non-spec is fine, so MTP is a throughput play, not
-    # a correctness fix. If MTP boot crashes / output degrades, roll back to
-    # speculative_enabled: false (non-spec is the known-good baseline).
+    # EAGLE-MTP was validated 2026-06-20 against the THEN-current 0.5.13-sm121
+    # image (digest a29aea1, built with APPLY_DSV4_NVFP4_PR25820=1 — the
+    # cherry-pick that bundled the marlin draft-MoE branch + tilelang-018
+    # compat). NOTE #25704: V4-Pro NVFP4 on B200 produced NaN/garbage in
+    # NON-spec decode and only EAGLE worked — here non-spec is fine, so MTP is
+    # a throughput play, not a correctness fix.
+    # ⚠ 2026-06-29 the cluster moved to 0.5.14-sm121 (native NVFP4-MoE,
+    # APPLY_DSV4_NVFP4_PR25820=0) — which silently DROPPED the marlin branch +
+    # tilelang compat along with the retired cherry-pick. CONFIRMED via
+    # in-image source read 2026-07-06: both are absent from the running
+    # 0.5.14-sm121 image, so speculative_enabled: true WILL crash on it today.
+    # DISABLED here until scripts/patches/sglang-dsv4-mtp-marlin-v0.5.14.patch +
+    # sglang-tilelang-018-indexer-compat.patch (wired via
+    # APPLY_DSV4_MTP_MARLIN_TILELANG=1 in sglang-0.5.14-sm121.recipe) are built
+    # into a fresh image and that image is deployed — flip back to true only
+    # after that. Non-spec (below false) is the current known-good baseline.
     # spec_v2 is AUTO-MANAGED for DSV4 — do NOT set enable_spec_v2 by hand (verified
     # in-image 2026-06-20): environ.py defaults SGLANG_ENABLE_SPEC_V2=True, AND
     # deepseek_v4_hook.py force-enables it whenever a speculative_algorithm is set.
@@ -203,7 +224,7 @@ _model_profile:
     # with speculative_eagle_topk == 1 → must be EAGLE for DSV4. With no external
     # draft path, launch.sh self-drafts (--speculative-draft-model-path = the model),
     # i.e. EAGLE drives the model's own num_nextn_predict_layers MTP head.
-    speculative_enabled: true  # EAGLE-MTP ON 2026-06-20 — needs the marlin draft-MoE image (digest a29aea1); first-contact, roll back to false if it crashes
+    speculative_enabled: false  # SAFETY: disabled 2026-07-06 — confirmed crash on the current 0.5.14-sm121 image (marlin branch + tilelang compat dropped); re-enable once the image is rebuilt with APPLY_DSV4_MTP_MARLIN_TILELANG=1
     speculative_algo: EAGLE  # was NEXTN — deepseek_v4_hook asserts EAGLE-only for DSV4
     speculative_num_steps: 1
     speculative_eagle_topk: 1

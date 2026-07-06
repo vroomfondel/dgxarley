@@ -1,0 +1,69 @@
+DeepSeek-V4 EAGLE-MTP marlin branch + TileLang 0.1.8 indexer compat
+patch-application steps for container-build/Dockerfile.sglang-nightly.
+
+Adds two COPY+RUN steps to the sglang Python source AFTER the SM121
+sgl-kernel patches but BEFORE `uv pip install ./python`, so the installed
+package picks up the changes. Same anchor/pattern as the retired
+dockerfile-dsv4-nvfp4.patch — but this variant is for v0.5.14+, where
+PR #25820's base NVFP4-MoE support is already NATIVE (no longer patched)
+and only two GB10-specific remainders are still needed:
+
+Step 1: applies sglang-dsv4-mtp-marlin-v0.5.14.patch (adds the marlin
+draft-MoE branch inside the native HybridFp8NvFp4Config.get_quant_method —
+without it, EAGLE-MTP's draft MoE hardcodes an SM100-only TVM kernel that
+crashes on GB10).
+
+Step 2: applies sglang-tilelang-018-indexer-compat.patch (TileLang 0.1.8
+compat fix for the DSA paged-MQA indexer kernel: promotes two 1D shared
+buffers to 2D for inject_permuted_layout compat, and adds .view(torch.uint8)
+before the kvcache view — required for the SGLANG_OPT_USE_TILELANG_INDEXER
+path to compile on TL 0.1.8, unchanged since 0.5.13-sm121).
+
+Apply to: container-build/Dockerfile.sglang-nightly AFTER
+dockerfile-sm121.patch has been applied. Application is gated by
+build_sm121_image.sh on the recipe variable
+APPLY_DSV4_MTP_MARLIN_TILELANG=1 (set in sglang-0.5.14-sm121.recipe).
+Remove once both upstream fixes land in the pinned SGLANG_REF / TileLang.
+
+NOTE: anchors on the same Dockerfile region as the retired
+dockerfile-dsv4-nvfp4.patch and dockerfile-gemma4-nvfp4.patch (the end of
+the sm121-debug block). Regenerate this patch's context if that region
+drifts upstream.
+
+--- a/container-build/Dockerfile.sglang-nightly
++++ b/container-build/Dockerfile.sglang-nightly
+@@ -290,6 +290,34 @@
+         echo "=== Skipping sgl-kernel-sm121-debug.patch (APPLY_SGL_KERNEL_SM121_DEBUG=${APPLY_SGL_KERNEL_SM121_DEBUG}) ==="; \
+     fi
+
++# DeepSeek-V4 EAGLE-MTP draft-MoE marlin routing (SM121/GB10-only fix).
++# HybridFp8NvFp4Config's native NVFP4-MoE dispatch (upstream PR #25820,
++# native since SGLang v0.5.14) hardcodes the MTP/nextn draft MoE layers to
++# an SM100-only TVM kernel that crashes on GB10. This adds a marlin (SM80+)
++# branch selected via --speculative-moe-runner-backend marlin. Gated by
++# build_sm121_image.sh on APPLY_DSV4_MTP_MARLIN_TILELANG=1.
++COPY patches/sglang-dsv4-mtp-marlin-v0.5.14.patch /tmp/sglang-dsv4-mtp-marlin-v0.5.14.patch
++RUN set -e; cd /data/sglang && \
++    echo "=== Applying sglang-dsv4-mtp-marlin-v0.5.14.patch (MTP marlin branch) ===" && \
++    patch --dry-run -p1 < /tmp/sglang-dsv4-mtp-marlin-v0.5.14.patch && \
++    patch -p1 < /tmp/sglang-dsv4-mtp-marlin-v0.5.14.patch && \
++    grep -q 'Mxfp4MarlinMoEMethod(Fp8MoEMethod(self)' python/sglang/srt/layers/quantization/modelopt_quant.py && \
++    echo 'DSV4 MTP marlin patch applied successfully'
++
++# TileLang 0.1.8 compat fix for the DSA paged-MQA indexer kernel.
++# Promotes two 1D shared allocs to 2D (inject_permuted_layout compat) and
++# adds .view(torch.uint8) to the kvcache view. Required for the
++# SGLANG_OPT_USE_TILELANG_INDEXER path to compile on TL 0.1.8 (bundled in
++# both 0.5.13-sm121 and 0.5.14-sm121 images — unchanged file at this
++# function). Validated on GB10/SM121 2026-06-20.
++COPY patches/sglang-tilelang-018-indexer-compat.patch /tmp/sglang-tilelang-018-indexer-compat.patch
++RUN set -e; cd /data/sglang && \
++    echo "=== Applying sglang-tilelang-018-indexer-compat.patch (TL 0.1.8 compat) ===" && \
++    patch --dry-run -p1 < /tmp/sglang-tilelang-018-indexer-compat.patch && \
++    patch -p1 < /tmp/sglang-tilelang-018-indexer-compat.patch && \
++    grep -q 'TL0.1.8 fix' python/sglang/srt/layers/attention/dsa/tilelang_kernel.py && \
++    echo 'TileLang 0.1.8 compat patch applied successfully'
++
+ # Install sglang package (no deps, no build isolation since base has torch).
+ # Moved here from its original early-stage location so the installed
+ # dist-packages picks up the patched nvfp4_blockwise_moe.cuh above.
