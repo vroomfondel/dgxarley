@@ -49,6 +49,13 @@
 #       check post-build with the nccl_test framework (k8s_dgx tag nccl_test,
 #       roce variant) — not because we expect breakage, just the usual minor-bump
 #       diligence (2.29 -> 2.30).
+#   - [2026-07-06] NCCL v2.30.4-1 -> v2.30.7-1 — patch bump, newest tag on
+#     NVIDIA/nccl as of this check (github.com/NVIDIA/nccl/tags; next-newest
+#     after 2.30.7-1 is 2.30.4-1 itself, so no versions were skipped). Same
+#     minor (2.30.x) as the already-adopted mainline switch above — no new
+#     re-verification of the subnet-aware-routing no-op analysis needed.
+#     Re-run nccl_test (k8s_dgx tag nccl_test, roce variant) after rebuild as
+#     the usual minor-bump diligence.
 #
 # Deliberately unchanged:
 #   - TORCH_CUDA_ARCH_LIST / NVCC_GENCODE: Spark-target arches (sm_120 + sm_121).
@@ -66,8 +73,8 @@ TARGET=pytorch_builder
 CUDA_VERSION=13.2.1
 CUDA_SHORT=132
 
-NCCL_VERSION=2.30.4-1
-NCCL_REF=v2.30.4-1
+NCCL_VERSION=2.30.7-1
+NCCL_REF=v2.30.7-1
 NCCL_REPO=https://github.com/NVIDIA/nccl.git
 
 BUILD_JOBS=8
