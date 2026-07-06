@@ -884,8 +884,6 @@ hf_preload_models:
 #  - "nvidia/Qwen3.5-397B-A17B-NVFP4"
 #  - "Qwen/Qwen3.5-122B-A10B-FP8"
 #  - "nvidia/GLM-5-NVFP4"
-#  - "QuantTrio/Qwen3-235B-A22B-Thinking-2507-AWQ"
-#  - "QuantTrio/Qwen3-235B-A22B-Instruct-2507-AWQ"
 #  - "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
 #  - "Qwen/Qwen3.5-35B-A3B-FP8"
 #  - "Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
