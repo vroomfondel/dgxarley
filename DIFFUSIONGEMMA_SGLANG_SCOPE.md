@@ -9,7 +9,7 @@ As of 2026-06-19. Companion document to the profile
 **Short answer:** Yes — and as of 2026-06-19 this repo now BAKES the SGLang
 runtime (unmerged PR #28054) into a dedicated image and WIRES the dLLM launch
 path end-to-end. The only remaining manual step is building the image
-(`0.5.13-gemmadiffusion-sm121`); until that build + a green boot, the **`vllm`
+(`0.5.14-gemmadiffusion-sm121`); until that build + a green boot, the **`vllm`
 tag** stays the proven fallback. NVFP4-through-dLLM and multi-node TP remain
 unverified — test the BF16 base single-node first.
 
@@ -21,7 +21,7 @@ unverified — test the BF16 base single-node first.
 - §A image bake: source patch `scripts/patches/sglang-diffusiongemma-pr28054.patch`
   (PR #28054, docs+pyproject stripped), `dockerfile-diffusiongemma.patch`
   (anchors after the gemma4-nvfp4 block), recipe
-  `sglang-0.5.13-gemma4-diffusion-sm121.recipe` (tag `0.5.13-gemmadiffusion-sm121`,
+  `sglang-0.5.14-gemma4-diffusion-sm121.recipe` (tag `0.5.14-gemmadiffusion-sm121`,
   `APPLY_DIFFUSIONGEMMA_PR28054=1`), and the `build_sm121_image.sh` gate wiring +
   selector entry.
 - §B OPEN QUESTION RESOLVED: `self.dllm_algorithm` is a pre-existing ServerArgs
@@ -39,7 +39,7 @@ unverified — test the BF16 base single-node first.
   already present. Denoising params (max_denoising_steps=48, entropy_bound=0.1,
   canvas=256, temp 0.4..0.8) are MODEL-CONFIG defaults (hf_config), NOT CLI flags
   — documented in the profile, not wired.
-- Profile `sglang_image` repointed to `0.5.13-gemmadiffusion-sm121`.
+- Profile `sglang_image` repointed to `0.5.14-gemmadiffusion-sm121`.
 
 **Open (needs the build + a boot — your steps):**
 - Build the image (the one manual step you reserved).
@@ -48,6 +48,21 @@ unverified — test the BF16 base single-node first.
   then the NVFP4 quant (unverified through the dLLM path).
 - §B multi-node TP=4 (untested for encoder-decoder block diffusion) + streaming
   UX (one canvas per chunk) in OpenWebUI/Hermes.
+
+**Status 2026-07-06 (update):** the repo's SGLang baseline migrated
+0.5.13 → **v0.5.14** across the board (commit `10702ba`, "migrate all SM121
+recipes to the tagged release"; the old 0.5.13 diffusion recipe was removed in
+`d9161ab`). Both diffusiongemma profiles
+(`google-diffusiongemma-26b-a4b-it.yml`,
+`nvidia-diffusiongemma-26b-a4b-it-nvfp4.yml`) now point `sglang_image` at
+`xomoxcc/dgx-spark-sglang:0.5.14-gemmadiffusion-sm121`; the recipe is
+`scripts/patches/sglang-0.5.14-gemma4-diffusion-sm121.recipe`. `d9161ab` also
+added a second source patch, `sglang-diffusiongemma-pr28054-mainahead.patch`
+(a main-branch-ahead variant of the PR #28054 bake), alongside the original
+`sglang-diffusiongemma-pr28054.patch`. PR #28054 itself is **still open,
+unmerged**, last upstream activity 2026-06-14 — no change there. Substantive
+status is otherwise UNCHANGED: **build + boot are still pending**, and the
+`vllm` tag remains the proven fallback.
 
 ---
 
@@ -62,7 +77,7 @@ unverified — test the BF16 base single-node first.
 So the [cookbook page](https://docs.sglang.io/cookbook/autoregressive/Google/DiffusionGemma)
 exists, but the code (`models/gemma4_diffusion.py`, the
 `Gemma4Renoise`/EntropyBound sampler) is **in no tagged SGLang** — not even in
-0.5.13. Our `0.5.13-gemma4-sm121` image cannot load the model.
+0.5.14. Our `0.5.14-gemma4-sm121` image cannot load the model.
 
 **What the model is, per PR #28054:** an **encoder-decoder** uniform-state
 (renoising) block-diffusion model (26B-A4B MoE) with a **Gemma-4 vision tower**.
@@ -82,7 +97,7 @@ DSV4 #25820): source patch + Dockerfile patch, recipe-gated in
 `scripts/build_sm121_image.sh::apply_patches`.
 
 - [ ] `gh pr diff 28054 > scripts/patches/sglang-diffusiongemma-pr28054.patch`
-      (rebased onto `v0.5.13`; the PR is against `main` → check context offsets,
+      (rebased onto `v0.5.14`; the PR is against `main` → check context offsets,
       the in-container `patch --dry-run` catches drift).
 - [ ] `dockerfile-diffusiongemma.patch` (COPY + `RUN patch -p1 < …` before
       `uv pip install ./python`). **Watch the Dockerfile region:** the
@@ -91,10 +106,10 @@ DSV4 #25820): source patch + Dockerfile patch, recipe-gated in
       gemma4 image as its base (vision tower + gemma4 patches), the new COPY+RUN
       block must co-exist with the gemma4-nvfp4 block → regenerate the context
       cleanly once.
-- [ ] New recipe `sglang-0.5.13-gemma4-diffusion-sm121.recipe` (base:
-      `sglang-0.5.13-gemma4-sm121.recipe`, plus `APPLY_DIFFUSIONGEMMA_PR28054=1`).
-      Its own tag `xomoxcc/dgx-spark-sglang:0.5.13-gemma4-diffusion-sm121`, so the
-      other four Gemma profiles stay on the leaner `0.5.13-gemma4`.
+- [ ] New recipe `sglang-0.5.14-gemma4-diffusion-sm121.recipe` (base:
+      `sglang-0.5.14-gemma4-sm121.recipe`, plus `APPLY_DIFFUSIONGEMMA_PR28054=1`).
+      Its own tag `xomoxcc/dgx-spark-sglang:0.5.14-gemma4-diffusion-sm121`, so the
+      other four Gemma profiles stay on the leaner `0.5.14-gemma4`.
 - [ ] Verify in the image: model `google/diffusiongemma-26B-A4B-it` loads,
       `--dllm-algorithm Gemma4Renoise` is recognized.
 
