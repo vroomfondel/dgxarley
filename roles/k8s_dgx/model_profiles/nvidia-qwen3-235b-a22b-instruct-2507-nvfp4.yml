@@ -1,0 +1,97 @@
+---
+# Model profile: nvidia/Qwen3-235B-A22B-Instruct-2507-NVFP4
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+#
+# ⚠ Backend recipe INHERITED (not re-measured on 2507): this is the same quant
+#   packaging (modelopt_fp4) and the same architecture (qwen3_moe, 94 layers,
+#   128 experts) as the validated nvidia/Qwen3-235B-A22B-NVFP4 profile
+#   (nvidia-qwen3-235b-a22b-nvfp4.yml, Test-17 winner). The moe/attn/fp4-gemm/CG
+#   knobs are copied verbatim from that winner — HIGH confidence they transfer,
+#   but re-run the nn4 TP=4 EP=4 matrix on THIS checkpoint before treating the
+#   numbers as measured, then replace this note with the 2507 TESTLOG reference.
+#
+# 2507 = the July-2025 refresh of Qwen3-235B-A22B. Differences vs the original
+# base this profile's sibling wraps:
+#   - NATIVE 262144 context (rope_scaling=null, max_position_embeddings=262144)
+#     → NO YaRN override needed (unlike the original, which needs factor=4.0 to
+#     reach 131072). Verified from HF config.json (2026-07-06).
+#   - Instruct-2507 is the NON-THINKING variant → no <think> blocks → no
+#     reasoning_parser (see below).
+#
+# NVFP4 packaging (modelopt), verified from HF config.json:
+#   quantization_config.quant_method="modelopt", 4-bit weights + 4-bit acts
+#   (static calibrated scales), group_size 16. ignore=[q/k/v_proj, mlp.gate,
+#   lm_head] → attention q/k/v + gate + lm_head stay BF16; o_proj + MoE experts
+#   are FP4. kv_cache_scheme: FP8 (num_bits=8) baked in (static calibrated).
+_model_profile:
+  "nvidia/Qwen3-235B-A22B-Instruct-2507-NVFP4":
+    knowledge_cutoff: null  # not officially disclosed for the 2507 refresh
+    release_date: "2025-07-21"  # Qwen3-235B-A22B-Instruct-2507; official Qwen release
+    info_url: "https://huggingface.co/nvidia/Qwen3-235B-A22B-Instruct-2507-NVFP4"
+    # 235B/22B-active MoE (128 experts, top-8), NVFP4 quantized, text-only.
+    # Standard Qwen3 MoE (NOT hybrid-mamba): 94 layers, GQA (num_kv_heads=4,
+    # 16:1 ratio), 1 shared + 128 routed experts. No MTP heads → no NEXTN.
+    # num_attention_heads=64, num_key_value_heads=4 → TP=4 works (1 KV head/GPU).
+    # ~18 GB/GPU weights across 4 GPUs — same footprint as the original variant.
+    nccl_transport: "roce"
+    tp_size: 4  # num_kv_heads=4 → TP=4 works (1 KV head/GPU)
+    ep_size: 4
+    num_experts: 128
+    trust_remote_code: true
+    tool_call_parser: "qwen3"  # hermes-style tool parser (needed by honcho/hindsight)
+    # NO reasoning_parser: Instruct-2507 is the non-thinking variant and emits no
+    # <think> blocks. (Use the Thinking-2507 checkpoint + reasoning_parser="qwen3"
+    # if you want a reasoning model.)
+
+    # --- Context: native 262144, NO YaRN ---
+    # config.json ships rope_scaling=null, max_position_embeddings=262144 →
+    # the full window is available WITHOUT --json-model-override-args. Do not add
+    # a YaRN override here (that's only needed for the original 40960-native base).
+    context_length: 262144
+
+    # --- Quantization: modelopt (same container as the validated original) ---
+    quantization: "modelopt_fp4"
+
+    # --- Backend = original-235B Test-17 winner (modelopt_fp4 recipe) ---
+    # See TESTLOGS/sglang_nn4_tp4_ep4/qwen-3-235b-a22b-nvfp4/ for why these exact
+    # values (moe/attn/fp4-gemm/CG all fail in other combinations on SM121):
+    #   moe_runner_backend=flashinfer_cutlass — triton/cutlass MoE runners fall
+    #     through to nvfp4_blockwise_moe.cuh → device-side assert under CUDA
+    #     graphs / 0 tokens under eager on SM121.
+    #   fp4_gemm_backend=flashinfer_cutlass — flashinfer_cudnn FP4 GEMM is 100%
+    #     startup_crash on SM121.
+    #   attention_backend=triton — flashinfer attn also works; triton gave the
+    #     best peak in the winner row.
+    #   disable_piecewise_cuda_graph=true — piecewise graphs crash at startup in
+    #     this kernel family on SM121.
+    moe_runner_backend: "flashinfer_cutlass"
+    fp4_gemm_backend: "flashinfer_cutlass"
+    attention_backend: "triton"
+    # kv_cache_scheme in the checkpoint is FP8 (static calibrated) → fp8_e4m3
+    # matches the baked-in scales.
+    kv_cache_dtype: "fp8_e4m3"
+    # 0.70 = original Test-17 winner. NOTE: 262144 context (2× the original's
+    # 131072) means a larger KV-cache reservation — if first boot OOMs at long
+    # context, drop mem_fraction_static in 0.02 steps or cap context_length.
+    mem_fraction_static: "0.70"
+    jit_max_jobs: 4
+    disable_piecewise_cuda_graph: true
+    disable_cuda_graph: false
+    cuda_graph_max_bs: 8
+    pp_async_batch_depth: 0
+    disable_deep_gemm: true
+    # EPLB disabled: Qwen3MoE routed_experts_weights_of_layer crash (same as the
+    # original + AWQ variants).
+    enable_eplb: false
+    enable_expert_distribution_metrics: false
+    # Qwen3-235B-A22B-Instruct-2507 recommended sampling (Qwen model card):
+    #   temperature=0.7, top_p=0.8, top_k=20 (presence_penalty 0–2 to curb repeats).
+    recommended_sampling:
+      temperature: 0.7
+      top_p: 0.8
+      top_k: 20
+    # No MTP heads on this arch. EAGLE3 was measured NON-viable on the original
+    # NVFP4 sibling (NaN draft logprobs from FP4→BF16 hidden-state drift collapse
+    # the tree → ~17% of baseline peak). Left off; revisit only if an
+    # NVFP4-aware draft appears. See nvidia-qwen3-235b-a22b-nvfp4.yml for detail.
+    speculative_enabled: false
