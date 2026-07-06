@@ -204,10 +204,14 @@ hermes:
   # ENTRYPOINT /init runs cont-init (stage2-hook.sh: usermod $HERMES_UID/$HERMES_GID
   # + chown), then our `args:` via docker/main-wrapper.sh → `s6-setuidgid hermes
   # hermes <args>`. We never hard-code command:, so the swap is transparent.
-  # gateway/platforms/email.py is byte-identical across v2026.5.16..6.5 and main
-  # (md5 318ae8f3e6d4b26718784e0c94bf8458) → the hermes_email_gateway_patched.py
-  # patch needs NO re-sync. Verified 2026-06-08.
-  image_tag: "v2026.6.19"            # agent image (nousresearch/hermes-agent)
+  # Email adapter MOVED at v2026.7.1: upstream #41112 relocated it from
+  # gateway/platforms/email.py → plugins/platforms/email/adapter.py and swapped
+  # the static _PLATFORMS dict for a register(ctx) plugin entry point. The
+  # hermes_email_gateway_patched.py re-sync (all 7 [PATCH-N] sections re-applied,
+  # + upstream SPF/DKIM/DMARC sender-auth folded in), the email-patch ConfigMap
+  # data key, and the webui subPath mount were all re-targeted to adapter.py.
+  # Re-synced against v2026.7.1 (md5 8d01ff755f33df1b9867b5ecf0febc11) 2026-07-06.
+  image_tag: "v2026.7.1"             # agent image (nousresearch/hermes-agent)
   # NFS-backed hostPath base on k3smaster — per-user subdirs <base>/<username>
   # are mounted as /opt/data inside the pod (subdir-only, no parent visibility).
   data_base: "/mnt/nfs/hermes"

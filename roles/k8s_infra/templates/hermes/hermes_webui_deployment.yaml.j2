@@ -14,7 +14,7 @@
 {%- set _email = item.email | default({}) -%}
 {%- set _email_enabled = _email.get('enabled', hermes.email.enabled_default) -%}
 {#- Matrix gateway gate (env-driven: MATRIX_* in .env, no source patch needed,
-    unlike email which overlays platforms/email.py). E2EE crypto store lives on
+    unlike email which overlays plugins/platforms/email/adapter.py). E2EE crypto store lives on
     the /opt/data NFS subdir so device keys persist across restarts. -#}
 {%- set _matrix = item.matrix | default({}) -%}
 {%- set _matrix_enabled = _matrix.get('enabled', hermes.matrix.enabled_default) -%}
@@ -78,7 +78,7 @@ spec:
         # cause a spurious rollover on every playbook run.
         checksum/auth:        "{{ (item.basicauth_password | default(item.litellm_token)) | hash('sha256') }}"
 {% if _email_enabled %}
-        # Auto-roll when the gateway/platforms/email.py patch changes —
+        # Auto-roll when the plugins/platforms/email/adapter.py patch changes —
         # subPath ConfigMap mounts don't surface updates without a pod restart.
         checksum/email-patch: "{{ lookup('file', 'hermes_email_gateway_patched.py') | hash('sha256') }}"
 {% endif %}
@@ -453,9 +453,9 @@ spec:
               mountPath: /workspace
 {% endif %}
 {% if _email_enabled %}
-            # dgxarley local patch — overlays the upstream gateway/platforms/
-            # email.py with the version under
-            # roles/k8s_dgx/files/hermes_email_gateway_patched.py.  Adds
+            # dgxarley local patch — overlays the upstream plugins/platforms/
+            # email/adapter.py with the version under
+            # roles/k8s_infra/files/hermes_email_gateway_patched.py.  Adds
             # Working/Done folder lifecycle, IMAP APPEND to Sent, and the
             # EMAIL_PROCESS_EXISTING knob (see file's PATCH header).
             # subPath gives us a single-file bind mount — the rest of
@@ -463,9 +463,11 @@ spec:
             # the image. Pin: file content must match the upstream source
             # of hermes.image_tag; re-sync on image bump. Matrix needs no
             # equivalent patch (pure-env platform), so it's gated on email only.
+            # NOTE: upstream #41112 MOVED this file at v2026.7.1 — it was
+            # /opt/hermes/gateway/platforms/email.py through v2026.6.19.
             - name: hermes-email-patch
-              mountPath: /opt/hermes/gateway/platforms/email.py
-              subPath: email.py
+              mountPath: /opt/hermes/plugins/platforms/email/adapter.py
+              subPath: adapter.py
               readOnly: true
 {% endif %}
         # Gateway-status refresher — keeps the WebUI "Gateway configured" badge
@@ -549,8 +551,8 @@ spec:
           configMap:
             name: hermes-email-patch
             items:
-              - key: email.py
-                path: email.py
+              - key: adapter.py
+                path: adapter.py
 {% endif %}
 {% if _gateway_enabled %}
         - name: hermes-gw-refresh

@@ -4,35 +4,55 @@ Email platform adapter for the Hermes gateway.
 Allows users to interact with Hermes by sending emails.
 Uses IMAP to receive and SMTP to send messages.
 
+Environment variables:
+    EMAIL_IMAP_HOST     — IMAP server host (e.g., imap.gmail.com)
+    EMAIL_IMAP_PORT     — IMAP server port (default: 993)
+    EMAIL_SMTP_HOST     — SMTP server host (e.g., smtp.gmail.com)
+    EMAIL_SMTP_PORT     — SMTP server port (default: 587)
+    EMAIL_ADDRESS       — Email address for the agent
+    EMAIL_PASSWORD      — Email password or app-specific password
+    EMAIL_POLL_INTERVAL — Seconds between mailbox checks (default: 15)
+    EMAIL_ALLOWED_USERS — Comma-separated list of allowed sender addresses
+
 ------------------------------------------------------------------------------
-LOCAL PATCH (dgxarley) — synced to upstream tag v2026.6.19
-(gateway/platforms/email.py, base blob d2f7e64a, md5
-a3f7dc61f40388bf806481b189b48e00, 32908 bytes).
-Current for the pinned image (hermes_image_tag v2026.6.19). The previous sync
-target was v2026.6.5 (base blob 0fffb82d, md5 318ae8f3e6d4b26718784e0c94bf8458,
-byte-identical across v2026.5.16 .. v2026.6.5).
+LOCAL PATCH (dgxarley) — synced to upstream tag v2026.7.1
+(plugins/platforms/email/adapter.py, md5 8d01ff755f33df1b9867b5ecf0febc11,
+49488 bytes). Current for the pinned image (hermes.image_tag v2026.7.1).
 
-Upstream changes folded in during the v2026.6.5 → v2026.6.19 re-sync (all are
+FILE MOVED at this bump: upstream #41112/#3823 landed the plugin refactor that
+the v2026.6.19 patch header warned about — the adapter moved from
+gateway/platforms/email.py to plugins/platforms/email/adapter.py and the static
+_PLATFORMS["email"] dict was replaced by a register(ctx)→ctx.register_platform()
+plugin entry point (see the "Plugin migration glue" block at the bottom of this
+file). The ConfigMap subPath mount in hermes_webui_deployment.yaml.j2 was
+re-targeted to /opt/hermes/plugins/platforms/email/adapter.py to match. Previous
+sync target was v2026.6.19 (gateway/platforms/email.py, md5
+a3f7dc61f40388bf806481b189b48e00).
+
+Upstream changes folded in during the v2026.6.19 → v2026.7.1 re-sync (all are
 upstream-only; none collide with the [PATCH-N] logic):
-  - SMTP port-aware connect + IPv4 fallback: new module helpers
-    _create_ipv4_connection / _IPv4SMTP / _IPv4SMTP_SSL, a new
-    EmailAdapter._connect_smtp() (port 465 → implicit SMTP_SSL, else
-    STARTTLS; retries connection-level failures over IPv4 only), and all four
-    SMTP call sites (connect() test + the three _send_email* senders) routed
-    through it. Our [PATCH-7] _append_to_sent calls sit AFTER each SMTP block,
-    so they are unaffected.
-  - DOCUMENT attachment classification in _dispatch_message()'s media loop
-    (image only wins when still TEXT; document wins over photo) — upstream
-    code inside, but distinct from, the [PATCH-6] finally-finalize.
-  - send_image() gained a `metadata` kwarg (base-class contract).
-  - new `import socket`.
-
-PLUGIN-REFACTOR WARNING: upstream #41112 (in main/latest after 2026-06-19, NOT
-in any release tag through v2026.6.19) MOVES this file to
-plugins/platforms/email/adapter.py and replaces the static _PLATFORMS["email"]
-entry with a register_platform() registry. The NEXT bump past v2026.6.19 must
-re-target this patch to plugins/platforms/email/adapter.py AND adjust the
-ConfigMap subPath mount in hermes.yml accordingly. Verified 2026-06-21.
+  - Plugin migration: the register()/_build_adapter/_is_connected/
+    _standalone_send glue block at end of file (untouched — our patch never
+    referenced the old _PLATFORMS dict).
+  - SENDER AUTHENTICATION (GHSA-rxqh-5572-8m77): new module-level
+    _domain_of / _domains_aligned / _verify_sender_authentication +
+    _AUTH_METHOD_RE / _AUTH_PROP_RE regexes, EmailAdapter fields
+    _require_authenticated_sender (env EMAIL_TRUST_FROM_HEADER / config
+    require_authenticated_sender) + _authserv_id, the _allow_all_senders /
+    _allowlist_in_effect statics, the sender_authenticated/auth_reason keys in
+    _fetch_new_messages' results dict, and the reject-gate in _dispatch_message.
+    Our [PATCH-5] source_folder key sits ALONGSIDE the two new auth keys in the
+    same results dict; our [PATCH-6] try/finally WRAPS the new reject-gate so an
+    unauthenticated-From drop still finalizes the mail out of Working.
+  - __init__ now parses ports via utils.env_int / env_bool and falls back to
+    config.extra for address/imap_host/smtp_host; our [PATCH-2] extra.get()
+    reads reuse the same `extra` local.
+  - connect() gained a `*, is_reconnect` kwarg + a missing-config fail-closed
+    guard (_set_fatal_error); [PATCH-4] only rewrites the IMAP-test body below
+    that guard.
+  - check_email_requirements() now .strip()s and treats blank as missing.
+  - `import time` was REMOVED upstream — re-added below (our _append_to_sent
+    needs time.time() for imaplib.Time2Internaldate).
 
 Adds three behaviours that upstream lacks:
 
@@ -95,26 +115,15 @@ we submitted:
     is gated on done_folder AND working_folder AND a Message-ID being present
     (no Done → no moves; no Message-ID → cannot relocate after MOVE), and
     _dispatch_message wraps its drop-checks + handle_message in one try/finally
-    so an early drop (self / automated / non-allowlisted) can't strand mail in
-    Working.
+    so an early drop (self / automated / non-allowlisted / unauthenticated) can't
+    strand mail in Working.
   - ALL behavioural knobs (working_folder, done_folder, sent_folder,
     process_existing) are read from config.yaml `platforms.email.extra.*`
     (config.extra), NOT env vars. The loader only folds an explicit ``extra:``
-    sub-block into config.extra (bare keys are dropped — verified on the pinned
-    tag v2026.6.5 and on main), so the keys MUST be nested under ``extra:`` in
-    hermes_config.yaml.j2. NOTE our process_existing default is True (process the
-    backlog), unlike upstream's False. No email behaviour is env-based anymore.
+    sub-block into config.extra (bare keys are dropped), so the keys MUST be
+    nested under ``extra:`` in hermes_config.yaml.j2. NOTE our process_existing
+    default is True (process the backlog), unlike upstream's False.
 ------------------------------------------------------------------------------
-
-Environment variables:
-    EMAIL_IMAP_HOST     — IMAP server host (e.g., imap.gmail.com)
-    EMAIL_IMAP_PORT     — IMAP server port (default: 993)
-    EMAIL_SMTP_HOST     — SMTP server host (e.g., smtp.gmail.com)
-    EMAIL_SMTP_PORT     — SMTP server port (default: 587)
-    EMAIL_ADDRESS       — Email address for the agent
-    EMAIL_PASSWORD      — Email password or app-specific password
-    EMAIL_POLL_INTERVAL — Seconds between mailbox checks (default: 15)
-    EMAIL_ALLOWED_USERS — Comma-separated list of allowed sender addresses
 """
 
 import asyncio
@@ -126,7 +135,7 @@ import re
 import smtplib
 import socket
 import ssl
-import time
+import time  # dgxarley: re-added (upstream dropped it); _append_to_sent needs time.time()
 import uuid
 from email.header import decode_header
 from email.mime.multipart import MIMEMultipart
@@ -146,6 +155,7 @@ from gateway.platforms.base import (
     cache_image_from_bytes,
 )
 from gateway.config import Platform, PlatformConfig
+from utils import env_int, env_bool
 
 logger = logging.getLogger(__name__)
 # Automated sender patterns — emails from these are silently ignored
@@ -274,14 +284,16 @@ def _is_automated_sender(address: str, headers: dict) -> bool:
 
 
 def check_email_requirements() -> bool:
-    """Check if email platform dependencies are available."""
-    addr = os.getenv("EMAIL_ADDRESS")
-    pwd = os.getenv("EMAIL_PASSWORD")
-    imap = os.getenv("EMAIL_IMAP_HOST")
-    smtp = os.getenv("EMAIL_SMTP_HOST")
-    if not all([addr, pwd, imap, smtp]):
-        return False
-    return True
+    """Check if email platform settings are available and non-blank.
+
+    Treats blank/whitespace-only values as missing so an abandoned setup that
+    left empty ``EMAIL_*`` keys in ``.env`` does not enable the platform (#40715).
+    """
+    addr = os.getenv("EMAIL_ADDRESS", "").strip()
+    pwd = os.getenv("EMAIL_PASSWORD", "").strip()
+    imap = os.getenv("EMAIL_IMAP_HOST", "").strip()
+    smtp = os.getenv("EMAIL_SMTP_HOST", "").strip()
+    return all([addr, pwd, imap, smtp])
 
 
 def _decode_header_value(raw: str) -> str:
@@ -356,6 +368,120 @@ def _extract_email_address(raw: str) -> str:
     return raw.strip().lower()
 
 
+def _domain_of(address: str) -> str:
+    """Return the lowercased domain part of an email address, or ''."""
+    _, _, domain = address.rpartition("@")
+    return domain.strip().lower()
+
+
+def _domains_aligned(a: str, b: str) -> bool:
+    """Return True if two domains are equal or in an organizational
+    parent/subdomain relationship (relaxed DMARC alignment).
+
+    DMARC relaxed alignment treats ``mail.example.com`` as aligned with
+    ``example.com``. We approximate organizational alignment by checking
+    exact equality or that one domain is a dot-suffix of the other.
+    """
+    a = (a or "").strip().lower().rstrip(".")
+    b = (b or "").strip().lower().rstrip(".")
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return a.endswith("." + b) or b.endswith("." + a)
+
+
+# Match a single "method=result" token in an Authentication-Results header,
+# e.g. ``dmarc=pass`` or ``spf=fail``.
+_AUTH_METHOD_RE = re.compile(r"\b(dmarc|dkim|spf)\s*=\s*([a-z]+)", re.IGNORECASE)
+# Match a property value like ``header.from=example.com`` or
+# ``smtp.mailfrom=user@example.com``.
+_AUTH_PROP_RE = re.compile(
+    r"\b(header\.from|header\.d|smtp\.mailfrom|smtp\.from|envelope-from)\s*=\s*([^\s;]+)",
+    re.IGNORECASE,
+)
+
+
+def _verify_sender_authentication(
+    msg: email_lib.message.Message,
+    from_addr: str,
+    *,
+    authserv_id: str = "",
+) -> Tuple[bool, str]:
+    """Verify that the message's ``From:`` domain is authenticated.
+
+    The ``From:`` header is attacker-controlled and is never authenticated by
+    IMAP delivery, so an allowlist keyed on ``From:`` alone is trivially
+    spoofable (GHSA-rxqh-5572-8m77). The only trustworthy signal is the
+    ``Authentication-Results`` header that the *receiving* mail server (the one
+    we IMAP into) stamps after running SPF/DKIM/DMARC. That header is prepended
+    by our own server, so the topmost instance is the one we trust; any
+    ``Authentication-Results`` an attacker injected into the body of their
+    message sorts below it.
+
+    Returns ``(authenticated, reason)``. ``authenticated`` is True when:
+      * a DMARC pass is recorded for the From domain, OR
+      * an SPF pass aligned with the From domain, OR
+      * a DKIM pass aligned (``header.d``) with the From domain.
+
+    When no ``Authentication-Results`` header is present at all, we return
+    ``(False, "no Authentication-Results header")`` — fail-closed. Operators
+    whose mail server does not stamp this header can opt out of the check
+    (see ``EmailAdapter._require_authenticated_sender``).
+    """
+    from_domain = _domain_of(from_addr)
+    if not from_domain:
+        return False, "missing From domain"
+
+    # get_all preserves header order; the receiving server prepends its result,
+    # so the FIRST Authentication-Results is the trusted one. We pin to the
+    # configured authserv-id when provided to defend against an injected header
+    # that happens to sort first.
+    headers = msg.get_all("Authentication-Results") or []
+    if not headers:
+        return False, "no Authentication-Results header"
+
+    trusted = None
+    for raw in headers:
+        value = " ".join(str(raw).split())
+        if authserv_id:
+            # authserv-id is the first token before the first ';'
+            serv = value.split(";", 1)[0].strip().lower()
+            if not _domains_aligned(serv, authserv_id) and serv != authserv_id.lower():
+                continue
+        trusted = value
+        break
+    if trusted is None:
+        return False, "no Authentication-Results from trusted authserv-id"
+
+    methods = {m.lower(): r.lower() for m, r in _AUTH_METHOD_RE.findall(trusted)}
+    props = {p.lower(): v.strip().strip('"') for p, v in _AUTH_PROP_RE.findall(trusted)}
+
+    # 1) DMARC pass is the strongest signal — DMARC already enforces From
+    #    alignment, so a pass means the From domain is authenticated.
+    if methods.get("dmarc") == "pass":
+        return True, "dmarc=pass"
+
+    # 2) SPF pass aligned with the From domain (the envelope/MAIL FROM domain
+    #    must match the From domain).
+    if methods.get("spf") == "pass":
+        spf_domain = (
+            _domain_of(props.get("smtp.mailfrom", "")) or props.get("smtp.from", "") or props.get("envelope-from", "")
+        )
+        spf_domain = _domain_of(spf_domain) if "@" in spf_domain else spf_domain
+        if _domains_aligned(spf_domain, from_domain):
+            return True, "spf=pass aligned"
+
+    # 3) DKIM pass aligned with the From domain (the signing domain header.d
+    #    must align with the From domain).
+    if methods.get("dkim") == "pass":
+        dkim_domain = props.get("header.d", "") or _domain_of(props.get("header.from", ""))
+        if _domains_aligned(dkim_domain, from_domain):
+            return True, "dkim=pass aligned"
+
+    return False, f"authentication failed ({trusted[:120]})"
+
+
 def _extract_attachments(
     msg: email_lib.message.Message,
     skip_attachments: bool = False,
@@ -426,13 +552,28 @@ class EmailAdapter(BasePlatformAdapter):
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform.EMAIL)
 
-        self._address = os.getenv("EMAIL_ADDRESS", "")
+        # Resolve connection settings from the env vars first, then fall back to
+        # PlatformConfig.extra (address/imap_host/smtp_host) — the canonical dict
+        # gateway.config populates and that the "connected" check, the
+        # send-helper, and `hermes config show` already read. Without the
+        # fallback a config.yaml-only setup left these empty. Host/address values
+        # are stripped: a stray space or newline made IMAP4_SSL raise the
+        # misleading ``[Errno 8] nodename nor servname`` (an unresolvable name)
+        # instead of an obvious "host not set" error.
+        extra = config.extra or {}
+        self._address = (os.getenv("EMAIL_ADDRESS", "") or extra.get("address", "")).strip()
         self._password = os.getenv("EMAIL_PASSWORD", "")
-        self._imap_host = os.getenv("EMAIL_IMAP_HOST", "")
-        self._imap_port = int(os.getenv("EMAIL_IMAP_PORT", "993"))
-        self._smtp_host = os.getenv("EMAIL_SMTP_HOST", "")
-        self._smtp_port = int(os.getenv("EMAIL_SMTP_PORT", "587"))
-        self._poll_interval = int(os.getenv("EMAIL_POLL_INTERVAL", "15"))
+        self._imap_host = (os.getenv("EMAIL_IMAP_HOST", "") or extra.get("imap_host", "")).strip()
+        self._imap_port = env_int("EMAIL_IMAP_PORT", 993)
+        self._smtp_host = (os.getenv("EMAIL_SMTP_HOST", "") or extra.get("smtp_host", "")).strip()
+        self._smtp_port = env_int("EMAIL_SMTP_PORT", 587)
+        self._poll_interval = env_int("EMAIL_POLL_INTERVAL", 15)
+
+        # Skip attachments — configured via config.yaml:
+        #   platforms:
+        #     email:
+        #       skip_attachments: true
+        self._skip_attachments = extra.get("skip_attachments", False)
 
         # [PATCH-2] dgxarley: folder-lifecycle + APPEND-to-Sent + process-existing,
         # all configured via config.yaml under an explicit ``extra:`` block (the
@@ -454,12 +595,36 @@ class EmailAdapter(BasePlatformAdapter):
         #   both set .................... INBOX -> Working -> Done
         # NOTE: our default for process_existing is True (process the backlog),
         # unlike upstream's False.
-        extra = config.extra or {}
-        self._skip_attachments = extra.get("skip_attachments", False)
         self._working_folder = extra.get("working_folder", "Hermes_Working")
         self._done_folder = extra.get("done_folder", "Hermes_Done")
         self._sent_folder = extra.get("sent_folder", "Sent")
         self._process_existing = bool(extra.get("process_existing", True))
+
+        # Require the sender's From: domain to be authenticated (SPF/DKIM/DMARC)
+        # before trusting it for authorization. The From: header is
+        # attacker-controlled and unauthenticated by IMAP, so an allowlist keyed
+        # on it alone is spoofable (GHSA-rxqh-5572-8m77). Default ON (fail-closed).
+        #
+        # Operators whose receiving mail server does not stamp an
+        # Authentication-Results header can opt out via config.yaml:
+        #   platforms:
+        #     email:
+        #       require_authenticated_sender: false
+        # or the EMAIL_TRUST_FROM_HEADER=true env mirror (parity with the other
+        # EMAIL_* access-control vars). When allow-all is in effect the operator
+        # has already chosen to accept any sender, so the check is moot and the
+        # gate below is skipped.
+        if "require_authenticated_sender" in extra:
+            self._require_authenticated_sender = bool(extra["require_authenticated_sender"])
+        elif env_bool("EMAIL_TRUST_FROM_HEADER", False):
+            self._require_authenticated_sender = False
+        else:
+            self._require_authenticated_sender = True
+
+        # Optional authserv-id to pin Authentication-Results to the operator's
+        # own receiving server (defends against an injected header that sorts
+        # first). Defaults to the From-domain of the agent's own address.
+        self._authserv_id = (extra.get("authserv_id", "") or os.getenv("EMAIL_AUTHSERV_ID", "")).strip().lower()
 
         # Track message IDs we've already processed to avoid duplicates
         self._seen_uids: set = set()
@@ -739,8 +904,36 @@ class EmailAdapter(BasePlatformAdapter):
     # End of [PATCH-3] block.
     # ------------------------------------------------------------------
 
-    async def connect(self) -> bool:
+    async def connect(self, *, is_reconnect: bool = False) -> bool:
         """Connect to the IMAP server and start polling for new messages."""
+        # Validate up front so a missing host surfaces as an actionable config
+        # error instead of IMAP4_SSL("") raising the cryptic
+        # ``[Errno 8] nodename nor servname provided, or not known``.
+        missing = [
+            name
+            for name, value in (
+                ("EMAIL_ADDRESS", self._address),
+                ("EMAIL_PASSWORD", self._password),
+                ("EMAIL_IMAP_HOST", self._imap_host),
+                ("EMAIL_SMTP_HOST", self._smtp_host),
+            )
+            if not value
+        ]
+        if missing:
+            message = (
+                "Not configured — missing "
+                + ", ".join(missing)
+                + ". Set it via `hermes gateway setup` (env) or platforms.email "
+                "in config.yaml."
+            )
+            logger.error("[Email] %s", message)
+            # Mark non-retryable so the gateway does NOT keep reconnecting against
+            # an empty host. A blank-but-present env var (e.g. ``EMAIL_IMAP_HOST=``)
+            # used to slip past the startup gate and drive an indefinite retry
+            # loop that leaked memory until the host OOM-killed (#40715).
+            self._set_fatal_error("email_missing_configuration", message, retryable=False)
+            return False
+
         try:
             # Test IMAP connection — uses port-based SSL/STARTTLS auto-detect
             # so Dovecot-style 143-with-STARTTLS endpoints work alongside the
@@ -874,6 +1067,17 @@ class EmailAdapter(BasePlatformAdapter):
                     if _is_automated_sender(sender_addr, msg_headers):
                         logger.debug("[Email] Skipping automated sender: %s", sender_addr)
                         continue
+
+                    # Verify the From: domain is authenticated (SPF/DKIM/DMARC)
+                    # while the raw message — and its trusted
+                    # Authentication-Results header — is still in scope. The
+                    # verdict is consumed at dispatch where authorization is
+                    # decided. From: is attacker-controlled, so this is the only
+                    # place a spoof can be caught (GHSA-rxqh-5572-8m77).
+                    sender_authenticated, auth_reason = _verify_sender_authentication(
+                        msg, sender_addr, authserv_id=self._authserv_id
+                    )
+
                     body = _extract_text_body(msg)
                     attachments = _extract_attachments(msg, skip_attachments=self._skip_attachments)
 
@@ -911,6 +1115,8 @@ class EmailAdapter(BasePlatformAdapter):
                             "body": body,
                             "attachments": attachments,
                             "date": msg.get("Date", ""),
+                            "sender_authenticated": sender_authenticated,
+                            "auth_reason": auth_reason,
                             # [PATCH-5] Carries the folder where the mail now lives
                             # so _dispatch_message → _finalize_message knows where
                             # to look it up for the final MOVE → Done.
@@ -926,13 +1132,41 @@ class EmailAdapter(BasePlatformAdapter):
             logger.error("[Email] IMAP fetch error: %s", e)
         return results
 
+    @staticmethod
+    def _allow_all_senders() -> bool:
+        """Return True when the operator opted into accepting any sender.
+
+        Mirrors the gateway authz allow-all resolution: the per-platform
+        EMAIL_ALLOW_ALL_USERS flag or the global GATEWAY_ALLOW_ALL_USERS flag.
+        When either is set, sender identity is moot, so the From: authentication
+        gate is skipped.
+        """
+        truthy = {"true", "1", "yes"}
+        return (
+            os.getenv("EMAIL_ALLOW_ALL_USERS", "").strip().lower() in truthy
+            or os.getenv("GATEWAY_ALLOW_ALL_USERS", "").strip().lower() in truthy
+        )
+
+    @staticmethod
+    def _allowlist_in_effect() -> bool:
+        """Return True when a sender allowlist gates email access.
+
+        Authorization keys on the From: address only when an allowlist is
+        configured — the per-platform EMAIL_ALLOWED_USERS or the global
+        GATEWAY_ALLOWED_USERS. When neither is set the gateway default-denies
+        every sender regardless, so the spoofable From: identity grants nothing
+        and the authentication gate is unnecessary.
+        """
+        return bool(os.getenv("EMAIL_ALLOWED_USERS", "").strip() or os.getenv("GATEWAY_ALLOWED_USERS", "").strip())
+
     async def _dispatch_message(self, msg_data: Dict[str, Any]) -> None:
         """Convert a fetched email into a MessageEvent and dispatch it."""
         sender_addr = msg_data["sender_addr"]
         message_id = msg_data["message_id"]
         # [PATCH-6] Folder the mail currently lives in (set by
         # _fetch_new_messages). The finally below ALWAYS finalizes it, so an
-        # early drop after a Working move can't strand the mail in Working.
+        # early drop (self / automated / non-allowlisted / unauthenticated) after
+        # a Working move can't strand the mail in Working.
         source_folder = msg_data.get("source_folder", "INBOX")
 
         try:
@@ -951,11 +1185,47 @@ class EmailAdapter(BasePlatformAdapter):
             # a race between dispatch and authorization can result in the adapter
             # sending a reply even though the handler returned None.
             allowed_raw = os.getenv("EMAIL_ALLOWED_USERS", "").strip()
-            if allowed_raw:
+            if not allowed_raw:
+                if os.getenv("EMAIL_ALLOW_ALL_USERS", "").strip().lower() not in {"true", "1", "yes"} and (
+                    os.getenv("GATEWAY_ALLOW_ALL_USERS", "").strip().lower() not in {"true", "1", "yes"}
+                ):
+                    logger.debug(
+                        "[Email] Dropping sender at dispatch — EMAIL_ALLOWED_USERS is unset "
+                        "and open access is not opted in: %s",
+                        sender_addr,
+                    )
+                    return
+            else:
                 allowed = {addr.strip().lower() for addr in allowed_raw.split(",") if addr.strip()}
                 if sender_addr.lower() not in allowed:
                     logger.debug("[Email] Dropping non-allowlisted sender at dispatch: %s", sender_addr)
                     return
+
+            # Reject spoofed senders. The allowlist (and the gateway's own authz)
+            # key on sender_addr, which comes straight from the attacker-controlled
+            # From: header — so an attacker can forge From: an-allowlisted@addr to
+            # get authorized (GHSA-rxqh-5572-8m77). This only matters when an
+            # allowlist is actually being used to GRANT access: if no allowlist is
+            # configured the gateway default-denies everyone anyway, and if allow-all
+            # is on the operator already accepts any sender. So enforce From:
+            # authentication exactly when an allowlist is in effect and allow-all is
+            # off. Fail-closed: an unauthenticated From: is dropped before it can be
+            # matched against the allowlist.
+            if (
+                self._require_authenticated_sender
+                and self._allowlist_in_effect()
+                and not self._allow_all_senders()
+                and not msg_data.get("sender_authenticated", False)
+            ):
+                logger.warning(
+                    "[Email] Dropping sender with unauthenticated From: %s (%s). "
+                    "If your mail server does not stamp Authentication-Results, set "
+                    "platforms.email.require_authenticated_sender: false (or "
+                    "EMAIL_TRUST_FROM_HEADER=true) to accept the risk.",
+                    sender_addr,
+                    msg_data.get("auth_reason", "no verdict"),
+                )
+                return
 
             subject = msg_data["subject"]
             body = msg_data["body"].strip()
@@ -1013,9 +1283,9 @@ class EmailAdapter(BasePlatformAdapter):
         finally:
             # [PATCH-6] Always advance the mail out of its current folder to
             # Done — on a successful reply, an early drop (self / automated /
-            # non-allowlisted sender), OR a handle_message exception. Without
-            # this, mail that _fetch_new_messages already moved into Working
-            # would be stranded there on any non-success path.
+            # non-allowlisted / unauthenticated sender), OR a handle_message
+            # exception. Without this, mail that _fetch_new_messages already
+            # moved into Working would be stranded there on any non-success path.
             # _finalize_message is a no-op when done_folder is unset, when the
             # mail never moved, or when there is no Message-ID to re-locate it by.
             loop = asyncio.get_running_loop()
@@ -1303,3 +1573,103 @@ class EmailAdapter(BasePlatformAdapter):
             "chat_id": chat_id,
             "subject": ctx.get("subject", ""),
         }
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Plugin migration glue (#41112 / #3823)
+#
+# Added when the Email adapter moved from gateway/platforms/email.py into this
+# bundled plugin. register() exposes the platform via the registry, replacing
+# the Platform.EMAIL elif in gateway/run.py, the _PLATFORM_CONNECTED_CHECKERS
+# entry in gateway/config.py, the _PLATFORMS["email"] static dict in
+# hermes_cli/gateway.py, and the _send_email dispatch in
+# tools/send_message_tool.py. EMAIL_* env→PlatformConfig seeding stays in core.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+async def _standalone_send(
+    pconfig,
+    chat_id,
+    message,
+    *,
+    thread_id=None,
+    media_files=None,
+    force_document=False,
+):
+    """Out-of-process Email delivery via SMTP (one-shot). Implements the
+    standalone_sender_fn contract; replaces the legacy _send_email helper."""
+    import smtplib
+    import ssl as _ssl
+    from email.mime.text import MIMEText
+    from email.utils import formatdate
+
+    extra = getattr(pconfig, "extra", {}) or {}
+    address = extra.get("address") or os.getenv("EMAIL_ADDRESS", "")
+    password = os.getenv("EMAIL_PASSWORD", "")
+    smtp_host = extra.get("smtp_host") or os.getenv("EMAIL_SMTP_HOST", "")
+    try:
+        smtp_port = int(os.getenv("EMAIL_SMTP_PORT", "587"))
+    except (ValueError, TypeError):
+        smtp_port = 587
+
+    if not all([address, password, smtp_host]):
+        return {"error": "Email not configured (EMAIL_ADDRESS, EMAIL_PASSWORD, EMAIL_SMTP_HOST required)"}
+
+    try:
+        msg = MIMEText(message, "plain", "utf-8")
+        msg["From"] = address
+        msg["To"] = chat_id
+        msg["Subject"] = "Hermes Agent"
+        msg["Date"] = formatdate(localtime=True)
+
+        server = smtplib.SMTP(smtp_host, smtp_port)
+        server.starttls(context=_ssl.create_default_context())
+        server.login(address, password)
+        server.send_message(msg)
+        server.quit()
+        return {"success": True, "platform": "email", "chat_id": chat_id}
+    except Exception as e:
+        try:
+            from tools.send_message_tool import _error as _e
+
+            return _e(f"Email send failed: {e}")
+        except Exception:
+            return {"error": f"Email send failed: {e}"}
+
+
+def _is_connected(config) -> bool:
+    """Email is connected when an address is configured (in PlatformConfig.extra
+    or via EMAIL_ADDRESS). Mirrors the legacy
+    _PLATFORM_CONNECTED_CHECKERS[Platform.EMAIL] = bool(extra.get('address'))."""
+    extra = getattr(config, "extra", {}) or {}
+    if extra.get("address"):
+        return True
+    import hermes_cli.gateway as gateway_mod
+
+    return bool((gateway_mod.get_env_value("EMAIL_ADDRESS") or "").strip())
+
+
+def _build_adapter(config):
+    """Factory wrapper that constructs EmailAdapter from a PlatformConfig."""
+    return EmailAdapter(config)
+
+
+def register(ctx) -> None:
+    """Plugin entry point — called by the Hermes plugin system."""
+    ctx.register_platform(
+        name="email",
+        label="Email",
+        adapter_factory=_build_adapter,
+        check_fn=check_email_requirements,
+        is_connected=_is_connected,
+        required_env=["EMAIL_ADDRESS", "EMAIL_PASSWORD", "EMAIL_SMTP_HOST"],
+        install_hint="Email uses the Python stdlib (smtplib/imaplib) — no extra deps",
+        allowed_users_env="EMAIL_ALLOWED_USERS",
+        allow_all_env="EMAIL_ALLOW_ALL_USERS",
+        cron_deliver_env_var="EMAIL_HOME_ADDRESS",
+        standalone_sender_fn=_standalone_send,
+        max_message_length=50_000,
+        pii_safe=True,
+        emoji="📧",
+        allow_update_command=True,
+    )

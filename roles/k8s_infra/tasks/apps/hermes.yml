@@ -206,10 +206,13 @@
     - hermes_seafile_provision
 
 # === Cluster-wide patch ConfigMap (subPath-overlaid onto the agent image) ===
-# Local fix for upstream gateway/platforms/email.py — adds Working/Done folder
-# lifecycle, IMAP APPEND to Sent, and EMAIL_PROCESS_EXISTING. File is pinned to
-# the upstream source tree of hermes.image_tag (currently v2026.5.16); bump
-# both together (re-fetch upstream email.py, re-apply [PATCH-N] sections).
+# Local fix for upstream plugins/platforms/email/adapter.py — adds Working/Done
+# folder lifecycle, IMAP APPEND to Sent, and EMAIL_PROCESS_EXISTING. File is
+# pinned to the upstream source tree of hermes.image_tag (currently v2026.7.1);
+# bump both together (re-fetch upstream adapter.py, re-apply [PATCH-N] sections).
+# NOTE: at v2026.7.1 upstream #41112 MOVED this file — it was
+# gateway/platforms/email.py through v2026.6.19. The ConfigMap data key and the
+# webui-pod subPath mount are now adapter.py.
 # Only the hermes-email sidecar consumes it (subPath mount in the webui pod).
 
 - name: Render hermes email-gateway patch ConfigMap
@@ -224,7 +227,7 @@
         labels:
           app: hermes
       data:
-        email.py: "{{ lookup('file', 'hermes_email_gateway_patched.py') }}"
+        adapter.py: "{{ lookup('file', 'hermes_email_gateway_patched.py') }}"
 
 # Gateway-status refresher script — consumed by the gateway-state-refresh
 # sidecar in the webui pod. Keeps gateway_state.json's updated_at fresh WHILE
