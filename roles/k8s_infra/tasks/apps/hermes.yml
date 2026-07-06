@@ -241,6 +241,7 @@
 - name: Render hermes seadrive sidecar entrypoint ConfigMap
   kubernetes.core.k8s:
     state: present
+    apply: true  # kubectl-apply three-way merge → prune renamed/removed data keys
     definition:
       apiVersion: v1
       kind: ConfigMap
@@ -255,6 +256,7 @@
 - name: Render hermes merge-config ConfigMap
   kubernetes.core.k8s:
     state: present
+    apply: true  # kubectl-apply three-way merge → prune renamed/removed data keys
     definition:
       apiVersion: v1
       kind: ConfigMap
@@ -269,6 +271,7 @@
 - name: Render hermes gateway-state refresher ConfigMap
   kubernetes.core.k8s:
     state: present
+    apply: true  # kubectl-apply three-way merge → prune renamed/removed data keys
     definition:
       apiVersion: v1
       kind: ConfigMap
@@ -285,6 +288,7 @@
 - name: Render per-user hermes config.yaml ConfigMap
   kubernetes.core.k8s:
     state: present
+    apply: true  # kubectl-apply three-way merge → prune renamed/removed data keys
     definition:
       apiVersion: v1
       kind: ConfigMap
@@ -324,6 +328,7 @@
   # Caddyfile + caddy-security config — see template for full rationale.
   kubernetes.core.k8s:
     state: present
+    apply: true  # kubectl-apply three-way merge → prune renamed/removed data keys
     definition:
       apiVersion: v1
       kind: ConfigMap
