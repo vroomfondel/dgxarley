@@ -205,6 +205,13 @@ Patch the NVFP4 blockwise MoE kernel source in the SGLang clone during the `scit
 > CUTLASS **4.5.2** (2026-06-16) has since been released upstream but is not
 > yet picked up by any SGLang release image; check (a) still fails for v0.5.13.
 
+> **2026-07-06 update — v0.5.14 re-checked, still no fix:**
+> - SGLang **v0.5.14** was released **2026-06-26**.
+> - At tag v0.5.14, the C++ CUTLASS pin in `sgl-kernel/CMakeLists.txt` is **STILL** commit `57e3cfb47a2d9e0d46eb6335c3dc411498efa198` — unchanged from v0.5.12.post1/v0.5.13.
+> - `nvfp4_blockwise_moe.cuh` **STILL** uses `StageCountAutoCarveout` + `KernelPtrArrayTmaWarpSpecializedPingpong` on the SM120 path → **Crash A is still present in v0.5.14**.
+> - The repo's default image moved to this tag: `roles/k8s_dgx/defaults/main.yml:12` now sets `default_sglang_image: "xomoxcc/dgx-spark-sglang:0.5.14-sm121"`.
+> - Separately, NVIDIA/cutlass issue **#2800 was CLOSED 2026-07-02** — but it's an unrelated Python-DSL code path (already noted above as NOT the root cause for Crash A), so its closure has **no impact** on this PRD's conclusion.
+
 ## Implementation (Option 2)
 
 ### Target file
