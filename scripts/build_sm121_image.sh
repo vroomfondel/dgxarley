@@ -945,6 +945,16 @@ apply_patches() {
         sglang-dsv4-nvfp4-pr25820.patch
         sglang-tilelang-018-indexer-compat.patch
     )
+    # DSV4 EAGLE-MTP marlin branch (v0.5.14+ remainder, rebased standalone
+    # against the now-native HybridFp8NvFp4Config) + the same TileLang 0.1.8
+    # compat fix (unchanged file, listed again here since it must be copied
+    # under THIS gate too — APPLY_DSV4_NVFP4_PR25820=0 on v0.5.14 means the
+    # entry above is not copied). Copied only when the recipe opts in via
+    # APPLY_DSV4_MTP_MARLIN_TILELANG=1.
+    local dsv4_mtp_marlin_source_patches=(
+        sglang-dsv4-mtp-marlin-v0.5.14.patch
+        sglang-tilelang-018-indexer-compat.patch
+    )
     # DiffusionGemma source patch (PR #28054) — copied only when the recipe
     # opts in, same rationale as the dsv4/gemma4 patches.
     local diffusiongemma_source_patches=(
@@ -969,6 +979,9 @@ apply_patches() {
     fi
     if (( apply_dsv4_nvfp4_patch )); then
         patches_to_copy+=( "${dsv4_nvfp4_source_patches[@]}" )
+    fi
+    if (( apply_dsv4_mtp_marlin_patch )); then
+        patches_to_copy+=( "${dsv4_mtp_marlin_source_patches[@]}" )
     fi
     if (( apply_diffusiongemma_patch )); then
         patches_to_copy+=( "${diffusiongemma_source_patches[@]}" )
