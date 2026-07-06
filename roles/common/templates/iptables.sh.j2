@@ -70,6 +70,16 @@ iptables -A HTSTUFFIN -s {{ qsfp_network }} -j RETURN
 iptables -A HTSTUFFIN -s {{ qsfp_vf_network }} -j RETURN
 {% endif %}
 
+{% if juicefs_mount_master | default(false) | bool and inventory_hostname == juicefs_storage_node | default('') %}
+# JuiceFS backend reachability for a QSFP-less master mount.
+# Spark mount clients reach Valkey(6379)+RustFS(9000) over the QSFP subnet
+# (already trusted above); the master has no QSFP and comes in over the mgmt/k3s
+# VLAN, which is otherwise closed for these ports. Only rendered ON the storage
+# node, only when juicefs_mount_master is on. requirepass + S3 keys still apply.
+# (juicefs_storage_node / juicefs_mount_master live in group_vars/all/main.yml.)
+iptables -A HTSTUFFIN -m state --state NEW -p tcp -m multiport --dport 6379,9000 -m set --match-set k3snodes src -j RETURN
+{% endif %}
+
 # dhcp
 iptables -A HTSTUFFIN -p udp -m state --state NEW -m multiport --dport 67,68 -m set --match-set localnets src -j RETURN
 

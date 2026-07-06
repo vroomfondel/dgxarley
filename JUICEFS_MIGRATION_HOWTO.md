@@ -254,19 +254,20 @@ The host firewall (`roles/common/templates/iptables.sh.j2`) already trusts the
 firewall change for the default (spark-only) migration.**
 
 **Exception — `juicefs_mount_master: true`:** the master reaches the storage node
-over the **mgmt/k3s VLAN**, where 6379/9000 are **not** open (none of the
-`localnets`/`k3snodes` port lists include them). So master-mount additionally
-needs, **on the storage node**, a rule opening 6379 + 9000 from the cluster
-nodes, e.g.:
+over the **mgmt/k3s VLAN**, where 6379/9000 are otherwise closed. This is now
+**wired**: `roles/common/templates/iptables.sh.j2` emits, **only on the storage
+node and only when `juicefs_mount_master` is on**, a rule opening 6379 + 9000
+from `k3snodes`:
 
 ```
 iptables -A HTSTUFFIN -m state --state NEW -p tcp -m multiport --dport 6379,9000 \
   -m set --match-set k3snodes src -j RETURN
 ```
 
-This is **not wired yet** (it would mean promoting `juicefs_storage_node` /
-`juicefs_mount_master` to `group_vars/all` so the `common` iptables template can
-gate the rule to the storage node). Do this before enabling master-mount.
+To make this possible, `juicefs_storage_node` and `juicefs_mount_master` were
+promoted to `group_vars/all/main.yml` (the `common` role needs cross-role
+visibility). So enabling master-mount is: set `juicefs_mount_master: true`, then
+re-run `common.yml` (firewall) **and** `storage.yml` (mount + dual-bind).
 
 ---
 

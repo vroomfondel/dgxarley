@@ -12,23 +12,22 @@
 # mount -> backup). Run via: ansible-playbook storage.yml
 
 # --- Topology ---------------------------------------------------------------
-# inventory_hostname of the node the USB-SSD is attached to (runs Valkey+RustFS).
-# May be the k3s master OR any spark — this is THE placement knob.
-juicefs_storage_node: spark1
+# juicefs_storage_node (THE placement knob — inventory_hostname of the node with
+# the USB-SSD, running Valkey+RustFS) and juicefs_mount_master (opt-in mount on
+# the QSFP-less master) are PROMOTED to group_vars/all/main.yml, because the
+# `common` role's iptables template needs them to open the backend ports for a
+# master mount. They are authoritative there; do NOT redefine them here (a role
+# default would just be shadowed by the group_vars value). All other juicefs_*
+# knobs stay in this file. When juicefs_mount_master is on, three things engage
+# automatically:
+#   1. mount.yml also runs on the master (see the gate in tasks/main.yml);
+#   2. juicefs_storage_address resolves to the storage node's k3s IP for any
+#      host without QSFP (the per-client logic below);
+#   3. Valkey is dual-homed on the storage node (juicefs_valkey_bind_addresses),
+#      and the storage node's firewall opens 6379/9000 (common iptables template).
 
 # Inventory group whose hosts get the JuiceFS mount.
 juicefs_mount_group: dgxsparks
-
-# Also mount JuiceFS on the k3s master (which has NO QSFP). OFF by default: the
-# HF-cache use case is spark-only, and a QSFP-less master reaches a spark-hosted
-# backend only over the slower mgmt/k3s VLAN, not the 200GbE QSFP mesh. When
-# true, three things engage automatically:
-#   1. mount.yml also runs on the master (see the gate in tasks/main.yml);
-#   2. the master resolves juicefs_storage_address to the storage node's k3s IP
-#      (the per-client logic below picks the mgmt route for any host w/o QSFP);
-#   3. Valkey is dual-homed on the storage node so that mgmt route is reachable
-#      (juicefs_valkey_bind_addresses below).
-juicefs_mount_master: false
 
 # Address a mount client uses to reach Valkey + RustFS on the storage node.
 # Resolved PER CLIENT: a QSFP-capable client (a spark) uses the storage node's

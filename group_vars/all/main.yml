@@ -690,3 +690,18 @@ ollama_embedding_model_max_ctx: "{{ ollama_embed_model_profiles[ollama_embed_mod
 
 # --- Docling coordinate ---
 docling_port: 5001
+
+# --- JuiceFS shared storage (cross-role knobs) ------------------------------
+# Authoritative home for the two JuiceFS vars that MUST be visible outside the
+# juicefs_storage role: the `common` role's iptables template reads them to open
+# the metadata/object ports for a QSFP-less master mount. All other juicefs_*
+# knobs stay in roles/juicefs_storage/defaults/main.yml.
+#
+# inventory_hostname of the node holding the USB-SSD (runs Valkey + RustFS).
+juicefs_storage_node: spark1
+# Also mount JuiceFS on the QSFP-less k3s master. OFF by default. When true, the
+# master reaches the backend over the mgmt/k3s VLAN, so the storage node's
+# firewall additionally opens Valkey(6379)+RustFS(9000) from k3snodes (see
+# roles/common/templates/iptables.sh.j2), Valkey is dual-homed, and the master's
+# storage address resolves to the mgmt IP. Full detail: JUICEFS_MIGRATION_HOWTO.md.
+juicefs_mount_master: false
