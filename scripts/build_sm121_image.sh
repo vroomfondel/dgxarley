@@ -474,7 +474,11 @@ done
 # set it explicitly. "root@spark4.local" -> "spark4".
 if [[ -z "${PODMAN_CONNECTION}" ]]; then
     PODMAN_CONNECTION="${REMOTE_HOST##*@}"
-    PODMAN_CONNECTION="${PODMAN_CONNECTION%%.*}"
+    # Shorten a DNS name to its first label (spark4.local -> spark4), but keep an
+    # IPv4 address whole ("192.168.0.5" must NOT collapse to "192").
+    if [[ ! "${PODMAN_CONNECTION}" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+        PODMAN_CONNECTION="${PODMAN_CONNECTION%%.*}"
+    fi
 fi
 
 # ============================================================================

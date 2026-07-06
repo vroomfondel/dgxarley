@@ -105,7 +105,11 @@ IMAGE_TAG="xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132"
 # registered podman connection can be reused.
 REMOTE_HOST="${BUILD_PYTORCH_REMOTE_HOST:-root@spark4.local}"
 PODMAN_CONNECTION="${BUILD_PYTORCH_PODMAN_CONNECTION:-${REMOTE_HOST##*@}}"
-PODMAN_CONNECTION="${PODMAN_CONNECTION%%.*}"
+# Shorten a DNS name to its first label (spark4.local -> spark4), but keep an
+# IPv4 address whole ("192.168.0.5" must NOT collapse to "192").
+if [[ ! "${PODMAN_CONNECTION}" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+    PODMAN_CONNECTION="${PODMAN_CONNECTION%%.*}"
+fi
 PODMAN_SSH_IDENTITY="${BUILD_PYTORCH_SSH_IDENTITY:-${HOME}/.ssh/id_podman}"
 
 # Build-time parallelism. Same considerations as build_sm121_image.sh but
@@ -193,7 +197,10 @@ done
 # env var must win regardless of CLI-vs-default REMOTE_HOST).
 if [[ -z "${BUILD_PYTORCH_PODMAN_CONNECTION:-}" ]]; then
     PODMAN_CONNECTION="${REMOTE_HOST##*@}"
-    PODMAN_CONNECTION="${PODMAN_CONNECTION%%.*}"
+    # IPv4 stays whole; a DNS name -> first label (see note at the initial assignment).
+    if [[ ! "${PODMAN_CONNECTION}" =~ ^[0-9]+(\.[0-9]+){3}$ ]]; then
+        PODMAN_CONNECTION="${PODMAN_CONNECTION%%.*}"
+    fi
 fi
 
 # ============================================================================
