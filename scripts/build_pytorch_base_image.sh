@@ -127,7 +127,7 @@ die()  { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [--no-push] [--help]
+Usage: $(basename "$0") [--no-push] [--remote-host user@host] [--help]
 
 Builds ${IMAGE_TAG} on spark4 via remote podman socket.
 
@@ -137,15 +137,23 @@ control host and pushed to Docker Hub (same flow as build_sm121_image.sh).
 Expected duration: 3-5 hours cold build.
 
 Options:
-  --no-push    Skip the scp+push steps and keep the image only in spark4's
-               local podman store. Useful for iteration on the recipe
-               without consuming Docker Hub bandwidth. Default: push.
-  --help       Show this help.
+  --no-push              Skip the scp+push steps and keep the image only in
+                         spark4's local podman store. Useful for iteration on
+                         the recipe without consuming Docker Hub bandwidth.
+                         Default: push.
+  --remote-host HOST     user@host for the arm64 build host, overriding both
+                         the default and BUILD_PYTORCH_REMOTE_HOST. Also
+                         re-derives the podman connection name from HOST
+                         unless BUILD_PYTORCH_PODMAN_CONNECTION is set.
+                         Default: ${REMOTE_HOST}
+  --help                 Show this help.
 
 Environment overrides:
-  BUILD_PYTORCH_REMOTE_HOST        user@host for spark4 SSH.
+  BUILD_PYTORCH_REMOTE_HOST        user@host for spark4 SSH. Overridden by
+                                   --remote-host if both are given.
                                    Default: ${REMOTE_HOST}
-  BUILD_PYTORCH_PODMAN_CONNECTION  Registered podman connection name.
+  BUILD_PYTORCH_PODMAN_CONNECTION  Registered podman connection name. Pins
+                                   the connection regardless of --remote-host.
                                    Default: derived from REMOTE_HOST (${PODMAN_CONNECTION})
   BUILD_PYTORCH_SSH_IDENTITY       Unencrypted SSH private key for podman.
                                    Default: ${PODMAN_SSH_IDENTITY}
@@ -167,10 +175,23 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --no-push) PUSH_IMAGE=0; shift ;;
+        --remote-host)
+            [[ $# -ge 2 ]] || die "--remote-host requires a value (e.g. --remote-host root@spark4.local)"
+            REMOTE_HOST="$2"
+            shift 2
+            ;;
         --help|-h) usage; exit 0 ;;
         *)         die "Unknown argument: $1 (use --help)" ;;
     esac
 done
+
+# Re-derive the podman connection name from a --remote-host override, unless
+# the user pinned it explicitly via BUILD_PYTORCH_PODMAN_CONNECTION (that
+# env var must win regardless of CLI-vs-default REMOTE_HOST).
+if [[ -z "${BUILD_PYTORCH_PODMAN_CONNECTION:-}" ]]; then
+    PODMAN_CONNECTION="${REMOTE_HOST##*@}"
+    PODMAN_CONNECTION="${PODMAN_CONNECTION%%.*}"
+fi
 
 # ============================================================================
 # Preflight
