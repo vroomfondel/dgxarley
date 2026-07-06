@@ -28,12 +28,12 @@ regressions across that toolchain delta.
 - **torchaudio 2.11.0** — not bumped to 2.12 (pytorch/audio hadn't tagged 2.12
   at build time); the ABI lag is harmless for SGLang text-only inference, where
   the audio module is never imported
-- **NCCL 2.30.4** — built from upstream
-  [`NVIDIA/nccl`](https://github.com/NVIDIA/nccl) at `v2.30.4-1`. (Earlier builds
+- **NCCL 2.30.7** — built from upstream
+  [`NVIDIA/nccl`](https://github.com/NVIDIA/nccl) at `v2.30.7-1`. (Earlier builds
   pinned the `zyang-dev/nccl` `dgxspark-3node-ring` fork at `2.29.7-1`; reviewing
   that fork's diff showed its sole patch is a **default-off** subnet-aware-routing
   feature — a verified no-op on our single-`/24` switched QSFP fabric — so we
-  track upstream now and lose nothing.) **Note:** NCCL 2.30.4 has an NVLS-path
+  track upstream now and lose nothing.) **Note:** the NCCL 2.30.x NVLS path has a
   regression that can hang high-expert-count MoE weight loads on GB10/RoCE
   ([NVIDIA/nccl#2167](https://github.com/NVIDIA/nccl/issues/2167)); set
   `NCCL_NVLS_ENABLE=0` at runtime (free on these non-NVLink systems)
@@ -43,10 +43,10 @@ regressions across that toolchain delta.
 
 ## Tags
 
-| Tag | Notes |
-|---|---|
-| `2.12.0-v1-cu132` | PyTorch 2.12.0 + CUDA 13.2.1 + torchvision 0.27.0 + NCCL 2.30.4, arm64 (current) |
-| `2.11.0-v1-cu132` | PyTorch 2.11.0 + CUDA 13.2.0 + NCCL 2.30.4, arm64 (previous, rollback) |
+| Tag               | Notes                                                                            |
+|-------------------|----------------------------------------------------------------------------------|
+| `2.12.0-v1-cu132` | PyTorch 2.12.0 + CUDA 13.2.1 + torchvision 0.27.0 + NCCL 2.30.7, arm64 (current) |
+| `2.11.0-v1-cu132` | PyTorch 2.11.0 + CUDA 13.2.0 + NCCL 2.30.4, arm64 (previous, rollback)           |
 
 `linux/arm64` only — there is no x86_64 variant and the kernels are not useful
 on non-GB10 hardware.
