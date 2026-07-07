@@ -229,6 +229,11 @@
   tags:
     - rustfs
 
+- name: install sops + age on all k3sservers
+  import_tasks: sops_age.yml
+  tags:
+    - sops_age
+
 - name: debug also non-master k3sservers
   debug:
     msg: "DONE ON: {{ inventory_hostname }}"

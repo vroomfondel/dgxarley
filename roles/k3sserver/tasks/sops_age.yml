@@ -1,0 +1,77 @@
+---
+# Install sops (getsops/sops) + age (FiloSottile/age) on all k3sservers.
+# Both are single static Go binaries from upstream GitHub releases:
+#   - sops is a raw binary asset (sops-vX.Y.Z.linux.<arch>)
+#   - age ships a tarball (age-vX.Y.Z-linux-<arch>.tar.gz) containing age/age
+#     and age/age-keygen
+# Downloaded directly on the target node (same as rustfs_client.yml — the sparks
+# have GitHub access). Versions pinned in defaults/main.yml; installs to
+# /usr/local/bin, arch-aware, idempotent via a version check.
+
+- name: set sops/age arch mapping
+  set_fact:
+    _sops_age_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+# --- sops -------------------------------------------------------------------
+- name: check current sops version
+  command: /usr/local/bin/sops --version
+  register: _sops_current
+  changed_when: false
+  failed_when: false
+
+- name: install sops {{ sops_version }} binary
+  when: >-
+    _sops_current.rc != 0 or
+    sops_version not in (_sops_current.stdout | default(''))
+  get_url:
+    url: "https://github.com/getsops/sops/releases/download/v{{ sops_version }}/sops-v{{ sops_version }}.linux.{{ _sops_age_arch }}"
+    dest: /usr/local/bin/sops
+    mode: "0755"
+    owner: root
+    group: root
+    force: true
+
+# --- age --------------------------------------------------------------------
+- name: check current age version
+  command: /usr/local/bin/age --version
+  register: _age_current
+  changed_when: false
+  failed_when: false
+
+- name: install age {{ age_version }} (age + age-keygen)
+  when: >-
+    _age_current.rc != 0 or
+    age_version not in (_age_current.stdout | default(''))
+  block:
+    - name: download age tarball
+      get_url:
+        url: "https://github.com/FiloSottile/age/releases/download/v{{ age_version }}/age-v{{ age_version }}-linux-{{ _sops_age_arch }}.tar.gz"
+        dest: /tmp/age-v{{ age_version }}-{{ _sops_age_arch }}.tar.gz
+        mode: "0644"
+        force: true
+
+    - name: extract age tarball
+      unarchive:
+        src: /tmp/age-v{{ age_version }}-{{ _sops_age_arch }}.tar.gz
+        dest: /tmp/
+        remote_src: true
+
+    - name: install age binaries to /usr/local/bin
+      copy:
+        src: "/tmp/age/{{ item }}"
+        dest: "/usr/local/bin/{{ item }}"
+        remote_src: true
+        mode: "0755"
+        owner: root
+        group: root
+      loop:
+        - age
+        - age-keygen
+
+    - name: clean up age temp files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/age-v{{ age_version }}-{{ _sops_age_arch }}.tar.gz
+        - /tmp/age
