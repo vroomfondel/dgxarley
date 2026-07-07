@@ -213,15 +213,27 @@
             name: policy-reporter-kyverno-plugin-events
             apiGroup: rbac.authorization.k8s.io
 
-    - name: Restart Kyverno Plugin to pick up config
-      ansible.builtin.command:
-        cmd: kubectl rollout restart deployment/policy-reporter-kyverno-plugin -n policy-reporter
-      changed_when: true
-
-    - name: Wait for Kyverno Plugin rollout
-      ansible.builtin.command:
-        cmd: kubectl rollout status deployment/policy-reporter-kyverno-plugin -n policy-reporter --timeout=120s
-      changed_when: false
+    # `rollout restart` + wait via the k8s module (inherits the play's context; no
+    # kubectl). Patching the pod-template restart annotation forces a fresh rollout,
+    # and wait_condition blocks until the Deployment is Available again.
+    - name: Restart Kyverno Plugin to pick up config and wait for rollout
+      kubernetes.core.k8s:
+        state: patched
+        api_version: apps/v1
+        kind: Deployment
+        name: policy-reporter-kyverno-plugin
+        namespace: policy-reporter
+        definition:
+          spec:
+            template:
+              metadata:
+                annotations:
+                  kubectl.kubernetes.io/restartedAt: "{{ ansible_date_time.iso8601 }}"
+        wait: true
+        wait_condition:
+          type: Available
+          status: "True"
+        wait_timeout: 120
 
     - name: Create Policy Reporter IP allowlist middleware
       kubernetes.core.k8s:
@@ -341,15 +353,16 @@
         kind: Namespace
         name: policy-reporter
 
+    # Via the k8s module (inherits the play's module_defaults context; no kubectl).
     - name: Delete Policy Reporter cluster RBAC
-      ansible.builtin.command:
-        cmd: >-
-          kubectl delete clusterrole,clusterrolebinding {{ item }} --ignore-not-found
-      loop:
-        - policy-reporter
-        - policy-reporter-kyverno-plugin
-        - policy-reporter-kyverno-plugin-events
-      changed_when: true
+      kubernetes.core.k8s:
+        state: absent
+        api_version: rbac.authorization.k8s.io/v1
+        kind: "{{ item.0 }}"
+        name: "{{ item.1 }}"
+      loop: "{{ ['ClusterRole', 'ClusterRoleBinding'] | product(['policy-reporter', 'policy-reporter-kyverno-plugin', 'policy-reporter-kyverno-plugin-events']) | list }}"
+      loop_control:
+        label: "{{ item.0 }}/{{ item.1 }}"
 
     - name: Remove DNS A record for policy-reporter
       community.general.nsupdate:

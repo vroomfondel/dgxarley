@@ -65,8 +65,10 @@ kyverno_teardown: false
 kyverno_policy_teardown: false
 policy_reporter_teardown: false
 sealed_secrets_teardown: false
-# Upstream sealed-secrets release; used by both install and teardown so they
-# apply/delete the SAME manifest.
+# Upstream sealed-secrets release applied by the INSTALL (controller.yaml). The
+# teardown does NOT reuse this manifest — it enumerates the controller objects by
+# name (stable across versions) and removes them via the k8s module, so a version
+# mismatch can't leave anything behind.
 # gh api repos/bitnami-labs/sealed-secrets/releases/latest --jq '.tag_name'
 sealed_secrets_version: "v0.38.4"
 # Upstream External Secrets Operator manifest release (used in the Kustomize

@@ -342,30 +342,72 @@
         kind: Namespace
         name: "{{ eso_namespace }}"
 
-    # Cluster-scoped bulk deletes. NOTE the selectors — verified against a live
-    # v2.x install: the old `app.kubernetes.io/name=external-secrets` selector
-    # matched NOTHING (CRDs carry `external-secrets.io/component=controller`,
-    # webhooks `=webhook`), so CRDs + RBAC + webhooks were silently left behind.
-    - name: Delete ESO CRDs (label external-secrets.io/component=controller)
-      ansible.builtin.command:
-        cmd: kubectl delete crd -l external-secrets.io/component=controller --ignore-not-found
-      changed_when: true
+    # Cluster-scoped bulk deletes — ALL via the k8s module so they inherit the
+    # play's `module_defaults` context (NEVER shell out to kubectl here: a bare
+    # kubectl ignores module_defaults and hits the shell's current-context, i.e.
+    # possibly the WRONG cluster). Selectors verified against a live v2.x install:
+    # the old `app.kubernetes.io/name=external-secrets` matched NOTHING (CRDs carry
+    # `external-secrets.io/component=controller`, webhooks `=webhook`).
+    - name: Find ESO CRDs (label external-secrets.io/component=controller)
+      kubernetes.core.k8s_info:
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        label_selectors:
+          - external-secrets.io/component=controller
+      register: eso_crds
 
-    - name: Delete ESO validating webhooks (label external-secrets.io/component=webhook)
-      ansible.builtin.command:
-        cmd: >-
-          kubectl delete validatingwebhookconfiguration
-          -l external-secrets.io/component=webhook --ignore-not-found
-      changed_when: true
+    - name: Delete ESO CRDs
+      kubernetes.core.k8s:
+        state: absent
+        api_version: apiextensions.k8s.io/v1
+        kind: CustomResourceDefinition
+        name: "{{ item }}"
+        wait: false   # deletion cascades to CRs server-side; don't block on finalizers
+      loop: "{{ eso_crds.resources | map(attribute='metadata.name') | list }}"
 
-    # Cluster RBAC carries no reliable ESO label → match by the external-secrets-*
+    - name: Find ESO validating webhooks (label external-secrets.io/component=webhook)
+      kubernetes.core.k8s_info:
+        api_version: admissionregistration.k8s.io/v1
+        kind: ValidatingWebhookConfiguration
+        label_selectors:
+          - external-secrets.io/component=webhook
+      register: eso_webhooks
+
+    - name: Delete ESO validating webhooks
+      kubernetes.core.k8s:
+        state: absent
+        api_version: admissionregistration.k8s.io/v1
+        kind: ValidatingWebhookConfiguration
+        name: "{{ item }}"
+      loop: "{{ eso_webhooks.resources | map(attribute='metadata.name') | list }}"
+
+    # Cluster RBAC carries no reliable ESO label → filter by the external-secrets-
     # name prefix (covers -controller, -cert-controller, -edit, -view, -servicebindings).
-    # grep exit 1 on no-match is harmless mid-pipe; xargs -r skips an empty delete.
-    - name: Delete ESO cluster RBAC (name prefix external-secrets-)
-      ansible.builtin.shell:
-        cmd: >-
-          kubectl get clusterrole,clusterrolebinding -o name
-          | grep -E '/external-secrets-'
-          | xargs -r kubectl delete --ignore-not-found
-      changed_when: true
+    - name: Find ESO ClusterRoles
+      kubernetes.core.k8s_info:
+        api_version: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+      register: eso_clusterroles
+
+    - name: Delete ESO ClusterRoles (name prefix external-secrets-)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        name: "{{ item }}"
+      loop: "{{ eso_clusterroles.resources | map(attribute='metadata.name') | select('match', '^external-secrets-') | list }}"
+
+    - name: Find ESO ClusterRoleBindings
+      kubernetes.core.k8s_info:
+        api_version: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+      register: eso_crbindings
+
+    - name: Delete ESO ClusterRoleBindings (name prefix external-secrets-)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        name: "{{ item }}"
+      loop: "{{ eso_crbindings.resources | map(attribute='metadata.name') | select('match', '^external-secrets-') | list }}"
 
