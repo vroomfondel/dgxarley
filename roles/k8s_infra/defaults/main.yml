@@ -31,6 +31,56 @@ nut_exporter_password: "changeme"
 # nut_ups_name, nut_ups_secondary_name — defined in group_vars/all/main.yml
 traefik_dashboard_password: "changeme"
 
+# === Secret-management component gates (ESO / Kyverno / Sealed Secrets) ===
+# Each component task file (core/eso.yml, kyverno.yml, kyverno_policy.yml,
+# policy_reporter.yml, sealed_secrets.yml) carries BOTH its install and its
+# teardown as two conditional blocks:
+#   - install block  → runs when `<x>_enabled`  AND NOT `<x>_teardown`
+#   - teardown block → runs when `<x>_teardown`  (opt-in, default false)
+# So `<x>_enabled: false` only STOPS re-installing; it deletes nothing. Deletion
+# is the deliberate `-e <x>_teardown=true` opt-in, targeted with the install tag:
+#   ansible-playbook k8s_infra.yml --tags eso            -e eso_teardown=true
+#   ansible-playbook k8s_infra.yml --tags kyverno        -e kyverno_teardown=true
+#   ansible-playbook k8s_infra.yml --tags policy         -e kyverno_policy_teardown=true
+#   ansible-playbook k8s_infra.yml --tags policyreporter -e policy_reporter_teardown=true
+#   ansible-playbook k8s_infra.yml --tags sealed_secrets -e sealed_secrets_teardown=true
+# Teardown works even when the matching `_enabled` flag is false (teardown ignores it).
+#
+# Coupling note: in this cluster Kyverno exists SOLELY to enforce the ESO
+# `eso-namespace-secret-isolation` policy, and Policy-Reporter is only its
+# dashboard. So the sensible combinations are all-on, or ESO-only with the
+# isolation guardrail off (kyverno* off). Kyverno/policy on with ESO off leaves
+# the policy with nothing to enforce.
+eso_enabled: false              # External Secrets Operator + ClusterSecretStore + RBAC
+kyverno_enabled: false          # Kyverno policy engine (ESO isolation guardrail)
+kyverno_policy_enabled: false   # the eso-namespace-secret-isolation ClusterPolicy
+policy_reporter_enabled: false  # Kyverno Policy-Reporter dashboard/UI
+sealed_secrets_enabled: false   # bitnami sealed-secrets controller
+# Teardown opt-ins — DEFAULT false. Flip to true (preferably via -e on the CLI,
+# not by editing this file) to delete the corresponding component. Destructive:
+# CRD deletion cascades to all ExternalSecrets/SealedSecrets cluster-wide. See
+# each component file's teardown-block header for what is deliberately preserved.
+eso_teardown: false
+kyverno_teardown: false
+kyverno_policy_teardown: false
+policy_reporter_teardown: false
+sealed_secrets_teardown: false
+# Upstream sealed-secrets release; used by both install and teardown so they
+# apply/delete the SAME manifest.
+# gh api repos/bitnami-labs/sealed-secrets/releases/latest --jq '.tag_name'
+sealed_secrets_version: "v0.38.4"
+# Upstream External Secrets Operator manifest release (used in the Kustomize
+# resource URL in core/eso.yml). NOTE: external-secrets ships two interleaved
+# release streams (vX.Y.Z = operator manifest, helm-chart-X.Y.Z = Helm chart),
+# so `releases/latest` returns whichever was published last (often the chart) —
+# filter to the v* stream explicitly:
+# gh api 'repos/external-secrets/external-secrets/releases?per_page=30' --jq '[.[].tag_name | select(startswith("v"))] | first'
+eso_version: "v2.7.0"
+# Upstream Kyverno manifest release (used in the Kustomize resource URL in
+# core/kyverno.yml).
+# gh api repos/kyverno/kyverno/releases/latest --jq '.tag_name'
+kyverno_version: "v1.18.1"
+
 # KCEVE KVM RS232 serial device on k3smaster (USB-to-RS232 adapter)
 kceve_kvm_serial_device: "/dev/ttyACM0"
 

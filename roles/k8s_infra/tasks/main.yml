@@ -35,22 +35,66 @@
     - isk3smaster is defined
     - isk3smaster
 
-- name: import eso_keyverno.yml if isk3smaster is defined and true
-  import_tasks: core/eso_keyverno.yml
+# === Secret management: ESO + Kyverno + Policy Reporter ===
+# Formerly one file (eso_keyverno.yml); split into 4 components, each in its own
+# task file that carries BOTH the install and the teardown as two conditional
+# blocks (see roles/k8s_infra/defaults/main.yml):
+#   - install block  → runs when `<x>_enabled` AND NOT `<x>_teardown`
+#   - teardown block → runs when `<x>_teardown` (opt-in, default false)
+# So `<x>_enabled: false` only stops re-installing; deletion is the deliberate
+# `-e <x>_teardown=true` opt-in. Target one component with its tag, e.g.:
+#   ansible-playbook k8s_infra.yml --tags eso -e eso_teardown=true
+# Install order: ESO → Kyverno → policy → reporter → fail-test (the last two need
+# Kyverno + the policy present). The import `when` is just isk3smaster — the
+# enabled/teardown logic lives in the blocks so teardown stays reachable even
+# when the enabled flag is false.
+
+- name: import eso.yml (External Secrets Operator install/teardown)
+  import_tasks: core/eso.yml
   tags:
     - eso
   when:
     - isk3smaster is defined
     - isk3smaster
 
-- name: import eso_secrets.yml if isk3smaster is defined and true
-  import_tasks: core/eso_secrets.yml
+- name: import kyverno.yml (policy engine install/teardown)
+  import_tasks: core/kyverno.yml
   tags:
-    - eso
+    - kyverno
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: import kyverno_policy.yml (ESO isolation policy install/teardown)
+  import_tasks: core/kyverno_policy.yml
+  tags:
+    - policy
+    - kyverno
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: import policy_reporter.yml (dashboard install/teardown)
+  import_tasks: core/policy_reporter.yml
+  tags:
+    - policyreporter
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+# NOTE: tagged `eso_secrets` ONLY (not `eso`). This is the Kyverno-policy fail-test
+# and needs the ESO CRDs AND the isolation ClusterPolicy present; a bare `--tags eso`
+# no longer installs Kyverno/the policy (separate tags now), so running it there
+# would falsely fail. On a full run the policy is installed earlier in this file.
+- name: import eso_test_secrets.yml (Kyverno-policy fail-test) if ESO + policy enabled
+  import_tasks: core/eso_test_secrets.yml
+  tags:
     - eso_secrets
   when:
     - isk3smaster is defined
     - isk3smaster
+    - eso_enabled | default(true)
+    - kyverno_policy_enabled | default(true)
 
 
 - name: import smarter_devices.yml if isk3smaster is defined and true
@@ -69,7 +113,9 @@
     - isk3smaster is defined
     - isk3smaster
 
-- name: import sealed_secrets.yml if isk3smaster is defined and true
+# sealed_secrets.yml carries both install (sealed_secrets_enabled AND NOT
+# sealed_secrets_teardown) and teardown (-e sealed_secrets_teardown=true) blocks.
+- name: import sealed_secrets.yml (install/teardown) if isk3smaster
   import_tasks: core/sealed_secrets.yml
   tags: sealed_secrets
   when:

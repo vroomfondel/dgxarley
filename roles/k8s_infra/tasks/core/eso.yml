@@ -1,0 +1,364 @@
+---
+# External Secrets Operator (ESO) — INSTALL.
+# Split out of the former eso_keyverno.yml (2026-07). Gated by `eso_enabled`
+# (see roles/k8s_infra/defaults/main.yml) at the import in main.yml; teardown
+# is the second block in THIS file (`-e eso_teardown=true`). Kyverno, its ESO-isolation
+# policy and Policy-Reporter are now separate components (kyverno.yml,
+# kyverno_policy.yml, policy_reporter.yml) — Kyverno exists ONLY to enforce the
+# ESO namespace-secret-isolation policy.
+
+# --- INSTALL (runs on a normal play when eso_enabled and NOT eso_teardown) ---
+- name: ESO (External Secrets Operator) — install
+  when:
+    - eso_enabled | default(true)
+    - not (eso_teardown | default(false))
+  block:
+    - name: Create ESO secrets namespace
+      kubernetes.core.k8s:
+        name: "{{ eso_secrets_namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+
+    - name: Create ESO namespace
+      kubernetes.core.k8s:
+        name: "{{ eso_namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+
+    - name: Install External Secrets Operator via Kustomize
+      vars:
+        # eso_version now lives in roles/k8s_infra/defaults/main.yml (next to
+        # sealed_secrets_version), single source of truth for the manifest URL.
+        eso_temp_dir: "/tmp/eso-install"
+      block:
+        - name: Ensure ESO temporary directory exists
+          ansible.builtin.file:
+            path: "{{ eso_temp_dir }}"
+            state: directory
+            mode: '0755'
+
+        # ┌───────────────────────────────┬─────────────┬───────────┬────────────────┬──────────────┐
+        # │          Controller           │ CPU Request │ CPU Limit │ Memory Request │ Memory Limit │
+        # ├───────────────────────────────┼─────────────┼───────────┼────────────────┼──────────────┤
+        # │ external-secrets              │ 100m        │ 500m      │ 128Mi          │ 512Mi        │
+        # ├───────────────────────────────┼─────────────┼───────────┼────────────────┼──────────────┤
+        # │ external-secrets-cert-ctrl    │ 50m         │ 200m      │ 64Mi           │ 128Mi        │
+        # ├───────────────────────────────┼─────────────┼───────────┼────────────────┼──────────────┤
+        # │ external-secrets-webhook      │ 50m         │ 250m      │ 64Mi           │ 256Mi        │
+        # └───────────────────────────────┴─────────────┴───────────┴────────────────┴──────────────┘
+        - name: Create ESO kustomization.yaml
+          ansible.builtin.copy:
+            dest: "{{ eso_temp_dir }}/kustomization.yaml"
+            mode: '0644'
+            content: |
+              apiVersion: kustomize.config.k8s.io/v1beta1
+              kind: Kustomization
+
+              namespace: {{ eso_namespace }}
+
+              resources:
+                - https://github.com/external-secrets/external-secrets/releases/download/{{ eso_version }}/external-secrets.yaml
+
+              patches:
+                # Main controller resources
+                - target:
+                    kind: Deployment
+                    name: external-secrets
+                  patch: |-
+                    apiVersion: apps/v1
+                    kind: Deployment
+                    metadata:
+                      name: external-secrets
+                    spec:
+                      template:
+                        spec:
+                          containers:
+                            - name: external-secrets
+                              resources:
+                                requests:
+                                  cpu: 100m
+                                  memory: 128Mi
+                                limits:
+                                  cpu: 500m
+                                  memory: 512Mi
+                # Cert-controller: fix namespace args + resources
+                - target:
+                    kind: Deployment
+                    name: external-secrets-cert-controller
+                  patch: |-
+                    apiVersion: apps/v1
+                    kind: Deployment
+                    metadata:
+                      name: external-secrets-cert-controller
+                    spec:
+                      template:
+                        spec:
+                          containers:
+                            - name: cert-controller
+                              args:
+                                - certcontroller
+                                - --crd-requeue-interval=5m
+                                - --service-name=external-secrets-webhook
+                                - --service-namespace={{ eso_namespace }}
+                                - --secret-name=external-secrets-webhook
+                                - --secret-namespace={{ eso_namespace }}
+                                - --metrics-addr=:8080
+                                - --healthz-addr=:8081
+                                - --loglevel=info
+                                - --zap-time-encoding=epoch
+                                - --enable-partial-cache=true
+                              resources:
+                                requests:
+                                  cpu: 50m
+                                  memory: 64Mi
+                                limits:
+                                  cpu: 200m
+                                  memory: 128Mi
+                # nodeSelector: pin all ESO pods to amd64
+                - target:
+                    kind: Deployment
+                  patch: |-
+                    apiVersion: apps/v1
+                    kind: Deployment
+                    metadata:
+                      name: placeholder
+                    spec:
+                      template:
+                        spec:
+                          nodeSelector:
+                            kubernetes.io/arch: amd64
+                # Webhook: fix dns-name arg + resources
+                - target:
+                    kind: Deployment
+                    name: external-secrets-webhook
+                  patch: |-
+                    apiVersion: apps/v1
+                    kind: Deployment
+                    metadata:
+                      name: external-secrets-webhook
+                    spec:
+                      template:
+                        spec:
+                          containers:
+                            - name: webhook
+                              args:
+                                - webhook
+                                - --port=10250
+                                - --dns-name=external-secrets-webhook.{{ eso_namespace }}.svc
+                                - --cert-dir=/tmp/certs
+                                - --check-interval=5m
+                                - --metrics-addr=:8080
+                                - --healthz-addr=:8081
+                                - --loglevel=info
+                                - --zap-time-encoding=epoch
+                              resources:
+                                requests:
+                                  cpu: 50m
+                                  memory: 64Mi
+                                limits:
+                                  cpu: 250m
+                                  memory: 256Mi
+
+    #    - name: Build ESO Kustomize manifest
+    #      ansible.builtin.shell:
+    #        cmd: kubectl kustomize . > external-secrets-rendered.yaml
+    #        chdir: "{{ eso_temp_dir }}"
+    #      changed_when: true
+    #
+    #    - name: Apply ESO Kustomize build to cluster
+    #      kubernetes.core.k8s:
+    #        state: present
+    #        src: "{{ eso_temp_dir }}/external-secrets-rendered.yaml"
+    #        server_side_apply:
+    #          field_manager: ansible
+
+        - name: Apply ESO Kustomize build to cluster
+          kubernetes.core.k8s:
+            state: present
+            definition: "{{ lookup('kubernetes.core.kustomize', dir=eso_temp_dir) }}"
+            server_side_apply:
+              field_manager: ansible
+
+      always:
+        - name: Cleanup ESO temporary directory
+          ansible.builtin.file:
+            path: "{{ eso_temp_dir }}"
+            state: absent
+
+    - name: Wait for External Secrets Cert Controller to be ready first
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: external-secrets-cert-controller
+        namespace: "{{ eso_namespace }}"
+      register: eso_cert_deployment_initial
+      until: >
+        eso_cert_deployment_initial.resources | length > 0 and
+        (eso_cert_deployment_initial.resources[0].status.readyReplicas | default(0)) >= 1
+      retries: 30
+      delay: 10
+
+    - name: Wait for External Secrets Webhook Secret to be created
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: external-secrets-webhook
+        namespace: "{{ eso_namespace }}"
+      register: eso_webhook_secret
+      until: eso_webhook_secret.resources | length > 0
+      retries: 30
+      delay: 10
+
+    - name: Wait for External Secrets Operator to be ready
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: external-secrets
+        namespace: "{{ eso_namespace }}"
+      register: eso_deployment
+      until: >
+        eso_deployment.resources | length > 0 and
+        (eso_deployment.resources[0].status.readyReplicas | default(0)) >= 1
+      retries: 30
+      delay: 10
+
+    - name: Wait for External Secrets Webhook to be ready
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: external-secrets-webhook
+        namespace: "{{ eso_namespace }}"
+      register: eso_webhook_deployment
+      until: >
+        eso_webhook_deployment.resources | length > 0 and
+        (eso_webhook_deployment.resources[0].status.readyReplicas | default(0)) >= 1
+      retries: 30
+      delay: 10
+
+    - name: Create ESO reader role in secrets namespace
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          metadata:
+            namespace: "{{ eso_secrets_namespace }}"
+            name: eso-reader-role
+          rules:
+            - apiGroups: [""]
+              resources: ["secrets"]
+              verbs: ["get", "list", "watch"]
+
+    - name: Create RoleBinding for ESO ServiceAccount
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            namespace: "{{ eso_secrets_namespace }}"
+            name: eso-reader-binding
+          subjects:
+            - kind: ServiceAccount
+              name: "{{ eso_service_account }}"
+              namespace: "{{ eso_namespace }}"
+          roleRef:
+            kind: Role
+            name: eso-reader-role
+            apiGroup: rbac.authorization.k8s.io
+
+    - name: Create ClusterSecretStore for Kubernetes secrets
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: external-secrets.io/v1
+          kind: ClusterSecretStore
+          metadata:
+            name: "{{ eso_default_store_name }}"
+          spec:
+            provider:
+              kubernetes:
+                server:
+                  url: "https://kubernetes.default.svc.cluster.local."
+                  caProvider:
+                    type: ConfigMap
+                    name: kube-root-ca.crt
+                    key: ca.crt
+                    namespace: kube-system
+                auth:
+                  serviceAccount:
+                    name: "{{ eso_service_account }}"
+                    namespace: "{{ eso_namespace }}"
+                remoteNamespace: "{{ eso_secrets_namespace }}"
+
+# --- TEARDOWN (opt-in: run the play with -e eso_teardown=true) ---
+# External Secrets Operator (ESO) — TEARDOWN.
+# Opt-in: runs only with `-e eso_teardown=true` (e.g.
+# `ansible-playbook k8s_infra.yml --tags eso -e eso_teardown=true`); it is
+# deliberately NOT triggered by `eso_enabled: false` (that flag only skips the
+# install). Destructive: deletes the ESO deployment, its CRDs and cluster RBAC.
+#
+# NOT removed on purpose:
+#   - the `{{ eso_secrets_namespace }}` namespace itself (may hold real secrets) —
+#     only the eso-reader Role/RoleBinding we created inside it are removed;
+#   - any Secrets that ESO already materialised into app namespaces.
+#
+# Deleting the CRDs cascades to every ExternalSecret / ClusterSecretStore in the
+# cluster — including the `{{ eso_default_store_name }}` store — so this wipes ESO
+# reconciliation cluster-wide.
+- name: ESO (External Secrets Operator) — teardown
+  when: eso_teardown | default(false)
+  block:
+    - name: Delete ESO ClusterSecretStore
+      kubernetes.core.k8s:
+        state: absent
+        api_version: external-secrets.io/v1
+        kind: ClusterSecretStore
+        name: "{{ eso_default_store_name }}"
+      ignore_errors: true   # CRD may already be gone
+
+    - name: Delete ESO reader RoleBinding in secrets namespace
+      kubernetes.core.k8s:
+        state: absent
+        api_version: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        name: eso-reader-binding
+        namespace: "{{ eso_secrets_namespace }}"
+
+    - name: Delete ESO reader Role in secrets namespace
+      kubernetes.core.k8s:
+        state: absent
+        api_version: rbac.authorization.k8s.io/v1
+        kind: Role
+        name: eso-reader-role
+        namespace: "{{ eso_secrets_namespace }}"
+
+    - name: Delete ESO namespace
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ eso_namespace }}"
+
+    # Label-selector / bulk deletes — kubectl is simplest and mirrors the documented
+    # cleanup that used to live as a comment at the bottom of eso_keyverno.yml.
+    - name: Delete ESO CRDs and cluster RBAC (label-selected) + webhook
+      ansible.builtin.command:
+        cmd: >-
+          kubectl delete {{ item }}
+          -l app.kubernetes.io/name=external-secrets --ignore-not-found
+      loop:
+        - crd
+        - clusterrole,clusterrolebinding
+        - validatingwebhookconfiguration
+      changed_when: true
+
+    - name: Delete leftover ESO cert-controller cluster RBAC (unlabelled)
+      ansible.builtin.command:
+        cmd: >-
+          kubectl delete clusterrole,clusterrolebinding
+          external-secrets-cert-controller --ignore-not-found
+      changed_when: true
+
