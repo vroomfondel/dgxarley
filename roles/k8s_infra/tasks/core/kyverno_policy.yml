@@ -1,0 +1,74 @@
+---
+# Kyverno ClusterPolicy `eso-namespace-secret-isolation` — INSTALL.
+# Split out of the former eso_keyverno.yml (2026-07). The ONLY Kyverno policy in
+# this cluster: restricts ExternalSecrets to secrets prefixed with their own
+# namespace. Requires Kyverno CRDs (kyverno.yml) to be present first. Gated by
+# `kyverno_policy_enabled`; teardown is the second block in THIS file
+# (`-e kyverno_policy_teardown=true`).
+
+# --- INSTALL (runs on a normal play when kyverno_policy_enabled and NOT kyverno_policy_teardown) ---
+- name: Kyverno ESO isolation ClusterPolicy — install
+  when:
+    - kyverno_policy_enabled | default(true)
+    - not (kyverno_policy_teardown | default(false))
+  block:
+    - name: Create Kyverno policy for namespace-based secret isolation
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: kyverno.io/v1
+          kind: ClusterPolicy
+          metadata:
+            name: eso-namespace-secret-isolation
+          spec:
+            background: true
+            rules:
+              - name: restrict-secrets-to-namespace-prefix
+                match:
+                  any:
+                    - resources:
+                        kinds:
+                          - ExternalSecret
+                validate:
+                  failureAction: Enforce
+                  message: "ExternalSecrets dürfen nur Secrets referenzieren, die mit '{% raw %}{{request.namespace}}{% endraw %}-' beginnen"
+                  foreach:
+                    # Prüft spec.data (einzelne Key-Mappings)
+                    - list: "request.object.spec.data"
+                      deny:
+                        conditions:
+                          all:
+                            - key: "{% raw %}{{ starts_with(element.remoteRef.key, '{{request.namespace}}-') }}{% endraw %}"
+                              operator: NotEquals
+                              value: true
+                    # Prüft spec.dataFrom mit extract (alle Keys aus einem Secret)
+                    - list: "request.object.spec.dataFrom"
+                      deny:
+                        conditions:
+                          all:
+                            - key: "{% raw %}{{ starts_with(element.extract.key, '{{request.namespace}}-') }}{% endraw %}"
+                              operator: NotEquals
+                              value: true
+      register: kyverno_policy_result
+      retries: 6
+      delay: 10
+      until: kyverno_policy_result is not failed
+
+# --- TEARDOWN (opt-in: run the play with -e kyverno_policy_teardown=true) ---
+# Kyverno ClusterPolicy `eso-namespace-secret-isolation` — TEARDOWN.
+# Opt-in: runs only with `-e kyverno_policy_teardown=true` (e.g.
+# `--tags policy -e kyverno_policy_teardown=true`); NOT triggered by
+# `kyverno_policy_enabled: false`. Removes just the policy (leaves the Kyverno
+# engine running). After this, ExternalSecrets are accepted without the
+# namespace-prefix restriction.
+- name: Kyverno ESO isolation ClusterPolicy — teardown
+  when: kyverno_policy_teardown | default(false)
+  block:
+    - name: Delete Kyverno ESO isolation ClusterPolicy
+      kubernetes.core.k8s:
+        state: absent
+        api_version: kyverno.io/v1
+        kind: ClusterPolicy
+        name: eso-namespace-secret-isolation
+      ignore_errors: true   # Kyverno CRD may already be gone (e.g. kyverno torn down)
+

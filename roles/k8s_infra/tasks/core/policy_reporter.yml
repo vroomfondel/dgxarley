@@ -1,0 +1,365 @@
+---
+# Kyverno Policy Reporter — INSTALL (dashboard/UI for the ESO isolation policy).
+# Split out of the former eso_keyverno.yml (2026-07). Purely observability for the
+# single Kyverno policy (kyverno_policy.yml); needs Kyverno CRDs + the plugin.
+# Gated by `policy_reporter_enabled`; teardown is the second block in THIS file
+# (`-e policy_reporter_teardown=true`).
+
+# policy_reporter_fqdn was previously set in eso_keyverno.yml's "Set ESO variables"
+# task; it is only consumed here, so it moved with the component.
+
+# --- INSTALL (runs on a normal play when policy_reporter_enabled and NOT policy_reporter_teardown) ---
+- name: Kyverno Policy Reporter dashboard — install
+  when:
+    - policy_reporter_enabled | default(true)
+    - not (policy_reporter_teardown | default(false))
+  block:
+    - name: Set Policy Reporter FQDN
+      ansible.builtin.set_fact:
+        policy_reporter_fqdn: "policy-reporter.{{ dns_external_domain_suffix }}"
+
+    - name: Create policy-reporter namespace
+      kubernetes.core.k8s:
+        name: policy-reporter
+        api_version: v1
+        kind: Namespace
+        state: present
+
+    - name: Install Kyverno Policy Reporter via Kustomize
+      vars:
+        policy_reporter_temp_dir: "/tmp/policy-reporter-install"
+      block:
+        - name: Ensure Policy Reporter temporary directory exists
+          ansible.builtin.file:
+            path: "{{ policy_reporter_temp_dir }}"
+            state: directory
+            mode: '0755'
+
+        # ┌───────────────────────────────┬─────────────┬───────────┬────────────────┬──────────────┐
+        # │          Component            │ CPU Request │ CPU Limit │ Memory Request │ Memory Limit │
+        # ├───────────────────────────────┼─────────────┼───────────┼────────────────┼──────────────┤
+        # │ policy-reporter               │ 50m         │ 200m      │ 64Mi           │ 256Mi        │
+        # ├───────────────────────────────┼─────────────┼───────────┼────────────────┼──────────────┤
+        # │ policy-reporter-ui            │ 25m         │ 100m      │ 32Mi           │ 128Mi        │
+        # ├───────────────────────────────┼─────────────┼───────────┼────────────────┼──────────────┤
+        # │ policy-reporter-kyverno-plugin│ 25m         │ 100m      │ 32Mi           │ 128Mi        │
+        # └───────────────────────────────┴─────────────┴───────────┴────────────────┴──────────────┘
+        - name: Create Policy Reporter kustomization.yaml
+          ansible.builtin.copy:
+            dest: "{{ policy_reporter_temp_dir }}/kustomization.yaml"
+            mode: '0644'
+            content: |
+              apiVersion: kustomize.config.k8s.io/v1beta1
+              kind: Kustomization
+
+              resources:
+                - https://raw.githubusercontent.com/kyverno/policy-reporter/main/manifests/policy-reporter-kyverno-ui/install.yaml
+
+              patches:
+                # policy-reporter resources
+                - target:
+                    kind: Deployment
+                    name: policy-reporter
+                    namespace: policy-reporter
+                  patch: |-
+                    apiVersion: apps/v1
+                    kind: Deployment
+                    metadata:
+                      name: policy-reporter
+                    spec:
+                      template:
+                        spec:
+                          containers:
+                            - name: policy-reporter
+                              resources:
+                                requests:
+                                  cpu: 50m
+                                  memory: 64Mi
+                                limits:
+                                  cpu: 200m
+                                  memory: 256Mi
+                # nodeSelector: pin all Policy Reporter pods to amd64
+                - target:
+                    kind: Deployment
+                    namespace: policy-reporter
+                  patch: |-
+                    apiVersion: apps/v1
+                    kind: Deployment
+                    metadata:
+                      name: placeholder
+                    spec:
+                      template:
+                        spec:
+                          nodeSelector:
+                            kubernetes.io/arch: amd64
+                # policy-reporter-ui resources
+                - target:
+                    kind: Deployment
+                    name: policy-reporter-ui
+                    namespace: policy-reporter
+                  patch: |-
+                    apiVersion: apps/v1
+                    kind: Deployment
+                    metadata:
+                      name: policy-reporter-ui
+                    spec:
+                      template:
+                        spec:
+                          containers:
+                            - name: policy-reporter-ui
+                              resources:
+                                requests:
+                                  cpu: 25m
+                                  memory: 32Mi
+                                limits:
+                                  cpu: 100m
+                                  memory: 128Mi
+                # policy-reporter-kyverno-plugin resources
+                - target:
+                    kind: Deployment
+                    name: policy-reporter-kyverno-plugin
+                    namespace: policy-reporter
+                  patch: |-
+                    apiVersion: apps/v1
+                    kind: Deployment
+                    metadata:
+                      name: policy-reporter-kyverno-plugin
+                    spec:
+                      template:
+                        spec:
+                          containers:
+                            - name: policy-reporter-kyverno-plugin
+                              resources:
+                                requests:
+                                  cpu: 25m
+                                  memory: 32Mi
+                                limits:
+                                  cpu: 100m
+                                  memory: 128Mi
+
+        - name: Apply Policy Reporter Kustomize build to cluster
+          kubernetes.core.k8s:
+            definition: "{{ lookup('kubernetes.core.kustomize', dir=policy_reporter_temp_dir) }}"
+            state: present
+
+      always:
+        - name: Cleanup Policy Reporter temporary directory
+          ansible.builtin.file:
+            path: "{{ policy_reporter_temp_dir }}"
+            state: absent
+
+    - name: Wait for Policy Reporter deployment to be ready
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: policy-reporter
+        namespace: policy-reporter
+      register: policy_reporter_deployment
+      until: >
+        policy_reporter_deployment.resources | length > 0 and
+        (policy_reporter_deployment.resources[0].status.readyReplicas | default(0)) >= 1
+      retries: 30
+      delay: 10
+
+    # Kyverno Plugin Secret for showing blocked requests (Enforce mode)
+    - name: Create Kyverno Plugin config for block events
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: policy-reporter-kyverno-plugin-config
+            namespace: policy-reporter
+          stringData:
+            config.yaml: |
+              blockReports:
+                enabled: true
+                results:
+                  maxPerReport: 200
+                  keepOnlyLatest: false
+
+    # RBAC for Kyverno Plugin to read Events (needed for blockReports)
+    - name: Create ClusterRole for Kyverno Plugin events access
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          metadata:
+            name: policy-reporter-kyverno-plugin-events
+          rules:
+            - apiGroups: [""]
+              resources: ["events"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["wgpolicyk8s.io"]
+              resources: ["policyreports", "clusterpolicyreports"]
+              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+    - name: Create ClusterRoleBinding for Kyverno Plugin events access
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: policy-reporter-kyverno-plugin-events
+          subjects:
+            - kind: ServiceAccount
+              name: policy-reporter-kyverno-plugin
+              namespace: policy-reporter
+          roleRef:
+            kind: ClusterRole
+            name: policy-reporter-kyverno-plugin-events
+            apiGroup: rbac.authorization.k8s.io
+
+    - name: Restart Kyverno Plugin to pick up config
+      ansible.builtin.command:
+        cmd: kubectl rollout restart deployment/policy-reporter-kyverno-plugin -n policy-reporter
+      changed_when: true
+
+    - name: Wait for Kyverno Plugin rollout
+      ansible.builtin.command:
+        cmd: kubectl rollout status deployment/policy-reporter-kyverno-plugin -n policy-reporter --timeout=120s
+      changed_when: false
+
+    - name: Create Policy Reporter IP allowlist middleware
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: Middleware
+          metadata:
+            name: policy-reporter-ip-allowlist
+            namespace: policy-reporter
+          spec:
+            ipAllowList:
+              sourceRange: "{{ traefik_internal_allowlist }}"
+
+    - name: Create Policy Reporter UI IngressRoute (HTTP)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: IngressRoute
+          metadata:
+            name: policy-reporter-ui-ingress
+            namespace: policy-reporter
+          spec:
+            entryPoints:
+              - web
+            routes:
+              - kind: Rule
+                match: Host(`{{ policy_reporter_fqdn }}`)
+                priority: 10
+                middlewares:
+                  - name: policy-reporter-ip-allowlist
+                    namespace: policy-reporter
+                services:
+                  - kind: Service
+                    name: policy-reporter-ui
+                    namespace: policy-reporter
+                    passHostHeader: true
+                    port: 8080
+
+    - name: Create Policy Reporter TLS certificate
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: "{{ policy_reporter_fqdn }}"
+            namespace: policy-reporter
+          spec:
+            dnsNames:
+              - "{{ policy_reporter_fqdn }}"
+            secretName: "{{ policy_reporter_fqdn }}"
+            issuerRef:
+              name: letsencrypt-production
+              kind: ClusterIssuer
+
+    - name: Create Policy Reporter UI IngressRoute (HTTPS)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: IngressRoute
+          metadata:
+            name: policy-reporter-ui-ingress-tls
+            namespace: policy-reporter
+          spec:
+            entryPoints:
+              - websecure
+            routes:
+              - kind: Rule
+                match: Host(`{{ policy_reporter_fqdn }}`)
+                priority: 10
+                middlewares:
+                  - name: policy-reporter-ip-allowlist
+                    namespace: policy-reporter
+                services:
+                  - kind: Service
+                    name: policy-reporter-ui
+                    namespace: policy-reporter
+                    passHostHeader: true
+                    port: 8080
+            tls:
+              secretName: "{{ policy_reporter_fqdn }}"
+
+    - name: Register DNS A record for policy-reporter
+      community.general.nsupdate:
+        server: "{{ nsupdate_server }}"
+        zone: "{{ nsupdate_zone }}"
+        key_name: "{{ nsupdate_tsig_key_name }}"
+        key_secret: "{{ nsupdate_tsig_key_secret }}"
+        key_algorithm: "{{ nsupdate_tsig_algorithm }}"
+        record: "{{ policy_reporter_fqdn }}."
+        type: A
+        ttl: "{{ nsupdate_ttl }}"
+        value: "{{ nsupdate_ingress_ip }}"
+        state: present
+
+# --- TEARDOWN (opt-in: run the play with -e policy_reporter_teardown=true) ---
+# Kyverno Policy Reporter — TEARDOWN (dashboard only).
+# Opt-in: runs only with `-e policy_reporter_teardown=true` (e.g.
+# `--tags policyreporter -e policy_reporter_teardown=true`); NOT triggered by
+# `policy_reporter_enabled: false`. Removes the Policy Reporter
+# namespace (incl. its IngressRoutes + cert), its cluster RBAC and the DNS record.
+# Does NOT touch Kyverno or the policy itself.
+- name: Kyverno Policy Reporter dashboard — teardown
+  when: policy_reporter_teardown | default(false)
+  block:
+    - name: Set Policy Reporter FQDN
+      ansible.builtin.set_fact:
+        policy_reporter_fqdn: "policy-reporter.{{ dns_external_domain_suffix }}"
+
+    - name: Delete policy-reporter namespace
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: policy-reporter
+
+    - name: Delete Policy Reporter cluster RBAC
+      ansible.builtin.command:
+        cmd: >-
+          kubectl delete clusterrole,clusterrolebinding {{ item }} --ignore-not-found
+      loop:
+        - policy-reporter
+        - policy-reporter-kyverno-plugin
+        - policy-reporter-kyverno-plugin-events
+      changed_when: true
+
+    - name: Remove DNS A record for policy-reporter
+      community.general.nsupdate:
+        server: "{{ nsupdate_server }}"
+        zone: "{{ nsupdate_zone }}"
+        key_name: "{{ nsupdate_tsig_key_name }}"
+        key_secret: "{{ nsupdate_tsig_key_secret }}"
+        key_algorithm: "{{ nsupdate_tsig_algorithm }}"
+        record: "{{ policy_reporter_fqdn }}."
+        type: A
+        state: absent
+      ignore_errors: true   # best-effort: record may already be absent
+
