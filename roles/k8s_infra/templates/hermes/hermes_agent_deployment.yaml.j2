@@ -65,10 +65,11 @@ spec:
         # Roll the pod when the merge-config script changes so the new merge
         # logic runs against /opt/data on next start.
         checksum/merge:  "{{ lookup('file', 'hermes_merge_config.py') | hash('sha256') }}"
-        # Hash the raw login secret so rotating basicauth_password (which is
-        # only referenced by the Caddy users.json ConfigMap — no rollover
-        # on its own) forces a fresh pod. Hash the cleartext, not bcrypt:
-        # bcrypt re-salts each render and would roll the pod every run.
+        # Hash the raw login secret so rotating basicauth_password forces a
+        # fresh pod: it now drives the dashboard's BasicAuthProvider via the
+        # DASHBOARD_BASIC_AUTH_PASSWORD/SECRET Secret keys, and a Secret change
+        # does NOT auto-roll the pod. Hash the cleartext (the value is otherwise
+        # only Secret-referenced) — stable across runs, unlike a re-salted hash.
         checksum/auth:   "{{ (item.basicauth_password | default(item.litellm_token)) | hash('sha256') }}"
         # ALWAYS emit gated checksums with the gate flag folded into the value —
         # never wrap them in a Jinja if/endif block. A disable (enabled->disabled) must still
@@ -83,6 +84,9 @@ spec:
         # seafile: rolls the pod to add/drop the seadrive sidecar and to pick up
         # rotated creds (hermes-seafile-<user> Secret is envFrom, read at start).
         checksum/seafile: "{{ _seafile_workspace }}:{{ (hermes.seafile.server_url ~ '|' ~ (item.email.address | default('?')) ~ '|' ~ (item.seafile.web_password | default('none'))) | hash('sha256') }}"
+        # gateway: rolls the pod to add/drop the hermes-gateway sidecar (and the
+        # api_server /health the dashboard probes). Folded flag, not an if/endif.
+        checksum/gateway: "{{ _gateway_enabled | bool }}"
     spec:
       restartPolicy: Always
 {% if _gateway_enabled %}
