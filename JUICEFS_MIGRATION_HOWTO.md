@@ -6,7 +6,7 @@ JuiceFS filesystem (`roles/juicefs_storage`), while keeping node-local JIT cache
 local.
 
 > Status of this doc's changes — the wiring is **already in the repo, gated OFF**:
-> - `hf_cache_on_juicefs: false` (`roles/k8s_dgx/defaults/main.yml`) — the master
+> - `hf_hub_cache_on_juicefs: false` (`roles/k8s_dgx/defaults/main.yml`) — the master
 >   switch. Flipping it to `true` routes the SGLang/vLLM HF cache to JuiceFS and
 >   no-ops the rsync fan-out. Everything below is done via **this one flag**, not
 >   manual file edits.
@@ -126,11 +126,11 @@ juicefs warmup /mnt/jfs/hub
 ### 4a. Flip the flag
 
 The pod wiring is already in `roles/k8s_dgx/tasks/sglang_instance.yml`, gated by
-`hf_cache_on_juicefs`. Set it (globally or per-play):
+`hf_hub_cache_on_juicefs`. Set it (globally or per-play):
 
 ```yaml
-# roles/k8s_dgx/defaults/main.yml  (or -e hf_cache_on_juicefs=true)
-hf_cache_on_juicefs: true
+# roles/k8s_dgx/defaults/main.yml  (or -e hf_hub_cache_on_juicefs=true)
+hf_hub_cache_on_juicefs: true
 ```
 
 then redeploy the SGLang/vLLM instances (e.g. `ansible-playbook k8s_dgx.yml
@@ -138,7 +138,7 @@ then redeploy the SGLang/vLLM instances (e.g. `ansible-playbook k8s_dgx.yml
 
 | | `false` (default) | `true` |
 |---|---|---|
-| hostPath | `hf_cache_path` (`/var/lib/hf-cache`, local NVMe) | `hf_cache_juicefs_path` (`/mnt/jfs`, JuiceFS) |
+| hostPath | `hf_cache_path` (`/var/lib/hf-cache`, local NVMe) | `hf_cache_juicefs_root` (`= juicefs_mount_path`, `/mnt/jfs`, JuiceFS) |
 | `type` | `DirectoryOrCreate` | `Directory` (fail loudly if JuiceFS isn't mounted) |
 | `mountPropagation` | `None` | `HostToContainer` (survive a JuiceFS FUSE remount) |
 
@@ -153,8 +153,10 @@ then redeploy the SGLang/vLLM instances (e.g. `ansible-playbook k8s_dgx.yml
    (`roles/k8s_dgx/files/hf_preload_download.py:26`, `:154`; a CLAUDE.md rule).
    So the container path `/root/.cache/huggingface` stays fixed and the JuiceFS
    **root** is mapped onto it → `hub` at `/mnt/jfs/hub` matches the hardcoded
-   `cache_dir`. This is why **Phase 3 seeds to `/mnt/jfs/` (root)**, and why
-   `hf_cache_juicefs_path` must equal the role's `juicefs_mount_path`.
+   `cache_dir`. This is why **Phase 3 seeds to `/mnt/jfs/` (root)**.
+   `hf_cache_juicefs_root` is DERIVED from `juicefs_mount_path` (promoted to
+   `group_vars/all/main.yml`), so the HF-cache hostPath can never drift from the
+   FUSE mountpoint — change `juicefs_mount_path` and both follow.
 
 > **If you later want JuiceFS to host more than the HF cache**, switch to the
 > `HF_HOME=/mnt/jfs/hf` layout instead — but then also update the hardcoded
@@ -180,7 +182,7 @@ need **no change** — leave their hostPath at `{{ hf_cache_path }}/...`.
 
 With `hub`/`moe_configs` shared, the manual fan-out is redundant. Rather than
 delete it (so the flag stays reversible), both tasks emit an **empty**
-`RSYNC_TARGETS` when `hf_cache_on_juicefs` is on, and the scripts already no-op
+`RSYNC_TARGETS` when `hf_hub_cache_on_juicefs` is on, and the scripts already no-op
 on an empty target list — **no script change**:
 
 - `roles/k8s_dgx/tasks/hf_preload.yml` — `RSYNC_TARGETS` → `''`;
@@ -239,7 +241,7 @@ juicefs_cache_size_mib: 600_000   # ~586 GiB, once the local hub copy is gone
 
 ## 10. Rollback
 
-Set `hf_cache_on_juicefs: false` and redeploy. Because Phase 6 is deferred until
+Set `hf_hub_cache_on_juicefs: false` and redeploy. Because Phase 6 is deferred until
 after a confirmed cutover, the full local copy is still on each spark, so
 rollback is a flag flip + redeploy with no data loss.
 

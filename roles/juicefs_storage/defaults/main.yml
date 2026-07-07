@@ -64,7 +64,8 @@ juicefs_disk_path: /mnt/jfs-usb
 juicefs_rustfs_data_dir: "{{ juicefs_disk_path }}/rustfs"
 
 # Host mountpoint of the shared FS on every mount node.
-juicefs_mount_path: /mnt/jfs
+# PROMOTED to group_vars/all/main.yml (k8s_dgx derives hf_cache_juicefs_root
+# from it, cross-play). Do NOT redefine here — a role default would be shadowed.
 # Per-node local read cache on the NVMe.
 juicefs_cache_dir: /var/lib/jfs-cache
 # Per-node cache size in MiB (JuiceFS unit is MiB). Keep well below free NVMe.

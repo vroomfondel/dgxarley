@@ -73,9 +73,9 @@
                   - name: HF_CACHE_HOST_PATH
                     value: "{{ hf_cache_path }}"
                   - name: RSYNC_TARGETS
-                    # Empty when hf_cache_on_juicefs → the tune script no-ops the rsync fan-out
+                    # Empty when hf_hub_cache_on_juicefs → the tune script no-ops the rsync fan-out
                     # (moe_configs already lands on the shared JuiceFS namespace).
-                    value: "{{ '' if hf_cache_on_juicefs | bool else (range(2, sglang_nnodes | int + 1) | map('string') | map('regex_replace', '^(.+)$', 'spark\\1') | map('extract', hostvars, 'ansible_host') | join(',')) }}"
+                    value: "{{ '' if hf_hub_cache_on_juicefs | bool else (range(2, sglang_nnodes | int + 1) | map('string') | map('regex_replace', '^(.+)$', 'spark\\1') | map('extract', hostvars, 'ansible_host') | join(',')) }}"
                   - name: FORCE_RETUNE
                     value: "{{ sglang_force_retune | default('false') }}"
                   - name: SGLANG_TUNE_BRANCH
@@ -94,7 +94,7 @@
                     mountPath: /root/.cache/huggingface
                     # HostToContainer when JuiceFS-backed (survive a FUSE remount);
                     # None for a plain local dir. Same gate as the SGLang pods.
-                    mountPropagation: "{{ 'HostToContainer' if hf_cache_on_juicefs | bool else 'None' }}"
+                    mountPropagation: "{{ 'HostToContainer' if hf_hub_cache_on_juicefs | bool else 'None' }}"
                   - name: tune-script
                     mountPath: /scripts
                     readOnly: true
@@ -104,12 +104,12 @@
             volumes:
               - name: hf-cache
                 hostPath:
-                  # hf_cache_on_juicefs: write moe_configs straight into the shared
+                  # hf_hub_cache_on_juicefs: write moe_configs straight into the shared
                   # JuiceFS (its root maps onto /root/.cache/huggingface) vs local
                   # NVMe. When on JuiceFS the rsync fan-out is skipped
                   # (RSYNC_TARGETS='') because every node already sees this write.
-                  path: "{{ hf_cache_juicefs_path if hf_cache_on_juicefs | bool else hf_cache_path }}"
-                  type: "{{ 'Directory' if hf_cache_on_juicefs | bool else 'DirectoryOrCreate' }}"
+                  path: "{{ hf_cache_juicefs_root if hf_hub_cache_on_juicefs | bool else hf_cache_path }}"
+                  type: "{{ 'Directory' if hf_hub_cache_on_juicefs | bool else 'DirectoryOrCreate' }}"
               - name: tune-script
                 configMap:
                   name: sglang-tune-moe-script

@@ -412,7 +412,7 @@
                     mountPath: /root/.cache/huggingface
                     # HostToContainer when JuiceFS-backed so the pod survives a
                     # JuiceFS FUSE remount; None (default) for a plain local dir.
-                    mountPropagation: "{{ 'HostToContainer' if hf_cache_on_juicefs | bool else 'None' }}"
+                    mountPropagation: "{{ 'HostToContainer' if hf_hub_cache_on_juicefs | bool else 'None' }}"
                   - name: model-download-script
                     mountPath: /scripts
                     readOnly: true
@@ -486,7 +486,7 @@
                     mountPath: /root/.cache/huggingface
                     # HostToContainer when JuiceFS-backed so the pod survives a
                     # JuiceFS FUSE remount; None (default) for a plain local dir.
-                    mountPropagation: "{{ 'HostToContainer' if hf_cache_on_juicefs | bool else 'None' }}"
+                    mountPropagation: "{{ 'HostToContainer' if hf_hub_cache_on_juicefs | bool else 'None' }}"
                   - name: flashinfer-cache
                     mountPath: /root/.cache/flashinfer_persistent
                   - name: triton-cache
@@ -499,11 +499,11 @@
             volumes:
               - name: hf-cache
                 hostPath:
-                  # hf_cache_on_juicefs: shared JuiceFS (its root maps onto
+                  # hf_hub_cache_on_juicefs: shared JuiceFS (its root maps onto
                   # /root/.cache/huggingface → hub at <mount>/hub) vs local NVMe.
                   # type Directory when on JuiceFS → fail loudly if not mounted.
-                  path: "{{ hf_cache_juicefs_path if hf_cache_on_juicefs | bool else hf_cache_path }}"
-                  type: "{{ 'Directory' if hf_cache_on_juicefs | bool else 'DirectoryOrCreate' }}"
+                  path: "{{ hf_cache_juicefs_root if hf_hub_cache_on_juicefs | bool else hf_cache_path }}"
+                  type: "{{ 'Directory' if hf_hub_cache_on_juicefs | bool else 'DirectoryOrCreate' }}"
               - name: flashinfer-cache
                 hostPath:
                   path: "{{ hf_cache_path }}/flashinfer_cache"
@@ -596,7 +596,7 @@
                     mountPath: /root/.cache/huggingface
                     # HostToContainer when JuiceFS-backed so the pod survives a
                     # JuiceFS FUSE remount; None (default) for a plain local dir.
-                    mountPropagation: "{{ 'HostToContainer' if hf_cache_on_juicefs | bool else 'None' }}"
+                    mountPropagation: "{{ 'HostToContainer' if hf_hub_cache_on_juicefs | bool else 'None' }}"
                   - name: model-download-script
                     mountPath: /scripts
                     readOnly: true
@@ -697,7 +697,7 @@
                     mountPath: /root/.cache/huggingface
                     # HostToContainer when JuiceFS-backed so the pod survives a
                     # JuiceFS FUSE remount; None (default) for a plain local dir.
-                    mountPropagation: "{{ 'HostToContainer' if hf_cache_on_juicefs | bool else 'None' }}"
+                    mountPropagation: "{{ 'HostToContainer' if hf_hub_cache_on_juicefs | bool else 'None' }}"
                   - name: flashinfer-cache
                     mountPath: /root/.cache/flashinfer_persistent
                   - name: triton-cache
@@ -720,11 +720,11 @@
             volumes:
               - name: hf-cache
                 hostPath:
-                  # hf_cache_on_juicefs: shared JuiceFS (its root maps onto
+                  # hf_hub_cache_on_juicefs: shared JuiceFS (its root maps onto
                   # /root/.cache/huggingface → hub at <mount>/hub) vs local NVMe.
                   # type Directory when on JuiceFS → fail loudly if not mounted.
-                  path: "{{ hf_cache_juicefs_path if hf_cache_on_juicefs | bool else hf_cache_path }}"
-                  type: "{{ 'Directory' if hf_cache_on_juicefs | bool else 'DirectoryOrCreate' }}"
+                  path: "{{ hf_cache_juicefs_root if hf_hub_cache_on_juicefs | bool else hf_cache_path }}"
+                  type: "{{ 'Directory' if hf_hub_cache_on_juicefs | bool else 'DirectoryOrCreate' }}"
               - name: flashinfer-cache
                 hostPath:
                   path: "{{ hf_cache_path }}/flashinfer_cache"

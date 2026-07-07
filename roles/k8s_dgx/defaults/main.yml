@@ -829,19 +829,21 @@ _vllm_shard_qsfp_ips: "{{ (_vllm_shard_qsfp_ips_sriov if qsfp_sriov_enabled | de
 
 # HuggingFace cache paths on DGX nodes
 hf_cache_path: "/var/lib/hf-cache"
-# When true, SGLang/vLLM pods consume the HuggingFace cache from the shared
-# JuiceFS mount (hf_cache_juicefs_path, mapped onto /root/.cache/huggingface)
+# When true, SGLang/vLLM pods consume the HuggingFace HUB model cache (hub/) from
+# the shared JuiceFS mount (hf_cache_juicefs_root, mapped onto /root/.cache/huggingface)
 # instead of per-node local NVMe (hf_cache_path), and the manual rsync fan-out in
 # hf_preload / sglang_tune_moe is disabled (JuiceFS is one shared namespace, so
 # no per-node copy is needed — RSYNC_TARGETS is emptied, scripts no-op). Node-
 # local JIT caches (flashinfer/triton/fa4) stay on hf_cache_path regardless.
 # Reversible: flip back to false + redeploy. Deploy the storage layer first
 # (roles/juicefs_storage). Full procedure: JUICEFS_MIGRATION_HOWTO.md.
-hf_cache_on_juicefs: false
-# FUSE mountpoint of the shared JuiceFS on each node. MUST match juicefs_mount_path
-# in the juicefs_storage role. Its ROOT maps onto /root/.cache/huggingface (so
-# hub → <path>/hub), keeping the download script's hardcoded cache_dir valid.
-hf_cache_juicefs_path: "/mnt/jfs"
+hf_hub_cache_on_juicefs: false
+# JuiceFS mount root used as the HF cache home (mapped onto /root/.cache/huggingface,
+# so hub → <root>/hub, keeping the download script's hardcoded cache_dir valid).
+# DERIVED from juicefs_mount_path (promoted to group_vars/all/main.yml) so it can
+# never drift from the FUSE mountpoint. Override to a subdir (e.g.
+# "{{ juicefs_mount_path }}/hf-cache") only if JuiceFS holds more than the HF cache.
+hf_cache_juicefs_root: "{{ juicefs_mount_path }}"
 hf_token: "hf_CHANGEME"
 # HuggingFace model pre-download Job
 hf_preload_models:

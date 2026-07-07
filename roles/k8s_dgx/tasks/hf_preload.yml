@@ -63,9 +63,9 @@
                     value: "{{ hf_preload_models | join(',') }}"
                   - name: RSYNC_TARGETS
                     # Use QSFP IPs (10.10.10.0/24, 200GbE) instead of management IPs for faster rsync.
-                    # Empty when hf_cache_on_juicefs → the download script no-ops the rsync fan-out
+                    # Empty when hf_hub_cache_on_juicefs → the download script no-ops the rsync fan-out
                     # (JuiceFS is one shared namespace; every node already sees the same cache).
-                    value: "{{ '' if hf_cache_on_juicefs | bool else (range(1, sglang_nnodes | int + 1) | reject('equalto', 2) | map('string') | map('regex_replace', '^(.+)$', 'qsfp_ip_spark\\1') | map('extract', vars) | join(' ')) }}"
+                    value: "{{ '' if hf_hub_cache_on_juicefs | bool else (range(1, sglang_nnodes | int + 1) | reject('equalto', 2) | map('string') | map('regex_replace', '^(.+)$', 'qsfp_ip_spark\\1') | map('extract', vars) | join(' ')) }}"
                   - name: HF_CACHE_HOST_PATH
                     value: "{{ hf_cache_path }}"
                 resources:
@@ -80,7 +80,7 @@
                     mountPath: /root/.cache/huggingface
                     # HostToContainer when JuiceFS-backed (survive a FUSE remount);
                     # None for a plain local dir. Same gate as the SGLang pods.
-                    mountPropagation: "{{ 'HostToContainer' if hf_cache_on_juicefs | bool else 'None' }}"
+                    mountPropagation: "{{ 'HostToContainer' if hf_hub_cache_on_juicefs | bool else 'None' }}"
                   - name: preload-script
                     mountPath: /scripts
                     readOnly: true
@@ -90,12 +90,12 @@
             volumes:
               - name: hf-cache
                 hostPath:
-                  # hf_cache_on_juicefs: download straight into the shared JuiceFS
+                  # hf_hub_cache_on_juicefs: download straight into the shared JuiceFS
                   # (its root maps onto /root/.cache/huggingface) vs local NVMe.
                   # When on JuiceFS the rsync fan-out is skipped (RSYNC_TARGETS='')
                   # because every node already sees this download.
-                  path: "{{ hf_cache_juicefs_path if hf_cache_on_juicefs | bool else hf_cache_path }}"
-                  type: "{{ 'Directory' if hf_cache_on_juicefs | bool else 'DirectoryOrCreate' }}"
+                  path: "{{ hf_cache_juicefs_root if hf_hub_cache_on_juicefs | bool else hf_cache_path }}"
+                  type: "{{ 'Directory' if hf_hub_cache_on_juicefs | bool else 'DirectoryOrCreate' }}"
               - name: preload-script
                 configMap:
                   name: hf-preload-script
