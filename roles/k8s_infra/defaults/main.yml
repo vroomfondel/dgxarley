@@ -325,6 +325,20 @@ hermes:
     # cross-container gateway liveness (GATEWAY_HEALTH_URL). Matches the image's
     # DEFAULT_PORT (gateway/platforms/api_server.py). localhost-only, same pod.
     gateway_api_port: 8642
+    # Port the `hermes dashboard` HTTP server itself listens on. The dashboard
+    # binds 0.0.0.0:<dashboard_port> directly and Traefik targets it — there is
+    # no auth proxy in front (the former Caddy sidecar on `proxy_port` is
+    # commented out in the templates/tasks). Auth is hermes' built-in
+    # BasicAuthProvider, engaged automatically by the non-loopback bind (see
+    # hermes_agent_deployment).
+    dashboard_port: 9119
+    # Bind address for `hermes dashboard`. 0.0.0.0 (non-loopback) is what engages
+    # hermes' own auth gate (`should_require_auth`) AND makes the WS Host/Origin
+    # guard accept the public Origin (`_is_accepted_host` returns True for
+    # 0.0.0.0) — so no Caddy Origin-rewrite is needed. Requires the `--insecure`
+    # launch flag, which no longer disables auth, only permits the non-loopback
+    # bind.
+    bind_host: "0.0.0.0"
     # NOTE: the former `dashboard_tui_default` gate was removed 2026-07. Upstream
     # dropped the `--tui` flag in v0.16.0 (PR #38591); the dashboard chat is on
     # by default now, so the gate was a no-op. See UPSTREAM_HERMES_AGENT_TUI_BUG.md.
