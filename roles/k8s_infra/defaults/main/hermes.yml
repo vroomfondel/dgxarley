@@ -190,14 +190,14 @@ hermes:
     image: "seafileltd/seadrive-fuse"
     image_tag: "latest"
 
-# Per-user list — real entries in group_vars/all/vault/.
+# Per-user list — real entries in group_vars/all/vault/hermes.yml.
 #
 # ⚠️  WHY THIS IS A SEPARATE TOP-LEVEL VAR (and NOT hermes.users):
 # Ansible's hash_behaviour defaults to `replace` (this repo does NOT set it to
 # `merge` — and that default is deprecated, so we don't rely on it). Under
 # `replace`, when the SAME dict key is defined in two files, the higher-precedence
 # file's value REPLACES the whole dict — sub-keys are NOT deep-merged.
-# The real user list lives in vault (group_vars/all/vault/). If it were
+# The real user list lives in vault (group_vars/all/vault/hermes.yml). If it were
 # `hermes.users`, that vault file would define `hermes:` with only the `users`
 # key — and being higher precedence, it would REPLACE the entire `hermes:` config
 # dict above, silently wiping namespace/image_tag/webui/seafile/… (every key).

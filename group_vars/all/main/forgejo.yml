@@ -1,6 +1,6 @@
 ---
 # Public dummy/example values — real values live in group_vars/all/vault/ (git-crypt).
-# Forgejo (Gitea fork) — dummy values; real secrets in group_vars/all/vault/.
+# Forgejo (Gitea fork) — dummy values; real secrets in group_vars/all/vault/forgejo.yml.
 # hash_behaviour=replace: vault.yml's `forgejo:` overrides this entirely, so the
 # operational keys are duplicated. Keep in sync with vault.yml and
 # roles/k8s_infra/defaults/main/forgejo.yml. DB password = postgresql_forgejo_password.

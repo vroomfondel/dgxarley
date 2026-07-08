@@ -3,7 +3,7 @@
 # Self-hosted git forge. DB lives on the shared PostgreSQL (postgresql_forgejo_password
 # above); all other secrets are in this dict. With hash_behaviour=replace, vault.yml's
 # `forgejo:` REPLACES this whole block — keep all keys in sync across this file,
-# group_vars/all/main/ and group_vars/all/vault/ (same rule as seafile).
+# group_vars/all/main/forgejo.yml and group_vars/all/vault/forgejo.yml (same rule as seafile).
 #   data_base      — /data (git repos + app.ini), hostPath on the NFS pool
 #   disable_ssh    — true = HTTPS-only (Traefik can't proxy raw TCP SSH)
 #   secret_key / internal_token / *_jwt_secret — symmetric keys; MUST be stable

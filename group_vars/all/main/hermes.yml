@@ -1,7 +1,7 @@
 ---
 # Public dummy/example values — real values live in group_vars/all/vault/ (git-crypt).
 # === Nous Hermes Agent (per-user deployments) — SCHEMA REFERENCE ===
-# Public schema documentation. Real entries live in group_vars/all/vault/
+# Public schema documentation. Real entries live in group_vars/all/vault/hermes.yml
 # (git-crypted) and override this list entirely. Default is `[]` from
 # roles/k8s_infra/defaults/main/hermes.yml — this dummy is purely illustrative.
 # `enabled: false` on every entry keeps it inert even if vault.yml is missing.
