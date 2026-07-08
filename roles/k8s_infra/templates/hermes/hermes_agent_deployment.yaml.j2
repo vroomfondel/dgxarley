@@ -84,6 +84,9 @@ spec:
         # email-patch: subPath ConfigMap mounts don't surface updates without a
         # restart. Consumed by the hermes-gateway sidecar (below), same as webui.
         checksum/email-patch: "{{ _email_enabled | bool }}:{{ lookup('file', 'hermes_email_gateway_patched.py') | hash('sha256') }}"
+        # health-patch: same subPath-doesn't-update reason as email-patch. Rolls
+        # the pod when the gateway health-endpoint patch changes (gateway only).
+        checksum/health-patch: "{{ _gateway_enabled | bool }}:{{ lookup('file', 'hermes_health_patch.py') | hash('sha256') }}"
         # seafile: rolls the pod to add/drop the seadrive sidecar and to pick up
         # rotated creds (hermes-seafile-<user> Secret is envFrom, read at start).
         checksum/seafile: "{{ _seafile_workspace }}:{{ (hermes.seafile.server_url ~ '|' ~ (item.email.address | default('?')) ~ '|' ~ (item.seafile.web_password | default('none'))) | hash('sha256') }}"
@@ -602,6 +605,17 @@ spec:
             - name: files
               mountPath: /workspace
 {% endif %}
+            # Health-endpoint patch (.py + .pth) into the venv site dir → makes
+            # this gateway's /health/detailed public so the dashboard probe stops
+            # logging a per-poll 401. subPath so siblings in site-packages survive.
+            - name: hermes-health-patch
+              mountPath: "{{ hermes.venv_site_packages }}/hermes_health_patch.py"
+              subPath: hermes_health_patch.py
+              readOnly: true
+            - name: hermes-health-patch
+              mountPath: "{{ hermes.venv_site_packages }}/zz_hermes_health_patch.pth"
+              subPath: zz_hermes_health_patch.pth
+              readOnly: true
 {% if _email_enabled %}
             # dgxarley local patch over plugins/platforms/email/adapter.py
             # (Working/Done lifecycle, IMAP APPEND, PROCESS_EXISTING) — same
@@ -671,6 +685,19 @@ spec:
         - name: seed-secret
           secret:
             secretName: "hermes-env-{{ item.username }}"
+{% if _gateway_enabled %}
+        # Gateway api_server health-patch (.py + .pth) — subPath-mounted into the
+        # venv site dir of the gateway sidecar. Shared ConfigMap; rendered by
+        # hermes.yml. Present whenever a gateway runs in this pod.
+        - name: hermes-health-patch
+          configMap:
+            name: hermes-health-patch
+            items:
+              - key: hermes_health_patch.py
+                path: hermes_health_patch.py
+              - key: zz_hermes_health_patch.pth
+                path: zz_hermes_health_patch.pth
+{% endif %}
 {% if _email_enabled %}
         # Single-file patch mount for the gateway sidecar's email adapter —
         # same ConfigMap the webui pod uses. Rendered by hermes.yml.

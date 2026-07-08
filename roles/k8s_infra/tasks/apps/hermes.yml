@@ -232,6 +232,31 @@
       data:
         adapter.py: "{{ lookup('file', 'hermes_email_gateway_patched.py') }}"
 
+# Gateway api_server health-endpoint patch — makes /health(/detailed) public so
+# the dashboard's unauthenticated liveness probe stops logging a per-poll 401
+# WARNING (and the "Gateway" badge gets the richer /health/detailed payload).
+# Upstream regression NousResearch/hermes-agent#56260 authenticated the endpoint
+# but never updated the probe; no upstream fix as of the pinned image. The .py is
+# imported at interpreter start via the zz_*.pth (both subPath-mounted into the
+# venv site dir of the gateway container). Shared across users (identical patch).
+- name: Render hermes gateway health-patch ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    apply: true  # kubectl-apply three-way merge → prune renamed/removed data keys
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: hermes-health-patch
+        namespace: "{{ hermes.namespace }}"
+        labels:
+          app: hermes
+      data:
+        hermes_health_patch.py: "{{ lookup('file', 'hermes_health_patch.py') }}"
+        # One-line .pth: site.py runs its import at startup (immune to the
+        # sitecustomize shadow). zz_ prefix so it sorts after other .pth files.
+        zz_hermes_health_patch.pth: "import hermes_health_patch\n"
+
 # Gateway-status refresher script — consumed by the gateway-state-refresh
 # sidecar in the webui pod. Keeps gateway_state.json's updated_at fresh WHILE
 # the email gateway holds its runtime flock, so the WebUI badge stays green
