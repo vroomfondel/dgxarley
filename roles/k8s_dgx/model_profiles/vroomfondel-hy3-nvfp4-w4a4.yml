@@ -28,8 +28,9 @@
 #   context. One 3.8B MTP head (at layers.80*) for EAGLE/MTP speculative decode.
 #   num_key_value_heads=8 → TP=4 gives 2 KV heads/GPU (clean). 192 experts → EP=4
 #   clean. ~148 GB FP4 weights + BF16 excludes → ~40 GB/GPU at TP=4 — FITS on the
-#   4× GB10 cluster (comparable to DeepSeek-V4-Flash's ~42 GB/GPU), with KV
-#   headroom only at a SHORT context (see context_length).
+#   4× GB10 cluster (comparable to DeepSeek-V4-Flash's ~42 GB/GPU). Each GB10 has
+#   128 GB unified memory (~120 GB usable) → ~40 GB weights leaves ~80 GB/GPU free
+#   for KV — huge headroom, the full 256K window fits comfortably.
 #
 # Card's reference serving (2-node B200, NOT this cluster):
 #   python3 -m sglang.launch_server --model ./Hy3-NVFP4-W4A4 \
@@ -56,11 +57,10 @@ _model_profile:
     reasoning_parser: "hunyuan"     # Hy3 is a hybrid fast/slow-thinking model
 
     # --- Context: native 256K (full window) ---
-    # Base supports 262144. ⚠ The card explicitly says start LOW on GB10 (KV cache
-    # + interconnect are the limits) and its own example uses 32768 — the full
-    # 256K KV reservation is large on top of ~40 GB/GPU weights, so first boot may
-    # OOM at KV alloc. If it does, drop mem_fraction_static in 0.02 steps, cap the
-    # KV pool via _sglang_active_max_total_tokens, or lower this back toward 32768.
+    # Base supports 262144, and it fits: ~40 GB/GPU weights leaves ~80 GB/GPU free
+    # on the 128 GB GB10, while one full 256K sequence's FP8 KV is only ~10 GB/GPU
+    # at TP=4. The card's "start low" note is generic GB10 caution — not a limit
+    # here. (Interconnect bandwidth, not memory, is the real long-context cost.)
     context_length: 262144
 
     # --- Quantization: modelopt_fp4 (unified HF checkpoint) ---
@@ -94,8 +94,9 @@ _model_profile:
     cuda_graph_max_bs: 32
     jit_max_jobs: 4
     pp_async_batch_depth: 0
-    # 0.70 = the modelopt_fp4 sibling's static reserve. NOTE: ~40 GB/GPU weights
-    # + FP8 KV; if first boot OOMs, drop in 0.02 steps or shorten context_length.
+    # 0.70 = the modelopt_fp4 sibling's post-weight KV reserve (fraction of the
+    # ~80 GB/GPU free AFTER weights → generous KV pool; not vLLM's total-fraction).
+    # Plenty for 256K here; only revisit if co-locating another instance.
     mem_fraction_static: "0.70"
     # EPLB off by default (routed_experts_weights_of_layer crashes on other MoE
     # families here); enable only after a clean baseline.
