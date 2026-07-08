@@ -392,7 +392,7 @@ docker push xomoxcc/comfyui:sm121-$(date +%Y%m%d)
 
 ## 9. Switching the Ansible role over
 
-Change `roles/k8s_dgx/defaults/main.yml`:
+Change `roles/k8s_dgx/defaults/main/`:
 
 ```yaml
 comfyui_image: "xomoxcc/comfyui:sm121"

@@ -8,7 +8,7 @@
 # prefix "sglang-embed"), ALWAYS single-node tp=1 on one spark — no NCCL/QSFP.
 # Launched by the minimal files/sglang_embed_launch.sh (selected via
 # is_embedding below), NOT the generation launcher. Consumers: LiteLLM embed
-# entry, honcho, hindsight, and OpenWebUI (via LiteLLM). See defaults/main.yml
+# entry, honcho, hindsight, and OpenWebUI (via LiteLLM). See defaults/main/
 # _sglang_embed_instance + enable_embedding_model gate.
 #
 # WHY Qwen3-Embedding and NOT bge-m3: bge-m3 is XLM-RoBERTa and hits sglang#7590
@@ -43,7 +43,7 @@ _model_profile:
     # auto-detect missed it (the embed launcher wires --quantization when non-empty).
     #
     # NOTE: most generation knobs (kv_cache_dtype/mem_fraction/attention_backend)
-    # are still resolved by defaults/main.yml even for the embed instance, so the
+    # are still resolved by defaults/main/sglang.yml even for the embed instance, so the
     # three no-default resolvers (context_length, kv_cache_dtype,
     # mem_fraction_static) MUST be set here. The embed launcher consumes the full
     # resource envelope below (max_total_tokens, max_running_requests,

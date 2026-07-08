@@ -1,0 +1,31 @@
+---
+# ComfyUI — local image generation playground (FLUX.1-schnell by default).
+# Deploys to a single Spark, consumes one GPU time-slice share alongside SGLang.
+# Nothing is precompiled into the image; the container clones ComfyUI on first
+# start into hostPath and downloads the FLUX.1-schnell fp8 single-file checkpoint
+# (~17 GB, Apache-2.0, no HF gating) into models/checkpoints.
+# Enable-gate (import-level in tasks/main.yml). false = NOT deployed (no
+# namespace, no DNS). Teardown opt-in: `-e comfyui_teardown=true` deletes the
+# comfyui namespace and removes its DNS A record.
+comfyui_enabled: false
+comfyui_teardown: false
+comfyui_namespace: "comfyui"
+# Custom image built by scripts/build_comfyui_image.sh on top of NGC PyTorch
+# (nvcr.io/nvidia/pytorch:26.03-py3 default since 2026-04-26). NGC base is
+# the only verified-correct sm121 SDPA option — scitrera-pipeline bases ship
+# a torch wheel with silently broken EFFICIENT_ATTENTION. See
+# UPSTREAM_PYTORCH_SDPA_SM121.md / COMFYUI_PROMPT_FAIL.md for the diagnosis,
+# and COMFYUI_ARM64_SM121.md / scripts/comfyui/Dockerfile for the build.
+comfyui_image: "xomoxcc/comfyui:sm121"
+comfyui_port: 8188
+# Which Spark to pin ComfyUI to. spark4 is the least disruptive default (last
+# SGLang worker; during image generation only rank 3 takes a latency hit).
+comfyui_spark_id: "4"
+# hostPath root on the chosen Spark. Holds the ComfyUI checkout, venv markers,
+# model checkpoints and generated outputs. Nothing inside is managed by Ansible
+# — create/destroy happens inside the container on first launch.
+comfyui_hostpath_base: "/var/lib/k8s-data/comfyui"
+# Initial model to download. Single-file checkpoint from Comfy-Org (packs UNet,
+# CLIP, T5, VAE). Set to "" to skip model download (manual upload via UI).
+comfyui_flux_schnell_repo: "Comfy-Org/flux1-schnell"
+comfyui_flux_schnell_file: "flux1-schnell-fp8.safetensors"

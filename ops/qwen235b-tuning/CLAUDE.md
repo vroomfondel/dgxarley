@@ -119,7 +119,7 @@ presence_penalty=1.0  frequency_penalty=0.0  repetition_penalty=0.0
 For the final commit, add `sampling_overrides` to the Qwen Thinking model profile in:
 
 ```
-roles/k8s_dgx/defaults/main.yml
+roles/k8s_dgx/defaults/main/
 ```
 
 Under `sglang_model_profiles` → `"QuantTrio/Qwen3-235B-A22B-Thinking-2507-AWQ"`, uncomment/update the `sampling_overrides` dict with the optimal values found. Example:
