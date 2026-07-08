@@ -205,7 +205,7 @@
           {% if litellm_guardrails | length > 0 %}
 
           # Guardrails — rendered only when litellm_guardrails is non-empty.
-          # See defaults/main.yml for the commented catalogue of examples.
+          # See defaults/main/litellm.yml for the commented catalogue of examples.
           guardrails:
           {% for entry in litellm_guardrails %}
             - guardrail_name: "{{ entry.guardrail_name }}"
@@ -457,7 +457,7 @@
 # Currently disabled — consumers pass the master_key (or a hand-provisioned
 # virtual key from vault) directly via plain variables. Uncomment the block
 # below when you want Ansible to manage the key lifecycle idempotently.
-# Define the key list as litellm_virtual_keys in group_vars/all/main.yml (or
+# Define the key list as litellm_virtual_keys in group_vars/all/main/litellm.yml (or
 # vault if metadata is sensitive).
 #
 # - name: Wait for litellm /health/readiness before provisioning keys

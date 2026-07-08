@@ -1,0 +1,147 @@
+---
+# Public dummy/example values — real values live in group_vars/all/vault/ (git-crypt).
+# LiteLLM
+litellm_master_key: "sk-changeme"
+# LiteLLM built-in Prometheus exporter (/metrics on the proxy port). Gated,
+# default ON. Renders `callbacks: ["prometheus"]` into litellm_settings. No
+# enterprise license needed (proxy_server.py mounts /metrics unconditionally on
+# the prometheus callback). Metrics carry model/key/team/deployment labels (e.g.
+# per-backend success + latency for the hermes-default alias). Single uvicorn
+# worker, so no PROMETHEUS_MULTIPROC_DIR needed. In group_vars/all so k8s_infra's
+# prometheus.yml can see it for the auth-gated scrape job below.
+litellm_enable_metrics: true
+# Gate /metrics behind auth. LiteLLM's own default is require_auth=TRUE (verified
+# in litellm/__init__.py: require_auth_for_metrics_endpoint=True), so an open
+# annotation scrape would 401. We default this to FALSE (open) so the
+# kubernetes-pods annotation scrape works out of the box — /metrics stays behind
+# the litellm-ip-allowlist externally, open in-cluster (same posture as SGLang).
+#   false → require_auth_for_metrics_endpoint: false + annotation scrape.
+#   true  → keep LiteLLM auth on; annotation scrape is dropped and Prometheus
+#           authenticates with litellm_master_key via a dedicated scrape_config
+#           (prometheus.yml). NOTE: any valid LiteLLM key can read /metrics — not
+#           scoped (issue #13644); prefer a dedicated virtual key in production.
+litellm_metrics_require_auth: false
+litellm_salt_key: "changeme-salt-key"
+litellm_ui_username: "admin"
+litellm_ui_password: "changeme"
+
+# LiteLLM virtual keys — metadata only. Actual sk-... tokens are generated at
+# runtime by the /key/generate API and persisted as K8s Secrets
+# litellm-vkey-<alias>. Consumer roles read these Secrets directly; nothing
+# sensitive leaks into git.
+litellm_virtual_keys:
+  - key_alias: "openwebui-chat"
+    user_id: "openwebui-chat"
+    max_budget:
+    budget_duration: "30d"
+    tpm_limit: 0
+    rpm_limit: 0
+    models: []
+  - key_alias: "openwebui-embedding"
+    user_id: "openwebui-embedding"
+    max_budget:
+    budget_duration: "30d"
+    tpm_limit: 0
+    rpm_limit: 0
+    models: ["{{ ollama_embedding_model }}"]
+# --- LiteLLM coordinates ---
+litellm_namespace: "litellm"
+litellm_port: 4000
+# Stable LiteLLM alias for Hermes (and any other client that needs a session-
+# durable model name). Routes to whatever SGLang currently serves.
+litellm_hermes_alias_model: "hermes-default"
+# Switch for the vision alias when enable_vision_model is false:
+#   false (default) → the `vision-default` alias is DROPPED entirely; a request
+#                     for it 404s, and Hermes renders no auxiliary.vision slot.
+#   true            → keep `vision-default` ALIVE, pointed at the base model
+#                     (sglang_served_model_name). Enable this ONLY when the base
+#                     model is itself vision-capable (multimodal) — turning it on
+#                     is a statement that image requests route fine to the base.
+#                     It ALSO wires Hermes' auxiliary.vision slot at the same alias
+#                     (vision_model in roles/k8s_infra/defaults/main/hermes.yml), so image
+#                     tasks go to the base too. If the base is text-only, image
+#                     payloads degrade (ignored / error) — then leave this false.
+# Has NO effect when enable_vision_model is true (alias → real VL group as usual).
+litellm_vision_alias_fallback_to_base: false
+
+# Qwen3-VL vision companion (sglang-vision instance), wired EXACTLY like
+# hermes-default: the backend is registered in model_list under its REAL served
+# name (litellm_vision_model) and litellm_vision_alias_model is a router
+# model_group_alias onto it (see litellm_router_settings).
+# The alias NAME exists when vision is enabled OR the fallback switch is on; its
+# TARGET (litellm_vision_alias_target) is the real VL group when enabled, else the
+# base text group (fallback). With both off, the name is "" → router omits it.
+litellm_vision_alias_model: "{{ 'vision-default' if ((enable_vision_model | default(true)) or (litellm_vision_alias_fallback_to_base | default(false))) else '' }}"
+litellm_vision_model: "Qwen/Qwen3-VL-8B-Instruct-FP8"   # == served_model_name of the sglang-vision instance
+litellm_vision_alias_target: "{{ litellm_vision_model if (enable_vision_model | default(true)) else sglang_served_model_name }}"
+# Qwen3-Coder-Next companion (sglang-coder instance), wired the same way, gated on
+# enable_coder_model. litellm_coder_model == its served_model_name (the model id).
+litellm_coder_alias_model: "{{ 'coder-default' if (enable_coder_model | default(false)) else '' }}"
+litellm_coder_model: "RedHatAI/Qwen3-Coder-Next-NVFP4"   # == served_model_name of the sglang-coder instance
+# Embedding companion (sglang-embed instance), wired the same way, gated on
+# enable_embedding_model. litellm_embed_model == its served_model_name (the model
+# id). `embed-default` is a STABLE alias so honcho/hindsight/OpenWebUI keep
+# resolving embeddings across an embed-model swap (same benefit as hermes-default).
+litellm_embed_alias_model: "{{ 'embed-default' if (enable_embedding_model | default(false)) else '' }}"
+litellm_embed_model: "chroma-core/Qwen3-Embedding-4B-FP8-Dynamic"   # == served_model_name of the sglang-embed instance (FP8 quant)
+# litellm_model_list_append / _exclude below are PUBLIC DUMMY values. The REAL
+# ones live in group_vars/all/vault/ (its cloud entry carries a secret
+# api_key); vault.yml loads AFTER main.yml so it OVERRIDES these — the standard
+# public-dummy / vault-real pattern used throughout this repo. Because lists
+# REPLACE (never merge), the real vault `litellm_model_list_append` assembles
+# BOTH fragments in one definition (its cloud fragment + the vision fragment
+# below). Keep exactly ONE `litellm_model_list_append:` PER FILE — the only
+# sanctioned duplicate is this main↔vault dummy/real pair, never two in the same
+# group_vars dir. _litellm_vision_model_list is NOT a dummy: it's the actual
+# (non-secret) vision fragment, referenced by name from both this dummy and the
+# vault combine (gated to [] when enable_vision_model is false).
+_litellm_vision_model_list:
+  - model_name: "{{ litellm_vision_model }}"
+    litellm_params:
+      model: "openai/{{ litellm_vision_model }}"
+      api_base: "http://sglang-vision.{{ sglang_namespace }}.svc.cluster.local:{{ sglang_port }}/v1"
+      api_key: "none"
+      input_cost_per_token: "{{ litellm_default_input_cost_per_token }}"
+      output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
+    # Take the vision INSTANCE window (sglang_instances['vision'].context_length =
+    # 65536), NOT the profile (262144): this instance is TRIMMED via its
+    # max_total_tokens/context_length override, so the profile would over-advertise
+    # 4×. Generic across companions — a companion instance without its own
+    # context_length (e.g. coder) falls through to the profile. Advertised top-level
+    # in /v1/models (+ the vision-default alias) so clients auto-detect it.
+    model_info:
+      max_input_tokens: "{{ (sglang_instances['vision'] | default({})).context_length | default((sglang_model_profiles[litellm_vision_model] | default({})).context_length) | default(omit) }}"
+
+# Coder fragment — same shape, points at the in-cluster sglang-coder Service.
+# Also non-secret; referenced by name from both the dummy below and the vault
+# combine (gated to [] when enable_coder_model is false).
+_litellm_coder_model_list:
+  - model_name: "{{ litellm_coder_model }}"
+    litellm_params:
+      model: "openai/{{ litellm_coder_model }}"
+      api_base: "http://sglang-coder.{{ sglang_namespace }}.svc.cluster.local:{{ sglang_port }}/v1"
+      api_key: "none"
+      input_cost_per_token: "{{ litellm_default_input_cost_per_token }}"
+      output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
+
+# Embedding fragment — same shape, points at the in-cluster sglang-embed Service
+# (openai/ provider → /v1/embeddings; NO ollama/ TLS singleton needed). Non-secret;
+# referenced by name from both the dummy below and the vault combine (gated to []
+# when enable_embedding_model is false). model_name == the sglang-embed served name.
+_litellm_embed_model_list:
+  - model_name: "{{ litellm_embed_model }}"
+    litellm_params:
+      model: "openai/{{ litellm_embed_model }}"
+      api_base: "http://sglang-embed.{{ sglang_namespace }}.svc.cluster.local:{{ sglang_port }}/v1"
+      api_key: "none"
+      input_cost_per_token: "{{ litellm_default_input_cost_per_token }}"
+      output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
+
+# Dummy: vision + coder + embed (the non-secret subset). Real vault value = cloud +
+# the same three gated fragments.
+litellm_model_list_append: >-
+  {{ (_litellm_vision_model_list if (enable_vision_model | default(true)) else [])
+     + (_litellm_coder_model_list if (enable_coder_model | default(false)) else [])
+     + (_litellm_embed_model_list if (enable_embedding_model | default(false)) else []) }}
+# Dummy: exclude nothing. Real vault value drops the local ollama chat model.
+litellm_model_list_exclude: []

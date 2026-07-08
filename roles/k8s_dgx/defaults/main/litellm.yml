@@ -1,0 +1,354 @@
+---
+# ============================================================================
+# LiteLLM — OpenAI-compatible proxy aggregating multiple LLM backends.
+# Routes requests to SGLang, vLLM, and Ollama via unified API.
+# ============================================================================
+
+# Merged sampling defaults for the active SGLang model: recommended + overrides.
+# Injected into litellm_model_list via combine() so LiteLLM sends them as
+# per-request defaults (client params override these).
+_sglang_sampling_defaults: >-
+  {{ sglang_model_profiles[_sglang_active_model].recommended_sampling | default({})
+     | combine(sglang_model_profiles[_sglang_active_model].sampling_overrides | default({})) }}
+
+# extra_body defaults for the active SGLang model: chat_template_kwargs (reasoning
+# toggles like enable_thinking, low_effort). Passed as LiteLLM extra_body so clients
+# inherit reasoning defaults without explicit per-request config. Also flows to
+# SGLang server via --chat-template-kwargs (sglang_chat_template_kwargs) as a
+# server-side default. Per-request extra_body from clients overrides these.
+_sglang_extra_body_defaults: >-
+  {{ {'chat_template_kwargs': sglang_model_profiles[_sglang_active_model].chat_template_kwargs}
+     if sglang_model_profiles[_sglang_active_model].chat_template_kwargs is defined
+     else {} }}
+
+litellm_enabled: true
+# litellm_namespace lifted to group_vars/all/main/ (shared w/ k8s_infra)
+# Official BerriAI/LiteLLM image on GitHub Container Registry.
+# Tag choice: `main-stable` = release passed 12h load-test before publish
+# (https://docs.litellm.ai/docs/proxy/deploy#docker). `main-latest` tracks
+# HEAD of main and is NOT recommended for production. For pinned deploys
+# use a specific version tag, e.g. `v1.83.7-stable`.
+litellm_image: "ghcr.io/berriai/litellm:main-stable"
+# litellm_port lifted to group_vars/all/main/ (shared w/ k8s_infra)
+
+# Model list: each entry maps a model_name to a backend endpoint.
+# api_key defaults to "none" in the task template for local backends.
+# Sampling defaults are set per model here — LiteLLM passes them as request
+# defaults to the backend. Per-request params from the client override these.
+# This replaces the previous generation_config.json patching hack in launch.sh.
+# Per-model token pricing (USD per token). LiteLLM multiplies prompt_tokens by
+# input_cost_per_token and completion_tokens by output_cost_per_token to populate
+# the spend table (per-key / per-user / per-team budgets). Local GPU inference
+# has no $-per-token rate — but we deliberately mirror the hosted-SaaS price
+# for the same model, so LiteLLM's /spend/* reports directly answer the question
+# "what would this usage have cost on a SaaS provider?".
+#
+# Current defaults = OpenRouter weighted-average pricing for
+# qwen/qwen3.5-397b-a17b (checked 2026-04-19 across providers):
+#   OpenRouter (weighted):  $0.39 / $2.34 per 1M
+#   Alibaba Cloud official: $0.39 / $0.90 per 1M
+#   DeepInfra:              $0.54 / $3.40 per 1M
+#   Together AI / Novita:   $0.60 / $3.60 per 1M
+# OpenRouter-median picked as the middle-of-the-road community rate. This is
+# ~realistic for our primary SGLang model (nvidia/Qwen3.5-397B-A17B-NVFP4).
+#
+# Fallback reference (if the served model changes to something Claude-class):
+#   Anthropic Claude Sonnet 4.5: $3.00 / $15.00 per 1M
+#
+# Override per-model by adding input_cost_per_token / output_cost_per_token
+# directly in litellm_model_list. Set both to 0 to track tokens without
+# charging spend. All values are in USD — LiteLLM has no currency switch.
+# litellm_default_input_cost_per_token: 0.00000039   # $0.39 per 1M input  — OpenRouter Qwen3.5-397B median
+# litellm_default_output_cost_per_token: 0.00000234  # $2.34 per 1M output — OpenRouter Qwen3.5-397B median
+
+litellm_default_input_cost_per_token: 0.000003    # $3.00 per 1M input  — Anthropic Claude Sonnet 4.5 (≤200K ctx)
+litellm_default_output_cost_per_token: 0.000015   # $15.00 per 1M output — Anthropic Claude Sonnet 4.5 (≤200K ctx)
+
+
+# litellm_hermes_alias_model lifted to group_vars/all/main/ (shared w/ k8s_infra)
+
+
+# The effective model list LiteLLM renders. Composed (not replaced) so callers
+# can append/prepend/remove/MODIFY individual models without duplicating the base:
+#   litellm_model_list_prepend  — entries placed BEFORE the base list
+#   litellm_model_list_append   — entries placed AFTER the base list
+#   litellm_model_list_exclude  — model_names to drop from the BASE only (matched
+#                                 after Jinja renders nested {{ vars }}, so use the
+#                                 resolved name, e.g. the value of ollama_model)
+# exclude is applied to the base list ONLY — prepend/append always survive. To
+# MODIFY a base entry, exclude its model_name AND re-add it (with the same name and
+# your new params) via append/prepend. Leave _litellm_model_list_base alone so
+# default changes keep flowing through. Override the three vars in group/host_vars.
+litellm_model_list_prepend: []
+litellm_model_list_append: []
+litellm_model_list_exclude: []
+
+litellm_model_list: >-
+  {{ litellm_model_list_prepend
+     + (_litellm_model_list_base | rejectattr('model_name', 'in', litellm_model_list_exclude) | list)
+     + litellm_model_list_append }}
+
+_litellm_model_list_base:
+  - model_name: "{{ sglang_served_model_name }}"
+    litellm_params:
+      model: "openai/{{ sglang_served_model_name }}"
+      api_base: "http://sglang.{{ sglang_namespace }}.svc.cluster.local:{{ sglang_port }}/v1"
+      api_key: "none"
+      # Sampling defaults from _sglang_sampling_defaults (recommended + overrides):
+      temperature: "{{ _sglang_sampling_defaults.temperature | default(omit) }}"
+      top_p: "{{ _sglang_sampling_defaults.top_p | default(omit) }}"
+      top_k: "{{ _sglang_sampling_defaults.top_k | default(omit) }}"
+      presence_penalty: "{{ _sglang_sampling_defaults.presence_penalty | default(omit) }}"
+      frequency_penalty: "{{ _sglang_sampling_defaults.frequency_penalty | default(omit) }}"
+      repetition_penalty: "{{ _sglang_sampling_defaults.repetition_penalty | default(omit) }}"
+      min_p: "{{ _sglang_sampling_defaults.min_p | default(omit) }}"
+      # Reasoning defaults from _sglang_extra_body_defaults (chat_template_kwargs):
+      extra_body: "{{ _sglang_extra_body_defaults if _sglang_extra_body_defaults else omit }}"
+      # Forward `reasoning_effort` to the SGLang backend. With drop_params:false
+      # LiteLLM otherwise 400s on it for any model whose static support-map lacks
+      # it (e.g. RecViking/Mistral-Medium-3.5: reasoning is OFF by default, turned
+      # ON per request via reasoning_effort=high). allowed_openai_params whitelists
+      # the passthrough WITHOUT dropping it (drop_params:true would silently
+      # discard it → thinking never activates). Harmless for non-reasoning models:
+      # it's forwarded and ignored by a chat template that doesn't read it.
+      allowed_openai_params: ["reasoning_effort"]
+      # Spend tracking (nominal cost — edit litellm_default_*_cost_per_token above):
+      input_cost_per_token: "{{ litellm_default_input_cost_per_token }}"
+      output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
+    # We OWN this model's context, so take it STRAIGHT FROM THE REPO — no probe.
+    # (Probing an in-cluster backend for a value the repo already defines is pure
+    # ceremony — and from a control node it can't even reach the .svc anyway.) The
+    # generic context_probe mechanism (see the probe task in litellm.yml) is
+    # reserved for UPSTREAM models whose window we do NOT control — e.g. the cloud
+    # entries in the vault, which can drift upstream without the repo knowing.
+    # LiteLLM 1.91.0 surfaces model_info.max_input_tokens top-level in GET /v1/models
+    # AND resolves the hermes-default alias onto this group (create_model_info_response
+    # + router.get_model_group_info), so BOTH the real model and hermes-default
+    # report the window — exactly the field (max_input_tokens ∈ Hermes'
+    # _CONTEXT_LENGTH_KEYS) Hermes probes at <base>/models. Also feeds LiteLLM's own
+    # pre-call context checks + /model/info. Omitted if the profile has no
+    # context_length → the litellm.yml render gate drops model_info (no regression).
+    model_info:
+      max_input_tokens: "{{ (sglang_model_profiles[sglang_served_model_name] | default({})).context_length | default(omit) }}"
+    # ALTERNATIVELY:
+    #     context_probe:
+    #      url: "http://sglang.{{ sglang_namespace }}.svc.cluster.local:{{ sglang_port }}/v1/models"
+    #      method: "GET"
+    #      ctx_container: "data"            # SGLang /v1/models → data[].max_model_len
+    #      ctx_key_substr: "max_model_len"  # first key CONTAINING this → its int value
+    #      fallback: "{{ sglang_context_length }}"  # resolved profile/instance window
+
+  # NOTE: the stable "hermes-default" alias is NO LONGER a second model_list
+  # entry. A duplicate deployment pointing at the same SGLang backend produced
+  # two identical litellm_deployment_state series (same backend
+  # litellm_model_name, differing only in the opaque model_id) → two "healthy"
+  # tiles on the LiteLLM Grafana panel. It is now a router model_group_alias
+  # (see litellm_router_settings below): one deployment, alias resolves to the
+  # live model group, still listed in /v1/models and resumable across swaps.
+  # The original duplicate-deployment form is kept commented out below in case
+  # a future LiteLLM behaviour change makes the alias-as-deployment preferable:
+  #
+  # # Stable alias → current SGLang model. Same params as above; only model_name
+  # # differs. Set litellm_hermes_alias_model: "" to disable.
+  # - model_name: "{{ litellm_hermes_alias_model }}"
+  #   litellm_params:
+  #     model: "openai/{{ sglang_served_model_name }}"
+  #     api_base: "http://sglang.{{ sglang_namespace }}.svc.cluster.local:{{ sglang_port }}/v1"
+  #     api_key: "none"
+  #     temperature: "{{ _sglang_sampling_defaults.temperature | default(omit) }}"
+  #     top_p: "{{ _sglang_sampling_defaults.top_p | default(omit) }}"
+  #     top_k: "{{ _sglang_sampling_defaults.top_k | default(omit) }}"
+  #     presence_penalty: "{{ _sglang_sampling_defaults.presence_penalty | default(omit) }}"
+  #     frequency_penalty: "{{ _sglang_sampling_defaults.frequency_penalty | default(omit) }}"
+  #     repetition_penalty: "{{ _sglang_sampling_defaults.repetition_penalty | default(omit) }}"
+  #     min_p: "{{ _sglang_sampling_defaults.min_p | default(omit) }}"
+  #     extra_body: "{{ _sglang_extra_body_defaults if _sglang_extra_body_defaults else omit }}"
+  #     allowed_openai_params: ["reasoning_effort"]
+  #     input_cost_per_token: "{{ litellm_default_input_cost_per_token }}"
+  #     output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
+
+  # Ollama models via native LiteLLM providers (ollama/ for embeddings,
+  # ollama_chat/ for chat). LiteLLM's ollama provider forces TLS on all
+  # connections — each Ollama pod runs a stunnel sidecar (self-signed cert,
+  # port {{ ollama_tls_port }}) so the native provider works over HTTPS.
+  # ssl_verify: false skips certificate verification for the self-signed cert.
+  - model_name: "{{ ollama_embed_model }}"
+    litellm_params:
+      model: "ollama/{{ ollama_embed_model }}"
+      api_base: "https://ollama-embed.ollama.svc.cluster.local:{{ ollama_tls_port }}"
+      ssl_verify: false
+      input_cost_per_token: "{{ litellm_default_input_cost_per_token }}"
+      output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
+  - model_name: "{{ ollama_model }}"
+    litellm_params:
+      model: "ollama_chat/{{ ollama_model }}"
+      api_base: "https://ollama.ollama.svc.cluster.local:{{ ollama_tls_port }}"
+      ssl_verify: false
+      input_cost_per_token: "{{ litellm_default_input_cost_per_token }}"
+      output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
+
+
+# litellm_enable_metrics / litellm_metrics_require_auth live in group_vars/all/main/
+# (shared with k8s_infra's prometheus.yml, like litellm_port / litellm_master_key).
+
+# router_settings: rendered as the router_settings block in config.yaml.
+# model_group_alias maps stable alias names onto live SGLang model groups WITHOUT
+# a duplicate model_list deployment — keeps saved sessions resumable across model
+# swaps while leaving a SINGLE litellm_deployment_state series per backend (one
+# Grafana tile). Aliases stay visible in /v1/models so clients can select them.
+#   hermes-default  → sglang_served_model_name   (the default/active SGLang model)
+#   vision-default  → litellm_vision_alias_target (the sglang-vision companion when
+#                     enable_vision_model, else the base model when
+#                     litellm_vision_alias_fallback_to_base — see group_vars/all)
+#   coder-default   → litellm_coder_model         (the sglang-coder companion)
+#   embed-default   → litellm_embed_model          (the sglang-embed instance;
+#                     stable EMBEDDING alias — routes /v1/embeddings across swaps)
+# Each alias is gated independently: set its *_alias_model var to "" to omit it.
+# The coder alias additionally needs its *_model var (the target group, the real
+# served name registered via litellm_model_list_append in group_vars); the vision
+# alias resolves its target via litellm_vision_alias_target (VL or base fallback).
+litellm_router_settings: >-
+  {{ {'model_group_alias':
+        ({}
+         | combine({litellm_hermes_alias_model: sglang_served_model_name}
+                   if (litellm_hermes_alias_model | default('')) else {})
+         | combine({litellm_vision_alias_model: litellm_vision_alias_target}
+                   if ((litellm_vision_alias_model | default('')) and (litellm_vision_alias_target | default(''))) else {})
+         | combine({litellm_coder_alias_model: litellm_coder_model}
+                   if ((litellm_coder_alias_model | default('')) and (litellm_coder_model | default(''))) else {})
+         | combine({litellm_embed_alias_model: litellm_embed_model}
+                   if ((litellm_embed_alias_model | default('')) and (litellm_embed_model | default(''))) else {}))}
+     if ((litellm_hermes_alias_model | default(''))
+         or (litellm_vision_alias_model | default(''))
+         or (litellm_coder_alias_model | default(''))
+         or (litellm_embed_alias_model | default(''))) else {} }}
+
+# litellm_settings: rendered as the litellm_settings block in config.yaml
+litellm_settings:
+  num_retries: 2
+  # End-to-end timeout (seconds) for the full upstream response — NOT an idle
+  # timeout. Covers the entire request lifecycle from send to final byte.
+  # Must be >= the longest backend timeout (SGLang HAProxy: {{ sglang_haproxy_timeout }}s,
+  # vLLM: no proxy, but long-running thinking requests can take minutes).
+  # Kept in lockstep with sglang_haproxy_timeout (raised 4000 -> 8000 for long
+  # reasoning traces).
+  request_timeout: 8000
+  # drop_params: false — pass through backend-specific params (top_k, min_p,
+  # chat_template_kwargs, thinking_budget, custom logit processors, etc.)
+  # so clients can use SGLang/vLLM-native features via extra_body.
+  drop_params: false
+  # ssl_verify: false — global override for the ollama/ embedding provider bug.
+  # The ollama/ embedding codepath uses a module-level HTTP singleton that reads
+  # litellm.ssl_verify at creation time but ignores per-model ssl_verify config.
+  # This sets litellm.ssl_verify=False globally so the singleton skips cert
+  # verification for self-signed certs on our HAProxy TLS sidecars.
+  # See LITELLM_UPSTREAM_BUG.md for details.
+  ssl_verify: false
+
+
+# ============================================================================
+# Guardrails (DISABLED BY DEFAULT — uncomment entries to activate)
+# ============================================================================
+# Guardrails are pre/post/parallel hooks that inspect or modify prompts and
+# responses. Each entry becomes one item in the `guardrails:` block of
+# config.yaml. Rendering is gated: the ConfigMap task only emits the block
+# when `litellm_guardrails` is non-empty — see tasks/litellm.yml.
+#
+# Modes:
+#   pre_call      blocks/modifies prompt BEFORE LLM call (e.g. PII redaction)
+#   post_call     blocks/modifies response AFTER LLM call (e.g. toxicity filter)
+#   during_call   runs in parallel (cannot block, no added latency)
+#   logging_only  observe only, never intervene
+#
+# default_on:
+#   true   applies to every request globally ("Global Guardrail" in UI)
+#   false  opt-in per request (body: "guardrails":["name"]) or per key/team
+#
+# Reference: https://docs.litellm.ai/docs/proxy/guardrails/quick_start
+#
+# --- Recommended minimal on-prem set (no SaaS dependencies) ---
+#
+# litellm_guardrails:
+#   # 1) hide-secrets: built-in TruffleHog-based secret detector. Masks any
+#   #    accidentally-pasted API keys, AWS creds, SSH keys, JWTs etc. in prompts
+#   #    BEFORE they reach the LLM. Zero external deps, zero SaaS calls, local
+#   #    regex/entropy scan. Cheap insurance against credential leaks.
+#   - guardrail_name: "hide-secrets"
+#     litellm_params:
+#       guardrail: "hide-secrets"
+#       mode: "pre_call"
+#       default_on: true
+#
+#   # 2) presidio-pii-mask: Microsoft Presidio — PII detection + redaction
+#     #  (names, emails, IBANs, phone numbers, ID numbers, etc.). Requires the
+#     #  two Presidio containers running in-cluster (analyzer + anonymizer).
+#     #  Deploy via a separate role/task before enabling this guardrail.
+#     #  output_parse_pii: true also scrubs PII from the LLM's response.
+#   - guardrail_name: "presidio-pii-mask"
+#     litellm_params:
+#       guardrail: "presidio"
+#       mode: "pre_call"
+#       presidio_analyzer_api_base: "http://presidio-analyzer.guardrails.svc.cluster.local:3000"
+#       presidio_anonymizer_api_base: "http://presidio-anonymizer.guardrails.svc.cluster.local:5001"
+#       output_parse_pii: true
+#       default_on: false   # opt-in per key — not every workload wants PII redaction
+#
+# --- SaaS-based guardrails (require API keys in vault.yml) ---
+#
+#   # 3) lakera-prompt-injection: Prompt-injection & jailbreak detection.
+#     #  during_call mode = runs parallel to the LLM request, no added latency,
+#     #  but also cannot block — flags requests for later audit.
+#   - guardrail_name: "lakera-prompt-injection"
+#     litellm_params:
+#       guardrail: "lakera_v2"
+#       api_key: "os.environ/LAKERA_API_KEY"   # set via litellm-env Secret
+#       mode: "during_call"
+#       default_on: true
+#
+#   # 4) aporia: Content moderation, hallucination scoring, jailbreak detection.
+#   - guardrail_name: "aporia-pre"
+#     litellm_params:
+#       guardrail: "aporia"
+#       api_key: "os.environ/APORIA_API_KEY"
+#       api_base: "os.environ/APORIA_API_BASE"
+#       mode: "pre_call"
+#       default_on: false
+#
+#   # 5) openai_moderation: OpenAI /moderations endpoint (hate, violence, sexual,
+#     #  self-harm categories). Requires OPENAI_API_KEY — sends prompt text to
+#     #  OpenAI, NOT recommended if our on-prem goal is data sovereignty.
+#   - guardrail_name: "openai-moderation"
+#     litellm_params:
+#       guardrail: "openai_moderation"
+#       api_key: "os.environ/OPENAI_API_KEY"
+#       mode: "pre_call"
+#       default_on: false
+#
+#   # 6) bedrock: AWS Bedrock Guardrails — denied topics, content filters,
+#     #  word-policy, PII. Requires AWS creds. Guardrail must be pre-created
+#     #  in the AWS console; supply its ID + version here.
+#   - guardrail_name: "bedrock-content-filter"
+#     litellm_params:
+#       guardrail: "bedrock"
+#       guardrailIdentifier: "os.environ/BEDROCK_GUARDRAIL_ID"
+#       guardrailVersion: "DRAFT"
+#       mode: "pre_call"
+#       default_on: false
+#
+# --- Self-written custom guardrail ---
+#
+#   # 7) custom: Python class extending litellm.integrations.custom_guardrail.
+#     #  CustomGuardrail — mounted into the pod via ConfigMap/PVC. Useful for
+#     #  domain-specific rules (keyword blacklists, regex, LLM-as-judge etc.).
+#     #  See docs: https://docs.litellm.ai/docs/proxy/guardrails/custom_guardrail
+#   - guardrail_name: "domain-blacklist"
+#     litellm_params:
+#       guardrail: "custom_guardrail.MyGuardrail"
+#       mode: "pre_call"
+#       default_on: false
+
+# Empty default — guardrails block is omitted from config.yaml when empty.
+litellm_guardrails: []
+
+# Hermes / Honcho / Hindsight config moved to roles/k8s_infra/defaults/main/
+# (those services moved to the k8s_infra role).
