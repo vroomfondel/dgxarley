@@ -480,7 +480,7 @@ sglang_port: 8000
 # sglang_model: "zai-org/GLM-4.7-FP8"
 # sglang_model: "nvidia/GLM-4.7-NVFP4"
 # sglang_model: "nvidia/GLM-5-NVFP4"
-# sglang_model: "lukealonso/GLM-5.2-NVFP4"                       # 744B/40B MoE (256 exp/8 active +1 shared), GlmMoeDsa (MLA+DSA), NVFP4 (modelopt, community) → PP=4/TP=1 (EP4/TP4 OOMs); 1M ctx. UNVALIDATED first-contact
+# sglang_model: "nvidia/GLM-5.2-NVFP4"                          # 753B/40B MoE (256 exp/8 active +1 shared), GlmMoeDsa (MLA+DSA), NVFP4 (modelopt, official NVIDIA) → PP=4/TP=1 (EP4/TP4 OOMs); 1M ctx; needs transformers>=5.3.0. UNVALIDATED first-contact
 # sglang_model: "0xSero/GLM-5.2-504B"                           # ~504B GLM-5.2 REAP keep-168 (256→168 exp, 34% pruned) + Router-KD, NVFP4 (modelopt) → PP=4/TP=1; MTP/NEXTN on; min_p=0.05+rep_pen anti-loop guardrail. UNVALIDATED first-contact
 #
 # --- Hermes (Nous Research) ---
@@ -526,11 +526,10 @@ sglang_model: "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
 # sglang_model: "nvidia/Qwen3.5-397B-A17B-NVFP4"
 # --- Qwen3.6 ---
 # sglang_model: "Qwen/Qwen3.6-27B-FP8"
-# sglang_model: "mmangkad/Qwen3.6-27B-NVFP4"                     # 27B dense NVFP4 (modelopt), Gated DeltaNet+Attention; FP8 sibling above
+# sglang_model: "nvidia/Qwen3.6-27B-NVFP4"                      # 27B dense NVFP4 (modelopt MIXED_PRECISION → needs sglang_launch.sh _sgl_mixed_nvfp4_* patch), Gated DeltaNet+Attention; FP8 sibling above
 # sglang_model: "Qwen/Qwen3.6-35B-A3B-FP8"
-# sglang_model: "RedHatAI/Qwen3.6-35B-A3B-NVFP4"
-# sglang_model: "nvidia/Qwen3.6-35B-A3B-NVFP4"
-# sglang_model: "mmangkad/Qwen3.6-35B-A3B-NVFP4"                 # 35B/3B MoE NVFP4 (modelopt) — fallback to the RedHatAI compressed-tensors variant above
+# sglang_model: "RedHatAI/Qwen3.6-35B-A3B-NVFP4"                # 35B/3B MoE, uniform NVFP4 (compressed-tensors) — patch-free winner
+# sglang_model: "nvidia/Qwen3.6-35B-A3B-NVFP4"                  # 35B/3B MoE NVFP4 (modelopt MIXED_PRECISION → needs sglang_launch.sh _sgl_mixed_nvfp4_* patch)
 #
 # --- Qwen3-VL (multimodal companion) ---
 # sglang_model: "Qwen/Qwen3-VL-8B-Instruct-FP8"                  # 8B dense multimodal (vision), block-128 FP8, 256K ctx → ~9 GB, tp=1. Vision companion for the text-only Nemotron; run as its OWN instance (see sglang_instances). UNVALIDATED first-contact

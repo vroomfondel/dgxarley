@@ -40,7 +40,7 @@ _model_profile:
     # execute. Without it, transformers refuses to load the model class.
     trust_remote_code: true
     # Untested on DGX Spark — values below are initial defaults inherited from
-    # nvidia/GLM-5-NVFP4 / lukealonso/GLM-5.2-NVFP4, pending a test matrix for this
+    # nvidia/GLM-5-NVFP4 / nvidia/GLM-5.2-NVFP4, pending a test matrix for this
     # checkpoint.
     moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
