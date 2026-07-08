@@ -743,7 +743,7 @@ Image: ${IMAGE_TAG}
 
 Next steps:
 
-1. Bump comfyui_image in roles/k8s_dgx/defaults/main.yml:
+1. Bump comfyui_image in roles/k8s_dgx/defaults/main/comfyui.yml:
      comfyui_image: "${IMAGE_TAG}"
 
 2. Simplify roles/k8s_dgx/tasks/comfyui.yml: the git-clone + pip-install

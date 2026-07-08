@@ -1483,7 +1483,7 @@ Image: ${IMAGE_TAG}
 
 Next steps (on the x86 control host in ~/pythondev_workspace/dgxarley):
 
-1. Bump sglang_image in roles/k8s_dgx/defaults/main.yml:
+1. Bump default_sglang_image in roles/k8s_dgx/defaults/main/sglang.yml:
      sglang_image: "${IMAGE_TAG}"
 
 2. Bump SGLANG_EXPECTED_IMAGE in roles/k8s_dgx/files/sglang_launch.sh:
