@@ -25,6 +25,6 @@ wifi_access_points: []
 
 # NFS server exports — only applied when `isnfsmaster: true`.
 # Schema: list of { path, clients: [{ cidr, options? }], owner?, group?, mode? }
-# Define in host_vars/<host>/vault.yml (e.g. host_vars/k3smaster/vault.yml).
+# Define in host_vars/<host>/vault/ (e.g. host_vars/k3smaster/vault/nfs.yml).
 nfs_exports: []
 nfs_exports_default_options: "rw,sync,no_subtree_check,no_root_squash"
