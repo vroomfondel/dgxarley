@@ -6,7 +6,7 @@ JuiceFS filesystem (`roles/juicefs_storage`), while keeping node-local JIT cache
 local.
 
 > Status of this doc's changes — the wiring is **already in the repo, gated OFF**:
-> - `hf_hub_cache_on_juicefs: false` (`roles/k8s_dgx/defaults/main.yml`) — the master
+> - `hf_hub_cache_on_juicefs: false` (`roles/k8s_dgx/defaults/main/`) — the master
 >   switch. Flipping it to `true` routes the SGLang/vLLM HF cache to JuiceFS and
 >   no-ops the rsync fan-out. Everything below is done via **this one flag**, not
 >   manual file edits.
@@ -46,11 +46,13 @@ risk for no benefit.
 
 ## 2. Prerequisites
 
-- The USB-SSD is physically attached to `juicefs_storage_node` (currently
-  `spark1`; `roles/juicefs_storage/defaults/main.yml:17`) and mounted at
-  `juicefs_disk_path` (`/mnt/jfs-usb`). The role refuses to run if it isn't a
-  real mountpoint (`juicefs_require_disk_mount: true`).
-- Real secrets set in `group_vars/all/vault.yml` (they are dummies in the role
+- The USB disk is physically attached to `juicefs_storage_node` and mounted at
+  `juicefs_disk_path`. The real values for both live in
+  `group_vars/all/vault/` (public dummies: `spark1` in
+  `group_vars/all/main/`, `/mnt/jfs-usb` in the role defaults). The role
+  refuses to run if the path isn't a real mountpoint
+  (`juicefs_require_disk_mount: true`).
+- Real secrets set in `group_vars/all/vault/` (they are dummies in the role
   defaults): `juicefs_rustfs_access_key`, `juicefs_rustfs_secret_key`,
   `juicefs_valkey_password`.
 - Free space check: each spark currently has only ~200 GiB free until the old
@@ -129,7 +131,7 @@ The pod wiring is already in `roles/k8s_dgx/tasks/sglang_instance.yml`, gated by
 `hf_hub_cache_on_juicefs`. Set it (globally or per-play):
 
 ```yaml
-# roles/k8s_dgx/defaults/main.yml  (or -e hf_hub_cache_on_juicefs=true)
+# roles/k8s_dgx/defaults/main/  (or -e hf_hub_cache_on_juicefs=true)
 hf_hub_cache_on_juicefs: true
 ```
 
@@ -155,7 +157,7 @@ then redeploy the SGLang/vLLM instances (e.g. `ansible-playbook k8s_dgx.yml
    **root** is mapped onto it → `hub` at `/mnt/jfs/hub` matches the hardcoded
    `cache_dir`. This is why **Phase 3 seeds to `/mnt/jfs/` (root)**.
    `hf_cache_juicefs_root` is DERIVED from `juicefs_mount_path` (promoted to
-   `group_vars/all/main.yml`), so the HF-cache hostPath can never drift from the
+   `group_vars/all/main/`), so the HF-cache hostPath can never drift from the
    FUSE mountpoint — change `juicefs_mount_path` and both follow.
 
 > **If you later want JuiceFS to host more than the HF cache**, switch to the
@@ -267,7 +269,7 @@ iptables -A HTSTUFFIN -m state --state NEW -p tcp -m multiport --dport 6379,9000
 ```
 
 To make this possible, `juicefs_storage_node` and `juicefs_mount_master` were
-promoted to `group_vars/all/main.yml` (the `common` role needs cross-role
+promoted to `group_vars/all/main/` (the `common` role needs cross-role
 visibility). So enabling master-mount is: set `juicefs_mount_master: true`, then
 re-run `common.yml` (firewall) **and** `storage.yml` (mount + dual-bind).
 
@@ -290,11 +292,163 @@ VLAN, not the 200GbE mesh — fine for light use, not for streaming large weight
 
 ---
 
-## 13. Open decisions before starting
+## 13. Moving the USB disk / storage node to another spark
 
-- **Storage node placement:** `juicefs_storage_node` (currently `spark1`) holds
-  the USB-SSD and runs Valkey+RustFS — single point of failure for the metadata
-  engine (mitigated by the meta-backup timer, not eliminated).
+Relocating the storage role from the current `juicefs_storage_node` (vault) to
+another spark is **three moves, not one**, because the pieces live in different
+places. Placeholders below: `<old-qsfp-ip>` / `<new-qsfp-ip>` = the QSFP IPs of
+the old/new storage node, `<disk-path>` = `juicefs_disk_path` (vault),
+`sparkN` = the target node.
+
+| Piece | Lives where | Moves with the disk? |
+|---|---|---|
+| Object data (all chunks) | `{{ juicefs_disk_path }}/rustfs` on the USB disk | ✅ yes |
+| **Metadata** (inodes, dir tree, chunk map) | Valkey — `/var/lib/valkey` on the storage **node's local disk** | ❌ **no** — must be dumped/loaded |
+| Bucket endpoint URL | **inside the metadata** (baked at format time: `http://<old QSFP IP>:9000/juicefs`) | ❌ must be rewritten (`juicefs config`) |
+| Valkey + RustFS services | systemd units on the storage node | ❌ redeployed by the role |
+| Client mount units | every mount node, dialing the old node's QSFP IP | ❌ re-rendered by the role |
+
+> ⚠️ **Never run a plain `ansible-playbook storage.yml` while the NEW node's
+> Valkey is still empty but the bucket already holds data.** The format step is
+> guarded only by `juicefs status` against Valkey — an empty Valkey looks
+> "unformatted", so it would format a FRESH filesystem of the same name into the
+> same bucket, orphaning/colliding with every existing object. During a move,
+> restore the metadata dump FIRST; bring the backend up with
+> `--tags juicefs_bin,juicefs_backend,juicefs_backup` only.
+
+**Downtime scope (both variants):** everything under `/mnt/jfs` is unavailable
+while the backend moves. With `hf_hub_cache_on_juicefs: true`, scale the
+SGLang/vLLM deployments to 0 first (the pods hold the FUSE mount). Traffic
+between sparks runs over the QSFP subnet, which the firewall blanket-trusts —
+no iptables change. (Exception: with `juicefs_mount_master: true`, the
+master-mount rule keys on `juicefs_storage_node` → also re-run `common.yml`.)
+
+### 13.1 Variant A — second (initially empty) disk on the target spark
+
+Downtime is short: the bulk copy happens over QSFP **while everything runs**,
+only the delta + metadata dance needs the stop window.
+
+1. **Prepare the new disk** on `sparkN`: partition/mkfs yourself (the role never
+   touches block devices), add an fstab entry (`UUID=... <mountpoint> ext4
+   defaults,nofail 0 2`), mount it. If the mountpoint differs from the current
+   `juicefs_disk_path`, update that var in `group_vars/all/vault/` later in
+   step 5.
+2. **Live pre-sync** of the object store over QSFP (chunks are write-once, so a
+   running first pass is safe; repeat until the delta is small):
+   ```bash
+   # on sparkN:
+   rsync -a --info=progress2 root@<old-qsfp-ip>:<disk-path>/rustfs/ <new-disk>/rustfs/
+   ```
+3. **Downtime starts** — stop consumers, then all mounts:
+   ```bash
+   # SGLang/vLLM down first if the HF cache is on JuiceFS, then on EVERY mount node:
+   systemctl stop juicefs-dgxfs
+   ```
+4. **On the old storage node** — dump metadata, freeze objects, final delta:
+   ```bash
+   set -a; . /etc/juicefs/dgxfs.env; set +a
+   juicefs dump --keep-secret-key redis://<old-qsfp-ip>:6379/1 /root/dgxfs-meta-move.json
+   systemctl stop rustfs
+   # final delta from sparkN (--delete: mirror exactly, drop since-deleted objects):
+   #   rsync -a --delete root@<old-qsfp-ip>:<disk-path>/rustfs/ <new-disk>/rustfs/
+   scp /root/dgxfs-meta-move.json root@sparkN:/root/
+   systemctl disable --now rustfs valkey-server
+   ```
+   (`--keep-secret-key` keeps the S3 secret inside the dump so the FS is
+   mountable right after load — delete the dump file once the move is verified.)
+5. **Repo:** set `juicefs_storage_node: sparkN` (and `juicefs_disk_path` if it
+   changed) in `group_vars/all/vault/`.
+6. **Backend bring-up on sparkN** (binaries + Valkey + RustFS + backup env —
+   deliberately WITHOUT the format/mount tags, see the warning above):
+   ```bash
+   ansible-playbook storage.yml --tags juicefs_bin,juicefs_backend,juicefs_backup
+   ```
+   Then fix object ownership — the `rustfs` system user gets a **different UID**
+   on each node, and rsync preserved the old one:
+   ```bash
+   # on sparkN:
+   systemctl stop rustfs && chown -R rustfs:rustfs <new-disk>/rustfs && systemctl start rustfs
+   ```
+7. **Restore metadata + rewrite the bucket endpoint** (on sparkN; Valkey is
+   empty after a fresh install — if a botched earlier attempt formatted it,
+   `valkey-cli -a <pw> -n 1 flushdb` first):
+   ```bash
+   set -a; . /etc/juicefs/dgxfs.env; set +a
+   juicefs load   redis://<sparkN-qsfp-ip>:6379/1 /root/dgxfs-meta-move.json
+   juicefs config redis://<sparkN-qsfp-ip>:6379/1 --bucket http://<sparkN-qsfp-ip>:9000/juicefs
+   juicefs status redis://<sparkN-qsfp-ip>:6379/1   # expect: name dgxfs, new bucket URL
+   ```
+8. **Full playbook run** — format is now correctly skipped (`status` succeeds),
+   every client's mount unit re-renders to the new address and restarts, and the
+   meta-backup cron migrates to sparkN (the role removes it elsewhere):
+   ```bash
+   ansible-playbook storage.yml
+   ```
+9. **Verify** (§9 checklist: `mountpoint`, cross-node read of a known model
+   file, sessions in `juicefs status`). Then clean up: delete
+   `/root/dgxfs-meta-move.json` on both nodes; keep the OLD disk + the old
+   node's `/var/lib/valkey` untouched for a few days — together they are a full,
+   consistent rollback (flip the vault var back + re-enable the old services).
+
+### 13.2 Variant B — "switch JuiceFS off", re-plug the same disk
+
+No second disk needed, but downtime lasts the whole move. "Switching JuiceFS
+off" = stopping the client mounts everywhere, then the backend services —
+in that order:
+
+1. **Downtime starts** — SGLang/vLLM down first (if the HF cache is on
+   JuiceFS), then on EVERY mount node:
+   ```bash
+   systemctl stop juicefs-dgxfs
+   ```
+2. **On the old storage node** — dump the metadata **onto the USB disk itself**
+   (so it travels with the disk), then shut the backend down and release the disk:
+   ```bash
+   set -a; . /etc/juicefs/dgxfs.env; set +a
+   juicefs dump --keep-secret-key redis://<old-qsfp-ip>:6379/1 <disk-path>/dgxfs-meta-move.json
+   systemctl disable --now rustfs valkey-server
+   umount <disk-path>
+   sed -i '\|<disk-path>|d' /etc/fstab && systemctl daemon-reload
+   ```
+3. **Re-plug** the disk into sparkN and mount it (the filesystem UUID travels
+   with the disk, so the fstab line is identical):
+   ```bash
+   # on sparkN:
+   echo "UUID=<disk-uuid> <disk-path> ext4 defaults,nofail 0 2" >> /etc/fstab
+   systemctl daemon-reload && mount <disk-path> && ls <disk-path>/rustfs
+   ```
+4. **Repo:** set `juicefs_storage_node: sparkN` in `group_vars/all/vault/`
+   (`juicefs_disk_path` stays unchanged).
+5. **Backend bring-up on sparkN** — same as Variant A step 6, including the
+   `chown -R rustfs:rustfs <disk-path>/rustfs` (different UID on the new node):
+   ```bash
+   ansible-playbook storage.yml --tags juicefs_bin,juicefs_backend,juicefs_backup
+   systemctl stop rustfs && chown -R rustfs:rustfs <disk-path>/rustfs && systemctl start rustfs
+   ```
+6. **Restore metadata + rewrite the bucket endpoint** — same as Variant A
+   step 7, with the dump read from `<disk-path>/dgxfs-meta-move.json`.
+7. **Full playbook run** (`ansible-playbook storage.yml`) — mounts come back on
+   all sparks, pointing at sparkN; backup cron migrates.
+8. **Verify** (§9 checklist), then delete `<disk-path>/dgxfs-meta-move.json`.
+   The old node's `/var/lib/valkey` remains an emergency metadata copy (as of
+   the dump moment) — wipe it after a few healthy days, along with its leftover
+   `/etc/rustfs` and `/etc/juicefs`.
+
+**Rollback of a failed move (both variants):** the old node still has the full
+Valkey data dir; Variant A additionally has the untouched old disk. Flip
+`juicefs_storage_node` back in the vault, re-plug/re-mount the disk on the old
+node (Variant B), `systemctl enable --now valkey-server rustfs` there, and run
+`ansible-playbook storage.yml` — the clients re-render back. Nothing was
+destroyed until you wiped the old copies in the last step.
+
+---
+
+## 14. Open decisions before starting
+
+- **Storage node placement:** `juicefs_storage_node` (real value in vault)
+  holds the USB disk and runs Valkey+RustFS — single point of failure for the
+  metadata engine (mitigated by the meta-backup timer, not eliminated). §13
+  documents how to relocate it.
 - **JuiceFS scope:** HF-cache-only (Phase 4a recommended path) vs. general
   shared FS (the README `HF_HOME` alternative). Decide before seeding, since it
   fixes the on-disk layout (`/mnt/jfs/hub` vs `/mnt/jfs/hf/hub`).
