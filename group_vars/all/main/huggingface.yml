@@ -1,0 +1,4 @@
+---
+# Public dummy/example values — real values live in group_vars/all/vault/ (git-crypt).
+# HuggingFace
+hf_token: "hf_CHANGEME"
