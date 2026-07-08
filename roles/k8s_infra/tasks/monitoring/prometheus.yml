@@ -315,7 +315,8 @@
             # and the key is rendered into this ConfigMap — prefer a scoped virtual
             # key in production rather than litellm_master_key.
             - job_name: 'litellm'
-              metrics_path: /metrics
+              # trailing slash: LiteLLM 307-redirects /metrics → /metrics/
+              metrics_path: /metrics/
               authorization:
                 type: Bearer
                 credentials: "{{ litellm_master_key }}"

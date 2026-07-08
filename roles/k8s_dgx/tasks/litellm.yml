@@ -275,7 +275,7 @@
               # over and this is "false" (kubernetes-pods job drops it).
               prometheus.io/scrape: "{{ (litellm_enable_metrics and not litellm_metrics_require_auth) | string | lower }}"
               prometheus.io/port: "{{ litellm_port | string }}"
-              prometheus.io/path: "/metrics"
+              prometheus.io/path: "/metrics/"   # trailing slash: LiteLLM 307-redirects /metrics → /metrics/
           spec:
             nodeSelector:
               kubernetes.io/arch: amd64
