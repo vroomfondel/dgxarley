@@ -21,4 +21,4 @@ nut_exporter_teardown: false
 nut_exporter_server: "192.168.124.100"
 nut_exporter_username: "monuser"
 nut_exporter_password: "changeme"
-# nut_ups_name, nut_ups_secondary_name — defined in group_vars/all/main/
+# nut_ups_name, nut_ups_secondary_name — defined in group_vars/all/main/nut.yml

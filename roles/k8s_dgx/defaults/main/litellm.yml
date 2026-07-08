@@ -22,14 +22,14 @@ _sglang_extra_body_defaults: >-
      else {} }}
 
 litellm_enabled: true
-# litellm_namespace lifted to group_vars/all/main/ (shared w/ k8s_infra)
+# litellm_namespace lifted to group_vars/all/main/litellm.yml (shared w/ k8s_infra)
 # Official BerriAI/LiteLLM image on GitHub Container Registry.
 # Tag choice: `main-stable` = release passed 12h load-test before publish
 # (https://docs.litellm.ai/docs/proxy/deploy#docker). `main-latest` tracks
 # HEAD of main and is NOT recommended for production. For pinned deploys
 # use a specific version tag, e.g. `v1.83.7-stable`.
 litellm_image: "ghcr.io/berriai/litellm:main-stable"
-# litellm_port lifted to group_vars/all/main/ (shared w/ k8s_infra)
+# litellm_port lifted to group_vars/all/main/litellm.yml (shared w/ k8s_infra)
 
 # Model list: each entry maps a model_name to a backend endpoint.
 # api_key defaults to "none" in the task template for local backends.
@@ -65,7 +65,7 @@ litellm_default_input_cost_per_token: 0.000003    # $3.00 per 1M input  — Anth
 litellm_default_output_cost_per_token: 0.000015   # $15.00 per 1M output — Anthropic Claude Sonnet 4.5 (≤200K ctx)
 
 
-# litellm_hermes_alias_model lifted to group_vars/all/main/ (shared w/ k8s_infra)
+# litellm_hermes_alias_model lifted to group_vars/all/main/litellm.yml (shared w/ k8s_infra)
 
 
 # The effective model list LiteLLM renders. Composed (not replaced) so callers
@@ -188,7 +188,7 @@ _litellm_model_list_base:
       output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
 
 
-# litellm_enable_metrics / litellm_metrics_require_auth live in group_vars/all/main/
+# litellm_enable_metrics / litellm_metrics_require_auth live in group_vars/all/main/litellm.yml
 # (shared with k8s_infra's prometheus.yml, like litellm_port / litellm_master_key).
 
 # router_settings: rendered as the router_settings block in config.yaml.
@@ -350,5 +350,5 @@ litellm_settings:
 # Empty default — guardrails block is omitted from config.yaml when empty.
 litellm_guardrails: []
 
-# Hermes / Honcho / Hindsight config moved to roles/k8s_infra/defaults/main/
+# Hermes / Honcho / Hindsight config moved to roles/k8s_infra/defaults/main/{hermes,honcho,hindsight}.yml
 # (those services moved to the k8s_infra role).

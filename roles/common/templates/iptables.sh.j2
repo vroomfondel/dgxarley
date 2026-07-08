@@ -77,7 +77,7 @@ iptables -A HTSTUFFIN -s {{ qsfp_vf_network }} -j RETURN
 # VLAN, which is otherwise closed for these ports. Only rendered ON the storage
 # node, only when juicefs_mount_master is on. requirepass + S3 keys still apply.
 # (juicefs_enabled / juicefs_storage_node / juicefs_mount_master live in
-# group_vars/all/main.yml; nothing opens while the layer is not deployed.)
+# group_vars/all/main/juicefs.yml; nothing opens while the layer is not deployed.)
 iptables -A HTSTUFFIN -m state --state NEW -p tcp -m multiport --dport 6379,9000 -m set --match-set k3snodes src -j RETURN
 {% endif %}
 

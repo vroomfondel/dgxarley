@@ -1,0 +1,6 @@
+---
+# KCEVE KVM RS232 serial device on k3smaster (USB-to-RS232 adapter)
+kceve_kvm_serial_device: "/dev/ttyACM0"
+# Number of ports on the KCEVE KVM switch (4-port and 10-port variants exist).
+# Injected into the web pod as KCEVE_KVM_PORTS env var.
+kceve_kvm_num_ports: 10

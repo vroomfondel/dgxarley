@@ -85,7 +85,7 @@ litellm_coder_model: "RedHatAI/Qwen3-Coder-Next-NVFP4"   # == served_model_name 
 litellm_embed_alias_model: "{{ 'embed-default' if (enable_embedding_model | default(false)) else '' }}"
 litellm_embed_model: "chroma-core/Qwen3-Embedding-4B-FP8-Dynamic"   # == served_model_name of the sglang-embed instance (FP8 quant)
 # litellm_model_list_append / _exclude below are PUBLIC DUMMY values. The REAL
-# ones live in group_vars/all/vault/ (its cloud entry carries a secret
+# ones live in group_vars/all/vault/litellm.yml (its cloud entry carries a secret
 # api_key); vault.yml loads AFTER main.yml so it OVERRIDES these — the standard
 # public-dummy / vault-real pattern used throughout this repo. Because lists
 # REPLACE (never merge), the real vault `litellm_model_list_append` assembles

@@ -6,7 +6,7 @@ JuiceFS filesystem (`roles/juicefs_storage`), while keeping node-local JIT cache
 local.
 
 > Status of this doc's changes — the wiring is **already in the repo, gated OFF**:
-> - `hf_hub_cache_on_juicefs: false` (`roles/k8s_dgx/defaults/main/`) — the master
+> - `hf_hub_cache_on_juicefs: false` (`roles/k8s_dgx/defaults/main/hf_cache.yml`) — the master
 >   switch. Flipping it to `true` routes the SGLang/vLLM HF cache to JuiceFS and
 >   no-ops the rsync fan-out. Everything below is done via **this one flag**, not
 >   manual file edits.
@@ -48,11 +48,11 @@ risk for no benefit.
 
 - The USB disk is physically attached to `juicefs_storage_node` and mounted at
   `juicefs_disk_path`. The real values for both live in
-  `group_vars/all/vault/` (public dummies: `spark1` in
-  `group_vars/all/main/`, `/mnt/jfs-usb` in the role defaults). The role
+  `group_vars/all/vault/juicefs.yml` (public dummies: `spark1` in
+  `group_vars/all/main/juicefs.yml`, `/mnt/jfs-usb` in the role defaults). The role
   refuses to run if the path isn't a real mountpoint
   (`juicefs_require_disk_mount: true`).
-- Real secrets set in `group_vars/all/vault/` (they are dummies in the role
+- Real secrets set in `group_vars/all/vault/juicefs.yml` (they are dummies in the role
   defaults): `juicefs_rustfs_access_key`, `juicefs_rustfs_secret_key`,
   `juicefs_valkey_password`.
 - Free space check: each spark currently has only ~200 GiB free until the old
@@ -131,7 +131,7 @@ The pod wiring is already in `roles/k8s_dgx/tasks/sglang_instance.yml`, gated by
 `hf_hub_cache_on_juicefs`. Set it (globally or per-play):
 
 ```yaml
-# roles/k8s_dgx/defaults/main/  (or -e hf_hub_cache_on_juicefs=true)
+# roles/k8s_dgx/defaults/main/hf_cache.yml  (or -e hf_hub_cache_on_juicefs=true)
 hf_hub_cache_on_juicefs: true
 ```
 
@@ -157,7 +157,7 @@ then redeploy the SGLang/vLLM instances (e.g. `ansible-playbook k8s_dgx.yml
    **root** is mapped onto it → `hub` at `/mnt/jfs/hub` matches the hardcoded
    `cache_dir`. This is why **Phase 3 seeds to `/mnt/jfs/` (root)**.
    `hf_cache_juicefs_root` is DERIVED from `juicefs_mount_path` (promoted to
-   `group_vars/all/main/`), so the HF-cache hostPath can never drift from the
+   `group_vars/all/main/juicefs.yml`), so the HF-cache hostPath can never drift from the
    FUSE mountpoint — change `juicefs_mount_path` and both follow.
 
 > **If you later want JuiceFS to host more than the HF cache**, switch to the
@@ -269,7 +269,7 @@ iptables -A HTSTUFFIN -m state --state NEW -p tcp -m multiport --dport 6379,9000
 ```
 
 To make this possible, `juicefs_storage_node` and `juicefs_mount_master` were
-promoted to `group_vars/all/main/` (the `common` role needs cross-role
+promoted to `group_vars/all/main/juicefs.yml` (the `common` role needs cross-role
 visibility). So enabling master-mount is: set `juicefs_mount_master: true`, then
 re-run `common.yml` (firewall) **and** `storage.yml` (mount + dual-bind).
 
@@ -331,7 +331,7 @@ only the delta + metadata dance needs the stop window.
 1. **Prepare the new disk** on `sparkN`: partition/mkfs yourself (the role never
    touches block devices), add an fstab entry (`UUID=... <mountpoint> ext4
    defaults,nofail 0 2`), mount it. If the mountpoint differs from the current
-   `juicefs_disk_path`, update that var in `group_vars/all/vault/` later in
+   `juicefs_disk_path`, update that var in `group_vars/all/vault/juicefs.yml` later in
    step 5.
 2. **Live pre-sync** of the object store over QSFP (chunks are write-once, so a
    running first pass is safe; repeat until the delta is small):
@@ -357,7 +357,7 @@ only the delta + metadata dance needs the stop window.
    (`--keep-secret-key` keeps the S3 secret inside the dump so the FS is
    mountable right after load — delete the dump file once the move is verified.)
 5. **Repo:** set `juicefs_storage_node: sparkN` (and `juicefs_disk_path` if it
-   changed) in `group_vars/all/vault/`.
+   changed) in `group_vars/all/vault/juicefs.yml`.
 6. **Backend bring-up on sparkN** (binaries + Valkey + RustFS + backup env —
    deliberately WITHOUT the format/mount tags, see the warning above):
    ```bash
@@ -417,7 +417,7 @@ in that order:
    echo "UUID=<disk-uuid> <disk-path> ext4 defaults,nofail 0 2" >> /etc/fstab
    systemctl daemon-reload && mount <disk-path> && ls <disk-path>/rustfs
    ```
-4. **Repo:** set `juicefs_storage_node: sparkN` in `group_vars/all/vault/`
+4. **Repo:** set `juicefs_storage_node: sparkN` in `group_vars/all/vault/juicefs.yml`
    (`juicefs_disk_path` stays unchanged).
 5. **Backend bring-up on sparkN** — same as Variant A step 6, including the
    `chown -R rustfs:rustfs <disk-path>/rustfs` (different UID on the new node):

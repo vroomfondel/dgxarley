@@ -9,7 +9,7 @@
 # stay in roles/juicefs_storage/defaults/main.yml.
 #
 # Master switch for the whole JuiceFS layer — DUMMY default; the REAL value
-# lives in group_vars/all/vault/ (loads after main.yml → overrides this).
+# lives in group_vars/all/vault/juicefs.yml (loads after main/ → overrides this).
 # While false: storage.yml skips the juicefs_storage role, and the monitoring
 # stack below stays fully dark (every consumer gates on juicefs_enabled AND
 # juicefs_metrics_enabled) — Prometheus never scrapes, the down-alerts never

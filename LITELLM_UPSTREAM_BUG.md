@@ -64,7 +64,7 @@ HAProxy TLS sidecar in each Ollama pod:
   (cert verification disabled, but TLS handshake succeeds)
 
 ```yaml
-# roles/k8s_dgx/defaults/main.yml
+# roles/k8s_dgx/defaults/main/litellm.yml
 - model_name: "{{ ollama_embed_model }}"
   litellm_params:
     model: "ollama/{{ ollama_embed_model }}"
