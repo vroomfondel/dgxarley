@@ -1,0 +1,16 @@
+---
+# Public dummy/example values — real values live in group_vars/all/vault/ (git-crypt).
+# Grafana
+grafana_admin_password: "changeme"
+grafana_root_url: "https://grafana.example.com"
+# Keel
+keel_basic_auth_password: "changeme"
+keel_gotify_token: "CHANGEME_GOTIFY_TOKEN"
+keel_gotify_url: "https://gotify.example.com"
+
+# Alertmanager
+alertmanager_smtp_smarthost: "mail.example.com:25"
+alertmanager_smtp_mailfrom: "alertmanager@example.com"
+alertmanager_alert_email: "admin@example.com"
+alertmanager_gotify_token: "CHANGEME_GOTIFY_TOKEN"
+alertmanager_gotify_url: "https://gotify.example.com"

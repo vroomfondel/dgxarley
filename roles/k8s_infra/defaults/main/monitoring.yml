@@ -1,0 +1,24 @@
+---
+grafana_admin_password: "changeme"
+grafana_root_url: "https://grafana.example.com"
+# Dashboard download cache TTL (days) for the download-dashboards initContainer.
+# Re-fetch a cached dashboard only if older than this. N>0 = refresh after N days;
+# 0 = always re-fetch (old behaviour); -1 = cache forever (full airgap).
+grafana_dashboard_cache_ttl_days: 7
+keel_basic_auth_password: "changeme"
+keel_gotify_token: "CHANGEME_GOTIFY_TOKEN"
+keel_gotify_url: "https://gotify.example.com"
+alertmanager_smtp_smarthost: "mail.example.com:25"
+alertmanager_smtp_mailfrom: "alertmanager@example.com"
+alertmanager_alert_email: "admin@example.com"
+alertmanager_gotify_token: "CHANGEME_GOTIFY_TOKEN"
+alertmanager_gotify_url: "https://gotify.example.com"
+# Enable-gate (import-level). ON by default. Teardown opt-in:
+# `-e nut_exporter_teardown=true` removes the exporter Deployment/Service/Secret
+# from the shared `monitoring` namespace (the namespace itself is NOT deleted).
+nut_exporter_enabled: true
+nut_exporter_teardown: false
+nut_exporter_server: "192.168.124.100"
+nut_exporter_username: "monuser"
+nut_exporter_password: "changeme"
+# nut_ups_name, nut_ups_secondary_name — defined in group_vars/all/main/
