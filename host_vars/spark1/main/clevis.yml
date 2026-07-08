@@ -1,0 +1,3 @@
+---
+# Public dummy/example values — real values live in the same-named file under vault/ (git-crypt).
+clevis_luks_passphrase: "changeme"
