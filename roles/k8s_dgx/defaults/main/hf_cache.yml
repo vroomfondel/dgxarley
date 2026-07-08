@@ -37,6 +37,7 @@ hf_preload_models:
   - "RedHatAI/Qwen3-Coder-Next-NVFP4"
   - "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"
   - "Qwen/Qwen3-VL-8B-Instruct-FP8"
+  - "vroomfondel/Hy3-NVFP4-W4A4"
 #  - "nvidia/Qwen3.5-397B-A17B-NVFP4"
 #  - "RedHatAI/Qwen3.6-35B-A3B-NVFP4"
 #  - "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4"

@@ -1,0 +1,127 @@
+---
+# Model profile: vroomfondel/Hy3-NVFP4-W4A4
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+#
+# ⚠ UNVALIDATED first-contact scaffold (written 2026-07-08). Arch/kernel knobs
+#   derived from the HF card + the tencent/Hy3 base config + our validated
+#   modelopt_fp4 SM121 recipe (Qwen3-235B-NVFP4 Test-17 winner). NOTHING here has
+#   booted on this cluster yet — run the nn4 TP=4 EP=4 matrix before treating any
+#   number as measured, then replace this note with the TESTLOG reference.
+#
+# WHAT THIS CHECKPOINT IS (HF card, 2026-07-08):
+#   vroomfondel's NVIDIA-ModelOpt NVFP4 (W4A4) repackage of tencent/Hy3 — the
+#   295B/21B-active Hunyuan-3 MoE (hy_v3 arch, released 2026-07-06). ModelOpt
+#   0.45.0, modelopt_fp4 unified HF checkpoint (hf_quant_config.json).
+#     - Weights + activations of the Linear / MoE-expert GEMMs → NVFP4 (E2M1,
+#       group_size 16, FP8 block scales).
+#     - FP8 KV cache (static calibrated).
+#     - Kept BF16 (excluded from quant): lm_head, model.embed_tokens, ALL MoE
+#       router gates (*.mlp.gate), and the MTP/NEXTN speculative head
+#       (model.layers.80*). → the draft head is a high-precision BF16 head.
+#   HF reports the checkpoint as "148B params" — that is the FP4 weights packed
+#   two-per-U8 byte (295B FP4 ≈ 148B U8 elements), i.e. ~148 GB of packed weight
+#   tensors on disk, not a smaller model.
+#
+# Architecture (hy_v3, from tencent/Hy3 base config):
+#   80 transformer layers, hidden GQA with 64 attention heads over 8 KV heads,
+#   sparse MoE = 192 routed experts (top-8) + 1 shared expert, 256K native
+#   context. One 3.8B MTP head (at layers.80*) for EAGLE/MTP speculative decode.
+#   num_key_value_heads=8 → TP=4 gives 2 KV heads/GPU (clean). 192 experts → EP=4
+#   clean. ~148 GB FP4 weights + BF16 excludes → ~40 GB/GPU at TP=4 — FITS on the
+#   4× GB10 cluster (comparable to DeepSeek-V4-Flash's ~42 GB/GPU), with KV
+#   headroom only at a SHORT context (see context_length).
+#
+# Card's reference serving (2-node B200, NOT this cluster):
+#   python3 -m sglang.launch_server --model ./Hy3-NVFP4-W4A4 \
+#     --quantization modelopt_fp4 --tp-size 2 --nnodes 2 --node-rank 0 \
+#     --tool-call-parser hunyuan --reasoning-parser hunyuan \
+#     --speculative-algorithm EAGLE --speculative-num-steps 2 \
+#     --speculative-eagle-topk 1 --speculative-num-draft-tokens 3 \
+#     --context-length 32768 --served-model-name hy3 --port 8000
+#   Card note: "On GB10/sm121 some SGLang-side workarounds may be required for the
+#   NVFP4 path. Start with a low --context-length; KV cache and interconnect
+#   bandwidth are the limits." → exactly our SM121 kernel-wall situation below.
+_model_profile:
+  "vroomfondel/Hy3-NVFP4-W4A4":
+    knowledge_cutoff: null  # not disclosed on the Hy3 card
+    release_date: "2026-07-06"  # tencent/Hy3 base release (NVFP4 repackage later)
+    info_url: "https://huggingface.co/vroomfondel/Hy3-NVFP4-W4A4"
+    nccl_transport: "roce"
+    tp_size: 4  # num_key_value_heads=8 → 2 KV heads/GPU at TP=4
+    ep_size: 4  # 192 routed experts → clean split
+    num_experts: 192
+    trust_remote_code: true  # hy_v3 is a custom arch; loads model code from the repo
+    # Parsers per the card (verbatim SGLang registry names):
+    tool_call_parser: "hunyuan"     # needed by honcho/hindsight tool-calling paths
+    reasoning_parser: "hunyuan"     # Hy3 is a hybrid fast/slow-thinking model
+
+    # --- Context: native 256K (full window) ---
+    # Base supports 262144. ⚠ The card explicitly says start LOW on GB10 (KV cache
+    # + interconnect are the limits) and its own example uses 32768 — the full
+    # 256K KV reservation is large on top of ~40 GB/GPU weights, so first boot may
+    # OOM at KV alloc. If it does, drop mem_fraction_static in 0.02 steps, cap the
+    # KV pool via _sglang_active_max_total_tokens, or lower this back toward 32768.
+    context_length: 262144
+
+    # --- Quantization: modelopt_fp4 (unified HF checkpoint) ---
+    quantization: "modelopt_fp4"
+    # FP8 KV baked into the checkpoint (static calibrated) → fp8_e4m3 matches.
+    kv_cache_dtype: "fp8_e4m3"
+
+    # --- Backend = validated modelopt_fp4 SM121 recipe (Qwen3-235B Test-17) ---
+    # Same quant packaging (modelopt_fp4) → same SM121 kernel walls. See
+    # nvidia-qwen3-235b-a22b-nvfp4.yml / TURBOQUANT.md for why these exact values:
+    #   moe_runner_backend=flashinfer_cutlass — triton/cutlass MoE runners fall
+    #     through to nvfp4_blockwise_moe.cuh → device-side assert on SM121.
+    #     ⚠ RISK: if Hy3's moe_intermediate_size is not padding-aligned this can
+    #     hit the "intermediate size required padding" boot assert — in which case
+    #     flashinfer_trtllm is the only runner that avoids it (see the NVFP4
+    #     gated-MoE padding note). Try flashinfer_trtllm if boot asserts on padding.
+    #   fp4_gemm_backend=flashinfer_cutlass — flashinfer_cudnn FP4 GEMM is a 100%
+    #     startup_crash on SM121.
+    #   attention_backend=triton — flashinfer attn also works; triton won the
+    #     modelopt_fp4 peak on the sibling.
+    moe_runner_backend: "flashinfer_cutlass"
+    fp4_gemm_backend: "flashinfer_cutlass"
+    attention_backend: "triton"
+    # DeepGemm targets FP8 ue8m0; NVFP4 scale_fmt != ue8m0 → disable (JIT blocks
+    # the scheduler forward loop / 300s watchdog kill / RAM exhaustion otherwise).
+    disable_deep_gemm: true
+    # eager (disable_cuda_graph) is broken on any cutlass_moe_fp4 path (TURBOQUANT.md);
+    # piecewise graphs crash at startup in this kernel family on SM121.
+    disable_cuda_graph: false
+    disable_piecewise_cuda_graph: true
+    cuda_graph_max_bs: 32
+    jit_max_jobs: 4
+    pp_async_batch_depth: 0
+    # 0.70 = the modelopt_fp4 sibling's static reserve. NOTE: ~40 GB/GPU weights
+    # + FP8 KV; if first boot OOMs, drop in 0.02 steps or shorten context_length.
+    mem_fraction_static: "0.70"
+    # EPLB off by default (routed_experts_weights_of_layer crashes on other MoE
+    # families here); enable only after a clean baseline.
+    enable_eplb: false
+    enable_expert_distribution_metrics: false
+
+    # --- Speculative decode: built-in MTP head via EAGLE (card-recommended) ---
+    # The 3.8B MTP/NEXTN head is preserved in the checkpoint and EXCLUDED from
+    # quant (BF16) → high-precision draft, no external draft model. Card uses the
+    # EAGLE algorithm over the model's own head with topk=1 (no draft path, so
+    # speculative_draft_model_path/_quantization stay unset). Params verbatim from
+    # the card. UNVALIDATED on GB10 — flip speculative_enabled:false if the head
+    # NaNs/misbehaves at boot (the usual FP4→BF16 draft-drift failure mode).
+    speculative_enabled: true
+    speculative_algo: EAGLE
+    speculative_num_steps: 2
+    speculative_eagle_topk: 1
+    speculative_num_draft_tokens: 3
+
+    # Hy3 is a reasoning/agent model; no per-card sampling recipe published.
+    # Conservative reasoning defaults — adjust once a baseline exists.
+    recommended_sampling:
+      temperature: 0.7
+      top_p: 0.95
+
+    # Image: default is 0.5.14-sm121. ⚠ hy_v3 is a brand-new arch (base released
+    # 2026-07-06) — confirm the pinned image actually registers the hy_v3 model
+    # class + hunyuan parsers before deploy; pin a newer sm121 image here if not.
+    # sglang_image: "xomoxcc/dgx-spark-sglang:0.5.14-sm121"
