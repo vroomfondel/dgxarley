@@ -1,0 +1,62 @@
+---
+ollama_replicas: 0
+ollama_embed_replicas: 1
+
+# Ollama model profiles
+ollama_model_profiles:
+  "qwen3-coder-next:latest":
+    info_url: "https://ollama.com/library/qwen3-coder-next"
+    # 80B total / 3B active MoE (hybrid attention), latest = q4_K_M (~52 GB), 256K ctx
+    context_length: 262144
+  "qwen3-coder:latest":
+    info_url: "https://ollama.com/library/qwen3-coder"
+    # 30B total / 3.3B active MoE, latest tag = 30b (~19 GB)
+    context_length: 262144
+  "qwen2.5-coder:latest":
+    info_url: "https://ollama.com/library/qwen2.5-coder"
+    # 7B dense, latest tag = 7b (~4.7 GB)
+    context_length: 32768
+  "qwen2.5-coder:14b":
+    info_url: "https://ollama.com/library/qwen2.5-coder:14b"
+    # 14B dense (~9 GB)
+    context_length: 32768
+
+# ollama_embed_model_profiles lifted to group_vars/all/main/ollama.yml (shared w/ k8s_infra)
+
+# Active ollama model — parameters pulled from ollama_model_profiles
+#ollama_model: "qwen3-coder:latest"
+#ollama_model: "qwen3-coder-next:latest"
+ollama_model: "qwen2.5-coder:latest"
+ollama_preload_models:
+  - "{{ ollama_model }}"
+
+# ollama_embed_model lifted to group_vars/all/main/ollama.yml (shared w/ k8s_infra)
+ollama_embed_preload_models:
+  - "{{ ollama_embed_model }}"
+
+# ollama_embedding_model, ollama_embedding_model_max_ctx, ollama_port
+# lifted to group_vars/all/main/ollama.yml (shared w/ k8s_infra)
+# TLS port for HAProxy sidecar — LiteLLM's ollama/ provider forces TLS on all
+# connections. Each Ollama pod runs an HAProxy sidecar (self-signed cert) that
+# terminates TLS and proxies to localhost:ollama_port.
+ollama_tls_port: 11435
+
+# Ollama runtime config
+ollama_num_parallel: 1
+ollama_max_loaded_models: 1
+ollama_keep_alive: "-1"
+ollama_flash_attention: 1
+ollama_kv_cache_type: "q8_0"
+ollama_context_length: "{{ ollama_model_profiles[ollama_model].context_length }}"
+
+# Ollama-embed runtime config (embedding-only instance)
+ollama_embed_num_parallel: 2
+ollama_embed_max_loaded_models: 1
+ollama_embed_keep_alive: "-1"
+ollama_embed_flash_attention: 1
+ollama_embed_kv_cache_type: "q8_0"
+ollama_embed_context_length: "{{ ollama_embed_model_profiles[ollama_embed_model].context_length }}"
+
+# docling_port lifted to group_vars/all/main/docling.yml.
+# openwebui / pipelines / searxng config (+ openwebui_namespace) moved to
+# roles/k8s_infra/defaults/main/openwebui.yml (those services moved to the k8s_infra role).

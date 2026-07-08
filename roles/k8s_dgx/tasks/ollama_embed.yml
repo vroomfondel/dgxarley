@@ -1,7 +1,7 @@
 ---
 # STANDALONE Ollama embedding service — being replaced by the sglang-embed
 # instance (enable_embedding_model). Gated by enable_ollama_embed
-# (group_vars/all/main.yml, default true) via the import in tasks/main.yml;
+# (group_vars/all/main/sglang.yml, default true) via the import in tasks/main.yml;
 # when false, ollama_embed_teardown.yml removes these resources instead.
 - name: Create ollama namespace
   kubernetes.core.k8s:
