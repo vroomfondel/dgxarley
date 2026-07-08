@@ -34,7 +34,7 @@ directly to Valkey + RustFS, so nothing is routed through a coordinator.
   and refuses to run if it isn't a real mountpoint).
 - `juicefs_cache_dir` / `juicefs_cache_size_mib` — per-node NVMe cache (MiB).
 - Secrets (`juicefs_rustfs_access_key`/`_secret_key`, `juicefs_valkey_password`)
-  are **dummies here** — put real values in `group_vars/all/vault.yml`.
+  are **dummies here** — put real values in `group_vars/all/vault/juicefs.yml`.
 
 ## Deploy
 
