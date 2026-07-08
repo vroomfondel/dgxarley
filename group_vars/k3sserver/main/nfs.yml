@@ -1,0 +1,7 @@
+---
+# Public dummy/example values — real values live in the same-named file under vault/ (git-crypt).
+# NFS — falls gewuenscht, NFS-Server und -Pfad setzen
+wantsnfsmount: false
+nfsmasterip: "192.168.123.67"
+nfs_share_path: "/k3shared"
+nfs_hf_cache_share_path: "/HF-CACHE"
