@@ -26,8 +26,10 @@
 #   3. Valkey is dual-homed on the storage node (juicefs_valkey_bind_addresses),
 #      and the storage node's firewall opens 6379/9000 (common iptables template).
 
-# Inventory group whose hosts get the JuiceFS mount.
-juicefs_mount_group: dgxsparks
+# Inventory group whose hosts get the JuiceFS mount: juicefs_mount_group is
+# PROMOTED to group_vars/all/main.yml (2026-07, with juicefs_metrics_enabled) —
+# common's iptables template and k8s_infra's Prometheus scrape loop need it.
+# Do NOT redefine it here; a role default would just be shadowed.
 
 # Address a mount client uses to reach Valkey + RustFS on the storage node.
 # Resolved PER CLIENT: a QSFP-capable client (a spark) uses the storage node's

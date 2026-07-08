@@ -13,5 +13,8 @@
   hosts: k3sserver
   become: true
   roles:
+    # Gated by the juicefs_enabled master switch (group_vars/all/main.yml):
+    # running storage.yml while it is false is a deliberate no-op.
     - role: juicefs_storage
       tags: juicefs
+      when: juicefs_enabled | default(false) | bool

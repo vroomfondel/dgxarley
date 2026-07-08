@@ -736,6 +736,14 @@ docling_port: 5001
 # hostPath and the FUSE mountpoint can never drift). All other juicefs_* knobs
 # stay in roles/juicefs_storage/defaults/main.yml.
 #
+# Master switch for the whole JuiceFS layer — DUMMY default; the REAL value
+# lives in group_vars/all/vault.yml (loads after main.yml → overrides this).
+# While false: storage.yml skips the juicefs_storage role, and the monitoring
+# stack below stays fully dark (every consumer gates on juicefs_enabled AND
+# juicefs_metrics_enabled) — Prometheus never scrapes, the down-alerts never
+# fire, no ports open for a not-yet-deployed filesystem. Enable order:
+# storage.yml → common.yml --tags iptables → k8s_infra.yml --tags prometheus,grafana.
+juicefs_enabled: false
 # inventory_hostname of the node holding the USB-SSD (runs Valkey + RustFS).
 juicefs_storage_node: spark1
 # Host mountpoint of the shared FS on every mount node. Promoted here (not a
@@ -748,3 +756,29 @@ juicefs_mount_path: /mnt/jfs
 # roles/common/templates/iptables.sh.j2), Valkey is dual-homed, and the master's
 # storage address resolves to the mgmt IP. Full detail: JUICEFS_MIGRATION_HOWTO.md.
 juicefs_mount_master: false
+# Inventory group whose hosts get the JuiceFS mount. Promoted here (was a
+# juicefs_storage default) because common's iptables template and k8s_infra's
+# Prometheus scrape loop iterate over it too — role defaults are out of scope
+# in a foreign play.
+juicefs_mount_group: dgxsparks
+
+# Prometheus metrics for the JuiceFS stack. Pre-enabled, but every consumer
+# couples it to the master switch (juicefs_enabled AND juicefs_metrics_enabled),
+# so nothing scrapes/alerts/opens ports until the layer is actually deployed.
+# ONE switch, three effects:
+#   1. juicefs_storage: adds `--metrics <k3s_node_ip>:<port>` to every FUSE
+#      mount unit (restarts the mount once!) and installs the apt
+#      prometheus-redis-exporter next to Valkey on the storage node;
+#   2. common (iptables): opens the two metrics ports from k3snodes on the
+#      affected hosts (in-cluster Prometheus egress is SNAT'd to its node IP);
+#   3. k8s_infra: adds the `juicefs` / `juicefs-valkey` scrape jobs + alert
+#      rules (prometheus.yml) and provisions the Grafana dashboards
+#      (JuiceFS 20794, Valkey/redis_exporter 763) via download-dashboards.sh.
+# Rollout after flipping: storage.yml → common.yml --tags iptables →
+# k8s_infra.yml --tags prometheus,grafana.
+# NOTE: RustFS has NO native /metrics endpoint (OTel push only, rustfs#3154
+# still open as of 2026-07) — object-store health is monitored from the CLIENT
+# side via the juicefs_object_request_* panels and the JuiceFSObjectErrors alert.
+juicefs_metrics_enabled: true
+juicefs_metrics_port: 9567          # juicefs mount --metrics (every mount node)
+juicefs_valkey_exporter_port: 9121  # prometheus-redis-exporter (storage node only)

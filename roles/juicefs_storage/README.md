@@ -45,6 +45,26 @@ ansible-playbook storage.yml --tags juicefs_mount # mounts only
 
 Order is handled internally: binary → backend → format → mount → backup.
 
+## Monitoring (gated by `juicefs_enabled` AND `juicefs_metrics_enabled`)
+
+`juicefs_metrics_enabled` (pre-enabled) selects WHETHER the layer is monitored;
+every consumer additionally couples to the `juicefs_enabled` master switch, so
+nothing scrapes, alerts, or opens ports until the layer is actually deployed.
+Deploy day is one flag flip (`juicefs_enabled: true`), then:
+`storage.yml → common.yml --tags iptables → k8s_infra.yml --tags prometheus,grafana`:
+
+- **Clients**: `--metrics <k3s_node_ip>:9567` on every FUSE mount unit (native
+  `juicefs_*` Prometheus metrics; flipping the gate restarts the mounts once).
+- **Valkey**: apt `prometheus-redis-exporter` on the storage node (`:9121`,
+  reuses the requirepass; redis_exporter supports Valkey upstream).
+- **RustFS**: has **no native `/metrics`** (OTel push only, rustfs#3154) — its
+  health is monitored client-side via `juicefs_object_request_errors` (alert
+  `JuiceFSObjectErrors`) and the object-request panels.
+- **k8s_infra**: scrape jobs `juicefs`/`juicefs-valkey` + `juicefs-alerts`
+  rules (`monitoring/prometheus.yml`), Grafana dashboards "JuiceFS Dashboard"
+  (grafana.com 20794) and "Valkey (JuiceFS Metadata)" (763) via
+  `download-dashboards.sh`; iptables opens both ports from `k3snodes` only.
+
 ## Consumer wiring (separate change, not done here)
 
 Pods consume the shared FS by mounting the host path with one-way propagation:
