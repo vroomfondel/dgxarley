@@ -260,7 +260,7 @@
         _venv_probe_candidate: "{{ (_venv_probe_lines | last) if (_venv_probe_lines | length > 0) else '' }}"
       when: _venv_probe_candidate is match('^/.+/site-packages$')
 
-    # Fallback (single source — deliberately NOT in defaults/main.yml): used only
+    # Fallback (single source — deliberately NOT in defaults/main/hermes.yml): used only
     # if the probe was skipped or returned nothing valid. Carries the version-
     # specific pythonX.Y segment; if it drifts from the image the subPath mount
     # silently no-ops (patch inert, no crash).

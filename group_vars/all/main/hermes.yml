@@ -1,0 +1,122 @@
+---
+# Public dummy/example values — real values live in group_vars/all/vault/ (git-crypt).
+# === Nous Hermes Agent (per-user deployments) — SCHEMA REFERENCE ===
+# Public schema documentation. Real entries live in group_vars/all/vault/
+# (git-crypted) and override this list entirely. Default is `[]` from
+# roles/k8s_infra/defaults/main/hermes.yml — this dummy is purely illustrative.
+# `enabled: false` on every entry keeps it inert even if vault.yml is missing.
+#
+# Per-user gates (independent):
+#   dashboard_enabled  → official `hermes dashboard` pod  (<u>.hermes-dashboard.<dns>)
+#   webui_enabled      → ghcr.io/nesquena/hermes-webui pod (<u>.hermes.<dns>)
+#   email.enabled      → `hermes gateway run` sidecar inside the webui pod
+#                        (implies webui_enabled; reads EMAIL_* from /opt/data/.env)
+hermes_users:
+  - username: example
+    uid: 1500
+    gid: 1500
+    litellm_token: "sk-REPLACE-WITH-PER-USER-LITELLM-VIRTUAL-KEY"
+    litellm_model: ""                  # empty → falls back to hermes.default_model
+    basicauth_password: "changeme"     # defaults to litellm_token if unset
+    webui_password: "changeme"         # defaults to basicauth_password if unset
+    dashboard_enabled: false
+    webui_enabled: true
+    hermes_debug: false                # true → logging.level=DEBUG in config.yaml
+    # ADDITIONAL, user-selectable backends (maps 1:1 onto Hermes' native top-level
+    # `custom_providers:` list). Each entry is an extra OpenAI-compatible endpoint
+    # that shows up in the `hermes model` picker; switch to it per-session. Does
+    # NOT change the default main model (model.default → hermes-default via
+    # LiteLLM). Omit the list to skip. Rendered into config.yaml as custom_providers[];
+    # api_key is injected at startup from the Secret .env var
+    # CUSTOM_PROVIDER_<NAME>_API_KEY by merge-config (kept out of the non-secret
+    # ConfigMap) — a config-var (inline api_key), NOT key_env/ENV provider auth.
+    # Real endpoints/keys live in the git-crypt vault, not here.
+    custom_providers:                  # omit to skip
+      - name: "othercluster"                  # label shown in the picker (any string)
+        base_url: "https://api.example.com/v1"   # OpenAI-compatible endpoint
+        api_key: "REPLACE-WITH-PROVIDER-KEY"     # secret (injected at startup)
+        model: "some-model"            # optional default model for this provider
+        api_mode: "chat_completions"   # optional: chat_completions | anthropic_messages
+        # key_env: "MY_ENV_VAR"        # optional: use an env var instead → disables the inline-key injection
+    # Additional Hermes PROFILES beyond the default one. Each becomes its own
+    # HERMES_HOME at /opt/data/profiles/<name>/ (own config.yaml/.env/SOUL.md/
+    # sessions/memory), discovered by Hermes' `hermes model`/dashboard profile
+    # switcher (sidebar). A profile CLONES the default profile's config and only
+    # overrides what you set below (ops-managed: the model/provider/soul are
+    # re-applied on every pod restart; theme/tool tweaks the user makes in the UI
+    # are preserved). Omit the list to have only the default profile.
+    profiles:                          # omit to skip
+      - name: "cloud"                  # dir name (lowercase, [a-z0-9-_]); shown in the switcher
+        soul: |                        # optional → SOUL.md (personality); seed-if-absent (never clobbers user edits)
+          You are a focused coding assistant. Be terse and precise.
+        terminal_cwd: "/workspace"     # optional → terminal.cwd for this profile's shell/file tools
+        # This profile's MAIN model points DIRECT at a custom OpenAI-compatible
+        # endpoint with its own key (model.provider=custom, model.api_key injected
+        # from the Secret at startup — stays out of the ConfigMap). Vision aux still
+        # uses LiteLLM (inherited, separate key). Omit `provider:` to keep the
+        # LiteLLM backend and only change the model via `model:` below.
+        provider:
+          base_url: "https://api.example.com/v1"   # required for a custom-endpoint profile
+          api_key: "REPLACE-WITH-PROVIDER-KEY"     # secret (injected at startup)
+          model: "some-model"          # → model.default; omit → endpoint's /v1/models
+      - name: "research"               # a second profile on the LiteLLM backend, different model
+        model: "hermes-default"        # optional → model.default (empty → inherit the default profile's model)
+        soul: "You are a meticulous research assistant."
+    email:                             # omit block or set enabled:false to skip
+      enabled: false
+      address: "hermes-example@example.com"
+      password: "imap-app-password"    # Gmail/Outlook: app password, NOT account password
+      imap_host: "imap.example.com"
+      smtp_host: "smtp.example.com"
+      imap_port: 993                   # default 993  (IMAP SSL)
+      smtp_port: 587                   # default 587  (SMTP STARTTLS)
+      poll_interval: 15                # default 15s between IMAP polls
+      home_address: "owner@example.com"  # fallback recipient for autonomous tasks
+      allow_all_users: false           # true → ignore allowed_users
+      allowed_users:                   # sender whitelist
+        - "owner@example.com"
+      skip_attachments: false          # true → strip attachments before LLM
+      # Folder-lifecycle knobs (local patch over upstream gateway/platforms/email.py).
+      # All rendered into config.yaml (platforms.email.extra.*), NOT .env — mirror
+      # upstream PR #28702. Empty string "" opts out of the respective stage.
+      working_folder: "Hermes_Working" # INBOX→Working at fetch; "" → skip, INBOX→Done directly
+      done_folder: "Hermes_Done"       # final destination after handle_message(); "" → no moves at all (Working skipped too)
+      sent_folder: "Sent"              # IMAP APPEND target for outbound replies; "" → SMTP-only. Rendered into config.yaml (platforms.email.extra.sent_folder), not .env — mirrors upstream PR #28697
+      process_existing: true           # true (default) → process pre-existing UNSEEN INBOX backlog on start. Rendered into config.yaml (platforms.email.extra.process_existing), not .env — mirrors upstream PR #28699
+      cpu_limit: "500m"                # sidecar caps; defaults 500m / 512Mi
+      memory_limit: "512Mi"
+    matrix:                            # omit block or set enabled:false to skip
+      enabled: false                   # true → same hermes-gateway sidecar also serves Matrix (no extra pod)
+      homeserver: "https://matrix.example.org"
+      access_token: "syt-REPLACE-OR-USE-USER-ID-AND-PASSWORD"  # access_token wins; OR set user_id + password instead
+      # user_id: "@hermes-example:example.org"   # alternative to access_token (bootstraps a token on first login)
+      # password: "matrix-account-password"
+      device_id: ""                    # "" → 'hermes-<username>' (stable across restarts for E2EE)
+      e2ee_mode: "required"            # off|optional|required — image ships mautrix[encryption]; crypto.db persists on /opt/data NFS
+      allowed_users:                   # who may trigger the agent (list or comma string)
+        - "@owner:example.org"
+      allowed_rooms:                   # rooms the bot responds in (list or comma string)
+        - "!roomid:example.org"
+      home_room: "!roomid:example.org" # room for cron/notification delivery
+    # gateway:                         # optional sidecar resource override (falls back to email.* then 500m/512Mi)
+    #   cpu_limit: "500m"
+    #   memory_limit: "512Mi"
+    # Ops-managed overrides for the webui Preferences panel. Merged into
+    # /opt/data/.webui/settings.json on every pod start — the keys listed
+    # here ALWAYS win, any other keys the user has set via the UI
+    # (POST /api/settings) are preserved untouched. Mirrors the
+    # config.yaml/.env merge pattern. Upstream defaults live in
+    # nesquena/hermes-webui at api/config.py:_SETTINGS_DEFAULTS — only
+    # list keys here that you actually want to lock to a specific value.
+    # Omit the key or set to {} to leave settings.json entirely up to the user.
+    webui_settings:
+      simplified_tool_calling: true    # "Compact tool activity"        (upstream: true)
+      api_redact_enabled: true         # "Redact sensitive data"        (upstream: true)
+      sidebar_density: "compact"       # "Sidebar density"              (upstream: "compact") — "detailed"|"compact"|"minimal"
+      auto_title_refresh_every: "0"    # "Adaptive title refresh"       (upstream: "0" = Off)
+      busy_input_mode: "queue"         # "Busy input mode"              (upstream: "queue") — "queue"|"interrupt"|"steer"
+      show_cli_sessions: false         # "Show non-WebUI sessions"      (upstream: false) — set true to see Email/CLI sessions
+      sync_to_insights: false          # "Sync to insights"             (upstream: false)
+      check_for_updates: true          # "Check for updates"            (upstream: true)
+      whats_new_summary_enabled: false # "Summarize What's New with AI" (upstream: false)
+    enabled: false
