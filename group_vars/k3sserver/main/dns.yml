@@ -1,0 +1,7 @@
+---
+# Public dummy/example values — real values live in the same-named file under vault/ (git-crypt).
+# DNS
+dns_external_domain_suffix: "dgx.example.com"
+coredns_replicas: 2
+# Cert-manager TSIG secret
+tsig_secret_key: "CHANGEME_BASE64_TSIG_KEY_HERE"

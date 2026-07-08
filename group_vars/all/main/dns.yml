@@ -1,0 +1,10 @@
+---
+# Public dummy/example values — real values live in group_vars/all/vault/ (git-crypt).
+# nsupdate / DNS
+nsupdate_server: "198.51.100.1"
+nsupdate_zone: "example.com"
+nsupdate_tsig_key_name: "dgx.example.com"
+nsupdate_tsig_key_secret: "CHANGEME_BASE64_TSIG_KEY"
+nsupdate_tsig_algorithm: "hmac-sha256"
+nsupdate_ttl: 3600
+nsupdate_ingress_ip: "192.168.124.100"

@@ -1,0 +1,14 @@
+---
+# hostPath base directory on k3smaster
+k8s_infra_data_base: "/var/lib/k8s-data"
+# Subdirectories: postgresql, redis, keel, loki, grafana, grafana-dashboards,
+#                 prometheus, alertmanager, uptimekuma, tang, pgbackup
+
+# Secrets (overridden by vault)
+postgresql_postgres_password: "changeme"
+postgresql_openwebui_password: "changeme"
+postgresql_forgejo_password: "changeme"
+traefik_internal_allowlist:
+  - "192.168.123.0/24"
+  - "192.168.124.0/24"
+traefik_dashboard_password: "changeme"
