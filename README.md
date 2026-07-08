@@ -411,7 +411,7 @@ ansible-playbook site.yml -e 'clevis_luks_passphrase=YOUR_PASSPHRASE'
 - Extra CNI plugins installed on sparks (`ansible-playbook dgx.yml --tags cni`): `host-device`, `static`
 - Switch configuration in place (Netgear VLANs, MikroTik bridge, PVID settings)
 - kubectl context (configured via `kubeconfig_context_name` in vault) — auto-provisioned by `k3sserver` role (tag `kubeconfig`), no manual setup needed
-- NFS server configured if desired (`wantsnfsmount` in `group_vars/k3sserver/main.yml`)
+- NFS server configured if desired (`wantsnfsmount` in `group_vars/k3sserver/main/nfs.yml`)
 
 ## MikroTik CRS310 Full Bridge Config
 
