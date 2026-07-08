@@ -1,0 +1,8 @@
+---
+# Public dummy/example values — real values live in the same-named file under vault/ (git-crypt).
+ansible_host: "192.168.123.2"
+ansible_password: "changeme"
+serial_number: "CHANGEME"
+# ansible_private_key_file: "~/.ssh/id_ed25519"
+# ansible_network_cli_ssh_type: libssh
+ansible_ssh_user: "mikrotikadmin"
