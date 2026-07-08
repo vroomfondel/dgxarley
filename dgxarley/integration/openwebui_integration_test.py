@@ -6,7 +6,7 @@ read from the Ansible defaults file.
 
 Sampling Presets:
     Recommended sampling parameters are loaded from the active model's
-    ``recommended_sampling`` dict in ``roles/k8s_dgx/defaults/main.yml``
+    ``recommended_sampling`` dict in ``roles/k8s_dgx/defaults/main/``
     (the Ansible single source of truth for model profiles).
 
     SGLang itself has no server-side default sampling flags — temperature,
@@ -75,19 +75,35 @@ from loguru import logger
 # Repo root: override via DGXARLEY_ROOT env var, otherwise 2 levels above __file__
 _REPO_ROOT: Path = Path(os.environ.get("DGXARLEY_ROOT") or Path(__file__).resolve().parents[2]).resolve()
 
-# Ansible defaults: override via DGXARLEY_DEFAULTS env var
+# Ansible defaults: override via DGXARLEY_DEFAULTS env var. Both this and
+# DGXARLEY_GROUPVARS may point at a single YAML file OR a directory of *.yml
+# files (Ansible's defaults/main/ + group_vars/all/main/ split layout); a
+# directory is merged in sorted filename order, mirroring Ansible.
 _defaults_path: Path = Path(
-    os.environ.get("DGXARLEY_DEFAULTS") or (_REPO_ROOT / "roles" / "k8s_dgx" / "defaults" / "main.yml")
+    os.environ.get("DGXARLEY_DEFAULTS") or (_REPO_ROOT / "roles" / "k8s_dgx" / "defaults" / "main")
 ).resolve()
 
 # Cluster-wide coordinates (sglang_model, sglang_namespace/port, litellm_*,
 # ollama_*, docling_port, traefik_internal_allowlist) were lifted from the
-# k8s_dgx role defaults to group_vars/all/main.yml. Load that too and merge it
+# k8s_dgx role defaults to group_vars/all/main/. Load that too and merge it
 # over the role defaults (group_vars wins, mirroring Ansible precedence).
 # Override via DGXARLEY_GROUPVARS env var.
 _groupvars_path: Path = Path(
-    os.environ.get("DGXARLEY_GROUPVARS") or (_REPO_ROOT / "group_vars" / "all" / "main.yml")
+    os.environ.get("DGXARLEY_GROUPVARS") or (_REPO_ROOT / "group_vars" / "all" / "main")
 ).resolve()
+
+
+def _load_vars_path(path: Path) -> dict[str, object]:
+    """Load Ansible vars from a YAML file, or merge all *.yml in a directory."""
+    merged: dict[str, object] = {}
+    files = sorted(path.glob("*.yml")) if path.is_dir() else [path]
+    for f in files:
+        with open(f) as fh:
+            doc = yaml.safe_load(fh) or {}
+        if isinstance(doc, dict):
+            merged.update(doc)
+    return merged
+
 
 # Load .env / .env.local from repo root (does not override existing env vars)
 _env_files: list[Path] = [_REPO_ROOT / ".env", _REPO_ROOT / ".env.local"]
@@ -107,22 +123,18 @@ for _env_file in _env_files:
 # Model profiles & sampling presets (from Ansible defaults)
 # ---------------------------------------------------------------------------
 
-if not _defaults_path.is_file():
+if not (_defaults_path.is_file() or _defaults_path.is_dir()):
     logger.warning(
         f"Ansible defaults not found: {_defaults_path} " "(set DGXARLEY_ROOT or DGXARLEY_DEFAULTS to override)"
     )
     _dgx_defaults: dict[str, object] = {}
 else:
-    with open(_defaults_path) as _f:
-        _dgx_defaults = yaml.safe_load(_f) or {}
+    _dgx_defaults = _load_vars_path(_defaults_path)
 
 # Merge group_vars/all over the role defaults so the lifted cluster coordinates
 # (sglang_model et al.) resolve. group_vars wins, mirroring Ansible precedence.
-if _groupvars_path.is_file():
-    with open(_groupvars_path) as _gf:
-        _group_vars = yaml.safe_load(_gf) or {}
-    if isinstance(_group_vars, dict):
-        _dgx_defaults.update(_group_vars)
+if _groupvars_path.is_file() or _groupvars_path.is_dir():
+    _dgx_defaults.update(_load_vars_path(_groupvars_path))
 # YAML-loaded data has heterogeneous structure; annotated as dict[str, object]
 _MODEL_PROFILES: dict[str, object] = _dgx_defaults.get("sglang_model_profiles", {})  # type: ignore[assignment]
 

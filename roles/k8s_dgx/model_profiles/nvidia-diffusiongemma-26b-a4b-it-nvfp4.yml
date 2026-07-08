@@ -102,7 +102,7 @@ _model_profile:
     # flags — they come from the checkpoint and are not tunable from this profile.
     dllm_algorithm: "Gemma4Renoise"
     # Card pins --max-num-seqs 4 for the diffusion path → SGLang --max-running-requests 4
-    # (wired via sglang_max_running_requests in defaults/main.yml).
+    # (wired via sglang_max_running_requests in defaults/main/sglang.yml).
     max_running_requests: 4
     # Parsers per the official NVFP4 card (same as autoregressive Gemma 4):
     #   --reasoning-parser gemma4 --tool-call-parser gemma4

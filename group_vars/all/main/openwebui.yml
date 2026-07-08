@@ -1,0 +1,11 @@
+---
+# Public dummy/example values — real values live in group_vars/all/vault/ (git-crypt).
+# OpenWebUI
+openwebui_secret_key: "CHANGEME_SECRET_KEY"
+openwebui_admin_email: "admin@example.com"
+openwebui_admin_password: "changeme"
+# Bearer tokens for LiteLLM-backed endpoints. Length of
+# openwebui_connections_openai_keys must match openwebui_connections_openai.
+openwebui_connections_openai_keys:
+  - "CHANGEME_LITELLM_CHAT_KEY"
+openwebui_embedding_openai_key: "CHANGEME_LITELLM_EMBED_KEY"

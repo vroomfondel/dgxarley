@@ -1,0 +1,69 @@
+---
+# ============================================================================
+# App-layer services moved here from the k8s_dgx role
+# ----------------------------------------------------------------------------
+# openwebui, pipelines, searxng, hermes, honcho, hindsight. Their shared
+# inference coordinates (sglang_*, litellm_*, ollama_*, docling_port,
+# traefik_internal_allowlist) live in group_vars/all/main/.
+# ============================================================================
+
+openwebui_namespace: "openwebui"
+
+openwebui_image: "ghcr.io/open-webui/open-webui:main"
+pipelines_image: "ghcr.io/open-webui/pipelines:main"
+pipelines_port: 9099
+searxng_port: 8080
+# OpenWebUI configuration
+openwebui_secret_key: "CHANGEME_SECRET_KEY"
+openwebui_admin_name: "Admin User"
+openwebui_admin_email: "admin@example.com"
+openwebui_admin_password: "changeme"
+
+# Embedding engine: "openai" routes through LiteLLM (unified OpenAI-v1 interface).
+# Switch back to "ollama" + ollama_url for direct access without LiteLLM proxy.
+openwebui_embedding_engine: "openai"
+openwebui_embedding_openai_url: "http://litellm.{{ litellm_namespace }}.svc.cluster.local:4000/v1"
+# Bearer token for the embedding endpoint — override in group_vars/all/vault/openwebui.yml.
+# Use a LiteLLM virtual key (scoped to the embedding model) in production.
+openwebui_embedding_openai_key: "CHANGEME_LITELLM_EMBED_KEY"
+openwebui_embedding_ollama_url: "http://ollama-embed.ollama.svc.cluster.local:{{ ollama_port }}"
+# Embedding model NAME sent to LiteLLM — GATED on enable_embedding_model (cutover):
+#   false → ollama_embedding_model (qwen3-embedding:4b-q8_0, the ollama LiteLLM entry).
+#   true  → embed-default (stable alias → sglang-embed). OpenWebUI already routes via
+#           LiteLLM (openai engine) either way; only the model name flips. Both are
+#           2560-dim Qwen3-Embedding-4B, so the existing RAG vectors stay valid (no
+#           re-index). NOTE: the embedding virtual key (openwebui_embedding_openai_key)
+#           must be allowed to call embed-default in LiteLLM (unrestricted keys are fine).
+openwebui_embedding_model: "{{ litellm_embed_alias_model if (enable_embedding_model | default(false)) else ollama_embedding_model }}"
+
+openwebui_embedding_chunk_size: 20000
+openwebui_embedding_chunk_overlap: 750
+openwebui_embedding_chunk_min_size: 100
+openwebui_embedding_batch_size: 16
+
+openwebui_content_extraction_engine: "docling"
+openwebui_docling_server_url: "http://docling.docling.svc.cluster.local:{{ docling_port }}"
+# openwebui_tei_openai_api_base_url: "http://tei.ollama.svc.cluster.local:8080/v1"
+openwebui_searxng_query_url: "http://searxng.searxng.svc.cluster.local:{{ searxng_port }}/search?q=<query>"
+openwebui_web_search_result_count: 5
+
+# Pipelines (filter/function plugins for OpenWebUI)
+# Master toggle — controls Deployment, Service, and OpenAI connection registration.
+pipelines_enabled: true
+# Which pipeline filter scripts to seed (files in roles/k8s_dgx/files/pipelines/)
+pipelines_filters:
+  - "pipelines_self_reflection_filter.py"
+
+# pipeline will be deployed, but this valve will disable it
+openwebui_self_reflection_enabled: false
+
+# OpenAI-compatible connections for OpenWebUI.
+# Pipelines URL is appended automatically when pipelines_enabled is true.
+# openwebui_connections_openai_keys must have the same length as
+# openwebui_connections_openai (positional mapping — keys[i] is the bearer
+# token for urls[i]). Override both in group_vars/all/vault/openwebui.yml when the
+# endpoint requires auth (e.g. LiteLLM).
+openwebui_connections_openai:
+  - "http://sglang.{{ sglang_namespace }}.svc.cluster.local:{{ sglang_port }}/v1"
+openwebui_connections_openai_keys:
+  - "CHANGEME_LITELLM_CHAT_KEY"
