@@ -62,6 +62,9 @@ spec:
         # the ConfigMap/Secret update alone leaves the pod on stale settings.
         checksum/config: "{{ lookup('template', 'hermes/hermes_config.yaml.j2') | hash('sha256') }}"
         checksum/env:    "{{ lookup('template', 'hermes/hermes_env.j2')         | hash('sha256') }}"
+        # Roll the pod when the per-profile seed (spec + secrets) changes so
+        # merge-config re-seeds /opt/data/profiles/<name>/ on next start.
+        checksum/profiles: "{{ (lookup('template', 'hermes/hermes_profiles_spec.json.j2') ~ lookup('template', 'hermes/hermes_profiles_secrets.json.j2')) | hash('sha256') }}"
         # Roll the pod when the merge-config script changes so the new merge
         # logic runs against /opt/data on next start.
         checksum/merge:  "{{ lookup('file', 'hermes_merge_config.py') | hash('sha256') }}"
@@ -306,6 +309,13 @@ spec:
         - name: hermes
           image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes.image_tag) }}"
           imagePullPolicy: Always
+          # Overrides the image WORKDIR (/opt/hermes). main-wrapper.sh sets the
+          # process cwd to `${HERMES_ORIG_CWD:-$PWD}` before exec'ing `hermes
+          # dashboard`; its with-contenv shebang is bypassed in the CMD path so
+          # HERMES_ORIG_CWD isn't loaded and it falls back to $PWD. workingDir
+          # makes $PWD = /workspace, so the dashboard process cwd (and thus the
+          # `!`-shell's os.getcwd() + the TUI footer) lands in /workspace.
+          workingDir: "{{ item.terminal_cwd | default(hermes.terminal_cwd) }}"
           # We let the image's default ENTRYPOINT run instead of overriding
           # `command:`. Since v2026.5.28 that ENTRYPOINT is s6-overlay's /init
           # (pre-s6 it was /opt/hermes/docker/entrypoint.sh, now a deprecated
@@ -385,6 +395,15 @@ spec:
             # container puts it in os.environ for every context. No deprecation
             # warning fires because config.yaml still declares terminal.cwd.
             - name: TERMINAL_CWD
+              value: "{{ item.terminal_cwd | default(hermes.terminal_cwd) }}"
+            # Process cwd of the dashboard. The `!`-shell RPC (tui_gateway
+            # shell.exec) runs commands with `cwd=os.getcwd()`, and the TUI
+            # footer shows the process cwd — NEITHER honours terminal.cwd, so
+            # both land in the image WORKDIR /opt/hermes. The image's
+            # main-wrapper.sh cd's to `${HERMES_ORIG_CWD:-$PWD}` before exec'ing
+            # `hermes dashboard` (the "-w" mechanism), so this makes the whole
+            # process start in /workspace → `!pwd`, footer AND file-tools align.
+            - name: HERMES_ORIG_CWD
               value: "{{ item.terminal_cwd | default(hermes.terminal_cwd) }}"
             # --- dashboard built-in auth (BasicAuthProvider) ---
             # The 0.0.0.0 bind requires an auth provider; these env vars make
@@ -526,6 +545,9 @@ spec:
         - name: hermes-gateway
           image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes.image_tag) }}"
           imagePullPolicy: Always
+          # Same as the dashboard container: make $PWD = /workspace so the
+          # gateway process (and any agent it spawns) starts there.
+          workingDir: "{{ item.terminal_cwd | default(hermes.terminal_cwd) }}"
           args:
             - "gateway"
             - "run"
@@ -547,6 +569,10 @@ spec:
             # Same reason as the dashboard container: anchor gateway-originated
             # agent file-tools to /workspace, not the process cwd.
             - name: TERMINAL_CWD
+              value: "{{ item.terminal_cwd | default(hermes.terminal_cwd) }}"
+            # main-wrapper cd's here before `hermes gateway run` → gateway
+            # process cwd = /workspace (matches the dashboard container).
+            - name: HERMES_ORIG_CWD
               value: "{{ item.terminal_cwd | default(hermes.terminal_cwd) }}"
             # api_server needs a >=16-char key to start (connect() refuses
             # otherwise). localhost-only in-pod; the /health probe is
