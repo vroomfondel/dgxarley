@@ -17,10 +17,10 @@ K3s kubeconfig credential synchronization utility. Keeps local Kubernetes authen
 python update_local_k3s_keys.py [OPTIONS]
 ```
 
-| Option | Description |
-|---|---|
-| `-u`, `--user USER` | SSH user (default: `root`) |
-| `-H`, `--host HOST` | Remote host (auto-detected from kubeconfig server URL) |
+| Option                    | Description                                                   |
+|---------------------------|---------------------------------------------------------------|
+| `-u`, `--user USER`       | SSH user (default: `root`)                                    |
+| `-H`, `--host HOST`       | Remote host (auto-detected from kubeconfig server URL)        |
 | `-c`, `--context CONTEXT` | Local kubeconfig context (auto-detected from current-context) |
 
 The remote kubeconfig is read from `/etc/rancher/k3s/k3s.yaml` on the target host.
