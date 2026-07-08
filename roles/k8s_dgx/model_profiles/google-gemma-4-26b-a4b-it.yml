@@ -68,7 +68,7 @@ _model_profile:
     #   initContainer auto-appends speculative_draft_model_path to
     #   HF_PRELOAD_MODELS when speculative_enabled=true (tasks/sglang.yml).
     #   Also pre-staged cluster-wide via the hf_preload Job entry in
-    #   defaults/main.yml (saves the per-pod download — optimization only).
+    #   defaults/main/hf_cache.yml (saves the per-pod download — optimization only).
     moe_runner_backend: "triton"
     kv_cache_dtype: "fp8_e4m3"
     mem_fraction_static: "0.85"
