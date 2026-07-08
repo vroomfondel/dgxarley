@@ -38,7 +38,7 @@
 # === Secret management: ESO + Kyverno + Policy Reporter ===
 # Formerly one file (eso_keyverno.yml); split into 4 components, each in its own
 # task file that carries BOTH the install and the teardown as two conditional
-# blocks (see roles/k8s_infra/defaults/main.yml):
+# blocks (gate flags in roles/k8s_infra/defaults/main/secret_management.yml):
 #   - install block  → runs when `<x>_enabled` AND NOT `<x>_teardown`
 #   - teardown block → runs when `<x>_teardown` (opt-in, default false)
 # So `<x>_enabled: false` only stops re-installing; deletion is the deliberate
@@ -243,7 +243,7 @@
 
 # === APPS ===
 # User-facing app-layer services (moved here from the k8s_dgx role). Their
-# shared inference coordinates live in group_vars/all/main.yml.
+# shared inference coordinates live in group_vars/all/main/.
 
 - name: Deploy SearXNG
   import_tasks: apps/searxng.yml

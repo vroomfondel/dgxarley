@@ -14,7 +14,7 @@
 # --- Topology ---------------------------------------------------------------
 # juicefs_storage_node (THE placement knob — inventory_hostname of the node with
 # the USB-SSD, running Valkey+RustFS) and juicefs_mount_master (opt-in mount on
-# the QSFP-less master) are PROMOTED to group_vars/all/main.yml, because the
+# the QSFP-less master) are PROMOTED to group_vars/all/main/juicefs.yml, because the
 # `common` role's iptables template needs them to open the backend ports for a
 # master mount. They are authoritative there; do NOT redefine them here (a role
 # default would just be shadowed by the group_vars value). All other juicefs_*
@@ -27,7 +27,7 @@
 #      and the storage node's firewall opens 6379/9000 (common iptables template).
 
 # Inventory group whose hosts get the JuiceFS mount: juicefs_mount_group is
-# PROMOTED to group_vars/all/main.yml (2026-07, with juicefs_metrics_enabled) —
+# PROMOTED to group_vars/all/main/juicefs.yml (2026-07, with juicefs_metrics_enabled) —
 # common's iptables template and k8s_infra's Prometheus scrape loop need it.
 # Do NOT redefine it here; a role default would just be shadowed.
 
@@ -61,13 +61,13 @@ juicefs_require_disk_mount: true
 # --- Disk / paths -----------------------------------------------------------
 # Mountpoint of the USB-SSD on the storage node. You mount the SSD here yourself
 # (fstab / systemd.mount); this role does NOT partition or format the SSD.
-# Real mountpoint is set in group_vars/all/vault.yml (host-specific).
+# Real mountpoint is set in group_vars/all/vault/juicefs.yml (host-specific).
 juicefs_disk_path: /mnt/jfs-usb
 # RustFS object data dir on the USB-SSD.
 juicefs_rustfs_data_dir: "{{ juicefs_disk_path }}/rustfs"
 
 # Host mountpoint of the shared FS on every mount node.
-# PROMOTED to group_vars/all/main.yml (k8s_dgx derives hf_cache_juicefs_root
+# PROMOTED to group_vars/all/main/juicefs.yml (k8s_dgx derives hf_cache_juicefs_root
 # from it, cross-play). Do NOT redefine here — a role default would be shadowed.
 # Per-node local read cache on the NVMe.
 juicefs_cache_dir: /var/lib/jfs-cache
@@ -109,7 +109,7 @@ juicefs_rustfs_user: rustfs              # native system user (NOT the container
 # Example: "16G". Uses MemoryHigh (soft reclaim) not MemoryMax (hard OOM).
 juicefs_rustfs_memory_high: ""
 
-# --- Credentials — DUMMIES. Real values go in group_vars/all/vault.yml ------
+# --- Credentials — DUMMIES. Real values go in group_vars/all/vault/juicefs.yml
 # RustFS S3 root creds (RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY; secret >= 8 chars).
 juicefs_rustfs_access_key: "changeme-access-key"
 juicefs_rustfs_secret_key: "changeme-secret-key-min8"

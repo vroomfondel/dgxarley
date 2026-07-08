@@ -7,11 +7,11 @@ qsfp_interfaces:
   - "enP2p1s0f1np1"
 # SR-IOV: create Virtual Functions on the QSFP PF used by Multus
 # When enabled, pods get VFs instead of the raw PF — allows multiple pods on QSFP.
-# qsfp_sriov_enabled lives in group_vars/all/main.yml (shared with k8s_dgx)
+# qsfp_sriov_enabled lives in group_vars/all/main/qsfp.yml (shared with k8s_dgx)
 qsfp_sriov_numvfs: 8
 qsfp_sriov_pf_pci: "0000:01:00.0"
 qsfp_sriov_pf_iface: "enp1s0f0np0"
-# qsfp_sriov_vf_prefix lives in group_vars/all/main.yml (shared with k8s_dgx)
+# qsfp_sriov_vf_prefix lives in group_vars/all/main/qsfp.yml (shared with k8s_dgx)
 
 # Manual DCBX/PFC — only if switch DCBX auto-negotiation doesn't work
 set_dcbx_manually: false
