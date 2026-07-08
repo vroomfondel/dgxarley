@@ -1,0 +1,14 @@
+---
+# Public dummy/example values — real values live in the same-named file under vault/ (git-crypt).
+# ulimits
+memlock_limit: "unlimited"
+stack_limit: 67108864
+
+# Node swap (KEP-2400) — lets a spark use a disk-backed swapfile to absorb the
+# transient weight-load peak of borderline models (DeepSeek-V4-Flash-FP8 on
+# 4×GB10). Renders kubelet failSwapOn:false + swapBehavior:LimitedSwap (see
+# k3sserver defaults / kubelet-config template). Activation still needs, in
+# order: (1) a swap device on each spark, (2) a k3s-agent restart to read the
+# new config, (3) a Burstable consumer pod with a memory request — the
+# sglang_shard Job sets sglang_shard_memory_request for exactly this.
+k3s_node_swap_enabled: false
