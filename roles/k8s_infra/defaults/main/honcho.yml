@@ -40,7 +40,7 @@ honcho_deriver_replicas: 1
 # WITHOUT touching the others. Replaces the old shared honcho_model /
 # honcho_litellm_base (split per-feature 2026-06).
 # The API KEYS are intentionally NOT here (sensitive): dummies live in
-# group_vars/all/main/, real values in group_vars/all/vault/. They are
+# group_vars/all/main/honcho.yml, real values in group_vars/all/vault/honcho.yml. They are
 # injected per-feature into the honcho-env Secret and referenced from config.toml
 # via `api_key_env`, so credentials never land in this public file.
 #
@@ -75,8 +75,8 @@ honcho_embedding_model: "{{ litellm_embed_alias_model if (enable_embedding_model
 
 # --- per-feature API keys (DUMMIES) ---
 # Lowest-precedence dummies so the role is self-contained and never undefined.
-# Overridden by the public dummies in group_vars/all/main/ and ultimately by
-# the REAL values in group_vars/all/vault/ (defaults < group_vars main < vault).
+# Overridden by the public dummies in group_vars/all/main/honcho.yml and ultimately
+# by the REAL values in group_vars/all/vault/honcho.yml (defaults < group_vars main < vault).
 # Sensitive — never put a real key here. Referenced by api_key_env in config.toml
 # (HONCHO_<FEATURE>_API_KEY) via the honcho-env Secret.
 honcho_deriver_api_key: "sk-changeme"

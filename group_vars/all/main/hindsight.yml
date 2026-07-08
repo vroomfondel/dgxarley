@@ -1,7 +1,7 @@
 ---
 # Public dummy/example values — real values live in group_vars/all/vault/ (git-crypt).
 # Hindsight (agent memory backend) — dummy values; real ones in
-# group_vars/all/vault/. Auth uses our own KeyMapTenantExtension (no Supabase):
+# group_vars/all/vault/hindsight.yml. Auth uses our own KeyMapTenantExtension (no Supabase):
 #   hindsight_tenant_keymap  — the SINGLE source of truth: map of bearer key ->
 #                              tenant name; each tenant gets its own Postgres
 #                              schema. Add real keys (long random strings) here in

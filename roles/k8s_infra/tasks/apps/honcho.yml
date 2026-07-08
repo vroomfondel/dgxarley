@@ -256,7 +256,7 @@
             # cluster; swap to a per-app LiteLLM virtual key for a less-trusted setup.
             LLM_OPENAI_API_KEY: "{{ litellm_master_key }}"
             # Per-feature LLM keys, referenced by api_key_env in config.toml. Defaults
-            # all point at litellm_master_key (group_vars/all/vault/); change one
+            # all point at litellm_master_key (group_vars/all/vault/litellm.yml); change one
             # there to repoint that single feature at another provider's key.
             HONCHO_DERIVER_API_KEY: "{{ honcho_deriver_api_key }}"
             HONCHO_DIALECTIC_API_KEY: "{{ honcho_dialectic_api_key }}"

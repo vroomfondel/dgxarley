@@ -1,14 +1,14 @@
 ---
 # Public dummy/example values — real values live in group_vars/all/vault/ (git-crypt).
 # Honcho (AI memory backend) — dummy values; override the real ones in
-# group_vars/all/vault/. honcho_jwt_secret signs the API's bearer JWTs
+# group_vars/all/vault/honcho.yml. honcho_jwt_secret signs the API's bearer JWTs
 # (AUTH_USE_AUTH=true); generate with `python scripts/generate_jwt_secret.py`
 # in the honcho repo, or any long random string. Changing it invalidates all
 # issued tokens. The LiteLLM key Honcho uses is litellm_master_key (above).
 honcho_jwt_secret: "changeme-honcho-jwt-secret"
 
 # Honcho per-feature LLM API keys — dummy values; real ones in
-# group_vars/all/vault/. Each Honcho feature picks up its OWN key via
+# group_vars/all/vault/honcho.yml. Each Honcho feature picks up its OWN key via
 # `api_key_env` in config.toml (see roles/k8s_dgx/tasks/honcho.yml), so you can
 # point e.g. dream at a different provider/key than deriver. Currently every
 # feature routes through LiteLLM, so the real values all = litellm_master_key.

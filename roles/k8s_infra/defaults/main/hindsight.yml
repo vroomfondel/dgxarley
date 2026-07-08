@@ -96,7 +96,7 @@ hindsight_tenant_schema_prefix: "tenant"
 # key authenticates a request and routes it to schema
 # "<hindsight_tenant_schema_prefix>_<tenant>"; unmapped keys are REJECTED (no
 # fallback tenant). Tenant names must be valid Postgres identifiers. SENSITIVE
-# (contains keys) — real map in group_vars/all/vault/; keys are NOT templated,
+# (contains keys) — real map in group_vars/all/vault/hindsight.yml; keys are NOT templated,
 # set literal strings.
 hindsight_tenant_keymap:
   "changeme-hindsight-key": "admin"
