@@ -1,0 +1,111 @@
+---
+# Model profile: nvidia/Qwen3.6-27B-NVFP4
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+#
+# NVIDIA's OWN modelopt quant of Qwen/Qwen3.6-27B (dense, hybrid Gated DeltaNet +
+# Gated Attention). Replaces the retired mmangkad-qwen3.6-27b-nvfp4.yml seed.
+# FP8 sibling: qwen-qwen3.6-27b-fp8.yml.
+#
+# ⚠️ NOT a uniform-NVFP4 checkpoint, despite the "-NVFP4" repo name — same trap as
+# nvidia/Qwen3.6-35B-A3B-NVFP4. The hf_quant_config.json (modelopt 0.45.0, confirmed
+# 2026-07-08) is `quant_algo: MIXED_PRECISION`, NOT uniform NVFP4:
+#   * MLP linears (gate_proj/up_proj/down_proj) + lm_head → W4A16_NVFP4, group_size 16
+#   * attention proj (q/k/v/o + linear-attn in_proj/out_proj) → FP8
+#   * MTP head (mtp*) → EXCLUDED (kept full precision)
+#   * kv_cache_quant_algo → FP8
+# The retired mmangkad-27B was uniform modelopt_fp4 and loaded WITHOUT any patch;
+# this first-party upload does NOT — it needs the same runtime patches as the 35B.
+#
+# ── WHY THE PATCH IS NEEDED (identical to nvidia-qwen3.6-35b-a3b-nvfp4.yml) ──
+# _parse_modelopt_quant_config() maps MIXED_PRECISION → quant method by ARCHITECTURE:
+# NemotronH → modelopt_mixed, everything else → w4afp8. This Qwen arch
+# (Qwen3_5ForConditionalGeneration) falls through to w4afp8, a closed trap:
+#   * modelopt_fp4 / modelopt_mixed → _verify_quantization rejects the mismatch.
+#   * w4afp8 → passes verify, but W4AFp8Config is the W4A8 (int4 + per-group fp8-scale)
+#     loader — the WRONG weight encoding for NVFP4 (e2m1) MLP weights.
+# The two PAIRED sglang_launch.sh patches make it load (⚠️ if either is reverted, this
+# profile breaks again) — the SAME patches the 35B profile relies on, both keyed on
+# NVFP4-presence not arch, so they already cover this dense 27B:
+#   1. "_sgl_mixed_nvfp4_dispatch_" — any NVFP4-bearing MIXED_PRECISION checkpoint →
+#      modelopt_mixed (not just NemotronH). With `quantization: modelopt_mixed` below,
+#      detection matches and verify passes.
+#   2. "_sgl_mixed_nvfp4_variant_" — normalizes the W4A16_NVFP4 quant_algo string to
+#      NVFP4 so the mixed loader's per-layer get_quant_method (exact `== "NVFP4"`) runs
+#      the real ModelOptNvFp4A16LinearMethod (PR #27906) instead of building the layer
+#      unquantized → KeyError on w*_weight_scale_2.
+#
+#   architectures Qwen3_5ForConditionalGeneration, 64 layers, hidden 5120, dense (no MoE),
+#   max_position_embeddings 262144, mtp_num_hidden_layers 1 (native MTP head → NEXTN).
+# Hybrid Gated-DeltaNet arch → SGLang routes it through the mamba scheduler path
+# (hence the spec-v2 + extra_buffer knobs below), same as the 35B-A3B sibling.
+#
+# ── VALIDATION STATUS: UNVALIDATED SEED (2026-07-08). ──
+# Config-derived only; NOT yet booted on this stack. The mixed-precision dispatch is
+# proven for the 35B upload (VALIDATED & SERVING), and the same patches are arch-agnostic,
+# so this dense 27B is expected to load the same way — but the dense-MLP W4A16_NVFP4 path
+# through ModelOptNvFp4A16LinearMethod has not been exercised here. Boot + first-contact
+# matrix required before trusting throughput; do NOT quote numbers until measured.
+# NOTE: the retired mmangkad uniform-NVFP4 27B covered this base model WITHOUT any patch.
+# Prefer a uniform-NVFP4 repack if you want a patch-free path; this profile exists to
+# align on NVIDIA's first-party checkpoint (per user request) at the cost of the patch dep.
+_model_profile:
+  "nvidia/Qwen3.6-27B-NVFP4":
+    knowledge_cutoff: null  # not officially disclosed; community (Reddit r/Qwen_AI) claims ~mid-2024, unconfirmed
+    release_date: "2026-04-22"  # Qwen3.6-27B base; official QwenLM GitHub changelog
+    info_url: "https://huggingface.co/nvidia/Qwen3.6-27B-NVFP4"
+    # SM121 sgl-kernel build required for NVFP4 on GB10. Pinned (not the scitrera 0.5.12
+    # default) so this profile resolves correctly without a -e override — matches the 35B
+    # nvidia profile. The MIXED_PRECISION dispatch comes from the sglang_launch.sh runtime
+    # patch (works on any -sm121 image), NOT from this build.
+    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.14-sm121"
+    # 27B dense hybrid (Gated DeltaNet + Gated Attention), MIXED_PRECISION modelopt:
+    # W4A16_NVFP4 MLP + FP8 attn (~8-10 GB on-device vs ~27 GB BF16 / ~13 GB FP8).
+    # Native 262K context.
+    context_length: 262144
+    # MIXED_PRECISION modelopt checkpoint (W4A16_NVFP4 MLP/lm_head + FP8 attn). REQUIRES
+    # BOTH sglang_launch.sh "_sgl_mixed_nvfp4_*" patches (see header): _dispatch_ routes
+    # this Qwen arch's MIXED_PRECISION → modelopt_mixed (stock gates it to NemotronH →
+    # w4afp8), and _variant_ makes the loader accept the W4A16_NVFP4 quant_algo string.
+    # Without them: verify-mismatch crash, then KeyError on w*_weight_scale_2.
+    quantization: "modelopt_mixed"
+    trust_remote_code: true
+    kv_cache_dtype: "fp8_e4m3"
+    # 0.75 with MTP: draft tokens need extra KV-cache headroom; NVFP4 weights are ~3×
+    # smaller than FP8 so there is plenty of slack (inherited from the retired 27B seed).
+    mem_fraction_static: "0.75"
+    nccl_transport: roce
+    attention_backend: flashinfer
+    # NVFP4 GEMM backend for the W4A16_NVFP4 MLP layers.
+    fp4_gemm_backend: flashinfer_cutlass
+    disable_deep_gemm: true
+    disable_cuda_graph: false
+    disable_piecewise_cuda_graph: true
+    pp_async_batch_depth: 0
+    cuda_graph_max_bs: 8
+    jit_max_jobs: 4
+    ep_size: 1
+    tp_size: 4
+    reasoning_parser: "qwen3"
+    tool_call_parser: "qwen3_coder"
+    # supports thinking (default) and non-thinking modes; control via
+    # chat_template_kwargs={"enable_thinking": False} per-request.
+    #   thinking:        temperature=1.0  top_p=0.95  top_k=20  presence_penalty=0.0
+    #   thinking_coding: temperature=0.6  top_p=0.95  top_k=20  presence_penalty=0.0
+    #   non_thinking:    temperature=0.7  top_p=0.80  top_k=20  presence_penalty=1.5
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 20
+      presence_penalty: 0.0
+    sampling_overrides: {}
+    # MTP / speculative decoding (NEXTN) — Qwen3.6 is MTP-trained (mtp_num_hidden_layers: 1).
+    # The two hybrid-mamba knobs (extra_buffer + spec_v2) avoid the spec-v2-vs-radix-cache
+    # crash on this Gated-DeltaNet arch. num_steps=3 carried from the retired seed; confirm
+    # the NVFP4 sweet spot with a num_steps sweep and update once measured.
+    speculative_enabled: true
+    speculative_algo: NEXTN
+    speculative_num_steps: 3
+    speculative_eagle_topk: 1
+    speculative_num_draft_tokens: 4
+    mamba_scheduler_strategy: extra_buffer
+    enable_spec_v2: true
