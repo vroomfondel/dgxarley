@@ -1071,21 +1071,28 @@ _litellm_model_list_base:
       # Spend tracking (nominal cost — edit litellm_default_*_cost_per_token above):
       input_cost_per_token: "{{ litellm_default_input_cost_per_token }}"
       output_cost_per_token: "{{ litellm_default_output_cost_per_token }}"
-    # Advertise the model's context window. LiteLLM 1.91.0 surfaces
-    # model_group_info.max_input_tokens UNCONDITIONALLY as a top-level field in
-    # GET /v1/models (create_model_info_response, proxy/utils.py) — and
-    # get_model_group_info reads THIS model_info AND resolves the hermes-default
-    # model_group_alias onto this group (router.py). So this single value makes
-    # BOTH the real model and the hermes-default alias report the window in
-    # /v1/models, which is exactly the field (max_input_tokens ∈ Hermes'
-    # _CONTEXT_LENGTH_KEYS) the Hermes agent probes at <base_url>/models →
-    # Hermes Desktop auto-detects the window without a config.yaml hardcode.
-    # It also enables LiteLLM's own pre-call context checks + populates /model/info.
-    # Source is the active SGLang profile's context_length (same as the Hermes
-    # cluster-side pin); omitted if the profile has none → the litellm.yml template
-    # gate drops the model_info block (no regression).
-    model_info:
-      max_input_tokens: "{{ (sglang_model_profiles[sglang_served_model_name] | default({})).context_length | default(omit) }}"
+    # DEMO of the generic context-window probe (the probe task lives in
+    # roles/k8s_dgx/tasks/litellm.yml; any model_list entry MAY declare a
+    # `context_probe`). This one live-queries THIS cluster's SGLang for the
+    # ACTUALLY-served window (/v1/models → data[].max_model_len), so the advertised
+    # max_input_tokens tracks per-instance context trims a static profile value
+    # would miss. LiteLLM 1.91.0 surfaces model_info.max_input_tokens as a top-level
+    # field in GET /v1/models AND resolves the hermes-default alias onto this group
+    # (proxy/utils.py create_model_info_response + router.get_model_group_info), so
+    # BOTH the real model and hermes-default report the window — exactly the field
+    # (max_input_tokens ∈ Hermes' _CONTEXT_LENGTH_KEYS) the Hermes agent probes at
+    # <base_url>/models. Clients incl. Hermes Desktop auto-detect it; it also feeds
+    # LiteLLM's own pre-call context checks + /model/info.
+    # REACHABILITY: the probe runs where the play executes (control node, connection
+    # local). Without in-cluster network reach the .svc GET can't resolve → the
+    # `fallback` (resolved profile/instance context_length) is used. That is the
+    # mechanism's graceful-degradation path; run the probe in-cluster to read live.
+    context_probe:
+      url: "http://sglang.{{ sglang_namespace }}.svc.cluster.local:{{ sglang_port }}/v1/models"
+      method: "GET"
+      ctx_container: "data"            # SGLang /v1/models → data[].max_model_len
+      ctx_key_substr: "max_model_len"  # first key CONTAINING this → its int value
+      fallback: "{{ sglang_context_length }}"  # resolved profile/instance window
 
   # NOTE: the stable "hermes-default" alias is NO LONGER a second model_list
   # entry. A duplicate deployment pointing at the same SGLang backend produced

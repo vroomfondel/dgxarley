@@ -102,6 +102,49 @@
         UI_PASSWORD: "{{ litellm_ui_password }}"
 
 
+# Generic, provider-agnostic context-window probe. ANY model_list entry (public
+# or vaulted) MAY declare a `context_probe` spec; this runs it at deploy time and
+# the map below feeds the result into model_info.max_input_tokens in the ConfigMap
+# render — so GET /v1/models advertises the real window (LiteLLM 1.91.0 surfaces it
+# top-level + resolves aliases) and clients like Hermes Desktop auto-detect it.
+# ALL provider specifics live in each entry's context_probe (cloud entries keep
+# theirs in the git-crypt vault), so nothing provider-specific is hardcoded here.
+# Graceful: a failed/unreachable probe falls back to context_probe.fallback below.
+- name: Probe declared model context endpoints
+  ansible.builtin.uri:
+    url: "{{ item.context_probe.url }}"
+    method: "{{ item.context_probe.method | default('GET') }}"
+    body_format: json
+    body: "{{ item.context_probe.body | default(omit) }}"
+    headers: "{{ item.context_probe.headers | default({}) }}"
+    validate_certs: "{{ item.context_probe.validate_certs | default(true) }}"
+    timeout: 10
+    status_code: [200]
+  loop: "{{ litellm_model_list | selectattr('context_probe', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.model_name }}"
+  register: _litellm_ctx_probes
+  failed_when: false          # unreachable/erroring probe → handled by fallback
+  no_log: true                # context_probe.headers may carry an API key
+
+# Resolve each probe: recursively-flat search of the declared container (dict OR
+# list-of-dicts) for the first int under a key matching ctx_key_substr; else the
+# entry's fallback. Builds {model_name: window} consumed by the render below.
+- name: Resolve probed context windows (probe hit -> fallback)
+  ansible.builtin.set_fact:
+    _litellm_probed_ctx: "{{ _litellm_probed_ctx | default({}) | combine({item.item.model_name: (_ctx | int)}) }}"
+  loop: "{{ _litellm_ctx_probes.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.model_name }}"
+  vars:
+    _cp: "{{ item.item.context_probe }}"
+    _cont: "{{ (item.json | default({})).get(_cp.ctx_container | default('model_info'), {}) }}"
+    _dicts: "{{ [_cont] if (_cont is mapping) else (_cont if (_cont is iterable and _cont is not string) else []) }}"
+    _hits: "{{ _dicts | map('dict2items') | flatten | selectattr('key', 'search', _cp.ctx_key_substr | default('context_length')) | map(attribute='value') | select('integer') | list }}"
+    _ctx: "{{ _hits[0] if (_hits | length > 0) else (_cp.fallback | default('')) }}"
+  when: (_ctx | string | length) > 0
+  no_log: true                # loop item carries context_probe.headers (API key)
+
 - name: Create litellm config
   kubernetes.core.k8s:
     state: present
@@ -122,9 +165,11 @@
                 {{ key }}: {{ value | to_json }}
           {% endif %}
           {% endfor %}
-          {% if (entry.model_info | default({})).values() | select('ne', omit) | list %}
+          {% set _probed_ctx = (_litellm_probed_ctx | default({})).get(entry.model_name) %}
+          {% set _mi = (entry.model_info | default({})) | combine({'max_input_tokens': _probed_ctx} if _probed_ctx else {}) %}
+          {% if _mi | dict2items | rejectattr('value', 'none') | selectattr('value', 'ne', omit) | list %}
               model_info:
-          {% for key, value in entry.model_info.items() %}
+          {% for key, value in _mi.items() %}
           {% if value is defined and value is not none and value != omit %}
                 {{ key }}: {{ value | to_json }}
           {% endif %}
