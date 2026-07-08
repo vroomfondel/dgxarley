@@ -300,16 +300,16 @@ hermes:
   dashboard_theme: "cyberpunk-lg"
   dashboard_font: "theme"
   default_model: "{{ litellm_hermes_alias_model }}"  # stable alias → current SGLang model
-  # Pinned context window (tokens) for the LiteLLM-backed main model, rendered as
+  # Explicit OVERRIDE for the LiteLLM-alias context window, rendered as
   # model.context_length in config.yaml. hermes-default is a LiteLLM alias, so
   # Hermes cannot probe its context length (LiteLLM returns no metadata for an
   # alias) and would otherwise default to 256,000 — the "probe-down" INFO in the
-  # agent log. This value MUST match the context of the SGLang model currently
-  # behind hermes-default (sglang_served_model_name); update it on a model swap.
-  # Currently nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4 @ 524288 (matches the
-  # model profile). Empty ("") → omit the key and fall back to the 256k
-  # auto-default. Per-user override via item.context_length.
-  context_length: 524288  # TODO: das hier aus dem aktiven model profile nehmen? geht das?
+  # agent log. DEFAULT "" → the value is DERIVED at deploy time from the active
+  # SGLang model profile (sglang_model_profiles[sglang_model].context_length, the
+  # same source k8s_dgx uses), so it tracks a model swap automatically — see the
+  # derivation tasks in tasks/apps/hermes.yml. Set a number here only to force a
+  # value regardless of the profile. Per-user override via item.context_length.
+  context_length: ""
   # Auxiliary VISION model for image tasks (vision_analyze). The main model
   # behind hermes-default is text-only, so Hermes falls back to this aux model to
   # describe images. Stable LiteLLM alias → the sglang-vision companion. Empty

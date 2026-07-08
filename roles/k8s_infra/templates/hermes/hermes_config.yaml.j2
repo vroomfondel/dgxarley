@@ -12,13 +12,15 @@ model:
   provider: "custom"
   default: "{{ (item.litellm_model | default('')) or hermes.default_model }}"
   base_url: "{{ hermes.litellm_url }}/v1"
-{% set _context_length = (item.context_length | default('')) or (hermes.context_length | default('')) %}
+{% set _context_length = (item.context_length | default('')) or (hermes.context_length | default('')) or (_hermes_default_context_length | default('')) %}
 {% if _context_length %}
   # Pinned context window. hermes-default is a LiteLLM alias with no probe-able
   # context metadata, so without this Hermes defaults to 256,000 ("probe-down"
-  # INFO in agent.log). MUST match the SGLang model currently behind the alias
-  # (sglang_served_model_name) — update hermes.context_length on a model swap, or
-  # set it "" to restore the 256k auto-default. Per-user override: item.context_length.
+  # INFO in agent.log). Value precedence: per-user item.context_length →
+  # ops override hermes.context_length → DERIVED from the active SGLang model
+  # profile (sglang_model_profiles[sglang_model].context_length, set in hermes.yml).
+  # The derived path tracks a model swap automatically; the overrides are escape
+  # hatches. Empty everywhere → key omitted → Hermes' 256k auto-default.
   context_length: {{ _context_length }}
 {% endif %}
 {% set vision_model = (item.vision_model | default('')) or hermes.vision_model %}

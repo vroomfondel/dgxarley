@@ -301,6 +301,44 @@
       data:
         cyberpunk-lg.yaml: "{{ lookup('file', 'hermes_dashboard_theme_cyberpunk_lg.yaml') }}"
 
+# === Derive the LiteLLM-alias context window from the active SGLang profile ===
+# hermes-default is a LiteLLM alias with no probe-able context metadata, so Hermes
+# would default to 256,000 ("probe-down" INFO). The single source of truth is the
+# SGLang model profile (roles/k8s_dgx/model_profiles/<model>.yml → context_length),
+# the SAME value k8s_dgx feeds SGLang. We load those profiles here (mirroring the
+# k8s_dgx loader) and index the pinned model (sglang_model, a group_vars/all
+# global). Result flows into config.yaml as model.context_length. An explicit
+# hermes.context_length (or per-user item.context_length) still overrides this.
+# Skipped when hermes.context_length is set — no need to load profiles then.
+- name: Load SGLang model profiles (for hermes-default context_length)
+  ansible.builtin.include_vars:
+    file: "{{ item }}"
+    name: "_hermes_mp_{{ idx }}"
+  loop: "{{ lookup('fileglob', playbook_dir ~ '/roles/k8s_dgx/model_profiles/*.yml', wantlist=True) | sort }}"
+  loop_control:
+    index_var: idx
+    label: "{{ item | basename }}"
+  when: (hermes.context_length | default('')) | string | length == 0
+
+- name: Merge SGLang model profiles into sglang_model_profiles
+  ansible.builtin.set_fact:
+    sglang_model_profiles: >-
+      {{ sglang_model_profiles | default({}) | combine(
+         lookup('vars', '_hermes_mp_' ~ item)._model_profile | default({}),
+         recursive=True
+      ) }}
+  loop: "{{ range(lookup('fileglob', playbook_dir ~ '/roles/k8s_dgx/model_profiles/*.yml', wantlist=True) | length) | list }}"
+  loop_control:
+    label: "profile {{ item }}"
+  when: (hermes.context_length | default('')) | string | length == 0
+
+# Empty string when: hermes.context_length is set (skips the load above), the
+# pinned model has no profile file, or the profile omits context_length. Empty →
+# the template falls back to hermes.context_length, then to Hermes' 256k default.
+- name: Derive hermes-default context_length from the active SGLang model profile
+  ansible.builtin.set_fact:
+    _hermes_default_context_length: "{{ (sglang_model_profiles[sglang_model] | default({})).context_length | default('') if ((hermes.context_length | default('')) | string | length == 0) else '' }}"
+
 # === Per-user shared ConfigMaps + Secrets (used by both agent + webui pods) ===
 
 - name: Render per-user hermes config.yaml ConfigMap
