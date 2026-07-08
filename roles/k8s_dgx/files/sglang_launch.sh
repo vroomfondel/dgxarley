@@ -1701,7 +1701,7 @@ if [ -n "$SGLANG_DLLM_ALGORITHM" ]; then
   args+=(--dllm-algorithm "$SGLANG_DLLM_ALGORITHM")
 fi
 # Server log level. Empty → no flag → SGLang's built-in default ('info'). Set
-# SGLANG_LOG_LEVEL=debug (via sglang_log_level in defaults/main.yml or a model
+# SGLANG_LOG_LEVEL=debug (via sglang_log_level in defaults/main/sglang.yml or a model
 # profile) to surface SGLang's logger.debug diagnostics — notably the Frozen-KV
 # MTP draft-bind skip ("Draft model <class> does not implement ... skipping
 # frozen-kv bind."), which names the class a Gemma-4 assistant draft loads as.

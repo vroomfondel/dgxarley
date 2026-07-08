@@ -4,7 +4,7 @@
 # resources to the pre-refactor deployment). All instance-specific logic lives in
 # sglang_instance.yml; this file only fans out over the instance map.
 #
-# Per-instance variable wiring (see roles/k8s_dgx/defaults/main.yml for the schema):
+# Per-instance variable wiring (see roles/k8s_dgx/defaults/main/sglang_instances.yml for the schema):
 #   inst                     = _sglang_instance_defaults merged under the entry
 #   _sglang_active_model     = inst.model     -> re-resolves all model-derived knobs
 #   _sglang_active_nnodes    = #nodes         -> re-resolves tp/pp + QSFP IP slice

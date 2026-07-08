@@ -1,0 +1,189 @@
+---
+# ============================================================================
+# Multiple SGLang instances
+# ----------------------------------------------------------------------------
+# sglang.yml loops over sglang_instances and includes sglang_instance.yml once
+# per entry. Each entry carries only what DIFFERS from the single-instance
+# defaults; everything omitted is inherited, so the canonical "default"
+# instance (whole cluster, active sglang_model) needs no keys at all and
+# renders byte-identical resources to the pre-refactor single deployment.
+#
+# Per-instance keys (all optional — _sglang_instance_defaults supplies the rest):
+#   nodes:         list of spark-ids; nodes[0] = head (rank 0), the rest are
+#                  workers (rank 1..N), placed on those spark-ids in order.
+#                  Default: all sglang_nnodes sparks, [1..N].
+#   model:         HF model id. Default: global sglang_model. All model-derived
+#                  knobs (tp/pp/ep, context_length, quantization, image, kernel
+#                  backends, speculative, …) re-resolve from THIS model's
+#                  profile automatically via _sglang_active_model.
+#   tp_size:       tensor-parallel override (default: profile tp_size, else
+#                  #nodes). Needed when the model's profile pins a tp_size that
+#                  doesn't fit a sub-cluster instance's node count.
+#   pp_size:       pipeline-parallel override (default: #nodes // tp). tp*pp
+#                  must equal #nodes (1 GPU/node) — enforced by assert.
+#   ep_size:       expert-parallel override (default: profile ep_size, else 1).
+#                  Must divide tp — enforced by assert.
+#   max_total_tokens: absolute KV-cache cap in tokens (default: profile value,
+#                  else unset). Use for co-located instances to pin memory
+#                  deterministically on the shared GB10 unified memory.
+#   context_length: per-request context window (default: profile value). Override
+#                  to run a shorter window than the profile pins (e.g. trim a
+#                  vision companion to cap KV) without forking the profile.
+#   prefix:        K8s resource-name prefix AND the `app` label value. Default:
+#                  "sglang" for the "default" instance, "sglang-<key>" otherwise.
+#   hostname:      ingress/cert/DNS short name -> <hostname>.<dns_suffix>.
+#                  Default: same as prefix.
+#   sriov_key:     key into qsfp_sriov_assignments for the VF index + QSFP IP
+#                  block. Default: "sglang" for "default", "<key>" otherwise. A
+#                  non-default instance needs its OWN qsfp_sriov_assignments
+#                  entry (own VF + IP block) to coexist on shared nodes.
+#   port / internal_port / nccl_port: pod-netns-local (each pod has its own
+#                  network namespace), so these can stay identical across
+#                  instances even when co-located. Override only if needed.
+#   enable_metrics: SGLang Prometheus exporter (--enable-metrics, /metrics on the
+#                  head's HTTP port). Default: global sglang_enable_metrics (on).
+#                  Set false to silence a noisy/ephemeral instance's scrape.
+#   external_enabled: expose this instance's HTTP API OUTSIDE the cluster via
+#                  Traefik (cert-manager TLS + IP-allowlist + http→https redirect
+#                  + DNS A record at <hostname>.<dns_external_domain_suffix>).
+#                  Default: global sglang_external_enabled (on). Set false for an
+#                  internal-only instance — the ClusterIP Service is still created
+#                  (in-cluster clients like litellm need it); only the ingress,
+#                  certificate and DNS record are skipped.
+#
+# Node sharing: nodes lists MAY overlap (GPU time-slicing — needs enough
+# nvidia_gpu_timeslice_replicas) or be disjoint (partitioning). Overlap requires
+# SR-IOV with a distinct sriov_key per instance; PF mode has a single QSFP IP
+# per node, so overlap is impossible there.
+# ---------------------------------------------------------------------------
+# enable_vision_model (group_vars/all/main/sglang.yml) is the MASTER SWITCH for the
+# Qwen3-VL vision companion. true → `default` + `vision` are deployed; false →
+# ONLY `default`, and `k8s_dgx.yml --tags sglang` ALSO tears down any already-
+# running sglang-vision resources (teardown block at the end of sglang.yml).
+# Full enable/disable HOWTO lives next to the flag in group_vars/all/main/sglang.yml.
+#
+# The Qwen3-VL VISION COMPANION (tp=2 across spark3+spark4). Background that used
+# to be inline: the 8B (~9 GB) co-locates with the 4-node `default` text instance
+# via GPU time-slicing (nvidia_gpu_timeslice_replicas already 4 on this cluster).
+# KV is fp8 (73,728 B/token); max_total_tokens 65536 ≈ ~2.4 GB/GPU sharded. PIN
+# the footprint via max_total_tokens (absolute), NOT mem_fraction_static (a
+# fraction of TOTAL unified memory → start-order dependent on the shared GPU).
+_sglang_vision_instance:
+  model: "Qwen/Qwen3-VL-8B-Instruct-FP8"
+  nodes: [3, 4]          # spark3 (head/rank0) + spark4 (worker/rank1) — NCCL over the sglang_vision VF
+  sriov_key: "sglang_vision"
+  tp_size: 2             # weights+KV shard across 2 GPUs → ~10.5 GB/GPU (vs ~18 GB at tp=1)
+  pp_size: 1             # tp*pp == #nodes (2) ✓
+  ep_size: 1             # ep divides tp ✓ (dense model, no experts)
+  max_total_tokens: 65536  # absolute KV cap = deterministic footprint; KV is sharded → ~2.4 GB/GPU
+  context_length: 65536    # per-request window (overrides the profile); keep == max_total_tokens
+  external_enabled: false  # in-cluster only (ClusterIP for litellm); no external ingress/cert/DNS
+
+# ---------------------------------------------------------------------------
+# enable_coder_model (group_vars/all/main/sglang.yml) is the MASTER SWITCH for the
+# Qwen3-Coder-Next companion, default OFF. Same machinery as vision: true → joins
+# the deploy loop (key `coder` → prefix "sglang-coder"); false → dropped from the
+# loop AND `--tags sglang` tears down any running sglang-coder resources.
+#
+# Qwen3-Coder-Next-80B-A3B (RedHatAI NVFP4), tp=4/ep=4/pp=1 over ALL 4 sparks —
+# CO-LOCATES with the `default` text instance (and vision on spark3+4) via GPU
+# time-slicing. UNVALIDATED ("first contact" profile) AND memory-tight: the
+# Nemotron default holds ~90 GB/spark, the 80B NVFP4 needs ~40 GB+ — it WON'T fit
+# until you free room (lower the default's mem_fraction_static). mem_fraction_static
+# is NOT a per-instance key (resolves from the model profile = 0.50); once you've
+# freed memory, PIN a co-located footprint via max_total_tokens here. Enabling
+# also needs qsfp_sriov_enabled + the `sglang_coder` qsfp_sriov_assignments entry
+# AND nvidia_gpu_timeslice_replicas high enough for the per-GPU stacking. TUNE
+# before flipping enable_coder_model true.
+_sglang_coder_instance:
+  model: "RedHatAI/Qwen3-Coder-Next-NVFP4"
+  nodes: [1, 2, 3, 4]      # all 4 sparks — co-locates with `default` (+ vision on 3,4) via timeslice
+  sriov_key: "sglang_coder"
+  tp_size: 4               # tensor-parallel across all 4 GPUs
+  ep_size: 4               # =tp → all-to-all expert parallelism for the MoE layers
+  pp_size: 1               # tp*pp == #nodes (4) ✓
+  external_enabled: false  # in-cluster only (ClusterIP for litellm); no external ingress/cert/DNS
+
+# ---------------------------------------------------------------------------
+# enable_embedding_model (group_vars/all/main/sglang.yml) is the MASTER SWITCH for the
+# EMBEDDING companion, default OFF. Same machinery as vision/coder: true → joins
+# the deploy loop (key `embed` → prefix "sglang-embed"); false → dropped AND a
+# `--tags sglang` run tears down any running sglang-embed resources.
+#
+# ALWAYS single-node tp=1 (embedding needs no NCCL/QSFP): nodes is a ONE-element
+# list, so the assert forces pp=1, the worker loop range(1,1) is empty (head-only
+# Deployment), and the wait-for-worker initContainer no-ops (WAIT_COUNT=0). The
+# `embed` instance is EMBEDDING-mode (is_embedding: true) → served by the minimal
+# files/sglang_embed_launch.sh, no QSFP network annotation. Placed on spark2 (the
+# node ollama-embed used). Replaces roles/k8s_dgx/tasks/ollama_embed.yml.
+# served-model-name follows the model id (sglang_served_model_name == _sglang_active_model),
+# so it changes with the model — but consumers reach embeddings via the STABLE
+# `embed-default` LiteLLM alias (litellm_embed_alias_model), which is repointed at
+# the new served name in the same change, so honcho/hindsight/OpenWebUI are unaffected.
+# FP8 quant of Qwen3-Embedding-4B (see the model profile: same 2560-dim output, so
+# no pgvector re-provisioning). Keep litellm_embed_model (group_vars/all) == this id.
+_sglang_embed_instance:
+  model: "chroma-core/Qwen3-Embedding-4B-FP8-Dynamic"
+  nodes: [2]               # single-node on spark2 (where ollama-embed lived)
+  tp_size: 1               # tp*pp == #nodes (1) → pp forced to 1; empty worker loop
+  pp_size: 1
+  is_embedding: true       # → embed launcher + no QSFP annotation (template guards)
+  hostname: "sglang-embed"
+  external_enabled: false  # in-cluster only (ClusterIP for litellm/honcho/hindsight)
+
+# `default` is ALWAYS present (whole cluster, active sglang_model); `vision`,
+# `coder` and `embed` join only when their enable_*_model flag is true. To add
+# MORE instances define them like _sglang_vision_instance above and combine()
+# them in here.
+# NAMING: the instance KEY ("coder") → prefix/hostname "sglang-<key>", so it MUST
+# be RFC1123-safe (lowercase/digits/'-', NO underscore); sriov_key is only a
+# qsfp_sriov_assignments lookup so it MAY contain underscores. Co-located
+# instances need qsfp_sriov_enabled + their own assignment AND timeslice ≥ 2.
+sglang_instances: >-
+  {{ {'default': {}}
+     | combine({'vision': _sglang_vision_instance}
+               if (enable_vision_model | default(true)) else {})
+     | combine({'coder': _sglang_coder_instance}
+               if (enable_coder_model | default(false)) else {})
+     | combine({'embed': _sglang_embed_instance}
+               if (enable_embedding_model | default(false)) else {}) }}
+
+# Merged UNDER each sglang_instances entry (entry wins). _inst_key is the dict
+# key of the current instance, set by the loop in sglang.yml. Defaults that
+# reference sglang_model / sglang_nnodes use the GLOBAL (never-overridden) vars
+# so there is no recursion with the _sglang_active_* indirection.
+# SGLang built-in Prometheus exporter (--enable-metrics → /metrics on the HTTP
+# server port). Gated, default ON, and INSTANCE-bound (not model-bound): general
+# engine metrics (running/waiting reqs, gen throughput, cache hit rate, TTFT /
+# e2e-latency / inter-token histograms) are an observability concern per
+# deployment. Distinct from enable_expert_distribution_metrics, which is NOT a
+# Prometheus exporter at all: it dumps per-expert .pt files via the
+# /{start,stop,dump}_expert_distribution_record API (EP-balance analysis, model-
+# bound) and never reaches /metrics. Every SGLang metric is auto-labelled
+# model_name=<served_model_name> (= inst.model here), so a single instance that
+# swaps models over time keeps its time-series separable by model.
+# Per-instance override via sglang_instances.<key>.enable_metrics. Only the HEAD
+# pod serves /metrics (workers run no HTTP server), so only the head is scraped.
+sglang_enable_metrics: true
+
+# Expose each SGLang instance's OpenAI-compatible HTTP API OUTSIDE the cluster
+# via Traefik (per-instance cert-manager TLS + IP-allowlist + http→https redirect
+# + DNS A record at <hostname>.<dns_external_domain_suffix>). Gated, default ON.
+# The ClusterIP Service is ALWAYS created (in-cluster clients like litellm /
+# openwebui resolve sglang at <prefix>.<sglang_namespace>.svc); this flag only
+# governs the EXTERNAL ingress, certificate and DNS record. Per-instance override
+# via sglang_instances.<key>.external_enabled.
+sglang_external_enabled: true
+
+_sglang_instance_defaults:
+  nodes: "{{ range(1, (sglang_nnodes | int) + 1) | list }}"
+  model: "{{ sglang_model }}"
+  prefix: "{{ 'sglang' if _inst_key == 'default' else 'sglang-' ~ _inst_key }}"
+  hostname: "{{ 'sglang' if _inst_key == 'default' else 'sglang-' ~ _inst_key }}"
+  sriov_key: "{{ 'sglang' if _inst_key == 'default' else _inst_key }}"
+  port: "{{ sglang_port }}"
+  internal_port: "{{ sglang_internal_port }}"
+  nccl_port: "{{ nccl_bootstrap_port }}"
+  enable_metrics: "{{ sglang_enable_metrics }}"
+  external_enabled: "{{ sglang_external_enabled }}"
+  is_embedding: false

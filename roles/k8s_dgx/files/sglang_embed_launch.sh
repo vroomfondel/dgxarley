@@ -56,7 +56,7 @@ args=(
 # (sgl-project/sglang#9181), so this cap is what actually bounds it. The profile
 # therefore sets mem_fraction_static high (headroom only) and max_total_tokens as
 # the real, start-order-independent cap. Each knob is guarded so an empty/sentinel
-# value (defaults/main.yml) is a no-op — set -e safe via if/then, NOT `&&` chains
+# value (defaults/main/sglang.yml) is a no-op — set -e safe via if/then, NOT `&&` chains
 # (a failed `[ ]` test under set -e would kill the script).
 if [ -n "${SGLANG_MAX_TOTAL_TOKENS:-}" ]; then
   args+=(--max-total-tokens "$SGLANG_MAX_TOTAL_TOKENS")
