@@ -4,7 +4,7 @@
 
 > **Update 2026-06-22 — pinned image is now `v2026.6.19` (v0.17.0); the
 > version references in the older blocks below (v2026.6.5 / v2026.5.16) are
-> STALE.** `hermes.image_tag` in `roles/k8s_infra/defaults/main.yml` is
+> STALE.** `hermes.image_tag` in `roles/k8s_infra/defaults/main/hermes.yml` is
 > **`v2026.6.19`** (verified in-repo), i.e. **v0.17.0**, currently the latest
 > upstream release (published 2026-06-19). Consequences:
 > - **`--tui` removal (PR #38591, merged 2026-06-04, shipped v0.16.0 /

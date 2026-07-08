@@ -107,7 +107,7 @@
 
 Summary of everything that blocks or constrains serving **DeepSeek-V4-Flash** on
 our 4×GB10 / SM121 cluster under SGLang. Context (as written 2026-05-31): the
-then-active model (`roles/k8s_dgx/defaults/main.yml`) was
+then-active model (selector today: `group_vars/all/main/sglang.yml`) was
 **`sgl-project/DeepSeek-V4-Flash-FP8`** on image
 **`xomoxcc/dgx-spark-sglang:0.5.12.post1-sm121`** (SGLang v0.5.12.post1) — see
 the 2026-06-08 note above; this is no longer the default.
@@ -573,6 +573,6 @@ einem v0.5.13-Image ändert.
 - Node swap: device `roles/dgx_prepare/tasks/swap.yml` (tag `swap`, gate `k3s_node_swap_enabled`,
   size `dgx_swap_size`); kubelet policy `roles/k3sserver/templates/etc_rancher_k3s_kubelet-config.yaml.j2`
   (`failSwapOn: false`, `swapBehavior: LimitedSwap`)
-- Active model: `roles/k8s_dgx/defaults/main.yml` (`sglang_model`)
+- Active model: `group_vars/all/main/sglang.yml` (`sglang_model`)
 - Image: `xomoxcc/dgx-spark-sglang:0.5.14-sm121` — recipe `scripts/patches/sglang-0.5.14-sm121.recipe`
 - Release notes: see the 2026-06-29 block at the top of this file
