@@ -30,22 +30,18 @@
   when: local_podman_pubkey.stat.exists
 
 - name: configure default registries in /etc/containers/registries.conf
-  blockinfile:
-    path: /etc/containers/registries.conf
-    create: true
+  # Deterministic managed file (v2 format), NOT a blockinfile append. Replacing the
+  # whole registries.conf works even on hosts shipping an ACTIVE legacy
+  # [registries.search] file (e.g. the DGX-OS spark), where appending our block would
+  # create a duplicate [registries.search] table and fail to parse. Leaves the
+  # registries.conf.d/ drop-ins (e.g. shortnames.conf) untouched.
+  template:
+    src: etc_containers_registries.conf.j2
+    dest: /etc/containers/registries.conf
     owner: root
     group: root
     mode: "0644"
-    marker: "# {mark} ANSIBLE MANAGED BLOCK - default registries"
-    block: |
-      [registries.search]
-      registries = ["docker.io"]
-
-      [registries.insecure]
-      registries = []
-
-      # Optional: Verhindert, dass Podman überhaupt nachfragt und einfach den ersten Treffer nimmt
-      unqualified-search-registries = ["docker.io"]
+    backup: true
 
 - name: Check for an existing containers storage.conf
   ansible.builtin.stat:

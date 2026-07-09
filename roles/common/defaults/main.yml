@@ -23,6 +23,13 @@ dyndns_hostname: "dyn.example.com"
 # WiFi access points for netplan (overridden by vault)
 wifi_access_points: []
 
+# Podman unqualified image search registries (containers-registries.conf v2).
+# A single entry keeps short-name resolution unambiguous and suppresses Podman's
+# interactive registry-selection prompt. Applied only when `wantspodman: true`.
+podman_unqualified_search_registries:
+  - docker.io
+podman_short_name_mode: permissive
+
 # NFS server exports — only applied when `isnfsmaster: true`.
 # Schema: list of { path, clients: [{ cidr, options? }], owner?, group?, mode? }
 # Define in host_vars/<host>/vault/ (e.g. host_vars/k3smaster/vault/nfs.yml).

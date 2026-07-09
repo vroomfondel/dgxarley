@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+# Managed by roles/common/tasks/installpodman.yml — do not edit by hand.
+#
+# Modern (v2) containers-registries.conf(5) format. Do NOT add the deprecated
+# [registries.search] / [registries.insecure] v1 tables here: mixing v1 and v2
+# directives in one file is unsupported by containers/image and errors at parse
+# time. A single unqualified-search-registries entry also avoids Podman's
+# interactive registry-selection prompt for short image names.
+
+unqualified-search-registries = {{ podman_unqualified_search_registries | to_json }}
+
+short-name-mode = "{{ podman_short_name_mode }}"
