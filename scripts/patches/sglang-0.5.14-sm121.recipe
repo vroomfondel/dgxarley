@@ -34,6 +34,16 @@
 #      0.5.14-sm121 pod (no GPU needed — pure source inspection) that neither
 #      fix is present natively. Non-spec DSV4 serving is unaffected either way.
 #      See the APPLY_DSV4_MTP_MARLIN_TILELANG block below for details.
+#   7. [2026-07-09] Added CUTLASS_DSL_VERSION=4.5.3 — the 2026-07-06 rebuild of
+#      this image silently picked up DIFFERENT nvidia-cutlass-dsl 4.5.2 wheel
+#      content (same version number!): its tvm_ffi_provider passes data=[] to
+#      an llvm.mlir_global_dtors() binding that lacks the parameter → every
+#      fresh CuTe-DSL JIT compile ICEs ("unexpected keyword argument 'data'"),
+#      killing SGLang at CUDA-graph warmup on ANY model (verified: Nemotron
+#      head + Qwen3-VL vision instance; the 06-29 build of the SAME tag was
+#      fine). flashinfer pins only >=4.5.0, so every rebuild re-resolves this
+#      transitively. 4.5.3 (released 2026-07-08) is consistent — verified by
+#      in-pod install on the broken image. See dockerfile-cutlass-dsl-pin.patch.
 #
 # ⚠️  v0.5.14 is a tagged release but it is 248 commits past v0.5.13, well past
 #     the 3a1417a commit the gemma-diffusion recipe was pinned to. The SM121
@@ -83,6 +93,15 @@ TRANSFORMERS_VERSION=5.8.1
 # kompilierte sgl-kernel + flashinfer, nicht über den HF-Hub. 0.14.1 (nicht
 # open-ended): 0.14.0 hat einen breaking repo-type-change, 0.14.1 ist der Bugfix.
 KERNELS_VERSION=0.14.1
+
+# nvidia-cutlass-dsl 4.5.3 — explicit pin, force-reinstalled late in the build
+# (empty = no-op). flashinfer requires only >=4.5.0 (open-ended) AND NVIDIA has
+# shipped different wheel content under the same 4.5.2 version number; the
+# 2026-07-06 variant is internally inconsistent and ICEs on every fresh
+# CuTe-DSL JIT compile (mlir_global_dtors 'data' kwarg — delta note 7). 4.5.3
+# (2026-07-08) is consistent; verified against the live crash. Wired via
+# dockerfile-cutlass-dsl-pin.patch (build_sm121_image.sh step 2-cutlass).
+CUTLASS_DSL_VERSION=4.5.3
 
 # Audio multimodal deps — installed by dockerfile-audio-deps.patch (gated ARG,
 # empty = no-op). Required for omni models that decode audio at runtime, e.g.

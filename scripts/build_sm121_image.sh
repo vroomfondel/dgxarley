@@ -1063,6 +1063,27 @@ apply_patches() {
         echo "audio-deps Dockerfile patched"
     fi
 
+    # 2-cutlass. Add an `ARG CUTLASS_DSL_VERSION` + gated force-reinstall RUN
+    #     step pinning nvidia-cutlass-dsl (+ its libs-base/libs-cu13 wheels) to
+    #     an exact version. Root cause 2026-07-09: NVIDIA shipped different
+    #     wheel content under the SAME 4.5.2 version — the newer variant's
+    #     tvm_ffi_provider passes data=[] to an llvm.mlir_global_dtors() binding
+    #     without that param → "ICE ... unexpected keyword argument 'data'" on
+    #     every fresh CuTe-DSL JIT compile (flashinfer rmsnorm_cute in CUDA-graph
+    #     warmup crashes ANY model). flashinfer pins only >=4.5.0, so rebuilds
+    #     re-resolve this transitively. Anchors on the audio-deps block above,
+    #     so it MUST run after it. Always applied — no-op when the recipe leaves
+    #     CUTLASS_DSL_VERSION empty. See patches/dockerfile-cutlass-dsl-pin.patch.
+    if [[ -f "${PATCHES_DIR}/dockerfile-cutlass-dsl-pin.patch" ]]; then
+        echo "Applying dockerfile-cutlass-dsl-pin.patch..."
+        patch --dry-run -p1 < "${PATCHES_DIR}/dockerfile-cutlass-dsl-pin.patch" \
+            || die "cutlass-dsl-pin Dockerfile patch dry-run failed — upstream Dockerfile drifted; regenerate dockerfile-cutlass-dsl-pin.patch"
+        patch -p1 < "${PATCHES_DIR}/dockerfile-cutlass-dsl-pin.patch"
+        grep -q 'ARG CUTLASS_DSL_VERSION' container-build/Dockerfile.sglang-nightly \
+            || die "cutlass-dsl-pin Dockerfile patch verification failed"
+        echo "cutlass-dsl-pin Dockerfile patched"
+    fi
+
     # 2-dsv4. DeepSeek-V4-Flash FlashMLA sparse-decode kernel (sm_121a).
     #     Adds an ARG + RUN step in the builder (before the dist-packages split)
     #     that installs stock flash_mla and builds 0xSero/deepseek-v4-flash-sm120
@@ -1245,7 +1266,7 @@ run_build() {
     [[ -f "${recipe_file}" ]] || die "Recipe not found: ${recipe_file}"
 
     local R_DOCKERFILE R_TARGET R_BASE_IMAGE R_FLASHINFER_VERSION
-    local R_TRANSFORMERS_VERSION R_KERNELS_VERSION R_AUDIO_DEPS R_SGLANG_VERSION R_SGLANG_REF R_IMAGE_TAG
+    local R_TRANSFORMERS_VERSION R_KERNELS_VERSION R_CUTLASS_DSL_VERSION R_AUDIO_DEPS R_SGLANG_VERSION R_SGLANG_REF R_IMAGE_TAG
     local R_FLASH_MLA_REPO R_FLASH_MLA_REF R_DSV4_KERNEL_REPO R_DSV4_KERNEL_REF R_DSV4_KERNEL_ARCH
     # shellcheck disable=SC1090
     source <(
@@ -1258,6 +1279,7 @@ run_build() {
         echo "R_FLASHINFER_VERSION='${FLASHINFER_VERSION}'"
         echo "R_TRANSFORMERS_VERSION='${TRANSFORMERS_VERSION}'"
         echo "R_KERNELS_VERSION='${KERNELS_VERSION:-}'"
+        echo "R_CUTLASS_DSL_VERSION='${CUTLASS_DSL_VERSION:-}'"
         echo "R_AUDIO_DEPS='${AUDIO_DEPS:-}'"
         echo "R_SGLANG_VERSION='${SGLANG_VERSION}'"
         echo "R_SGLANG_REF='${SGLANG_REF}'"
@@ -1288,6 +1310,7 @@ run_build() {
     echo "  FLASHINFER_VERSION   = ${R_FLASHINFER_VERSION}"
     echo "  TRANSFORMERS_VERSION = ${R_TRANSFORMERS_VERSION}"
     echo "  KERNELS_VERSION      = ${R_KERNELS_VERSION:-<unset, skipped>}"
+    echo "  CUTLASS_DSL_VERSION  = ${R_CUTLASS_DSL_VERSION:-<unset, skipped>}"
     echo "  AUDIO_DEPS           = ${R_AUDIO_DEPS:-<unset, skipped>}"
     echo "  SGLANG_VERSION       = ${R_SGLANG_VERSION}"
     echo "  SGLANG_REF           = ${R_SGLANG_REF}"
@@ -1321,6 +1344,7 @@ run_build() {
         --build-arg "FLASHINFER_VERSION=${R_FLASHINFER_VERSION}" \
         --build-arg "TRANSFORMERS_VERSION=${R_TRANSFORMERS_VERSION}" \
         --build-arg "KERNELS_VERSION=${R_KERNELS_VERSION:-}" \
+        --build-arg "CUTLASS_DSL_VERSION=${R_CUTLASS_DSL_VERSION:-}" \
         --build-arg "AUDIO_DEPS=${R_AUDIO_DEPS:-}" \
         --build-arg "SGLANG_VERSION=${R_SGLANG_VERSION}" \
         --build-arg "SGLANG_REF=${R_SGLANG_REF}" \

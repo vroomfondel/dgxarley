@@ -1,0 +1,64 @@
+Pin nvidia-cutlass-dsl (+ its two libs wheels) to an exact, known-good version.
+
+Root cause (2026-07-09): NVIDIA has shipped different wheel CONTENT under the
+SAME version number. Two builds of the 0.5.14-sm121 image six days apart
+(2026-06-29 vs 2026-07-06) both resolved nvidia-cutlass-dsl==4.5.2 yet ended up
+with different cutlass/_mlir generated binding files (_llvm_ops_gen.py sha
+mismatch). The newer variant is internally inconsistent: its own
+cutlass_dsl/tvm_ffi_provider.py passes data=[] to llvm.mlir_global_dtors(),
+whose ODS-generated binding in that same wheel lacks the parameter. Every FRESH
+CuTe-DSL JIT compile then dies with
+
+    DSLRuntimeError: ICE ... mlir_global_dtors() got an unexpected keyword
+    argument 'data'
+
+first hit in practice: flashinfer's rmsnorm_cute during SGLang CUDA-graph
+warmup -> scheduler crash-loop on ANY model (verified on both the Nemotron head
+and the Qwen3-VL vision instance). flashinfer only requires
+nvidia-cutlass-dsl>=4.5.0 (open-ended), so every rebuild re-resolves this
+transitively. 4.5.3 (released 2026-07-08) restores consistency — verified by
+in-pod install on the broken image (compile OK).
+
+Mirrors the dockerfile-kernels-pin.patch mechanism: ARG + gated force-reinstall
+RUN in the builder stage (BEFORE directory_split2.sh so the pinned files are
+carried into the runtime stage). --no-deps + all three wheels pinned explicitly
+(meta + libs-base + libs-cu13 share one version) so nothing else is touched;
+--force-reinstall so the pin wins even over a same-version-different-bytes
+install. Empty CUTLASS_DSL_VERSION = no-op.
+
+Applied AFTER dockerfile-kernels-pin.patch and dockerfile-audio-deps.patch (it
+anchors on the audio-deps block). The recipe drives it via the
+CUTLASS_DSL_VERSION variable (see sglang-0.5.14-sm121.recipe delta note 7).
+
+Apply to: container-build/Dockerfile.sglang-nightly in the local clone of
+scitrera/cuda-containers.
+
+--- a/container-build/Dockerfile.sglang-nightly
++++ b/container-build/Dockerfile.sglang-nightly
+@@ -269,6 +269,26 @@
+         uv pip install ${AUDIO_DEPS}; \
+     fi
+
++# dgxarley: pin nvidia-cutlass-dsl to an exact, known-good version. NVIDIA has
++# shipped different wheel content under the SAME version number (two builds
++# both resolving ==4.5.2 got different cutlass/_mlir bindings; the later one
++# passes data=[] to an llvm.mlir_global_dtors() binding without that param ->
++# "ICE ... unexpected keyword argument 'data'" on every fresh CuTe-DSL JIT
++# compile, first hit flashinfer rmsnorm_cute in CUDA-graph warmup; fixed
++# upstream in 4.5.3, 2026-07-08). Force-reinstall of the meta package + BOTH
++# libs wheels (--no-deps, exact ==) so the pin wins even over a
++# same-version-different-bytes install. Empty = no-op.
++# See patches/dockerfile-cutlass-dsl-pin.patch.
++ARG CUTLASS_DSL_VERSION=""
++RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
++    if [ -n "$CUTLASS_DSL_VERSION" ]; then \
++        echo "=== Pinning nvidia-cutlass-dsl==${CUTLASS_DSL_VERSION} ==="; \
++        uv pip install --force-reinstall --no-deps \
++            "nvidia-cutlass-dsl==${CUTLASS_DSL_VERSION}" \
++            "nvidia-cutlass-dsl-libs-base==${CUTLASS_DSL_VERSION}" \
++            "nvidia-cutlass-dsl-libs-cu13==${CUTLASS_DSL_VERSION}"; \
++    fi
++
+ # SM121 (DGX Spark GB10) shared memory fix for cutlass_moe_fp4.
+ # Patches run_fp4_blockwise_scaled_group_mm_sm120() in the JIT-compiled
+ # nvfp4_blockwise_moe.cuh to use KernelPtrArrayTmaWarpSpecializedCooperative
