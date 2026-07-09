@@ -24,6 +24,69 @@ directly to Valkey + RustFS, so nothing is routed through a coordinator.
 | **mount**       | `juicefs_mount_group` | native systemd FUSE mount, `Restart=always`, per-node cache            |
 | **meta-backup** | backup node           | root cron job: `juicefs dump` → external backup S3 (`rustfs_rc_alias`) |
 
+## Single-node vs. distributed object store
+
+`juicefs_rustfs_distributed` (default **false**) selects the RustFS topology:
+
+- **OFF (single-node):** RustFS runs only on `juicefs_storage_node`, one local
+  volume, no erasure coding. Original behaviour — unchanged.
+- **ON (distributed):** RustFS runs on **every** node in `juicefs_storage_nodes`,
+  forming one erasure-coded S3 cluster. Object data is striped + made redundant
+  across all their USB-SSDs, so no single USB bus carries every write.
+
+`juicefs_storage_nodes` is a **structured, ordered** list — one entry per node,
+each listing its USB disk(s) as dicts; heterogeneous paths and disk counts allowed:
+
+```yaml
+juicefs_storage_nodes:
+  - node: spark1
+    disks: [{ path: /mnt/intenso, uuid: "<blkid-UUID>", fstype: ext4 }]
+  - node: spark2                                        # two disks on this node
+    disks:
+      - { path: /mnt/usb-a, uuid: "<uuid>", fstype: ext4 }
+      - { path: /mnt/usb-b, uuid: "<uuid>", fstype: ext4 }
+  - node: spark3
+    disks: [{ path: /mnt/intenso, uuid: "<uuid>", fstype: ext4 }]
+  - node: spark4
+    disks: [{ path: /mnt/intenso, uuid: "<uuid>", fstype: ext4 }]
+```
+
+Per disk, `path` is always required (RustFS data dir = `<path>/rustfs`);
+`uuid`/`fstype`/`options` are consulted only when `juicefs_manage_fstab` is on.
+Order matters (positional erasure membership; `RUSTFS_VOLUMES` is rendered
+identically on every node). The **primary** (`juicefs_storage_node`) must be a
+member — it keeps running Valkey, does the one-time format, and is the single S3
+endpoint the FUSE clients dial. Redundancy level via `juicefs_rustfs_raid_level`:
+
+| `raid_level` | `EC:M` | usable (n drives) | tolerates |
+|--------------|--------|-------------------|-----------|
+| `raid0`      | `EC:0` | 100 %             | 0 (striping only) |
+| `raid5`      | `EC:1` | (n−1)/n           | 1 node/disk |
+| `raid6`      | `EC:2` | (n−2)/n           | 2 nodes/disks |
+
+**Constraints (verified upstream):** ≥4 total drives; **Valkey stays single-node**
+(distributing RustFS does NOT remove the metadata SPOF — the meta-backup cron is
+the insurance); RAID6 needs ≥4 drives.
+
+**Mounting the disks — `juicefs_manage_fstab`** (default **false**):
+
+- **OFF:** you own `/etc/fstab` (mount each USB by hand, e.g.
+  `UUID=… /mnt/intenso ext4 defaults,nofail 0 2`); the role only verifies the
+  mountpoints and fails if one is missing. Original behaviour.
+- **ON:** the role writes a **UUID-keyed** fstab entry (via `ansible.posix.mount`,
+  `state: mounted`, opts default `defaults,nofail`) and mounts each disk that
+  carries a `uuid` before the mountpoint check. UUID is mandatory — USB `/dev/sdX`
+  names reorder across boots and a wrong name would drop a disk into the wrong
+  erasure slot. Get the UUID with `blkid /dev/sdX1`. Single-node mode has no
+  structured disk (only `juicefs_disk_path`), so it stays manual either way.
+
+**⚠ Migration — enabling distributed is NOT in-place.** Single-node (SNSD) has no
+erasure coding and its on-disk layout is incompatible with distributed mode.
+Flipping `juicefs_rustfs_distributed` to true on a populated store means a **fresh
+`juicefs format`** — the existing object data is abandoned. Move/re-download data
+off the filesystem first, then wipe the old single-node data dir before deploying
+the cluster.
+
 ## Key variables (see `defaults/main.yml`)
 
 - `juicefs_storage_node` — **the placement knob**: which node has the USB-SSD and

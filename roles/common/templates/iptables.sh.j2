@@ -78,6 +78,12 @@ iptables -A HTSTUFFIN -s {{ qsfp_vf_network }} -j RETURN
 # node, only when juicefs_mount_master is on. requirepass + S3 keys still apply.
 # (juicefs_enabled / juicefs_storage_node / juicefs_mount_master live in
 # group_vars/all/main/juicefs.yml; nothing opens while the layer is not deployed.)
+#
+# DISTRIBUTED mode (juicefs_rustfs_distributed) needs NO extra rule here: FUSE
+# clients still dial only the PRIMARY's 9000 (juicefs_storage_address), so this
+# same rule covers the master; and the inter-node erasure traffic between the
+# RustFS storage nodes is spark<->spark over the QSFP mesh, already accepted
+# wholesale by the qsfp_network RETURN above.
 iptables -A HTSTUFFIN -m state --state NEW -p tcp -m multiport --dport 6379,9000 -m set --match-set k3snodes src -j RETURN
 {% endif %}
 

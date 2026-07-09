@@ -58,6 +58,105 @@ juicefs_valkey_bind_addresses: >-
 # (so RustFS data never lands on the OS disk by accident). Override only for tests.
 juicefs_require_disk_mount: true
 
+# --- Distributed RustFS (multi-node erasure coding) -------------------------
+# Single-node (default) vs distributed multi-node object store.
+#   OFF  -> exact single-node behaviour: RustFS on juicefs_storage_node only, a
+#           local volume, NO erasure coding. Zero change vs the original role.
+#   ON   -> RustFS runs on EVERY node in juicefs_storage_nodes, forming ONE
+#           erasure-coded S3 cluster whose object DATA is striped + made
+#           redundant across all their USB-SSDs.
+#
+# HARD CONSTRAINTS (RustFS distributed mode — all verified upstream):
+#   * Minimum 4 nodes, each with >=1 disk. RustFS refuses to start with fewer.
+#   * NOT an in-place upgrade. Single-node (SNSD) has no erasure coding and its
+#     on-disk layout is INCOMPATIBLE with distributed mode — enabling this on a
+#     populated single-node store means a FRESH juicefs format (the existing
+#     object data is abandoned). Migrate/re-download first. See README "Migration".
+#   * Valkey (metadata) STAYS single-node on juicefs_storage_node. Distributing
+#     RustFS does NOT remove the Valkey SPOF — only the object data gains
+#     redundancy. The off-box meta-backup cron remains your metadata insurance.
+#   * juicefs_storage_node stays the "primary": it runs Valkey, performs the
+#     one-time format, and is the single S3 endpoint the FUSE clients dial
+#     (juicefs_storage_address). The primary terminates S3 + coordinates the
+#     erasure writes out to its peers over QSFP; disk I/O still spreads across
+#     all nodes (the whole point — no single USB bus carries every write).
+juicefs_rustfs_distributed: false
+
+# The RustFS cluster members in distributed mode. STRUCTURED, ordered list — one
+# entry per node, each listing that node's USB disk(s) as dicts. Nodes may differ
+# in BOTH mountpoint path AND disk count (heterogeneous topology is supported):
+#   juicefs_storage_nodes:
+#     - node: spark1                                # inventory_hostname
+#       disks:
+#         - { path: /mnt/intenso, uuid: "<blkid-UUID>", fstype: ext4 }
+#     - node: spark2
+#       disks:                                      # two disks on this node
+#         - { path: /mnt/usb-a, uuid: "<uuid>", fstype: ext4 }
+#         - { path: /mnt/usb-b, uuid: "<uuid>", fstype: ext4 }
+# Per disk: `path` (mountpoint; RustFS data dir = <path>/rustfs) is ALWAYS
+# required. `uuid`/`fstype`/`options` are consulted ONLY when juicefs_manage_fstab
+# is on (see below) — otherwise you mount the disks yourself and only `path` matters.
+# ORDER MATTERS: erasure-set membership is positional and the RUSTFS_VOLUMES list
+# is rendered identically on every node, so keep the ordering stable across runs.
+# juicefs_storage_node MUST appear as one of the .node values. IGNORED in
+# single-node mode. Promoted to group_vars/all/main/juicefs.yml (common's iptables
+# template + this role both iterate over it); real value in the vault twin. Do NOT
+# redefine here — a role default would be shadowed by the group_vars value.
+
+# Optionally let the role own /etc/fstab for the RustFS disk(s) via
+# ansible.posix.mount (state: mounted -> UUID-keyed fstab entry + mount NOW).
+#   OFF (default): you mount the disks yourself (fstab by hand); the role only
+#                  verifies the mountpoints and fails if one is missing (original
+#                  behaviour — unchanged).
+#   ON: each disk entry that carries a `uuid` is mounted at its `path` with
+#       `options` (default `defaults,nofail`) before the mountpoint check. UUID
+#       (not /dev/sdX) is mandatory because USB device names reorder across boots
+#       — a /dev name could drop the wrong disk into the wrong erasure slot.
+# Single-node mode has no structured disk (only juicefs_disk_path, no UUID), so
+# this is a no-op there — keep mounting the single disk by hand as on the primary.
+juicefs_manage_fstab: false
+
+# Effective RustFS node list (hostnames) — resolved from the mode.
+juicefs_rustfs_nodes: >-
+  {{ (juicefs_storage_nodes | map(attribute='node') | list)
+     if juicefs_rustfs_distributed | bool
+     else [juicefs_storage_node] }}
+
+# THIS host's disk entries (dicts). Distributed: this node's `disks` from the
+# structure ([] on a non-storage host). Single: a synthetic one-disk list from
+# juicefs_disk_path (no uuid -> the fstab step skips it). One list drives both the
+# mount step and the mountpoint/data-dir derivations below.
+juicefs_rustfs_local_disks: >-
+  {{ (juicefs_storage_nodes | selectattr('node', 'equalto', inventory_hostname)
+      | map(attribute='disks') | first | default([]))
+     if juicefs_rustfs_distributed | bool
+     else [{'path': juicefs_disk_path}] }}
+# This host's USB mountpoints that MUST be mounted before RustFS starts.
+juicefs_rustfs_local_mounts: "{{ juicefs_rustfs_local_disks | map(attribute='path') | list }}"
+# RustFS object data dirs on THIS host (each mountpoint + /rustfs). Single mode
+# resolves to [juicefs_rustfs_data_dir] (== juicefs_disk_path/rustfs).
+juicefs_rustfs_local_data_dirs: >-
+  {{ juicefs_rustfs_local_mounts | map('regex_replace', '$', '/rustfs') | list }}
+
+# RAID level -> Reed-Solomon parity (RUSTFS_STORAGE_CLASS_STANDARD=EC:M):
+#   raid0 -> EC:0  striping only, 0 parity, ~100% usable, NO fault tolerance
+#   raid5 -> EC:1  single parity, tolerates 1 node/disk loss, (n-1)/n usable
+#   raid6 -> EC:2  double parity, tolerates 2 node/disk losses, (n-2)/n usable
+# Only meaningful in distributed mode. Baked at format time; changing it later
+# only affects NEWLY written objects (RustFS keeps each object's original parity).
+# RAID6 needs >=4 drives. Parity must stay <= floor(set_drive_count / 2).
+juicefs_rustfs_raid_level: raid5
+juicefs_rustfs_parity: >-
+  {{ {'raid0': 0, 'raid5': 1, 'raid6': 2}[juicefs_rustfs_raid_level] }}
+
+# Total volumes across the whole cluster = sum of every node's disk count.
+juicefs_rustfs_total_drives: >-
+  {{ juicefs_storage_nodes | map(attribute='disks') | map('length') | sum
+     if juicefs_rustfs_distributed | bool else 1 }}
+# Drives per erasure set. Default = ALL volumes in one set. Override only if you
+# want multiple sets (total must be an integer multiple of the set drive count).
+juicefs_rustfs_set_drive_count: "{{ juicefs_rustfs_total_drives }}"
+
 # --- Disk / paths -----------------------------------------------------------
 # Mountpoint of the USB-SSD on the storage node. You mount the SSD here yourself
 # (fstab / systemd.mount); this role does NOT partition or format the SSD.

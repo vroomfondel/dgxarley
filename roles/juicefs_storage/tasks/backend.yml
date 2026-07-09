@@ -1,83 +1,135 @@
 ---
-# Deploys the metadata + object backend on the storage node only.
-#   Valkey  : apt package, managed valkey.conf (AOF + requirepass + noeviction)
-#   RustFS  : native binary, dedicated system user, data dir on the USB-SSD
+# Deploys the metadata + object backend.
+#   Valkey  : apt package, managed valkey.conf (AOF + requirepass + noeviction).
+#             PRIMARY node only — metadata is single-node in BOTH modes.
+#   RustFS  : native binary, dedicated system user, data dir(s) on the USB-SSD(s).
+#             Single mode -> primary only; distributed -> EVERY node in
+#             juicefs_storage_nodes (one RustFS process per node, its own disks).
+# This file is imported on every host in juicefs_rustfs_nodes (see main.yml); the
+# Valkey/exporter tasks additionally gate to the primary.
+
+# --- Preflight: validate the distributed topology (primary only) ------------
+- name: Preflight — validate distributed RustFS topology
+  ansible.builtin.assert:
+    that:
+      - juicefs_rustfs_raid_level in ['raid0', 'raid5', 'raid6']
+      - juicefs_storage_node in (juicefs_storage_nodes | map(attribute='node') | list)
+      - (juicefs_rustfs_total_drives | int) >= 4
+      - (juicefs_rustfs_parity | int) * 2 <= (juicefs_rustfs_set_drive_count | int)
+      - (juicefs_rustfs_total_drives | int) % (juicefs_rustfs_set_drive_count | int) == 0
+    fail_msg: >-
+      Invalid distributed RustFS topology. Requires: raid_level in raid0/raid5/raid6;
+      the primary (juicefs_storage_node={{ juicefs_storage_node }}) present among
+      juicefs_storage_nodes; >=4 total drives (have {{ juicefs_rustfs_total_drives }});
+      parity*2 <= set_drive_count ({{ juicefs_rustfs_parity }}*2 vs
+      {{ juicefs_rustfs_set_drive_count }}); and total drives an integer multiple
+      of set_drive_count.
+  when:
+    - juicefs_rustfs_distributed | bool
+    - inventory_hostname == juicefs_storage_node
+
+# --- Optional fstab management (juicefs_manage_fstab) -----------------------
+# Own /etc/fstab for the RustFS disk(s): UUID-keyed entry + mount NOW, so the
+# mountpoint assert below passes on a fresh node. Only entries WITH a uuid are
+# touched (single-node's synthetic disk has none -> skipped, mount by hand).
+# `nofail` keeps a missing/rearranged USB from wedging the boot.
+- name: Mount RustFS USB-SSD(s) via fstab (UUID-keyed)
+  ansible.posix.mount:
+    src: "UUID={{ item.uuid }}"
+    path: "{{ item.path }}"
+    fstype: "{{ item.fstype | default('ext4') }}"
+    opts: "{{ item.options | default('defaults,nofail') }}"
+    state: mounted
+  loop: "{{ juicefs_rustfs_local_disks }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when:
+    - juicefs_manage_fstab | bool
+    - item.uuid is defined
 
 # --- Disk safety ------------------------------------------------------------
-- name: Verify the USB-SSD is mounted at the storage path
-  ansible.builtin.command: "mountpoint -q {{ juicefs_disk_path }}"
+# Every RustFS data dir must sit on a real mountpoint (never the OS disk). In
+# distributed mode a node may carry several disks, so check each.
+- name: Check each RustFS storage path is a mountpoint
+  ansible.builtin.command: "mountpoint -q {{ item }}"
+  loop: "{{ juicefs_rustfs_local_mounts }}"
   register: _disk_mp
   changed_when: false
   failed_when: false
 
-- name: Fail if the storage disk is not a separate mountpoint
-  ansible.builtin.fail:
-    msg: >-
-      {{ juicefs_disk_path }} is not a mountpoint. Mount the USB-SSD there first —
-      this role refuses to write RustFS object data onto the OS disk. Override
-      with juicefs_require_disk_mount=false only for throwaway tests.
-  when:
-    - juicefs_require_disk_mount | bool
-    - _disk_mp.rc != 0
+- name: Fail if any RustFS storage disk is not a separate mountpoint
+  ansible.builtin.assert:
+    that: item.rc == 0
+    fail_msg: >-
+      {{ item.item }} is not a mountpoint. Mount the USB-SSD there first — this
+      role refuses to write RustFS object data onto the OS disk. Override with
+      juicefs_require_disk_mount=false only for throwaway tests.
+  loop: "{{ _disk_mp.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: juicefs_require_disk_mount | bool
 
-# --- Valkey (metadata engine) ----------------------------------------------
-- name: Install Valkey
-  ansible.builtin.apt:
-    name: "{{ juicefs_valkey_apt_package }}"
-    state: present
-    update_cache: true
-    cache_valid_time: 3600
+# --- Valkey (metadata engine) — PRIMARY node only ---------------------------
+- name: Deploy Valkey metadata engine (primary only)
+  when: inventory_hostname == juicefs_storage_node
+  block:
+    - name: Install Valkey
+      ansible.builtin.apt:
+        name: "{{ juicefs_valkey_apt_package }}"
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
 
-- name: Deploy managed valkey.conf
-  ansible.builtin.template:
-    src: valkey.conf.j2
-    dest: /etc/valkey/valkey.conf
-    owner: valkey
-    group: valkey
-    mode: "0640"
-  notify: restart valkey
-  no_log: true  # contains requirepass
+    - name: Deploy managed valkey.conf
+      ansible.builtin.template:
+        src: valkey.conf.j2
+        dest: /etc/valkey/valkey.conf
+        owner: valkey
+        group: valkey
+        mode: "0640"
+      notify: restart valkey
+      no_log: true  # contains requirepass
 
-- name: Enable and start Valkey
-  ansible.builtin.systemd:
-    name: "{{ juicefs_valkey_apt_package }}"
-    enabled: true
-    state: started
+    - name: Enable and start Valkey
+      ansible.builtin.systemd:
+        name: "{{ juicefs_valkey_apt_package }}"
+        enabled: true
+        state: started
 
-# --- Valkey metrics exporter (gated by juicefs_metrics_enabled) --------------
-# oliver006/redis_exporter via the noble apt package (1.54 — old vs upstream
-# 1.86, but plenty for dashboard 763 + the redis_up alert; Valkey is supported
-# upstream). Scraped by the in-cluster Prometheus (job `juicefs-valkey` in
-# roles/k8s_infra/tasks/monitoring/prometheus.yml); iptables opens the port
-# from k3snodes (common role). Like the other <x>_enabled gates in this repo,
-# flipping the flag OFF only skips install — it deletes/stops nothing.
-- name: Install prometheus-redis-exporter (Valkey metrics)
-  ansible.builtin.apt:
-    name: prometheus-redis-exporter
-    state: present
-    update_cache: true
-    cache_valid_time: 3600
-  when: juicefs_metrics_enabled | default(false) | bool
+    # --- Valkey metrics exporter (gated by juicefs_metrics_enabled) ----------
+    # oliver006/redis_exporter via the noble apt package (1.54 — old vs upstream
+    # 1.86, but plenty for dashboard 763 + the redis_up alert; Valkey is supported
+    # upstream). Scraped by the in-cluster Prometheus (job `juicefs-valkey` in
+    # roles/k8s_infra/tasks/monitoring/prometheus.yml); iptables opens the port
+    # from k3snodes (common role). Like the other <x>_enabled gates in this repo,
+    # flipping the flag OFF only skips install — it deletes/stops nothing.
+    - name: Configure Valkey metrics exporter
+      when: juicefs_metrics_enabled | default(false) | bool
+      block:
+        - name: Install prometheus-redis-exporter (Valkey metrics)
+          ansible.builtin.apt:
+            name: prometheus-redis-exporter
+            state: present
+            update_cache: true
+            cache_valid_time: 3600
 
-- name: Configure prometheus-redis-exporter (Valkey auth + listen port)
-  ansible.builtin.template:
-    src: etc_default_prometheus-redis-exporter.j2
-    dest: /etc/default/prometheus-redis-exporter
-    owner: root
-    group: root
-    mode: "0600"
-  notify: restart redis exporter
-  no_log: true  # contains the Valkey requirepass
-  when: juicefs_metrics_enabled | default(false) | bool
+        - name: Configure prometheus-redis-exporter (Valkey auth + listen port)
+          ansible.builtin.template:
+            src: etc_default_prometheus-redis-exporter.j2
+            dest: /etc/default/prometheus-redis-exporter
+            owner: root
+            group: root
+            mode: "0600"
+          notify: restart redis exporter
+          no_log: true  # contains the Valkey requirepass
 
-- name: Enable and start prometheus-redis-exporter
-  ansible.builtin.systemd:
-    name: prometheus-redis-exporter
-    enabled: true
-    state: started
-  when: juicefs_metrics_enabled | default(false) | bool
+        - name: Enable and start prometheus-redis-exporter
+          ansible.builtin.systemd:
+            name: prometheus-redis-exporter
+            enabled: true
+            state: started
 
-# --- RustFS (S3 object store) ----------------------------------------------
+# --- RustFS (S3 object store) — every storage node --------------------------
 - name: Create rustfs system group
   ansible.builtin.group:
     name: "{{ juicefs_rustfs_user }}"
@@ -92,13 +144,14 @@
     home: /var/lib/rustfs
     create_home: false
 
-- name: Ensure RustFS data dir exists on the USB-SSD
+- name: Ensure RustFS data dir(s) exist on the USB-SSD(s)
   ansible.builtin.file:
-    path: "{{ juicefs_rustfs_data_dir }}"
+    path: "{{ item }}"
     state: directory
     owner: "{{ juicefs_rustfs_user }}"
     group: "{{ juicefs_rustfs_user }}"
     mode: "0750"
+  loop: "{{ juicefs_rustfs_local_data_dirs }}"
 
 - name: Set rustfs arch
   ansible.builtin.set_fact:
@@ -206,6 +259,8 @@
 
 # Apply pending Valkey/RustFS config restarts NOW, before the format step runs —
 # otherwise a freshly apt-installed Valkey is still on its default config (no
-# requirepass) and `juicefs format` (which authenticates) would fail.
+# requirepass) and `juicefs format` (which authenticates) would fail. In
+# distributed mode this also brings every RustFS node up before the primary
+# formats, so the cluster has reached quorum by the time format's S3 wait passes.
 - name: Apply backend config before formatting
   ansible.builtin.meta: flush_handlers

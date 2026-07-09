@@ -2,8 +2,9 @@
 # juicefs_storage — see defaults/main.yml for the architecture overview.
 # Tasks are host-gated so a single play over `k3sserver` configures every role:
 #   - JuiceFS binary    -> all nodes in the play
-#   - Valkey + RustFS   -> the storage node only
-#   - format (once)     -> the storage node only
+#   - RustFS            -> every storage node (juicefs_rustfs_nodes)
+#   - Valkey            -> the primary storage node only (metadata is single-node)
+#   - format (once)     -> the primary storage node only
 #   - FUSE mount        -> nodes in juicefs_mount_group
 #   - meta-backup timer -> the backup node (storage node by default)
 # Ansible runs each imported task across the batch in order, so the backend is
@@ -15,7 +16,10 @@
 
 - name: Deploy metadata + object backend (Valkey + RustFS)
   ansible.builtin.import_tasks: backend.yml
-  when: inventory_hostname == juicefs_storage_node
+  # RustFS runs on every storage node (juicefs_rustfs_nodes = the single node in
+  # single mode, the full set in distributed mode). Valkey + the metrics exporter
+  # are gated to the primary INSIDE backend.yml (metadata stays single-node).
+  when: inventory_hostname in juicefs_rustfs_nodes
   tags: [juicefs_backend]
 
 - name: Format the JuiceFS filesystem (idempotent, once)

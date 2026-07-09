@@ -17,7 +17,36 @@
 # storage.yml → common.yml --tags iptables → k8s_infra.yml --tags prometheus,grafana.
 juicefs_enabled: false
 # inventory_hostname of the node holding the USB-SSD (runs Valkey + RustFS).
+# In distributed mode this stays the "primary": Valkey + the one-time format live
+# here, and it is the single S3 endpoint the FUSE clients dial.
 juicefs_storage_node: spark1
+# Distributed multi-node RustFS toggle. DUMMY default here; the REAL value lives
+# in group_vars/all/vault/juicefs.yml (loads after main/ -> overrides this).
+# OFF = single-node object store (today). ON = erasure-coded cluster across
+# juicefs_storage_nodes. Promoted here (not a role default) because common's
+# iptables template needs it. Full semantics + the migration caveat live in
+# roles/juicefs_storage/defaults/main.yml. When OFF, nothing distributed engages.
+juicefs_rustfs_distributed: false
+# RustFS cluster members in distributed mode — STRUCTURED, ordered list (one entry
+# per node, each with its own USB mountpoint(s); heterogeneous paths + disk counts
+# allowed). DUMMY/example values here — put the REAL topology in the vault twin
+# (group_vars/all/vault/juicefs.yml), same as juicefs_disk_path. Only consulted
+# when juicefs_rustfs_distributed is ON; juicefs_storage_node MUST be one of the
+# .node values; min 4 total drives (RustFS distributed requirement). Promoted here
+# (was a role default) because common's iptables template and this role both
+# iterate over it — role defaults are out of scope in the common play. Full schema
+# + the ORDER-MATTERS note live in roles/juicefs_storage/defaults/main.yml.
+# Each disk: path (required) + uuid/fstype (only used when juicefs_manage_fstab is
+# on — get the UUID via `blkid /dev/sdX1`). DUMMY UUIDs here; real ones in vault.
+juicefs_storage_nodes:
+  - node: spark1
+    disks: [{ path: /mnt/jfs-usb, uuid: "00000000-0000-0000-0000-000000000001", fstype: ext4 }]
+  - node: spark2
+    disks: [{ path: /mnt/jfs-usb, uuid: "00000000-0000-0000-0000-000000000002", fstype: ext4 }]
+  - node: spark3
+    disks: [{ path: /mnt/jfs-usb, uuid: "00000000-0000-0000-0000-000000000003", fstype: ext4 }]
+  - node: spark4
+    disks: [{ path: /mnt/jfs-usb, uuid: "00000000-0000-0000-0000-000000000004", fstype: ext4 }]
 # Host mountpoint of the shared FS on every mount node. Promoted here (not a
 # juicefs_storage default) so k8s_dgx's connection:local play can reference it
 # for the HF-cache hostPath — role defaults are out of scope in a foreign play.

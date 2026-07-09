@@ -3,15 +3,17 @@
 Description=RustFS S3 object store (JuiceFS backend)
 After=network-online.target
 Wants=network-online.target
-# Data dir lives on the USB-SSD; require it to be mounted.
-RequiresMountsFor={{ juicefs_disk_path }}
+# Object data lives on the USB-SSD(s); require every one to be mounted.
+RequiresMountsFor={{ juicefs_rustfs_local_mounts | join(' ') }}
 
 [Service]
 Type=simple
 User={{ juicefs_rustfs_user }}
 Group={{ juicefs_rustfs_user }}
 EnvironmentFile=/etc/rustfs/rustfs.env
-ExecStart=/usr/local/bin/rustfs {{ juicefs_rustfs_data_dir }}
+{# Single-node: pass the local data dir positionally. Distributed: the volume set
+   comes from RUSTFS_VOLUMES in the env file (a positional arg would conflict). #}
+ExecStart=/usr/local/bin/rustfs{% if not juicefs_rustfs_distributed | bool %} {{ juicefs_rustfs_data_dir }}{% endif %}
 Restart=always
 RestartSec=5s
 LimitNOFILE=1048576
