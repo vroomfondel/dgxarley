@@ -47,6 +47,26 @@
       # Optional: Verhindert, dass Podman überhaupt nachfragt und einfach den ersten Treffer nimmt
       unqualified-search-registries = ["docker.io"]
 
+- name: Use kernel-native overlay instead of DGX-OS-forced fuse-overlayfs
+  # DGX-OS ships /etc/containers/storage.conf with mount_program = fuse-overlayfs,
+  # which forces the slow userspace FUSE path even for root. Empty mount_program
+  # = kernel-native overlay (near-zero overhead). Drop fsync=0 (fuse-only mountopt,
+  # invalid for kernel overlay). Kernel >= 5.13 required — DGX-OS is well past that.
+  # NOTE: only rewrites the config; pre-existing fuse-built storage may need a
+  # manual `podman system reset` (destructive) if the next build hits a driver mismatch.
+  community.general.ini_file:
+    path: /etc/containers/storage.conf
+    section: storage.options.overlay
+    option: "{{ item.opt }}"
+    value: "{{ item.val }}"
+    mode: "0644"
+    backup: true
+  loop:
+    - { opt: mount_program, val: '""' }
+    - { opt: mountopt, val: '"nodev"' }
+  loop_control:
+    label: "{{ item.opt }}"
+
 - name: enable and start podman socket (system-level)
   systemd:
     name: podman.socket
