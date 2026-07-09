@@ -24,7 +24,7 @@
 
 - name: Format the JuiceFS filesystem (idempotent, once)
   ansible.builtin.import_tasks: format.yml
-  when: inventory_hostname == juicefs_storage_node
+  when: inventory_hostname == juicefs_primary_node
   tags: [juicefs_format]
 
 - name: Mount JuiceFS on mount nodes

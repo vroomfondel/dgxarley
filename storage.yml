@@ -7,7 +7,7 @@
 #   ansible-playbook storage.yml --tags juicefs_mount   # mounts only
 #
 # Set the placement + secrets first (see roles/juicefs_storage/defaults/main.yml):
-#   juicefs_storage_node, juicefs_disk_path, juicefs_cache_size_mib, and the
+#   juicefs_primary_node, juicefs_disk_path, juicefs_cache_size_mib, and the
 #   real credentials in group_vars/all/vault/juicefs.yml.
 - name: JuiceFS distributed storage layer
   hosts: k3sserver

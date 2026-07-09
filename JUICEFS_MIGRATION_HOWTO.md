@@ -46,7 +46,7 @@ risk for no benefit.
 
 ## 2. Prerequisites
 
-- The USB disk is physically attached to `juicefs_storage_node` and mounted at
+- The USB disk is physically attached to `juicefs_primary_node` and mounted at
   `juicefs_disk_path`. The real values for both live in
   `group_vars/all/vault/juicefs.yml` (public dummies: `spark1` in
   `group_vars/all/main/juicefs.yml`, `/mnt/jfs-usb` in the role defaults). The role
@@ -268,7 +268,7 @@ iptables -A HTSTUFFIN -m state --state NEW -p tcp -m multiport --dport 6379,9000
   -m set --match-set k3snodes src -j RETURN
 ```
 
-To make this possible, `juicefs_storage_node` and `juicefs_mount_master` were
+To make this possible, `juicefs_primary_node` and `juicefs_mount_master` were
 promoted to `group_vars/all/main/juicefs.yml` (the `common` role needs cross-role
 visibility). So enabling master-mount is: set `juicefs_mount_master: true`, then
 re-run `common.yml` (firewall) **and** `storage.yml` (mount + dual-bind).
@@ -294,7 +294,7 @@ VLAN, not the 200GbE mesh — fine for light use, not for streaming large weight
 
 ## 13. Moving the USB disk / storage node to another spark
 
-Relocating the storage role from the current `juicefs_storage_node` (vault) to
+Relocating the storage role from the current `juicefs_primary_node` (vault) to
 another spark is **three moves, not one**, because the pieces live in different
 places. Placeholders below: `<old-qsfp-ip>` / `<new-qsfp-ip>` = the QSFP IPs of
 the old/new storage node, `<disk-path>` = `juicefs_disk_path` (vault),
@@ -321,7 +321,7 @@ while the backend moves. With `hf_hub_cache_on_juicefs: true`, scale the
 SGLang/vLLM deployments to 0 first (the pods hold the FUSE mount). Traffic
 between sparks runs over the QSFP subnet, which the firewall blanket-trusts —
 no iptables change. (Exception: with `juicefs_mount_master: true`, the
-master-mount rule keys on `juicefs_storage_node` → also re-run `common.yml`.)
+master-mount rule keys on `juicefs_primary_node` → also re-run `common.yml`.)
 
 ### 13.1 Variant A — second (initially empty) disk on the target spark
 
@@ -356,7 +356,7 @@ only the delta + metadata dance needs the stop window.
    ```
    (`--keep-secret-key` keeps the S3 secret inside the dump so the FS is
    mountable right after load — delete the dump file once the move is verified.)
-5. **Repo:** set `juicefs_storage_node: sparkN` (and `juicefs_disk_path` if it
+5. **Repo:** set `juicefs_primary_node: sparkN` (and `juicefs_disk_path` if it
    changed) in `group_vars/all/vault/juicefs.yml`.
 6. **Backend bring-up on sparkN** (binaries + Valkey + RustFS + backup env —
    deliberately WITHOUT the format/mount tags, see the warning above):
@@ -417,7 +417,7 @@ in that order:
    echo "UUID=<disk-uuid> <disk-path> ext4 defaults,nofail 0 2" >> /etc/fstab
    systemctl daemon-reload && mount <disk-path> && ls <disk-path>/rustfs
    ```
-4. **Repo:** set `juicefs_storage_node: sparkN` in `group_vars/all/vault/juicefs.yml`
+4. **Repo:** set `juicefs_primary_node: sparkN` in `group_vars/all/vault/juicefs.yml`
    (`juicefs_disk_path` stays unchanged).
 5. **Backend bring-up on sparkN** — same as Variant A step 6, including the
    `chown -R rustfs:rustfs <disk-path>/rustfs` (different UID on the new node):
@@ -436,7 +436,7 @@ in that order:
 
 **Rollback of a failed move (both variants):** the old node still has the full
 Valkey data dir; Variant A additionally has the untouched old disk. Flip
-`juicefs_storage_node` back in the vault, re-plug/re-mount the disk on the old
+`juicefs_primary_node` back in the vault, re-plug/re-mount the disk on the old
 node (Variant B), `systemctl enable --now valkey-server rustfs` there, and run
 `ansible-playbook storage.yml` — the clients re-render back. Nothing was
 destroyed until you wiped the old copies in the last step.
@@ -445,7 +445,7 @@ destroyed until you wiped the old copies in the last step.
 
 ## 14. Open decisions before starting
 
-- **Storage node placement:** `juicefs_storage_node` (real value in vault)
+- **Storage node placement:** `juicefs_primary_node` (real value in vault)
   holds the USB disk and runs Valkey+RustFS — single point of failure for the
   metadata engine (mitigated by the meta-backup timer, not eliminated). §13
   documents how to relocate it.

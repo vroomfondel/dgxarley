@@ -3,7 +3,7 @@
 Description=JuiceFS mount {{ juicefs_mount_path }} ({{ juicefs_fs_name }})
 After=network-online.target
 Wants=network-online.target
-{% if inventory_hostname == juicefs_storage_node %}
+{% if inventory_hostname == juicefs_primary_node %}
 # On the storage node the backend is local — order after it.
 After={{ juicefs_valkey_apt_package }}.service rustfs.service
 {% endif %}

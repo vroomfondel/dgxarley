@@ -4,7 +4,7 @@
 #             PRIMARY node only — metadata is single-node in BOTH modes.
 #   RustFS  : native binary, dedicated system user, data dir(s) on the USB-SSD(s).
 #             Single mode -> primary only; distributed -> EVERY node in
-#             juicefs_storage_nodes (one RustFS process per node, its own disks).
+#             juicefs_rustfs_members (one RustFS process per node, its own disks).
 # This file is imported on every host in juicefs_rustfs_nodes (see main.yml); the
 # Valkey/exporter tasks additionally gate to the primary.
 
@@ -13,20 +13,20 @@
   ansible.builtin.assert:
     that:
       - juicefs_rustfs_raid_level in ['raid0', 'raid5', 'raid6']
-      - juicefs_storage_node in (juicefs_storage_nodes | map(attribute='node') | list)
+      - juicefs_primary_node in (juicefs_rustfs_members | map(attribute='node') | list)
       - (juicefs_rustfs_total_drives | int) >= 4
       - (juicefs_rustfs_parity | int) * 2 <= (juicefs_rustfs_set_drive_count | int)
       - (juicefs_rustfs_total_drives | int) % (juicefs_rustfs_set_drive_count | int) == 0
     fail_msg: >-
       Invalid distributed RustFS topology. Requires: raid_level in raid0/raid5/raid6;
-      the primary (juicefs_storage_node={{ juicefs_storage_node }}) present among
-      juicefs_storage_nodes; >=4 total drives (have {{ juicefs_rustfs_total_drives }});
+      the primary (juicefs_primary_node={{ juicefs_primary_node }}) present among
+      juicefs_rustfs_members; >=4 total drives (have {{ juicefs_rustfs_total_drives }});
       parity*2 <= set_drive_count ({{ juicefs_rustfs_parity }}*2 vs
       {{ juicefs_rustfs_set_drive_count }}); and total drives an integer multiple
       of set_drive_count.
   when:
     - juicefs_rustfs_distributed | bool
-    - inventory_hostname == juicefs_storage_node
+    - inventory_hostname == juicefs_primary_node
 
 # --- Optional fstab management (juicefs_manage_fstab) -----------------------
 # Own /etc/fstab for the RustFS disk(s): UUID-keyed entry + mount NOW, so the
@@ -71,7 +71,7 @@
 
 # --- Valkey (metadata engine) — PRIMARY node only ---------------------------
 - name: Deploy Valkey metadata engine (primary only)
-  when: inventory_hostname == juicefs_storage_node
+  when: inventory_hostname == juicefs_primary_node
   block:
     - name: Install Valkey
       ansible.builtin.apt:

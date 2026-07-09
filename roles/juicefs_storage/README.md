@@ -28,17 +28,17 @@ directly to Valkey + RustFS, so nothing is routed through a coordinator.
 
 `juicefs_rustfs_distributed` (default **false**) selects the RustFS topology:
 
-- **OFF (single-node):** RustFS runs only on `juicefs_storage_node`, one local
+- **OFF (single-node):** RustFS runs only on `juicefs_primary_node`, one local
   volume, no erasure coding. Original behaviour — unchanged.
-- **ON (distributed):** RustFS runs on **every** node in `juicefs_storage_nodes`,
+- **ON (distributed):** RustFS runs on **every** node in `juicefs_rustfs_members`,
   forming one erasure-coded S3 cluster. Object data is striped + made redundant
   across all their USB-SSDs, so no single USB bus carries every write.
 
-`juicefs_storage_nodes` is a **structured, ordered** list — one entry per node,
+`juicefs_rustfs_members` is a **structured, ordered** list — one entry per node,
 each listing its USB disk(s) as dicts; heterogeneous paths and disk counts allowed:
 
 ```yaml
-juicefs_storage_nodes:
+juicefs_rustfs_members:
   - node: spark1
     disks: [{ path: /mnt/intenso, uuid: "<blkid-UUID>", fstype: ext4 }]
   - node: spark2                                        # two disks on this node
@@ -54,7 +54,7 @@ juicefs_storage_nodes:
 Per disk, `path` is always required (RustFS data dir = `<path>/rustfs`);
 `uuid`/`fstype`/`options` are consulted only when `juicefs_manage_fstab` is on.
 Order matters (positional erasure membership; `RUSTFS_VOLUMES` is rendered
-identically on every node). The **primary** (`juicefs_storage_node`) must be a
+identically on every node). The **primary** (`juicefs_primary_node`) must be a
 member — it keeps running Valkey, does the one-time format, and is the single S3
 endpoint the FUSE clients dial. Redundancy level via `juicefs_rustfs_raid_level`:
 
@@ -89,7 +89,7 @@ the cluster.
 
 ## Key variables (see `defaults/main.yml`)
 
-- `juicefs_storage_node` — **the placement knob**: which node has the USB-SSD and
+- `juicefs_primary_node` — **the placement knob**: which node has the USB-SSD and
   runs Valkey + RustFS (master or any spark).
 - `juicefs_storage_address` — address mounts use; defaults to the storage node's
   QSFP IP (spark → 200GbE) or its k3s VLAN IP (master).

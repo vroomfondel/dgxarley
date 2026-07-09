@@ -12,8 +12,11 @@ User={{ juicefs_rustfs_user }}
 Group={{ juicefs_rustfs_user }}
 EnvironmentFile=/etc/rustfs/rustfs.env
 {# Single-node: pass the local data dir positionally. Distributed: the volume set
-   comes from RUSTFS_VOLUMES in the env file (a positional arg would conflict). #}
-ExecStart=/usr/local/bin/rustfs{% if not juicefs_rustfs_distributed | bool %} {{ juicefs_rustfs_data_dir }}{% endif %}
+   comes from RUSTFS_VOLUMES in the env file (a positional arg would conflict).
+   Build the arg in a set (NOT an inline {% endif %} at line end — trim_blocks
+   would eat the trailing newline and glue ExecStart to the next line). #}
+{% set _rustfs_arg = (' ' ~ juicefs_rustfs_data_dir) if not juicefs_rustfs_distributed | bool else '' %}
+ExecStart=/usr/local/bin/rustfs{{ _rustfs_arg }}
 Restart=always
 RestartSec=5s
 LimitNOFILE=1048576

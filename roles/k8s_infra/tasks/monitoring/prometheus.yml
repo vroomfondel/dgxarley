@@ -374,9 +374,9 @@
             # the storage node — bare-metal apt install, like the backend itself.
             - job_name: 'juicefs-valkey'
               static_configs:
-                - targets: ['{{ hostvars[juicefs_storage_node].k3s_node_ip }}:{{ juicefs_valkey_exporter_port }}']
+                - targets: ['{{ hostvars[juicefs_primary_node].k3s_node_ip }}:{{ juicefs_valkey_exporter_port }}']
                   labels:
-                    node: '{{ juicefs_storage_node }}'
+                    node: '{{ juicefs_primary_node }}'
               relabel_configs:
                 - source_labels: [node]
                   target_label: instance

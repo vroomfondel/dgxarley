@@ -70,13 +70,13 @@ iptables -A HTSTUFFIN -s {{ qsfp_network }} -j RETURN
 iptables -A HTSTUFFIN -s {{ qsfp_vf_network }} -j RETURN
 {% endif %}
 
-{% if juicefs_enabled | default(false) | bool and juicefs_mount_master | default(false) | bool and inventory_hostname == juicefs_storage_node | default('') %}
+{% if juicefs_enabled | default(false) | bool and juicefs_mount_master | default(false) | bool and inventory_hostname == juicefs_primary_node | default('') %}
 # JuiceFS backend reachability for a QSFP-less master mount.
 # Spark mount clients reach Valkey(6379)+RustFS(9000) over the QSFP subnet
 # (already trusted above); the master has no QSFP and comes in over the mgmt/k3s
 # VLAN, which is otherwise closed for these ports. Only rendered ON the storage
 # node, only when juicefs_mount_master is on. requirepass + S3 keys still apply.
-# (juicefs_enabled / juicefs_storage_node / juicefs_mount_master live in
+# (juicefs_enabled / juicefs_primary_node / juicefs_mount_master live in
 # group_vars/all/main/juicefs.yml; nothing opens while the layer is not deployed.)
 #
 # DISTRIBUTED mode (juicefs_rustfs_distributed) needs NO extra rule here: FUSE
@@ -95,7 +95,7 @@ iptables -A HTSTUFFIN -m state --state NEW -p tcp -m multiport --dport 6379,9000
 # SNAT'd to its node IP → k3snodes (same pattern as the coturn metrics rule).
 iptables -A HTSTUFFIN -m state --state NEW -p tcp --dport {{ juicefs_metrics_port | default(9567) }} -m set --match-set k3snodes src -j RETURN
 {% endif %}
-{% if inventory_hostname == juicefs_storage_node | default('') %}
+{% if inventory_hostname == juicefs_primary_node | default('') %}
 # Valkey metrics via prometheus-redis-exporter — storage node only (the
 # JuiceFS metadata engine lives there).
 iptables -A HTSTUFFIN -m state --state NEW -p tcp --dport {{ juicefs_valkey_exporter_port | default(9121) }} -m set --match-set k3snodes src -j RETURN
