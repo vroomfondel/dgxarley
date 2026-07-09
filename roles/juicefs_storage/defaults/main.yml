@@ -72,11 +72,10 @@ juicefs_rustfs_data_dir: "{{ juicefs_disk_path }}/rustfs"
 # Per-node local read cache on the NVMe.
 juicefs_cache_dir: /var/lib/jfs-cache
 # Per-node cache size in MiB (JuiceFS unit is MiB). Keep well below free NVMe.
-# NOTE: today /var/lib/hf-cache holds a ~1.2 TiB per-spark full HF copy; free
-# space is ~330-400 GiB until that is migrated into JuiceFS and removed. Size
-# this conservatively until the old local cache is gone, then raise it
-# (Phase 6 of JUICEFS_MIGRATION_HOWTO.md: back to 600_000).
-juicefs_cache_size_mib: 150_000  # ~146 GiB — conservative until Phase 6
+# Raised at Phase 6 of JUICEFS_MIGRATION_HOWTO.md (2026-07-09): the old local
+# /var/lib/hf-cache/hub copies are deleted, ~1.5 TiB free per spark — and the
+# sparks' NVMe has little else to do, so most of it serves the read cache.
+juicefs_cache_size_mib: 1_100_000  # ~1.05 TiB
 
 # --- Filesystem format (set once at format time, immutable afterwards) -------
 juicefs_fs_name: dgxfs
