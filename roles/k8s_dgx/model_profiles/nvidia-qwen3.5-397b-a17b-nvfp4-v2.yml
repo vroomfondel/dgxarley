@@ -1,0 +1,111 @@
+---
+# Model profile: nvidia/Qwen3.5-397B-A17B-NVFP4-V2
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+#
+# ── VALIDATION STATUS: UNVALIDATED on this cluster ──────────────────────────
+# This is the "NVFP4 2.0" re-quant of the same Qwen3.5-397B-A17B base. The base
+# ARCHITECTURE is byte-for-byte the sibling of the matrix-validated V1 profile
+# (nvidia-qwen3.5-397b-a17b-nvfp4.yml): same Qwen3_5MoeForConditionalGeneration,
+# 60 layers, hybrid attention (15 full GQA + 45 linear), 512 routed + 1 shared
+# expert, MTP head, 262K context. The kernel/backend values below are INHERITED
+# from V1's validated winner as a starting hypothesis — they are NOT V2 matrix
+# results. Re-run the matrix (esp. moe_runner_backend + MTP depth) and a smoke
+# test (text + an image prompt) before trusting any throughput/correctness here.
+#
+# ── WHAT V2 CHANGES vs V1 (the quant recipe, NOT the architecture) ──────────
+# V1 (config.json, modelopt 0.0.1.dev538): uniform NVFP4 — the routed-expert MoE
+#   FFN linears are W4A4 (weights AND activations FP4); attention, shared experts,
+#   vision encoder, lm_head and MTP stay BF16. KV cache FP8.
+# V2 (config.json, modelopt 0.45.0.dev173, "NVFP4 2.0"): MIXED precision —
+#   * routed experts:            NVFP4  (W4A4, group_size 16)  — same as V1
+#   * attention + shared experts: per-tensor FP8 (W8A8)        — NEW (was BF16 in V1)
+#   * linear_attn (in_proj_a/b/ba, conv1d) + MTP: unquantized (BF16) — excluded
+#   * KV cache:                   FP8                          — same as V1
+#   Net: V2 additionally quantizes the dense/attention path to FP8 (V1 left it
+#   BF16), so V2 is slightly SMALLER and its accuracy recovery targets FP8 (the
+#   model card benchmarks are vs an FP8 baseline, not vs BF16). This is the
+#   modern modelopt recipe: FP4 where the parameter mass is (experts), FP8 where
+#   accuracy is sensitive (attention/router-adjacent), full precision on the
+#   linear-attention + MTP paths.
+#   SGLang still loads the whole mixed FP4/FP8 modelopt checkpoint via the single
+#   `quantization: modelopt_fp4` selector (it dispatches per-layer from the
+#   checkpoint's quant metadata) — no separate FP8 flag needed.
+#
+# ── MULTIMODAL (VLM) — verified against config.json 2026-07-10 ──────────────
+# This IS a vision-language model, NOT text-only: config.json carries vision_config
+# (27-layer encoder, hidden 1152), image_token_id=248056, video_token_id=248057,
+# vision_start/end_token_id 248053/248054. Model card: "Input Type(s): Text, Image,
+# Video". The vision tower is NOT quantized (only linear ops inside transformer
+# blocks are) — same posture as the sibling FP8 VLM profile
+# (qwen-qwen3-vl-8b-instruct-fp8.yml). WATCH the known NVFP4-VLM trap: if the
+# runtime wrongly quantizes the vision tower it crashes with an mm_fp4 2d error —
+# the should_ignore_layer name-remap patch in sglang_launch.sh is the fix
+# (SGLANG_VLM_COMPRESSED_TENSORS gotcha). Verify the vision tower loads in BF16
+# on first boot. A pure-text launch profile is INSUFFICIENT for this model.
+#
+# 397B/17B-active MoE, ~mixed FP4/FP8 quantized (slightly smaller than V1's ~234 GB).
+# num_attention_heads=32, num_key_value_heads=2 → full-attention layers cap KV at
+# TP=2; model card says TP=4 (linear-attn heads 16/64 are /4-divisible). Same
+# TP=4-vs-TP=2 open question as V1 — validate before trusting tp_size below.
+# Recommended launch (NVIDIA model card):
+#   python3 -m sglang.launch_server --model nvidia/Qwen3.5-397B-A17B-NVFP4-V2 \
+#     --tensor-parallel-size 4 --quantization modelopt_fp4 --trust-remote-code
+# WARNING: model_type=qwen3_5_moe may require a transformers upgrade.
+_model_profile:
+  "nvidia/Qwen3.5-397B-A17B-NVFP4-V2":
+    knowledge_cutoff: null  # not officially disclosed (HF card/tech report silent)
+    release_date: "2026-02-16"  # Qwen3.5-397B-A17B base; official QwenLM GitHub changelog
+    info_url: "https://huggingface.co/nvidia/Qwen3.5-397B-A17B-NVFP4-V2"
+    nccl_transport: "roce"
+    tp_size: 4  # model card says TP=4; num_kv_heads=2 may limit to TP=2 — UNVALIDATED for V2
+    context_length: 262144
+    quantization: "modelopt_fp4"  # single selector loads the mixed FP4/FP8 modelopt checkpoint
+    trust_remote_code: true
+    # ── kernel/backend config: INHERITED from V1's validated winner (see header) ──
+    # V1 winner (Test 38 / base-image case 18): flashinfer_cutlass MoE + triton attn
+    # + fi_cutlass FP4 + CG on + MTP s3/d4. Re-verify for V2 — the added FP8
+    # attention/shared-expert path may shift the MoE-runner / attention-backend
+    # optimum. In 0.5.12 the standalone "cutlass" MoE runner was REMOVED
+    # (NotImplementedError at load_model); flashinfer_cutlass is the FP4 path.
+    moe_runner_backend: "flashinfer_cutlass"
+    kv_cache_dtype: "fp8_e4m3"
+    # 0.75 with MTP (draft tokens need extra KV headroom). V2 is slightly smaller
+    # than V1 (FP8 attention/shared experts), so there may be headroom to raise
+    # this — measure before changing.
+    mem_fraction_static: "0.75"
+    attention_backend: "triton"
+    fp4_gemm_backend: "flashinfer_cutlass"
+    jit_max_jobs: 4
+    disable_piecewise_cuda_graph: true
+    disable_cuda_graph: false
+    cuda_graph_max_bs: 16
+    pp_async_batch_depth: 0
+    disable_deep_gemm: true
+    # Parsers — same family as V1 (official SGLang Qwen3.5 doc):
+    #   reasoning_parser "qwen3" splits <think> blocks.
+    reasoning_parser: "qwen3"
+    # tool_call_parser "qwen3_coder": the whole Qwen3.5/3.6 family emits XML-style
+    # <tool_call><function=…> calls (Qwen3CoderDetector). Do NOT use "qwen25"/"hermes"
+    # (JSON parsers) — Qwen3.5 XML would leak tags into content. Required for working
+    # tool-calling behind hermes-default (Honcho/Hindsight/Hermes).
+    tool_call_parser: "qwen3_coder"
+    num_experts: 512
+    # EP=1 required: flashinfer_cutlass/triton MoE crash at EP>1 (StandardDispatcher
+    # EP combine bug — SGLANG_NVFP4_SHUFFLE_ROWS_OOB_UPSTREAM_BUG.md). At EP=1 each
+    # GPU has all 512 experts (TP-sharded intermediate).
+    ep_size: 1
+    recommended_sampling:
+      temperature: 0.6
+      top_p: 0.95
+      top_k: 20
+    # MTP head is present (excluded from quant → BF16). Same spec-decode setup as V1.
+    speculative_enabled: true
+    speculative_algo: NEXTN
+    speculative_num_steps: 3
+    speculative_num_draft_tokens: 4
+    # Qwen3.5 MoE hybrid attention → SGLang "mamba" scheduler path. MTP requires
+    # extra_buffer strategy + SGLANG_ENABLE_SPEC_V2=1, else startup fails with
+    #   "Speculative decoding for Qwen3_5MoeForConditionalGeneration is not
+    #    compatible with radix cache when using --mamba-scheduler-strategy no_buffer"
+    mamba_scheduler_strategy: "extra_buffer"
+    enable_spec_v2: true
