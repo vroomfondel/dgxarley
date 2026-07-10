@@ -179,7 +179,7 @@ _model_profile:
     # TEMPORARILY false during the garbage-output backend-matrix debug (2026-07-09):
     # spec is isolated so an MTP boot issue can't mask the attention/output test.
     # The unquant fix below is staged — flip back to true once base output is clean.
-    speculative_enabled: true
+    speculative_enabled: false
     speculative_algo: EAGLE
     speculative_num_steps: 2
     speculative_eagle_topk: 1
