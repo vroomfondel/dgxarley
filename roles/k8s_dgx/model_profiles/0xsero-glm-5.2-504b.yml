@@ -25,9 +25,13 @@ _model_profile:
     # TP must divide 64 → valid TP ∈ {1,2,4,8,…}; TP=6 is INVALID (64 ∤ 6).
     # 78 layers divide cleanly by PP=6 (13/node) and PP=3 (26/stage).
     # NVFP4 quantization (modelopt, NVFP4 quant_algo, group_size 16) applied ONLY to
-    # the routed-expert MLPs (Linear targets). Router gates, attention projections
+    # the routed-expert MLPs (Linear targets). It is W4A4 — config_groups.group_0
+    # quantizes BOTH weights AND input_activations to FP4 (num_bits 4, type float,
+    # group_size 16), not weight-only W4A16. Router gates, attention projections
     # (q/k/v/o), DSA indexer, dense MLPs (layers 0-2), shared experts, lm_head, and
     # the MTP layer (78) all remain in BF16 (see config quantization_config.ignore).
+    # No kv_cache_quant_algo in the checkpoint — kv_cache_dtype below is a pure
+    # serving choice, independent of the W4A4 weight/activation quant.
     # 504B is ~2/3 the base 744B weight, so PP=4/TP=1 leaves MORE KV headroom than
     # the full GLM-5.2. No official DGX Spark / SGLang launch command on the card;
     # args below mirror the validated nvidia/GLM-5-NVFP4 profile (identical arch).

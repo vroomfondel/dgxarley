@@ -67,6 +67,249 @@ else
   echo "SKIPPING GLM-5 specific patches..."
 fi
 
+# ============================================================================
+# Hunyuan (Hy3 / HYV3) special-token suffix backport — SGLang PR #29920
+# ----------------------------------------------------------------------------
+# This image predates PR #29920 (merged 2026-07-04, "resolve special-token
+# suffix at runtime"). Its hunyuan tool-call AND reasoning detectors HARDCODE
+# the bare structural tokens (<think>, <tool_calls>, <tool_call>, <tool_sep>,
+# <arg_key>, <arg_value>). The shipping Hy3 checkpoints (vroomfondel/Hy3-NVFP4-
+# W4A4, tencent/Hy3, ...) append a shared suffix to EVERY such token — the
+# chat template's HYTK, mirrored by tokenizer_config.json "token_suffix", e.g.
+# ":opensource" so the model emits <think:opensource>, <tool_calls:opensource>,
+# ... (verified: these are single special tokens; the BARE forms are not tokens
+# at all). With the bare-token detectors, the reasoning split never fires and NO
+# tool calls are parsed → breaks honcho/hindsight function-calling.
+#
+# Faithful backport of PR #29920's resolve_hunyuan_tokens() into the two detector
+# files. Upstream threads the tokenizer through ~8 caller files to feed the vocab
+# to resolve_hunyuan_tokens(); this image threads no tokenizer, so we instead feed
+# the resolved suffix via SGLANG_HUNYUAN_TOKEN_SUFFIX (read below from the model's
+# tokenizer_config.json "token_suffix"). Empty suffix (preview checkpoints, or a
+# non-Hy3 model) → bare tokens = unchanged upstream-preview behavior.
+# RE-SYNC: when bumping to an image that already contains PR #29920, DELETE this
+# block — the "resolve_hunyuan_tokens" grep guard already makes it a no-op then.
+if [[ "$SGLANG_MODEL" == *"Hy3"* || "$SGLANG_MODEL" == *"Hunyuan"* \
+      || "$SGLANG_TOOL_CALL_PARSER" == "hunyuan" || "$SGLANG_REASONING_PARSER" == "hunyuan" ]]; then
+  export SGLANG_HUNYUAN_TOKEN_SUFFIX="$(python3 - <<'HY_SUFFIX_EOF'
+import json, os
+model = os.environ.get("SGLANG_MODEL", "")
+suffix = ""
+path = None
+try:
+    if os.path.isdir(model):
+        cand = os.path.join(model, "tokenizer_config.json")
+        path = cand if os.path.exists(cand) else None
+    if path is None:
+        try:
+            from transformers.utils import cached_file
+            path = cached_file(model, "tokenizer_config.json", local_files_only=True)
+        except Exception:
+            from huggingface_hub import hf_hub_download
+            path = hf_hub_download(model, "tokenizer_config.json", local_files_only=True)
+    if path:
+        with open(path) as fh:
+            suffix = json.load(fh).get("token_suffix", "") or ""
+except Exception:
+    suffix = ""
+print(suffix, end="")
+HY_SUFFIX_EOF
+)"
+  echo "Hunyuan token-suffix backport: SGLANG_HUNYUAN_TOKEN_SUFFIX='${SGLANG_HUNYUAN_TOKEN_SUFFIX}'"
+
+  # --- 1) function_call/hunyuan_detector.py: resolve_hunyuan_tokens + suffixed
+  #        tool-call tokens (bot/eot/tool_call/tool_sep/arg_key/arg_value + the
+  #        two regexes + structure_info). ---
+  python3 << 'PATCH_HUNYUAN_TOOL_EOF'
+f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/function_call/hunyuan_detector.py"
+with open(f) as fh:
+    code = fh.read()
+
+if "resolve_hunyuan_tokens" in code:
+    print("hunyuan_detector.py: resolve_hunyuan_tokens already present, skipping")
+else:
+    anchor = "logger = logging.getLogger(__name__)\n"
+    helper = r'''
+# [patch] _sgl_hunyuan_token_suffix_ — backport of SGLang PR #29920
+import os as _os
+
+_HUNYUAN_TOKEN_NAMES = (
+    "tool_calls",
+    "tool_call",
+    "tool_sep",
+    "arg_key",
+    "arg_value",
+    "think",
+)
+
+_HUNYUAN_TOKEN_RE = re.compile(
+    r"^<(?P<name>" + "|".join(_HUNYUAN_TOKEN_NAMES) + r")(?::[^>]+)?>$"
+)
+
+
+def resolve_hunyuan_tokens(tokenizer=None):
+    """Map bare token names to their real (possibly suffixed) strings.
+
+    Prefers suffixed forms in the tokenizer vocab; when no tokenizer is threaded
+    (this image predates PR #29920's caller plumbing), falls back to the
+    launch-provided SGLANG_HUNYUAN_TOKEN_SUFFIX; finally to the bare literal.
+    """
+    tokens = {}
+    vocab = None
+    if tokenizer is not None:
+        try:
+            vocab = tokenizer.get_vocab()
+        except Exception as e:
+            logger.warning("Failed to read Hunyuan tokenizer vocab: %s", e)
+            vocab = None
+    if isinstance(vocab, dict):
+        for tok in vocab:
+            if not isinstance(tok, str):
+                continue
+            m = _HUNYUAN_TOKEN_RE.match(tok)
+            if m:
+                tokens[m.group("name")] = tok
+    _suffix = _os.environ.get("SGLANG_HUNYUAN_TOKEN_SUFFIX", "")
+    for name in _HUNYUAN_TOKEN_NAMES:
+        tokens.setdefault(name, "<" + name + _suffix + ">")
+    return tokens
+
+'''
+    old_init = r'''    def __init__(self):
+        super().__init__()
+
+        self.bot_token = "<tool_calls>"
+        self.eot_token = "</tool_calls>"
+
+        self.tool_call_start_token = "<tool_call>"
+        self.tool_call_end_token = "</tool_call>"
+        self.tool_sep_token = "<tool_sep>"
+
+        self.arg_key_start_token = "<arg_key>"
+        self.arg_key_end_token = "</arg_key>"
+        self.arg_value_start_token = "<arg_value>"
+        self.arg_value_end_token = "</arg_value>"
+
+        self.tool_call_regex = re.compile(
+            r"<tool_call>(.*?)<tool_sep>(.*?)</tool_call>", re.DOTALL
+        )
+        self.func_args_regex = re.compile(
+            r"<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>", re.DOTALL
+        )'''
+    new_init = r'''    def __init__(self, tokenizer=None):
+        super().__init__()
+
+        t = resolve_hunyuan_tokens(tokenizer)
+        tool_calls = t["tool_calls"]
+        tool_call = t["tool_call"]
+        tool_sep = t["tool_sep"]
+        arg_key = t["arg_key"]
+        arg_value = t["arg_value"]
+
+        def _close(open_tok):
+            return "</" + open_tok[1:] if open_tok.startswith("<") else open_tok
+
+        self.bot_token = tool_calls
+        self.eot_token = _close(tool_calls)
+        self.tool_call_start_token = tool_call
+        self.tool_call_end_token = _close(tool_call)
+        self.tool_sep_token = tool_sep
+        self.arg_key_start_token = arg_key
+        self.arg_key_end_token = _close(arg_key)
+        self.arg_value_start_token = arg_value
+        self.arg_value_end_token = _close(arg_value)
+
+        tc_end = _close(tool_call)
+        ak_end = _close(arg_key)
+        av_end = _close(arg_value)
+        self.tool_call_regex = re.compile(
+            re.escape(tool_call)
+            + r"(.*?)"
+            + re.escape(tool_sep)
+            + r"(.*?)"
+            + re.escape(tc_end),
+            re.DOTALL,
+        )
+        self.func_args_regex = re.compile(
+            re.escape(arg_key)
+            + r"(.*?)"
+            + re.escape(ak_end)
+            + r"\s*"
+            + re.escape(arg_value)
+            + r"(.*?)"
+            + re.escape(av_end),
+            re.DOTALL,
+        )'''
+    old_si = r'''        return lambda name: StructureInfo(
+            begin=f"<tool_calls>\n<tool_call>{name}<tool_sep>",
+            end="</tool_call>\n</tool_calls>",
+            trigger="<tool_calls>",
+        )'''
+    new_si = r'''        return lambda name: StructureInfo(
+            begin=f"{self.bot_token}\n{self.tool_call_start_token}{name}{self.tool_sep_token}",
+            end=f"{self.tool_call_end_token}\n{self.eot_token}",
+            trigger=self.bot_token,
+        )'''
+    missing = [n for n, s in (("anchor", anchor), ("__init__", old_init), ("structure_info", old_si)) if s not in code]
+    if missing:
+        print("hunyuan_detector.py: patch anchors NOT found:", missing, "- skipping (code changed?)")
+    else:
+        code = code.replace(anchor, anchor + helper, 1)
+        code = code.replace(old_init, new_init, 1)
+        code = code.replace(old_si, new_si, 1)
+        with open(f, "w") as fh:
+            fh.write(code)
+        print("Patched hunyuan_detector.py: resolve_hunyuan_tokens + suffixed tool-call tokens")
+PATCH_HUNYUAN_TOOL_EOF
+
+  # --- 2) parser/reasoning_parser.py: HunyuanDetector reasoning think/tool
+  #        tokens resolved via the same backported helper. ---
+  python3 << 'PATCH_HUNYUAN_REASON_EOF'
+f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/parser/reasoning_parser.py"
+with open(f) as fh:
+    code = fh.read()
+
+if "_resolve_hunyuan_tokens" in code:
+    print("reasoning_parser.py: hunyuan suffix backport already present, skipping")
+else:
+    old = r'''        super().__init__(
+            "<think>",
+            "</think>",
+            force_reasoning=force_reasoning,
+            stream_reasoning=stream_reasoning,
+            tool_start_token="<tool_calls>",
+            continue_final_message=continue_final_message,
+            previous_content=previous_content,
+        )'''
+    new = r'''        # [patch] _sgl_hunyuan_token_suffix_ — backport of SGLang PR #29920
+        from sglang.srt.function_call.hunyuan_detector import (
+            resolve_hunyuan_tokens as _resolve_hunyuan_tokens,
+        )
+
+        _hy = _resolve_hunyuan_tokens()
+        _think_open = _hy["think"]
+        _think_close = (
+            "</" + _think_open[1:] if _think_open.startswith("<") else _think_open
+        )
+        super().__init__(
+            _think_open,
+            _think_close,
+            force_reasoning=force_reasoning,
+            stream_reasoning=stream_reasoning,
+            tool_start_token=_hy["tool_calls"],
+            continue_final_message=continue_final_message,
+            previous_content=previous_content,
+        )'''
+    if old not in code:
+        print("reasoning_parser.py: HunyuanDetector super().__init__ anchor not found, skipping")
+    else:
+        code = code.replace(old, new, 1)
+        with open(f, "w") as fh:
+            fh.write(code)
+        print("Patched reasoning_parser.py: HunyuanDetector uses suffixed think/tool tokens")
+PATCH_HUNYUAN_REASON_EOF
+fi
+
 # Patch SGLang get_config() to convert dict sub_configs after loading (transformers 5.5.0 bug).
 # Transformers 5.x auto-generates __init__ for PretrainedConfig subclasses with sub_configs,
 # bypassing dict→config conversion. from_pretrained() also bypasses __post_init__.

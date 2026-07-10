@@ -1,0 +1,91 @@
+---
+# Model profile: kodelow/Hy3-NVFP4-W4A16
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+#
+# ⚠ UNVALIDATED first-contact scaffold (written 2026-07-09). NOTHING here has
+#   served coherently on this cluster yet — this is the WEIGHT-ONLY (W4A16)
+#   sibling of vroomfondel/Hy3-NVFP4-W4A4, created because the W4A4 build produces
+#   NaN/garbage on GB10/sm121 (see vroomfondel-hy3-nvfp4-w4a4.yml + TESTLOGS/).
+#
+# WHY THIS VARIANT (HF card kodelow/Hy3-NVFP4-W4A16, 2026-07-09):
+#   Same tencent/Hy3 295B/21B hy_v3 MoE, but quantized WEIGHT-ONLY:
+#     - quant_method: compressed-tensors, format "nvfp4-pack-quantized"
+#     - weights: NVFP4 (4-bit float, tensor_group group_size 16, symmetric)
+#     - activations: BF16 (NO input_scale) → this is the key difference from W4A4.
+#     - EXCLUDED from quant (kept BF16): lm_head, embed_tokens, ALL dense MLP,
+#       ALL attention q/k/v/o, router gate, shared experts, MTP/eh_proj. So ONLY
+#       the routed-expert GEMMs are NVFP4 — effectively experts-only, the safest
+#       config and the same shape the working Qwen/GLM NVFP4 models use here.
+#   Because activations stay BF16, this NEVER touches the W4A4 activation-FP4
+#   kernel path that garbles on sm121. The card serves it via vLLM on the MARLIN
+#   NVFP4 kernel ("FlashInfer fp4 backends are W4A4 and reject a weight-only
+#   scheme"). Verified upstream only on B300 (SM100) — GB10/sm121 is UNVALIDATED.
+#
+# Architecture (hy_v3): 80 layers, 64 attn heads / 8 KV heads (head_dim 128),
+#   hidden 4096, 192 routed experts (top-8) + 1 shared, moe_intermediate 1536,
+#   rms_norm_eps 1e-5, qk_norm, 262144 native context, 1 MTP/NEXTN layer.
+_model_profile:
+  "kodelow/Hy3-NVFP4-W4A16":
+    knowledge_cutoff: null
+    release_date: "2026-07-06"  # tencent/Hy3 base (W4A16 repack later)
+    info_url: "https://huggingface.co/kodelow/Hy3-NVFP4-W4A16"
+    nccl_transport: "roce"
+    tp_size: 4  # num_key_value_heads=8 → 2 KV heads/GPU at TP=4
+    ep_size: 1  # 192 routed experts → clean split
+    num_experts: 192
+    trust_remote_code: true  # hy_v3 custom arch
+    # Parsers per the base Hy3 card (see the W4A4 profile's parser notes). The
+    # `:opensource` token-suffix backport in sglang_launch.sh applies here too —
+    # this checkpoint carries the same hy_v3 tokenizer (verify token_suffix).
+    tool_call_parser: "hunyuan"
+    reasoning_parser: "hunyuan"
+
+    # --- Quantization: compressed-tensors NVFP4, WEIGHT-ONLY (W4A16) ---
+    # NOT modelopt_fp4 — this checkpoint uses the compressed-tensors loader
+    # (quant_method "compressed-tensors", format "nvfp4-pack-quantized"), like the
+    # RedHatAI NVFP4 models that are patch-free winners here.
+    quantization: "compressed-tensors"
+    # No calibrated FP8 KV in the checkpoint (weight-only) → BF16 KV for a
+    # correctness-first first contact; try fp8_e4m3 later to halve KV memory.
+    kv_cache_dtype: "auto"
+
+    # --- Backend: MARLIN (W4A16 requires it) ---
+    # The card is explicit: weight-only NVFP4 serves ONLY on the MARLIN kernel;
+    # the FlashInfer/CUTLASS FP4 backends are W4A4 and reject a weight-only scheme
+    # ("kernel does not support QuantKey(u8, scale(f8e4m3))"). SGLang exposes marlin
+    # for both moe_runner and fp4_gemm. ⚠ SM121 CAVEAT: SGLang's marlin FP4 path is
+    # gated as an SM80–SM90 fallback (modelopt_quant.py use_marlin_fallback) — forcing
+    # it on sm121 is exactly what we're testing; if it miscomputes, the compressed-
+    # tensors loader may auto-select a different working path (RedHatAI models do).
+    moe_runner_backend: "marlin"
+    fp4_gemm_backend: "marlin"
+    # attention: triton — flashinfer attn crashes on the HYV3 head geometry
+    # ("Invalid configuration NUM_MMA..." in prefill.cuh), independent of quant.
+    attention_backend: "triton"
+    disable_deep_gemm: true      # DeepGemm targets FP8 ue8m0, not NVFP4
+    disable_cuda_graph: false
+    disable_piecewise_cuda_graph: true  # piecewise graphs crash on this kernel family / sm121
+    cuda_graph_max_bs: 32
+    jit_max_jobs: 4
+    pp_async_batch_depth: 0
+    mem_fraction_static: "0.70"
+    enable_eplb: false
+
+    # --- Context: native 262144 (fits; ~experts-only weights leave big KV room) ---
+    context_length: 262144
+
+    # --- Speculative / MTP: OFF for first contact ---
+    # The checkpoint keeps the MTP/NEXTN head; the card runs vLLM mtp spec. Leave
+    # OFF until a clean no-spec baseline serves coherently (the W4A4 sibling's MTP
+    # head had a separate w13 load bug — re-verify on this weight-only export).
+    speculative_enabled: false
+
+    # Official Hy3 sampling recommendation (tencent/Hy3 card). top_k=-1 because the
+    # generation_config ships top_k=0 which SGLang rejects (HTTP 400).
+    recommended_sampling:
+      temperature: 0.9
+      top_p: 1.0
+      top_k: -1
+
+    # Image: default is 0.5.14-sm121 (confirmed to serve NVFP4 coherently for Qwen).
+    # sglang_image: "xomoxcc/dgx-spark-sglang:0.5.14-sm121"

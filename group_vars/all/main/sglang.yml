@@ -50,6 +50,10 @@ sglang_port: 8000
 # sglang_model: "cyankiwi/Hermes-4.3-36B-AWQ-4bit"              # 36B DENSE (ByteDance Seed-OSS base), compressed-tensors int4 W4A16 (repo NAME says AWQ, format is compressed-tensors), hybrid <think> reasoning OFF by default → ~4.5 GB/GPU TP4 (tiny). UNVALIDATED first-contact
 # sglang_model: "TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ"  # 47B/13B MoE (Mixtral 8x7B), GENUINE AWQ int4 (gemm), ChatML, 32K ctx, no reasoning → ~6.2 GB/GPU TP4 (tiny). UNVALIDATED first-contact
 #
+# --- Hunyuan-3 (Tencent; hy_v3 arch) ---
+# sglang_model: "vroomfondel/Hy3-NVFP4-W4A4"                     # WIP UNSTABLE 295B/21B-active Hunyuan-3 MoE (192 exp/top-8 +1 shared), modelopt NVFP4 (W4A4) + FP8 KV, 256K ctx → ~40 GB/GPU TP4/EP4 (fits, huge KV headroom); hunyuan tool/reasoning parser; BF16 MTP head (EAGLE staged). ⚠ W4A4 garbles/NaNs on GB10/sm121 (see profile)
+sglang_model: "kodelow/Hy3-NVFP4-W4A16"                      # SAME hy_v3 295B MoE, WEIGHT-ONLY NVFP4 (compressed-tensors nvfp4-pack-quantized; experts-only, attn/dense/KV BF16) → avoids the W4A4 activation-FP4 sm121 garbage path; serves via MARLIN kernel. UNVALIDATED first-contact on GB10
+#
 # --- MiniMax ---
 # sglang_model: "nvidia/MiniMax-M2.5-NVFP4"
 # sglang_model: "nvidia/MiniMax-M2.7-NVFP4"
@@ -62,7 +66,7 @@ sglang_port: 8000
 #
 # --- Nemotron-3 ---
 # sglang_model: "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"  # 31B/3B MoE NVFP4 (modelopt mixed), OMNI-multimodal (text/img/video/audio), NemotronH hybrid; SGLang class NemotronH_Nano_Omni_Reasoning_V3 (in nano_nemotron_vl.py, >=0.5.12); AUDIO needs librosa baked into the 0.5.13-sm121 image (AUDIO_DEPS recipe var). UNVALIDATED first-contact
-sglang_model: "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
+# sglang_model: "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
 # sglang_model: "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4"
 #
 # --- Nex-N2 ---

@@ -19,6 +19,7 @@ hf_cache_juicefs_root: "{{ juicefs_mount_path }}"
 hf_token: "hf_CHANGEME"
 # HuggingFace model pre-download Job
 hf_preload_models:
+  - "kodelow/Hy3-NVFP4-W4A16"
   - "cyankiwi/Hermes-4.3-36B-AWQ-4bit"
   - "TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ"
   - "nvidia/Qwen3.6-35B-A3B-NVFP4"

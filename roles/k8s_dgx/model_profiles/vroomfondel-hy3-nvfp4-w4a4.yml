@@ -48,13 +48,32 @@ _model_profile:
     release_date: "2026-07-06"  # tencent/Hy3 base release (NVFP4 repackage later)
     info_url: "https://huggingface.co/vroomfondel/Hy3-NVFP4-W4A4"
     nccl_transport: "roce"
-    tp_size: 4  # num_key_value_heads=8 → 2 KV heads/GPU at TP=4
-    ep_size: 4  # 192 routed experts → clean split
+    # STEP C 2026-07-09: PP=4/TP=1/EP=1 — NO tensor + NO expert sharding (each GPU
+    # runs full layers with all 192 experts, pipeline across the 4 nodes). Isolates
+    # ALL sharding as the hy_v3 garbage cause. STEP B (TP=4/EP=1) still NaN-crashed →
+    # EP=4 dispatch ruled out; STEP A (Qwen TP=4) coherent → image + TP-for-qwen ok.
+    # tp_size=1 → PP = nnodes//tp = 4. Was TP=4/EP=1 (step B), TP=4/EP=4 (original).
+    tp_size: 4
+    ep_size: 1
     num_experts: 192
     trust_remote_code: true  # hy_v3 is a custom arch; loads model code from the repo
     # Parsers per the card (verbatim SGLang registry names):
     tool_call_parser: "hunyuan"     # needed by honcho/hindsight tool-calling paths
     reasoning_parser: "hunyuan"     # Hy3 is a hybrid fast/slow-thinking model
+    # ⚠ TOKEN-SUFFIX: this checkpoint's tokenizer suffixes EVERY structural token
+    # (tokenizer_config.json token_suffix ":opensource" → the model emits single
+    # tokens <think:opensource>, <tool_calls:opensource>, <tool_sep:opensource>,
+    # <arg_key/arg_value:opensource>; the BARE forms <think>/<tool_calls> are not
+    # tokens at all). The 0.5.14-sm121 image's hunyuan detectors match only the
+    # BARE tokens (pre-#29920) → WITHOUT the fix, reasoning never splits and NO
+    # tool calls parse. sglang_launch.sh backports SGLang PR #29920's
+    # resolve_hunyuan_tokens() (gated on Hy3/Hunyuan or a hunyuan parser), feeding
+    # the suffix via SGLANG_HUNYUAN_TOKEN_SUFFIX (from token_suffix). Verified in a
+    # debug pod: tool-call + reasoning-split both parse the :opensource tokens.
+    # When bumping to an image that already contains #29920, drop that launch block.
+    # The tokenizer itself needs NO patch: it loads fully as transformers-v5
+    # TokenizersBackend (the "still TokenizersBackend" warning is cosmetic — the
+    # repo ships no custom tokenizer .py, so nothing model-specific is missing).
 
     # --- Context: native 256K (full window) ---
     # Base supports 262144, and it fits: ~40 GB/GPU weights leaves ~80 GB/GPU free
@@ -81,8 +100,28 @@ _model_profile:
     #     startup_crash on SM121.
     #   attention_backend=triton — flashinfer attn also works; triton won the
     #     modelopt_fp4 peak on the sibling.
+    # ⚠ GARBAGE ON GB10 is sm121-KERNEL-SPECIFIC, not a bad checkpoint (2026-07-09).
+    # This is our own kikube/quantizer output, `qformat: nvfp4` = FULL W4A4 (attn
+    # q/k/v/o + activations FP4, verified: attn weights U8 + input_scale). The
+    # quantizer's before/after calibration preview on H200 (sm90) was COHERENT → the
+    # weights are fine. But on GB10/sm121 every SGLang FP4 backend garbles output:
+    # attn=triton→"!!!!", attn=flashinfer→NaN device-assert, moe+fp4=marlin→multilingual
+    # token salad (all backend-independent). So SGLang's sm121 W4A4 FP4 path (esp.
+    # activation-FP4 in attention) is the broken piece, not the model. Two fixes:
+    #   (a) serve via vLLM — the tonyd2wild Hy3-NVFP4-2x-DGX-Spark ref runs this exact
+    #       model/quant on DGX Spark via vLLM+MARLIN+--enforce-eager (proven working);
+    #   (b) re-quantize `nvfp4_mlp_only` (experts-only, attn/dense high-precision) so
+    #       SGLang only hits the experts-FP4 path that Qwen3-235B/GLM already use here.
+    # Backend knobs below are moot for SGLang until (b); reset to modelopt_fp4 defaults.
+    # Sweep verdicts + crash log: TESTLOGS/sglang_nn4_tp4_ep4/hy3-nvfp4-w4a4/.
     moe_runner_backend: "flashinfer_cutlass"
     fp4_gemm_backend: "flashinfer_cutlass"
+    # attention: triton is REQUIRED for HYV3 — flashinfer attn crashes on the Hy3
+    # head geometry ("Invalid configuration NUM_MMA..." in prefill.cuh → our NaN
+    # device-assert), per kikube/quantizer smoke_sglang_spark.sh. trtllm_mha is SM100-
+    # only (not GB10). The earlier triton→"!!!!" garbage is now hypothesised to be the
+    # sm121 cute-RMSNorm miscompute (FLASHINFER_USE_CUDA_NORM=1 added to the deploy env);
+    # this combo (triton attn + flashinfer_cutlass moe/fp4 + CUDA-norm) is the retest.
     attention_backend: "triton"
     # DeepGemm targets FP8 ue8m0; NVFP4 scale_fmt != ue8m0 → disable (JIT blocks
     # the scheduler forward loop / 300s watchdog kill / RAM exhaustion otherwise).
@@ -110,17 +149,44 @@ _model_profile:
     # speculative_draft_model_path/_quantization stay unset). Params verbatim from
     # the card. UNVALIDATED on GB10 — flip speculative_enabled:false if the head
     # NaNs/misbehaves at boot (the usual FP4→BF16 draft-drift failure mode).
-    speculative_enabled: true
+    # ── MTP/NEXTN boot crash 2026-07-09 + FIX (checkpoint-verified) ──────────
+    # First deploy with spec ON crash-looped: hunyuan_v3_nextn.py load_weights →
+    # fused_moe _load_w13 → "tensor a (2048) must match b (4096) at dim 1" → SIGQUIT
+    # → exitCode 137 → worker cascade. ROOT CAUSE (verified via safetensors headers):
+    # the MTP layer (layers.80) experts are BF16 (gate/up_proj hidden=4096, NO
+    # weight_scale), while the MAIN layers are NVFP4 (U8, hidden packed 2-per-byte
+    # =2048, + weight_scale). SGLang defaults the draft quant to the target's
+    # (speculative_draft_model_quantization=None → modelopt_fp4), so the NEXTN loader
+    # built an NVFP4 w13 buffer (hidden=2048) and tried to copy the BF16 weight
+    # (hidden=4096) into it → the 2048-vs-4096 mismatch. FIX = force the draft quant
+    # to unquant so the MTP head loads as BF16 (matching the checkpoint) — same knob
+    # as the gemma-4 / qwen3-235b NVFP4 profiles. See TESTLOGS/sglang_nn4_tp4_ep4/
+    # hy3-nvfp4-w4a4/ and [[reference_draft_quant_unquant]].
+    # UNVALIDATED-AT-BOOT with the fix: verified only at the checkpoint level so far;
+    # if it now hits a BF16-draft-on-NVFP4-target out_dtype error, see the Mistral
+    # sglang_model_dtype=bfloat16 workaround. Flip speculative_enabled:false to fall
+    # back to the (working) no-spec base model.
+    # TEMPORARILY false during the garbage-output backend-matrix debug (2026-07-09):
+    # spec is isolated so an MTP boot issue can't mask the attention/output test.
+    # The unquant fix below is staged — flip back to true once base output is clean.
+    speculative_enabled: false
     speculative_algo: EAGLE
     speculative_num_steps: 2
     speculative_eagle_topk: 1
     speculative_num_draft_tokens: 3
+    speculative_draft_model_quantization: "unquant"  # MTP head is BF16 (see above) — must NOT inherit modelopt_fp4
 
-    # Hy3 is a reasoning/agent model; no per-card sampling recipe published.
-    # Conservative reasoning defaults — adjust once a baseline exists.
+    # Official recommendation (tencent/Hy3 card): temperature=0.9, top_p=1.0 (same
+    # for thinking + no_think; the card tunes behavior via reasoning_effort, not
+    # sampling). top_k is set to -1 (disabled) because the checkpoint's
+    # generation_config ships top_k=0 which SGLang REJECTS ("top_k must be -1 or
+    # >=1, got 0", HTTP 400) — -1 is SGLang's disable sentinel and matches the
+    # model's intent. These feed LiteLLM's per-model defaults (_sglang_sampling_
+    # defaults → litellm.yml), so requests via LiteLLM get valid params.
     recommended_sampling:
-      temperature: 0.7
-      top_p: 0.95
+      temperature: 0.9
+      top_p: 1.0
+      top_k: -1
 
     # Image: default is 0.5.14-sm121. ⚠ hy_v3 is a brand-new arch (base released
     # 2026-07-06) — confirm the pinned image actually registers the hy_v3 model
