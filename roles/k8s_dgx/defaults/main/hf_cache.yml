@@ -20,6 +20,7 @@ hf_token: "hf_CHANGEME"
 # HuggingFace model pre-download Job
 hf_preload_models:
   - "vroomfondel/Qwen3.6-35B-A3B-NVFP4-ModelOpt"
+  - "vroomfondel/Qwen3.6-35B-A3B-NVFP4-MLP-Only-ModelOpt"
   - "0xSero/glm-5.2-reap-504B-v2"
   # - "0xSero/GLM-5.2-REAP-NU176-526B"
   - "vroomfondel/Qwen3-30B-A3B-NVFP4-ModelOpt"
