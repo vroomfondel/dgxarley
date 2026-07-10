@@ -97,38 +97,41 @@ _model_profile:
     # FP8 KV baked into the checkpoint (static calibrated) → fp8_e4m3 matches.
     kv_cache_dtype: "fp8_e4m3"
 
-    # --- Backend = validated modelopt_fp4 SM121 recipe (Qwen3-235B Test-17) ---
-    # Same quant packaging (modelopt_fp4) → same SM121 kernel walls. See
-    # nvidia-qwen3-235b-a22b-nvfp4.yml / TURBOQUANT.md for why these exact values:
-    #   moe_runner_backend=flashinfer_cutlass — triton/cutlass MoE runners fall
-    #     through to nvfp4_blockwise_moe.cuh → device-side assert on SM121.
-    #     ⚠ RISK: if Hy3's moe_intermediate_size is not padding-aligned this can
-    #     hit the "intermediate size required padding" boot assert — in which case
-    #     flashinfer_trtllm is the only runner that avoids it (see the NVFP4
-    #     gated-MoE padding note). Try flashinfer_trtllm if boot asserts on padding.
-    #   fp4_gemm_backend=flashinfer_cutlass — flashinfer_cudnn FP4 GEMM is a 100%
-    #     startup_crash on SM121.
-    #   attention_backend=triton — flashinfer attn also works; triton won the
-    #     modelopt_fp4 peak on the sibling.
-    # ✅ RESOLVED (2026-07-10): this combo (flashinfer_cutlass moe+fp4, triton attn)
-    # serves COHERENTLY on GB10/sm121. The long "garbles/NaNs on GB10" history below was
-    # a RED HERRING — it was NOT the FP4 kernels/backends at all, but the shared-expert
-    # weights never loading (name mismatch shared_experts↔shared_mlp; see header + the
-    # sglang_launch.sh step-3 remap). With the remap, moe+fp4=flashinfer_cutlass computes
-    # finite. The earlier "attn=triton→!!!!, flashinfer→NaN, marlin→salad" symptoms were
-    # all the SAME zero-shared-expert NaN wearing different masks (the sampler garbles
-    # whatever comes out of NaN logits), NOT backend-specific breakage.
-    # (For the record: the H200 before/after calibration preview being coherent was
-    # correct — the weights ARE fine; they just weren't reaching shared_mlp on load.)
+    # --- Backend = VALIDATED WORKING (2026-07-10), alternatives UNTESTED-not-broken ---
+    # moe_runner_backend=flashinfer_cutlass + fp4_gemm_backend=flashinfer_cutlass +
+    # attention_backend=triton: this exact combo serves COHERENTLY on GB10/sm121 (see the
+    # ROOT CAUSE note at the top — the real blocker was the shared_experts→shared_mlp load
+    # gap, NOT the backends). ⚠ IMPORTANT: the old "backend X device-asserts on sm121"
+    # claims were mostly the shared_experts NaN wearing different masks — so treat all
+    # alternatives as UNTESTED-since-the-fix, NOT proven-broken, EXCEPT the ones that are
+    # independently confirmed hard walls:
+    #   - moe_runner=cutlass → CONFIRMED unavailable: SGLang 0.5.14 removed its own cutlass
+    #     MoE runner (NotImplementedError). Never reaches a kernel.
+    #   - moe_runner=flashinfer_trtllm → crashes in trtllm_batched_gemm_runner.cu:305
+    #     (kernel compiled sm100f, wrong for sm121); fp4_gemm=flashinfer_trtllm/cute-dsl →
+    #     BackendSupportedError on capability 121. All independent of shared_experts.
+    #   - moe_runner=triton → the earlier "device-side assert" with this backend WAS the
+    #     shared_experts NaN (sampler `probability tensor contains inf/nan`), not a triton
+    #     bug. Whether triton MoE now works post-fix is UNTESTED — flashinfer_cutlass is
+    #     just what we validated; no need to re-test unless there's a reason (e.g. perf).
+    #   - fp4_gemm=flashinfer_cudnn → "100% startup crash on sm121" is INHERITED from the
+    #     Qwen3-235B sibling profile, not first-hand-verified on Hy3 (but a startup crash is
+    #     pre-forward, so architecturally unrelated to shared_experts → plausibly still true).
+    # For the record: the H200 before/after calibration preview being coherent was correct
+    # — the weights ARE fine, they just weren't reaching shared_mlp on load.
+    # Full backend-availability taxonomy: QUANT_HY3_GOTCHAS.md.
     # Historical sweep/crash log: TESTLOGS/sglang_nn4_tp4_ep4/hy3-nvfp4-w4a4/.
     moe_runner_backend: "flashinfer_cutlass"
     fp4_gemm_backend: "flashinfer_cutlass"
-    # attention: triton is REQUIRED for HYV3 — flashinfer attn crashes on the Hy3
-    # head geometry ("Invalid configuration NUM_MMA..." in prefill.cuh → our NaN
-    # device-assert), per kikube/quantizer smoke_sglang_spark.sh. trtllm_mha is SM100-
-    # only (not GB10). The earlier triton→"!!!!" garbage is now hypothesised to be the
-    # sm121 cute-RMSNorm miscompute (FLASHINFER_USE_CUDA_NORM=1 added to the deploy env);
-    # this combo (triton attn + flashinfer_cutlass moe/fp4 + CUDA-norm) is the retest.
+    # attention: triton is what we VALIDATED for HYV3. flashinfer attn has a SEPARATELY
+    # observed crash — "Invalid configuration NUM_MMA..." in prefill.cuh, a kernel-launch
+    # config assert tied to the HYV3 head geometry (from kikube/quantizer
+    # smoke_sglang_spark.sh, a different test context) — which is a DIFFERENT failure class
+    # than the shared_experts sampler NaN, so it's likely a genuine separate sm121/HYV3
+    # incompatibility (NOT the shared_experts root cause; that "→ our NaN" attribution was
+    # a conflation). Not re-tested since the fix — but a kernel-launch crash is unrelated to
+    # weight loading, so no reason to expect it changed. trtllm_mha is SM100-only (not GB10).
+    # Retest flashinfer attn only if there's a reason (e.g. perf); triton is the safe default.
     attention_backend: "triton"
     # DeepGemm targets FP8 ue8m0; NVFP4 scale_fmt != ue8m0 → disable (JIT blocks
     # the scheduler forward loop / 300s watchdog kill / RAM exhaustion otherwise).

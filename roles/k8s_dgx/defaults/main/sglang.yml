@@ -336,7 +336,18 @@ sglang_internal_port: 30080
 # mid-generation. Must stay >= the eval client --request-timeout (we run up to
 # 7200s). litellm_settings.request_timeout below is kept >= this value.
 sglang_haproxy_timeout: 8000
-sglang_dist_timeout: 1800
+# Timeout (seconds) for torch.distributed collective/rendezvous waits (--dist-timeout).
+# NOT the local weight-load CPU time — only cross-rank collectives (initial store
+# rendezvous ~30s, and the post-weight-load barrier). On a multi-node instance this
+# is the ONLY recovery lever: SGLang has no elastic re-join, so a worker that dies
+# mid-load can't rejoin — the head only notices at the post-load barrier and waits
+# out this timeout, then dies too, triggering a coordinated full recreate (the sole
+# working recovery). Lowered 1800->600 so that recovery takes ~10min instead of ~30min.
+# Safe because peer skew at the post-load barrier is ~1-2min (all ranks load equally);
+# 600s cleanly separates "slow peer" (waits ~2min) from "dead peer" (fails at 10min).
+# Per-profile overridable (dist_timeout) for a model whose first collective legitimately
+# runs longer (e.g. a huge first prefill) — raise it there, not globally.
+sglang_dist_timeout: "{{ sglang_model_profiles[_sglang_active_model].dist_timeout | default(600) }}"
 # Timeout (seconds) for the head's wait-for-worker initContainer.
 # Must be long enough for all workers to become Ready (model download + pod scheduling).
 sglang_wait_timeout: 1200
