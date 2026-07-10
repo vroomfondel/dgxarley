@@ -110,20 +110,17 @@ _model_profile:
     #     startup_crash on SM121.
     #   attention_backend=triton — flashinfer attn also works; triton won the
     #     modelopt_fp4 peak on the sibling.
-    # ⚠ GARBAGE ON GB10 is sm121-KERNEL-SPECIFIC, not a bad checkpoint (2026-07-09).
-    # This is our own kikube/quantizer output, `qformat: nvfp4` = FULL W4A4 (attn
-    # q/k/v/o + activations FP4, verified: attn weights U8 + input_scale). The
-    # quantizer's before/after calibration preview on H200 (sm90) was COHERENT → the
-    # weights are fine. But on GB10/sm121 every SGLang FP4 backend garbles output:
-    # attn=triton→"!!!!", attn=flashinfer→NaN device-assert, moe+fp4=marlin→multilingual
-    # token salad (all backend-independent). So SGLang's sm121 W4A4 FP4 path (esp.
-    # activation-FP4 in attention) is the broken piece, not the model. Two fixes:
-    #   (a) serve via vLLM — the tonyd2wild Hy3-NVFP4-2x-DGX-Spark ref runs this exact
-    #       model/quant on DGX Spark via vLLM+MARLIN+--enforce-eager (proven working);
-    #   (b) re-quantize `nvfp4_mlp_only` (experts-only, attn/dense high-precision) so
-    #       SGLang only hits the experts-FP4 path that Qwen3-235B/GLM already use here.
-    # Backend knobs below are moot for SGLang until (b); reset to modelopt_fp4 defaults.
-    # Sweep verdicts + crash log: TESTLOGS/sglang_nn4_tp4_ep4/hy3-nvfp4-w4a4/.
+    # ✅ RESOLVED (2026-07-10): this combo (flashinfer_cutlass moe+fp4, triton attn)
+    # serves COHERENTLY on GB10/sm121. The long "garbles/NaNs on GB10" history below was
+    # a RED HERRING — it was NOT the FP4 kernels/backends at all, but the shared-expert
+    # weights never loading (name mismatch shared_experts↔shared_mlp; see header + the
+    # sglang_launch.sh step-3 remap). With the remap, moe+fp4=flashinfer_cutlass computes
+    # finite. The earlier "attn=triton→!!!!, flashinfer→NaN, marlin→salad" symptoms were
+    # all the SAME zero-shared-expert NaN wearing different masks (the sampler garbles
+    # whatever comes out of NaN logits), NOT backend-specific breakage.
+    # (For the record: the H200 before/after calibration preview being coherent was
+    # correct — the weights ARE fine; they just weren't reaching shared_mlp on load.)
+    # Historical sweep/crash log: TESTLOGS/sglang_nn4_tp4_ep4/hy3-nvfp4-w4a4/.
     moe_runner_backend: "flashinfer_cutlass"
     fp4_gemm_backend: "flashinfer_cutlass"
     # attention: triton is REQUIRED for HYV3 — flashinfer attn crashes on the Hy3
