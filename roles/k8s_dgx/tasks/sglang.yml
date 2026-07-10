@@ -45,8 +45,8 @@
   vars:
     _sglang_disabled_instances: >-
       {{ ([{'prefix': 'sglang-vision', 'workers': (_sglang_vision_instance.nodes | length) - 1}]
-            if not (enable_vision_model | default(true)) else [])
+            if not (enable_vision_model | default(true) | bool) else [])
          + ([{'prefix': 'sglang-coder', 'workers': (_sglang_coder_instance.nodes | length) - 1}]
-            if not (enable_coder_model | default(false)) else [])
+            if not (enable_coder_model | default(false) | bool) else [])
          + ([{'prefix': 'sglang-embed', 'workers': (_sglang_embed_instance.nodes | length) - 1}]
-            if not (enable_embedding_model | default(false)) else []) }}
+            if not (enable_embedding_model | default(false) | bool) else []) }}

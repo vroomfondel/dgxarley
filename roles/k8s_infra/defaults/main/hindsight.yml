@@ -63,8 +63,8 @@ hindsight_llm_model: "{{ litellm_hermes_alias_model }}"
 #           hindsight_embeddings_api_key == litellm_master_key (set in vault).
 # Auto-switches when the master switch flips — safe to set now (inert until cutover).
 hindsight_embeddings_provider: "openai"
-hindsight_embeddings_base_url: "{{ ('http://litellm.' ~ litellm_namespace ~ '.svc.cluster.local:' ~ litellm_port ~ '/v1') if (enable_embedding_model | default(false)) else (openwebui_embedding_ollama_url ~ '/v1') }}"
-hindsight_embeddings_model: "{{ litellm_embed_alias_model if (enable_embedding_model | default(false)) else ollama_embed_model }}"
+hindsight_embeddings_base_url: "{{ ('http://litellm.' ~ litellm_namespace ~ '.svc.cluster.local:' ~ litellm_port ~ '/v1') if (enable_embedding_model | default(false) | bool) else (openwebui_embedding_ollama_url ~ '/v1') }}"
+hindsight_embeddings_model: "{{ litellm_embed_alias_model if (enable_embedding_model | default(false) | bool) else ollama_embed_model }}"
 
 # --- Reranker: `rrf` disables model-based reranking (no HF download). Set to
 # `litellm` / `cohere` / `local` etc. to enable; see configuration docs. ---

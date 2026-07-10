@@ -308,6 +308,41 @@ else:
             fh.write(code)
         print("Patched reasoning_parser.py: HunyuanDetector uses suffixed think/tool tokens")
 PATCH_HUNYUAN_REASON_EOF
+
+  # --- 3) models/hunyuan_v3.py: remap shared-expert weight names ---
+  # HYV3 checkpoints (vroomfondel/Hy3-NVFP4-W4A4, tencent/Hy3) name the shared
+  # expert `model.layers.N.mlp.shared_experts.*`, but SGLang's HYV3 model module
+  # is `shared_mlp` (self.shared_mlp = HYV3FeedForward). load_weights has NO remap
+  # for it (only router.gate → gate), so the shared-expert weights — which ARE
+  # present and FP4-quantized — are silently skipped (`if name not in params_dict:
+  # continue`) → shared_mlp stays zero-init → gate_up_proj outputs 0 → down_proj
+  # FP4-quantizes a zero input → scale 448·6/0 degenerates → NaN at layer 1, first
+  # forward. Localised via --debug-tensor-dump layer tracing (see QUANT_HY3_GOTCHAS).
+  # Fix: remap .shared_experts. → .shared_mlp. at the TOP of the load loop, so the
+  # existing gate_proj/up_proj → gate_up_proj stacking then applies correctly.
+  python3 - <<'PATCH_HUNYUAN_SHARED_EOF'
+f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/models/hunyuan_v3.py"
+with open(f) as fh:
+    code = fh.read()
+if 'replace(".shared_experts.", ".shared_mlp.")' in code:
+    print("hunyuan_v3.py: shared_experts remap already present, skipping")
+else:
+    anchor = "        for name, loaded_weight in weights:\n"
+    inject = anchor + (
+        "            # [dgxarley] HYV3 checkpoints name the shared expert\n"
+        "            # `mlp.shared_experts.*`; the SGLang model module is `shared_mlp`.\n"
+        "            # Remap so the (real, FP4) shared-expert weights actually load —\n"
+        "            # else silently skipped -> shared_mlp zero-init -> NaN at down_proj.\n"
+        '            name = name.replace(".shared_experts.", ".shared_mlp.")\n'
+    )
+    if anchor in code:
+        code = code.replace(anchor, inject, 1)
+        with open(f, "w") as fh:
+            fh.write(code)
+        print("Patched hunyuan_v3.py: remap .shared_experts. -> .shared_mlp. in load_weights")
+    else:
+        print("hunyuan_v3.py: load_weights loop anchor not found, skipping")
+PATCH_HUNYUAN_SHARED_EOF
 fi
 
 # Patch SGLang get_config() to convert dict sub_configs after loading (transformers 5.5.0 bug).

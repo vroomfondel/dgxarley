@@ -142,11 +142,11 @@ _sglang_embed_instance:
 sglang_instances: >-
   {{ {'default': {}}
      | combine({'vision': _sglang_vision_instance}
-               if (enable_vision_model | default(true)) else {})
+               if (enable_vision_model | default(true) | bool) else {})
      | combine({'coder': _sglang_coder_instance}
-               if (enable_coder_model | default(false)) else {})
+               if (enable_coder_model | default(false) | bool) else {})
      | combine({'embed': _sglang_embed_instance}
-               if (enable_embedding_model | default(false)) else {}) }}
+               if (enable_embedding_model | default(false) | bool) else {}) }}
 
 # Merged UNDER each sglang_instances entry (entry wins). _inst_key is the dict
 # key of the current instance, set by the loop in sglang.yml. Defaults that

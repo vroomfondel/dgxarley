@@ -34,7 +34,7 @@ openwebui_embedding_ollama_url: "http://ollama-embed.ollama.svc.cluster.local:{{
 #           2560-dim Qwen3-Embedding-4B, so the existing RAG vectors stay valid (no
 #           re-index). NOTE: the embedding virtual key (openwebui_embedding_openai_key)
 #           must be allowed to call embed-default in LiteLLM (unrestricted keys are fine).
-openwebui_embedding_model: "{{ litellm_embed_alias_model if (enable_embedding_model | default(false)) else ollama_embedding_model }}"
+openwebui_embedding_model: "{{ litellm_embed_alias_model if (enable_embedding_model | default(false) | bool) else ollama_embedding_model }}"
 
 openwebui_embedding_chunk_size: 20000
 openwebui_embedding_chunk_overlap: 750

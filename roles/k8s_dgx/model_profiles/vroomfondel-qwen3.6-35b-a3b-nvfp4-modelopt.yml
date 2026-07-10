@@ -12,25 +12,29 @@
 #     Parameter model.layers.0.linear_attn.in_proj_qkvz.input_scale not found in params_dict
 #     qwen3_5.py:388 weight_loader → linear.py:724 assert param_data.shape ==
 #     loaded_weight.shape → AssertionError → SIGQUIT → worker cascade.
-#   MECHANISM (verified against hf_quant_config.json + config.json): this UNIFORM
-#   NVFP4 export quantized the Gated-DeltaNet `linear_attn.in_proj_qkvz` Q/K/V/Z
-#   projection to FP4 (packed-U8 weight + input_scale). ModelOpt's exclude_modules
-#   keeps conv1d / in_proj_a / in_proj_b / mlp.gate / shared_expert_gate / mtp* in
-#   BF16 — but NOT in_proj_qkvz. On the PLAIN `modelopt_fp4` path SGLang built
-#   in_proj_qkvz UNQUANTIZED → params_dict has no input_scale slot AND the
-#   FP4-packed (half-width) weight ≠ the built (BF16) param shape → the assert.
 #
-#   ⚠ THIS IS A DISPATCH/LOADER GAP ON THE UNIFORM PATH, NOT A STRUCTURAL WALL.
-#   in_proj_qkvz IS quantizable on this arch: the nvidia MIXED_PRECISION sibling
-#   loads a quantized (FP8) in_proj_qkvz via modelopt_mixed, and sglang_launch.sh's
-#   `_sgl_mixed_nvfp4_variant_` patch already routes NVFP4-labelled linears to the
-#   FP4 loader. Whether THIS uniform checkpoint can be made to load — e.g. via
-#   `quantization: modelopt_mixed` (does the mixed dispatch fire for a uniform,
-#   non-MIXED_PRECISION checkpoint?) or a small qwen3_5.py:388 loader patch — is
-#   UNVERIFIED; it needs a source read of the fused-qkvz weight loader + the
-#   get_quant_method dispatch. Do not treat "unfixable" as settled.
+#   ⚠ ROOT CAUSE NOT YET PINNED — and it is NOT "in_proj_qkvz can't be quantized".
+#   Debug-pod source-read + live repro on the 0.5.14-sm121 image (2026-07-10, source
+#   inspection only, no GPU) proved in_proj_qkvz IS quantized NVFP4 and the split
+#   checkpoint LOADS in isolation:
+#     * create_qkvz_proj builds it as MergedColumnParallelLinear WITH quant_config.
+#     * ModelOptFp4Config.get_quant_method("…in_proj_qkvz") → NVFP4 (not excluded;
+#       is_layer_skipped resolves the constituents via packed_modules_mapping
+#       {in_proj_qkvz:[in_proj_qkv,in_proj_z]}, neither excluded).
+#     * ModelOptFp4LinearMethod.create_weights DOES build weight (packed U8
+#       [12288,1024]) + weight_scale [12288,128] + input_scale + weight_scale_2.
+#     * Feeding the REAL checkpoint tensors (in_proj_qkv[8192,1024]+in_proj_z[4096,
+#       1024], shards (0,1,2)+3) through the actual packed split-loaders LOADS
+#       CLEANLY at TP=1 AND TP=4/rank0 — no "not found", no shape assert.
+#   So the earlier "modelopt_fp4 built it unquantized / structurally unreadable"
+#   claim was WRONG (retracted). The isolated fused-linear load does NOT reproduce
+#   the boot crash → the real cause lives elsewhere in the FULL-model load, most
+#   likely the multimodal wrapper's weight-name mapping (crash name is
+#   `model.layers.0…` with the `language_model.` segment stripped — a name-map
+#   effect, not an inherent NVFP4-linear property). NEXT STEP to pin it: full-model
+#   (or single-decoder-layer) load_weights trace on CPU with the Qwen3VL wrapper.
 #
-#   BUT re-quant is still the RECOMMENDED path, on merits (not "SGLang can't"):
+#   Re-quant is still the RECOMMENDED path, on merits (not "SGLang can't"):
 #   quantizing linear_attn to 4-bit is the hybrid-arch "wrong layer quantized"
 #   anti-pattern (vLLM #40252: Qwen3-Next NVFP4 garbles when linear-attn isn't in
 #   ignore). EVERY working recipe keeps linear-attn/attention out of 4-bit
@@ -49,9 +53,11 @@
 #        default". RECOMMENDED.
 #     2. Or re-run THIS nvfp4 config with `*.linear_attn.in_proj_qkvz` (probably the
 #        whole `*.linear_attn.*`) added to ModelOpt exclude_modules.
-#     3. Or (research, unverified) keep this uniform checkpoint and pursue the
-#        modelopt_mixed / loader-patch route above — only if the goal is explicitly
-#        to serve 4-bit linear-attn, accepting the likely-NaN risk.
+#     3. Or (research) pin the real crash via a full-model load_weights trace, then
+#        fix the name-map / loader. Only worth it to serve 4-bit linear-attn, which
+#        is the wrong choice here anyway (likely-NaN, see above). NOTE: the
+#        modelopt_mixed dispatch does NOT apply — it only fires for MIXED_PRECISION
+#        checkpoints; this is uniform quant_algo=NVFP4.
 #
 # Knobs below are derived from the kikube/quantizer config that PRODUCES this
 #   export (kikube/quantizer/configs/qwen3.6-35b-a3b_nvfp4.yaml) plus the
@@ -74,12 +80,10 @@
 #   (no dispatch/variant patch), structurally the twin of vroomfondel-hy3-nvfp4-w4a4.yml.
 #
 # ── FAILURE MODES ──
-#   1. ⛔ CONFIRMED boot crash (2026-07-10): the FP4-quantized linear_attn.in_proj_qkvz
-#      isn't loaded by the modelopt_fp4 uniform path (built unquantized) → shape
-#      assert. A dispatch/loader gap, NOT a structural wall (nvidia-mixed loads a
-#      quantized in_proj_qkvz at FP8) — full mechanism + fix options in the ⛔ banner
-#      above. Dies at weight load, before serving, so the runtime NaN in #2 of the
-#      Hy3 gotchas was never reached here.
+#   1. ⛔ CONFIRMED boot crash (2026-07-10) at in_proj_qkvz weight load, but ROOT
+#      CAUSE UNPINNED. in_proj_qkvz IS quantized NVFP4 and loads fine in isolation
+#      (TP=1/TP=4) — the crash is a FULL-MODEL-load effect (likely the Qwen3VL
+#      name-map), NOT "unquantizable" and NOT the runtime NaN. See the ⛔ banner.
 #   2. MTP/NEXTN draft-quant mismatch (SECONDARY — only relevant AFTER fix 1). A
 #      LOADABLE re-quant will still exclude the MTP head from quant (kept BF16 —
 #      CONFIRMED: hf_quant_config.json exclude_modules lists `mtp*` / `mtp.layers.0*`).

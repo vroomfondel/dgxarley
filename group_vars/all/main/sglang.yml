@@ -97,7 +97,7 @@ sglang_model: "vroomfondel/Hy3-NVFP4-W4A4"                     # ACTIVE 2026-07-
 # sglang_model: "Qwen/Qwen3.6-35B-A3B-FP8"
 # sglang_model: "RedHatAI/Qwen3.6-35B-A3B-NVFP4"                # 35B/3B MoE, uniform NVFP4 (compressed-tensors) — patch-free winner
 # sglang_model: "nvidia/Qwen3.6-35B-A3B-NVFP4"                  # 35B/3B MoE NVFP4 (modelopt MIXED_PRECISION → needs sglang_launch.sh _sgl_mixed_nvfp4_* patch)
-# sglang_model: "vroomfondel/Qwen3.6-35B-A3B-NVFP4-ModelOpt"    # ⛔ DOES NOT BOOT (2026-07-10): UNIFORM W4A4 NVFP4 (our kikube/quantizer modelopt_fp4 export) quantized linear_attn.in_proj_qkvz → SGLang Qwen3_5 builds it unquantized → weight-load AssertionError. Re-quant nvfp4_mlp_only to fix (see profile). Kept as documented negative result
+# sglang_model: "vroomfondel/Qwen3.6-35B-A3B-NVFP4-ModelOpt"    # ⛔ DOES NOT BOOT (2026-07-10): UNIFORM W4A4 NVFP4 (our kikube/quantizer export) — full-model weight-load AssertionError at linear_attn.in_proj_qkvz. Root cause UNPINNED: in_proj_qkvz IS quantized NVFP4 & loads in isolation (TP1/TP4) — full-model name-map suspect, NOT unquantizable. Recommended fix = re-quant nvfp4_mlp_only (see profile). Documented negative result
 
 #
 # --- Qwen3-VL (multimodal companion) ---

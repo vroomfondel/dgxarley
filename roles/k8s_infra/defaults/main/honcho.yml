@@ -63,7 +63,7 @@ honcho_dream_base: "http://litellm.{{ litellm_namespace }}.svc.cluster.local:{{ 
 #           as the text-gen paths and drops the ollama/ coupling. honcho_embedding_api_key
 #           is already litellm_master_key in vault, so no key change is needed.
 # Auto-switches when the master switch flips — safe to set now (inert until cutover).
-honcho_embedding_base: "{{ ('http://litellm.' ~ litellm_namespace ~ '.svc.cluster.local:' ~ litellm_port ~ '/v1') if (enable_embedding_model | default(false)) else (openwebui_embedding_ollama_url ~ '/v1') }}"
+honcho_embedding_base: "{{ ('http://litellm.' ~ litellm_namespace ~ '.svc.cluster.local:' ~ litellm_port ~ '/v1') if (enable_embedding_model | default(false) | bool) else (openwebui_embedding_ollama_url ~ '/v1') }}"
 # --- models ---
 honcho_deriver_model: "{{ litellm_hermes_alias_model }}"
 honcho_dialectic_model: "{{ litellm_hermes_alias_model }}"
@@ -71,7 +71,7 @@ honcho_summary_model: "{{ litellm_hermes_alias_model }}"
 honcho_dream_model: "{{ litellm_hermes_alias_model }}"
 # embed-default (LiteLLM alias) at cutover, else the ollama model name. Same 2560-dim
 # either way (Qwen3-Embedding-4B) → honcho_embedding_dimensions unchanged, no DB wipe.
-honcho_embedding_model: "{{ litellm_embed_alias_model if (enable_embedding_model | default(false)) else ollama_embed_model }}"
+honcho_embedding_model: "{{ litellm_embed_alias_model if (enable_embedding_model | default(false) | bool) else ollama_embed_model }}"
 
 # --- per-feature API keys (DUMMIES) ---
 # Lowest-precedence dummies so the role is self-contained and never undefined.
