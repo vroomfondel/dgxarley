@@ -19,7 +19,12 @@ hf_cache_juicefs_root: "{{ juicefs_mount_path }}"
 hf_token: "hf_CHANGEME"
 # HuggingFace model pre-download Job
 hf_preload_models:
-  - "kodelow/Hy3-NVFP4-W4A16"
+  - "0xSero/glm-5.2-reap-504B-v2"
+  # - "0xSero/GLM-5.2-REAP-NU176-526B"
+  - "vroomfondel/Qwen3-30B-A3B-NVFP4-ModelOpt"
+  - "Qwen/Qwen3.6-35B-A3B"
+  - "nvidia/Qwen3.5-397B-A17B-NVFP4-V2"
+  - "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"
   - "cyankiwi/Hermes-4.3-36B-AWQ-4bit"
   - "TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ"
   - "nvidia/Qwen3.6-35B-A3B-NVFP4"

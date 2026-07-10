@@ -2,10 +2,36 @@
 # Model profile: kodelow/Hy3-NVFP4-W4A16
 # Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
 #
-# ⚠ UNVALIDATED first-contact scaffold (written 2026-07-09). NOTHING here has
-#   served coherently on this cluster yet — this is the WEIGHT-ONLY (W4A16)
-#   sibling of vroomfondel/Hy3-NVFP4-W4A4, created because the W4A4 build produces
-#   NaN/garbage on GB10/sm121 (see vroomfondel-hy3-nvfp4-w4a4.yml + TESTLOGS/).
+# ⛔ CONFIRMED DEAD-END UNDER SGLANG (verified 2026-07-10, matrix run 0/9, all cases
+#   crash IDENTICALLY at model LOAD — before any backend/graph/forward). This is NOT
+#   a GB10/sm121 issue and NOT fixable by the backend knobs below or a runtime guard.
+#
+#   Crash: compressed_tensors.py:389 `_is_dynamic_token_w8a8` →
+#          AttributeError: 'NoneType' object has no attribute 'num_bits'
+#   Reasoning (the AttributeError is only the fall-through symptom):
+#     `CompressedTensorsMoEMethod.get_moe_scheme()` tries its predicates in order; for
+#     kodelow's routed experts NONE matches, so it falls to the w8a8 check which derefs
+#     `input_quant.num_bits` on a weight-only checkpoint (input_quant is None) → crash.
+#     The real gap: SGLang has NO weight-only-NVFP4 *MoE* scheme. The predicates reject
+#     kodelow correctly:
+#       - _is_wNa16_group_channel → needs strategy CHANNEL/GROUP (kodelow is
+#         `tensor_group`) AND is the INTEGER wNa16/marlin path, not float NVFP4.
+#       - _is_fp4a4_nvfp4 → `if input_quant is None: return False` (that branch is W4A4,
+#         requires an activation scale). Weight-only has none.
+#     There is no `CompressedTensorsW4A16Nvfp4MoE` (float4 weight-only MoE). The card's
+#     "serves on MARLIN" is a vLLM claim — SGLang's marlin path is integer-only and is
+#     never reached here (the crash is during scheme resolution, before backend select).
+#     A None-guard would only turn the crash into "unsupported scheme", not make it load.
+#     Full write-up: QUANT_HY3_GOTCHAS.local.md (Blocker A).
+#
+#   ⟳ RECHECK(sglang>0.5.14): re-test if upstream adds a weight-only-NVFP4 MoE scheme
+#     (grep `.../compressed_tensors/schemes/` for a W4A16/WNA16-NVFP4 *float* MoE, or a
+#     get_moe_scheme predicate accepting strategy `tensor_group` with input_quant=None).
+#     Until then this profile CANNOT load. The kept config below is the vLLM-derived
+#     intent, preserved for that recheck — it is NOT a working SGLang config.
+#
+#   Sibling: vroomfondel/Hy3-NVFP4-W4A4 (loads but NaNs on the sm121 FP4 MoE GEMM — see
+#   that profile + TESTLOGS/). W4A16 here was the weight-only diagnostic detour.
 #
 # WHY THIS VARIANT (HF card kodelow/Hy3-NVFP4-W4A16, 2026-07-09):
 #   Same tencent/Hy3 295B/21B hy_v3 MoE, but quantized WEIGHT-ONLY:
