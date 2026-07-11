@@ -178,10 +178,37 @@
   debug:
     var: podman_info.stdout_lines
 
+- name: purge apt podman + orphaned rootless deps when running pure-static (opt-in)
+  # Only after the static bundle is verified working above (so a failed install never
+  # strands the host podman-less). Removes the shadowed apt /usr/bin/podman plus the
+  # exact set that goes orphan once podman is gone — the static bundle ships its own
+  # conmon/catatonit/netavark/pasta under /usr/local, and rootful podman uses netavark,
+  # so slirp4netns/libslirp0/passt are unused. buildah is deliberately NOT listed
+  # (separate apt pkg, kept). Named removal (not a global autoremove) so nothing
+  # unrelated is swept up; the list == the packages `apt autoremove -s` reports orphan
+  # after an apt podman purge.
+  ansible.builtin.apt:
+    name:
+      - podman
+      - catatonit
+      - conmon
+      - slirp4netns
+      - libslirp0
+      - passt
+    state: absent
+    purge: true
+  when:
+    - podman_static_enabled | default(false) | bool
+    - podman_apt_purge | default(false) | bool
+
 - name: podman system prune cron job
   cron:
     name: "podman system prune"
     minute: "30"
     hour: "23"
-    job: "podman system prune -af --volumes"
+    # Inline PATH so the job does NOT depend on the crontab-level PATH= env (which is
+    # set by the separate `crontab` tag, NOT the `podman` tag) — otherwise a standalone
+    # `--tags podman` run on a fresh pure-static host would schedule this with cron's
+    # default PATH (/usr/bin:/bin), where /usr/local/bin/podman is invisible.
+    job: "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin podman system prune -af --volumes"
     disabled: "no"

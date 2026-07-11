@@ -45,6 +45,15 @@ podman_static_enabled: true
 # curl -s https://api.github.com/repos/mgoltzsche/podman-static/releases/latest | jq -r '.tag_name'
 podman_static_version: "5.8.4"
 
+# Purge the (now shadowed) apt podman + its orphaned rootless deps once pure-static is
+# proven working. OPT-IN + only acts when podman_static_enabled: apt podman survives as
+# a fallback until you deliberately flip this. Removes exactly podman + catatonit/
+# conmon/slirp4netns/libslirp0/passt (all orphaned after podman goes — the static
+# bundle ships its own equivalents under /usr/local, and rootful uses netavark not
+# slirp/passt). buildah is KEPT (separate apt pkg). Runs AFTER the verify step, so a
+# broken static install never strands the host with no podman at all.
+podman_apt_purge: false
+
 # NFS server exports — only applied when `isnfsmaster: true`.
 # Schema: list of { path, clients: [{ cidr, options? }], owner?, group?, mode? }
 # Define in host_vars/<host>/vault/ (e.g. host_vars/k3smaster/vault/nfs.yml).
