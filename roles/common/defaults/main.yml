@@ -30,6 +30,21 @@ podman_unqualified_search_registries:
   - docker.io
 podman_short_name_mode: permissive
 
+# Static Podman overlay (mgoltzsche/podman-static). When true, a fully static rootful
+# podman stack (podman + crun/runc/conmon/netavark/aardvark-dns/fuse-overlayfs/pasta +
+# quadlet + systemd units + default etc/containers configs) is installed under
+# /usr/local, which wins on PATH over the apt /usr/bin/podman. The apt podman/buildah
+# packages STAY installed as the system-dependency base — they pull iptables (netavark
+# hard-dep for bridge NAT/port-forward), newuidmap/slirp4netns, buildah and seed
+# subuid/subgid; the static bundle ships none of those. Enable per host/group
+# (host_vars/group_vars) — default false = no change anywhere until opted in.
+# Upstream containers/podman ships NO self-contained static bundle, so mgoltzsche is
+# the only practical source and it lags upstream by a few weeks; check for a newer
+# arm64 bundle before bumping: https://github.com/mgoltzsche/podman-static/releases
+podman_static_enabled: true
+# curl -s https://api.github.com/repos/mgoltzsche/podman-static/releases/latest | jq -r '.tag_name'
+podman_static_version: "5.8.4"
+
 # NFS server exports — only applied when `isnfsmaster: true`.
 # Schema: list of { path, clients: [{ cidr, options? }], owner?, group?, mode? }
 # Define in host_vars/<host>/vault/ (e.g. host_vars/k3smaster/vault/nfs.yml).

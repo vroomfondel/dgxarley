@@ -44,3 +44,10 @@ dyndns_hostname: "dyn.example.com"
 # HAProxy stats + Traefik dashboard
 haproxy_stats_password: "changeme"
 traefik_dashboard_password: "changeme"
+
+# Podman: use the static mgoltzsche/podman-static bundle instead of apt podman.
+# Only takes effect on hosts with `wantspodman: true` (the dgxsparks); k3smaster has
+# no wantspodman, so installpodman.yml is skipped there regardless. When true, apt
+# podman is skipped (buildah still from apt) and the version-pinned static stack is
+# installed under /usr/local. Bump target: roles/common/defaults/main.yml.
+podman_static_enabled: true

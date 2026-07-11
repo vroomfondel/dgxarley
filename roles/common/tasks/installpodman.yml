@@ -1,11 +1,14 @@
 ---
 # file: roles/common/tasks/installpodman.yml
 
-- name: install podman
+- name: install podman (apt) + buildah
+  # buildah is ALWAYS from apt (not shipped in the static bundle). apt podman is
+  # installed ONLY when the static overlay is disabled — when podman_static_enabled,
+  # the static bundle below is the sole podman and apt podman would just be shadowed
+  # dead weight. This never REMOVES an already-present apt podman (state: present is
+  # additive); purge it by hand if you want a truly apt-podman-free host.
   apt:
-    pkg:
-      - podman
-      - buildah
+    pkg: "{{ (['podman'] if not (podman_static_enabled | default(false) | bool) else []) + ['buildah'] }}"
     state: present
     update_cache: true
 
@@ -28,6 +31,84 @@
     exclusive: false
     key: "{{ lookup('file', lookup('env', 'HOME') + '/.ssh/id_podman.pub') }}"
   when: local_podman_pubkey.stat.exists
+
+# --- Static Podman overlay (optional, gated by podman_static_enabled) -------------
+# mgoltzsche/podman-static ships a fully static rootful podman stack as one arch
+# tarball (podman + crun/runc/conmon/netavark/aardvark-dns/fuse-overlayfs/pasta +
+# quadlet + systemd units + default etc/containers configs). It installs UNDER
+# /usr/local, which wins on PATH over the apt /usr/bin/podman kept above. Both usr/
+# AND etc/ are copied: etc/ carries policy.json (pull breaks without it) and the
+# static build's required containers.conf (cgroup_manager=cgroupfs, events_logger=
+# file). systemd's search path on these hosts INCLUDES /usr/local/lib/systemd/system,
+# so the bundle's podman.socket/service become the active units — no unit copy needed.
+# The bundle's own registries.conf + fuse-overlayfs-forcing storage.conf are
+# re-asserted/corrected by the two managed tasks BELOW this block (that is why this
+# overlay is inserted before them, not appended).
+- name: check installed static podman version
+  ansible.builtin.command: /usr/local/bin/podman --version
+  register: _podman_static_current
+  changed_when: false
+  failed_when: false
+  when: podman_static_enabled | default(false) | bool
+
+- name: install static podman bundle
+  when:
+    - podman_static_enabled | default(false) | bool
+    - "'podman version ' + podman_static_version not in (_podman_static_current.stdout | default(''))"
+  vars:
+    _podman_static_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+  block:
+    - name: create temp dir for static podman download
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: podman-static
+      register: _podman_static_tmp
+
+    - name: download static podman bundle ({{ podman_static_version }} / {{ _podman_static_arch }})
+      ansible.builtin.get_url:
+        url: "https://github.com/mgoltzsche/podman-static/releases/download/v{{ podman_static_version }}/podman-linux-{{ _podman_static_arch }}.tar.gz"
+        dest: "{{ _podman_static_tmp.path }}/podman-static.tar.gz"
+        mode: "0644"
+
+    - name: unpack static podman bundle
+      ansible.builtin.unarchive:
+        src: "{{ _podman_static_tmp.path }}/podman-static.tar.gz"
+        dest: "{{ _podman_static_tmp.path }}"
+        remote_src: true
+
+    - name: install static podman binaries + configs under /usr/local and /etc
+      # cp -a merges usr/ and etc/ into the existing / tree (GNU cp merges into an
+      # existing target dir), replicating the upstream install script; -a preserves
+      # the executable bits on the static binaries. Idempotency is handled at the
+      # block level by the version gate above, so an unconditional copy here is fine.
+      ansible.builtin.command:
+        cmd: "cp -a {{ _podman_static_tmp.path }}/podman-linux-{{ _podman_static_arch }}/usr {{ _podman_static_tmp.path }}/podman-linux-{{ _podman_static_arch }}/etc /"
+      changed_when: true
+
+    - name: reload systemd to pick up static podman units
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: clear stale libpod SHM lock left by a different podman version
+      # apt podman 4.9.3 leaves /dev/shm/libpod_lock sized for ITS lock count; the
+      # static 5.8.4 then fails every call with "failed to open 2048 locks in
+      # /libpod_lock: numerical result out of range". Measured: `podman system
+      # renumber` can't fix it (it must open the broken lock first) and PATH/hash
+      # tricks are irrelevant — only removing the SHM file works; podman recreates it
+      # correctly-sized on the next call. tmpfs, so this only bites on a live
+      # apt->static migration without a reboot. Runs only in this block (i.e. only
+      # when the bundle was just (re)installed); safe as no podman containers run here
+      # (podman is build-only on these nodes — k8s workloads use containerd).
+      ansible.builtin.file:
+        path: /dev/shm/libpod_lock
+        state: absent
+
+  always:
+    - name: clean up static podman temp dir
+      ansible.builtin.file:
+        path: "{{ _podman_static_tmp.path }}"
+        state: absent
+      when: _podman_static_tmp.path is defined
 
 - name: configure default registries in /etc/containers/registries.conf
   # Deterministic managed file (v2 format), NOT a blockinfile append. Replacing the
