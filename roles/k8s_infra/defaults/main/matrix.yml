@@ -1,0 +1,62 @@
+---
+# === Matrix (Synapse homeserver + Cinny web client) ===
+# Ported from the sister repo's Keycloak-OIDC deployment
+# (../ansible/roles/k8s_workloads/tasks/communication/kubectlstuff_matrix.yml)
+# down to LOCAL Synapse auth (dgxarley has no Keycloak). Same Traefik +
+# cert-manager + nsupdate + shared-PostgreSQL pattern as forgejo/seafile/honcho.
+#
+# hash_behaviour=replace: vault.yml's `matrix:` REPLACES this whole block, so all
+# keys are duplicated across this file, group_vars/all/main/matrix.yml and
+# group_vars/all/vault/matrix.yml (same rule as forgejo/seafile). Keep in sync.
+#
+#   base_domain   — the Matrix identity/server domain. server_name and every
+#                   hostname derive from it: server_name/public_baseurl =
+#                   matrix.<base_domain>, Cinny = cinny.<base_domain>. The REAL
+#                   value (kikube.eu) lives ONLY in vault; dummy here.
+#   data_base     — /data (signing.key, media_store, homeserver.pid), hostPath.
+#                   Matrix media is content-addressed → NFS-safe (DB is on PG).
+#   manage_dns    — true = auto-register A records via nsupdate. Requires the
+#                   cluster TSIG key to authorise records under <base_domain>;
+#                   set false and manage DNS externally otherwise.
+#   enable_registration — false = closed signup; users via register_new_matrix_user
+#                   (admin + bot_users bootstrapped at the end of the task).
+#   enable_token_authenticator — true installs synapse-token-authenticator at
+#                   container start and wires its `jwt:` (HS512, symmetric-secret)
+#                   bot-login module — for Hermes-agent Matrix bots. No OIDC.
+#   *_secret / jwt_secret — Synapse symmetric secrets; MUST be stable across
+#                   restarts (rotating macaroon/form invalidates sessions/CSRF).
+#                   Generate with `openssl rand -hex 32`.
+#   admin.*       — first server admin, bootstrapped once (register_new_matrix_user -a).
+#   users         — regular human accounts, list of {user, password}, each
+#                   registered --no-admin (created directly at deploy time).
+#   bot_users     — bot accounts, same {user, password} shape, registered --no-admin.
+#                   (users + bot_users are functionally identical — just a naming
+#                   split for humans vs. bots.) Real passwords belong in vault.
+matrix_enabled: false
+matrix_teardown: false
+
+matrix:
+  namespace: "matrix"
+  base_domain: "example.eu"
+  data_base: "/mnt/nfs/matrix-synapse"
+  time_zone: "Europe/Berlin"
+  manage_dns: true
+  enable_registration: false
+  enable_token_authenticator: true
+  # Traefik pods source X-Forwarded-For from the K3s pod CIDR.
+  trusted_proxies: "10.68.0.0/16,10.69.0.0/16"
+  registration_shared_secret: "CHANGEME_REGISTRATION_SHARED_SECRET"
+  macaroon_secret_key: "CHANGEME_MACAROON_SECRET"
+  form_secret: "CHANGEME_FORM_SECRET"
+  jwt_secret: "CHANGEME_JWT_SECRET"
+  admin:
+    username: "admin"
+    password: "changeme"
+  users: []
+  bot_users: []
+  images:
+    synapse: {repo: "matrixdotorg/synapse", tag: "latest"}
+    cinny: {repo: "ghcr.io/cinnyapp/cinny", tag: "latest"}
+  resources:
+    synapse: {cpu_request: "500m", memory_request: "1Gi", cpu_limit: "2000m", memory_limit: "2Gi"}
+    cinny: {cpu_request: "50m", memory_request: "64Mi", cpu_limit: "500m", memory_limit: "256Mi"}

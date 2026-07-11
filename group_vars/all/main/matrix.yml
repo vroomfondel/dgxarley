@@ -1,0 +1,42 @@
+---
+# Public dummy/example values — real values live in group_vars/all/vault/ (git-crypt).
+# Matrix (Synapse homeserver + Cinny web client) — dummy values; real secrets and
+# the real base_domain (kikube.eu) live in group_vars/all/vault/matrix.yml.
+# hash_behaviour=replace: vault.yml's `matrix:` overrides this entirely, so the
+# operational keys are duplicated. Keep in sync with vault.yml and
+# roles/k8s_infra/defaults/main/matrix.yml.
+# The DB password is postgresql_synapse_password (in group_vars/all/{main,vault}/postgresql.yml).
+# *_secret / jwt_secret: generate with `openssl rand -hex 32`; keep stable across
+# restarts. Enable/teardown gates (matrix_enabled / matrix_teardown) are in the
+# role defaults.
+matrix:
+  namespace: "matrix"
+  base_domain: "example.eu"
+  data_base: "/mnt/nfs/matrix-synapse"
+  time_zone: "Europe/Berlin"
+  manage_dns: true
+  enable_registration: false
+  enable_token_authenticator: true
+  trusted_proxies: "10.68.0.0/16,10.69.0.0/16"
+  registration_shared_secret: "CHANGEME_REGISTRATION_SHARED_SECRET"
+  macaroon_secret_key: "CHANGEME_MACAROON_SECRET"
+  form_secret: "CHANGEME_FORM_SECRET"
+  jwt_secret: "CHANGEME_JWT_SECRET"
+  admin:
+    username: "admin"
+    password: "changeme"
+  # Regular human accounts, created directly at deploy (register_new_matrix_user
+  # --no-admin). Examples — real accounts + passwords go in vault (git-crypt).
+  users:
+    - {user: "alice", password: "changeme"}
+    - {user: "bob", password: "changeme"}
+  # Bot accounts (same shape). Use with the token-authenticator jwt module for
+  # Hermes-agent Matrix bots.
+  bot_users:
+    - {user: "hermes-bot", password: "changeme"}
+  images:
+    synapse: {repo: "matrixdotorg/synapse", tag: "latest"}
+    cinny: {repo: "ghcr.io/cinnyapp/cinny", tag: "latest"}
+  resources:
+    synapse: {cpu_request: "500m", memory_request: "1Gi", cpu_limit: "2000m", memory_limit: "2Gi"}
+    cinny: {cpu_request: "50m", memory_request: "64Mi", cpu_limit: "500m", memory_limit: "256Mi"}

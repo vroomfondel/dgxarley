@@ -24,6 +24,7 @@
         HONCHO_POSTGRES_PASSWORD: "{{ postgresql_honcho_password }}"
         HINDSIGHT_POSTGRES_PASSWORD: "{{ postgresql_hindsight_password }}"
         FORGEJO_POSTGRES_PASSWORD: "{{ postgresql_forgejo_password }}"
+        SYNAPSE_POSTGRES_PASSWORD: "{{ postgresql_synapse_password }}"
 
 
 - name: Create postgresql service
@@ -235,6 +236,24 @@
           	CREATE USER forgejo WITH PASSWORD '$FORGEJO_POSTGRES_PASSWORD';
           	CREATE DATABASE forgejo owner forgejo;
           	GRANT ALL PRIVILEGES ON DATABASE forgejo TO forgejo;
+          EOSQL
+
+          echo $0 done
+
+        8_createdb_synapse.sh: |
+          #!/bin/bash
+          export TZ='Europe/Berlin'
+          export SYNAPSE_POSTGRES_PASSWORD=${SYNAPSE_POSTGRES_PASSWORD:-${POSTGRES_PASSWORD}}
+
+          # Synapse REQUIRES the C collation on its database (LC_COLLATE/LC_CTYPE
+          # 'C', from template0) — it refuses to start against a non-C-collated
+          # DB. Collation cannot be altered after creation, so it must be set
+          # here at CREATE time. Mirrored at runtime for existing clusters by
+          # roles/k8s_infra/tasks/apps/matrix.yml (k8s_exec block, same clause).
+          psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<-EOSQL
+          	CREATE USER synapse WITH PASSWORD '$SYNAPSE_POSTGRES_PASSWORD';
+          	CREATE DATABASE synapse OWNER synapse ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0;
+          	GRANT ALL PRIVILEGES ON DATABASE synapse TO synapse;
           EOSQL
 
           echo $0 done

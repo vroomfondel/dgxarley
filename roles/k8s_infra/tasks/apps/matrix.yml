@@ -1,0 +1,748 @@
+---
+# Matrix Synapse homeserver + Cinny web client in the `matrix` namespace.
+#
+# Ported from the sister repo's Keycloak-OIDC deployment
+# (../ansible/roles/k8s_workloads/tasks/communication/kubectlstuff_matrix.yml)
+# down to LOCAL Synapse auth — dgxarley has no Keycloak. All OIDC bits
+# (oidc_providers, the modules oidc/oauth sub-blocks, the Keycloak realm/client
+# provisioning, the matrix-admin-sync Job, Element Web) are intentionally dropped.
+#
+# Design decisions:
+#   - server_name == the public ingress host (matrix.<base_domain>): no split
+#     between identity domain and server host, so NO .well-known delegation is
+#     needed and federation "just works" by connecting to matrix.<base>:443.
+#     User IDs are @user:matrix.<base_domain>.
+#   - Domain is split main.yml/vault: matrix.base_domain holds ONLY the dummy
+#     (example.eu) in group_vars/all/main + role defaults; the real kikube.eu is
+#     in group_vars/all/vault/matrix.yml (git-crypt).
+#   - Database: dedicated `synapse` DB on the shared PostgreSQL, created with the
+#     C collation Synapse requires (LC_COLLATE/LC_CTYPE 'C', template0). DB
+#     password flows postgresql-secrets -> k8s_info -> app Secret, like forgejo.
+#     Dual-provisioned: 8_createdb_synapse.sh (fresh clusters) + the idempotent
+#     k8s_exec block below (existing clusters).
+#   - Storage: hostPath (matrix.data_base) -> /data (signing.key, media_store).
+#     No PVC/StorageClass (dgxarley has none), matching forgejo/seafile.
+#   - Auth: local password auth + closed registration; admin + bot_users created
+#     via register_new_matrix_user. Optional synapse-token-authenticator jwt
+#     module (HS512, symmetric secret) for Hermes-agent Matrix bots — no OIDC.
+#   - Federation needs matrix.<base> reachable publicly on 443, so the matrix
+#     IngressRoute carries NO ip-allowlist. Cinny (a convenience web client) is
+#     behind the internal allowlist — flip by removing its middleware line.
+#   - Gated install + in-file teardown (matrix_enabled / matrix_teardown), same
+#     pattern as honcho/hindsight. teardown deletes the namespace but PRESERVES
+#     the synapse Postgres DB (holds rooms/messages) — drop it by hand to abandon.
+
+- name: Matrix — install
+  when:
+    - matrix_enabled | default(false) | bool
+    - not (matrix_teardown | default(false) | bool)
+  block:
+    - name: Create matrix namespace
+      kubernetes.core.k8s:
+        name: "{{ matrix.namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+
+    # =======================================================================
+    # PostgreSQL provisioning (idempotent, for already-initialised clusters).
+    # Fresh clusters get the same DB via postgresql initdb 8_createdb_synapse.sh.
+    # The C-collation clause is a HARD Synapse requirement and cannot be altered
+    # after creation, so it must be present on CREATE (create-if-not-exists).
+    # =======================================================================
+
+    - name: Get synapse database password from postgresql-secrets
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: postgresql-secrets
+        namespace: postgresql
+      register: matrix_postgresql_secrets_info
+
+    - name: Set synapse credential facts
+      ansible.builtin.set_fact:
+        synapse_db_password: "{{ matrix_postgresql_secrets_info.resources[0].data.SYNAPSE_POSTGRES_PASSWORD | b64decode }}"
+
+    - name: Get PostgreSQL pod
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: postgresql
+        label_selectors:
+          - app=postgresql
+      register: matrix_postgresql_pods
+
+    - name: Set PostgreSQL pod name fact
+      ansible.builtin.set_fact:
+        matrix_postgresql_pod_name: "{{ matrix_postgresql_pods.resources[0].metadata.name }}"
+
+    - name: Ensure synapse user and C-collated database exist in PostgreSQL
+      kubernetes.core.k8s_exec:
+        namespace: postgresql
+        pod: "{{ matrix_postgresql_pod_name }}"
+        command: |
+          bash -c '
+            set -e
+            SYNAPSE_PASSWORD="{{ synapse_db_password }}"
+
+            if psql -U postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='\''synapse'\''" | grep -q 1; then
+              psql -U postgres -c "ALTER USER synapse WITH PASSWORD '\''${SYNAPSE_PASSWORD}'\'';"
+              echo "User synapse: exists (password ensured)"
+            else
+              psql -U postgres -c "CREATE USER synapse WITH PASSWORD '\''${SYNAPSE_PASSWORD}'\'';"
+              echo "User synapse: created"
+            fi
+
+            # Synapse REQUIRES the C collation; it refuses to start otherwise.
+            if psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='\''synapse'\''" | grep -q 1; then
+              echo "Database synapse: exists"
+            else
+              psql -U postgres -c "CREATE DATABASE synapse OWNER synapse ENCODING '\''UTF8'\'' LC_COLLATE '\''C'\'' LC_CTYPE '\''C'\'' TEMPLATE template0;"
+              psql -U postgres -c "GRANT ALL PRIVILEGES ON DATABASE synapse TO synapse;"
+              echo "Database synapse: created"
+            fi
+          '
+      register: matrix_db_ensure
+      changed_when: "'created' in matrix_db_ensure.stdout"
+
+    # =======================================================================
+    # Synapse config — homeserver.yaml + log.config live in a Secret (not a
+    # ConfigMap) because homeserver.yaml embeds the DB password and the Synapse
+    # symmetric secrets in plaintext. Mounted read-only via subPath.
+    # =======================================================================
+
+    - name: Create synapse-config Secret (homeserver.yaml + log.config)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: synapse-config
+            namespace: "{{ matrix.namespace }}"
+          type: Opaque
+          stringData:
+            homeserver.yaml: |
+              server_name: "matrix.{{ matrix.base_domain }}"
+              pid_file: /data/homeserver.pid
+              public_baseurl: "https://matrix.{{ matrix.base_domain }}/"
+
+              listeners:
+                - port: 8008
+                  tls: false
+                  type: http
+                  x_forwarded: true
+                  resources:
+                    - names: [client, federation]
+                      compress: false
+
+              database:
+                name: psycopg2
+                txn_limit: 10000
+                args:
+                  user: synapse
+                  password: "{{ synapse_db_password }}"
+                  database: synapse
+                  host: postgresql.postgresql.svc.cluster.local
+                  port: 5432
+                  cp_min: 5
+                  cp_max: 10
+
+              log_config: "/data/log.config"
+              media_store_path: /data/media_store
+              signing_key_path: /data/signing.key
+              trusted_key_servers:
+                - server_name: "matrix.org"
+
+              registration_shared_secret: "{{ matrix.registration_shared_secret }}"
+              macaroon_secret_key: "{{ matrix.macaroon_secret_key }}"
+              form_secret: "{{ matrix.form_secret }}"
+
+              rc_message:
+                per_second: 5
+                burst_count: 30
+
+              rc_login:
+                address:
+                  per_second: 1
+                  burst_count: 10
+                account:
+                  per_second: 1
+                  burst_count: 10
+
+              report_stats: false
+              enable_registration: {{ matrix.enable_registration | bool | lower }}
+              suppress_key_server_warning: true
+              serve_server_wellknown: true
+
+              password_config:
+                enabled: true
+              {% if matrix.enable_token_authenticator %}
+              modules:
+                - module: synapse_token_authenticator.TokenAuthenticator
+                  config:
+                    jwt:
+                      secret: "{{ matrix.jwt_secret }}"
+                      algorithm: HS512
+                      allow_registration: false
+                      require_expiry: true
+              {% endif %}
+            log.config: |
+              version: 1
+              formatters:
+                precise:
+                  format: '%(asctime)s - %(name)s - %(lineno)d - %(levelname)s - %(request)s - %(message)s'
+              handlers:
+                console:
+                  class: logging.StreamHandler
+                  formatter: precise
+              loggers:
+                synapse.storage.SQL:
+                  level: INFO
+              root:
+                level: INFO
+                handlers: [console]
+              disable_existing_loggers: false
+
+    # =======================================================================
+    # Synapse server
+    # =======================================================================
+
+    - name: Create synapse Service
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: synapse
+            namespace: "{{ matrix.namespace }}"
+            labels:
+              app: synapse
+          spec:
+            selector:
+              app: synapse
+            ports:
+              - port: 8008
+                name: http
+                targetPort: 8008
+
+    - name: Create synapse Deployment
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: synapse
+            namespace: "{{ matrix.namespace }}"
+            labels:
+              app: synapse
+            annotations:
+              keel.sh/policy: force
+              keel.sh/match-tag: "true"
+              keel.sh/pollSchedule: "@every 24h"
+              keel.sh/trigger: poll
+          spec:
+            replicas: 1
+            strategy:
+              type: Recreate
+            selector:
+              matchLabels:
+                app: synapse
+            template:
+              metadata:
+                labels:
+                  app: synapse
+              spec:
+                restartPolicy: Always
+                # hostPath data lives on k3smaster (amd64). Never on the GPU sparks.
+                nodeSelector:
+                  node-role: k3smaster
+                securityContext:
+                  fsGroup: 991
+                dnsConfig:
+                  options:
+                    - name: ndots
+                      value: "1"
+                containers:
+                  - name: synapse
+                    image: "{{ matrix.images.synapse.repo }}:{{ matrix.images.synapse.tag }}"
+                    imagePullPolicy: Always
+                    # Always go through /start.py (stock entrypoint). When token
+                    # auth is on, pip-install the module first — the `{% if %}`
+                    # sits inside this block scalar, so it's Jinja-safe.
+                    command: ["/bin/sh", "-c"]
+                    args:
+                      - |
+                        {% if matrix.enable_token_authenticator %}pip install --no-cache-dir synapse-token-authenticator && {% endif %}exec /start.py
+                    env:
+                      - name: SYNAPSE_CONFIG_PATH
+                        value: /config/homeserver.yaml
+                      - name: TZ
+                        value: "{{ matrix.time_zone }}"
+                      - name: UID
+                        value: "991"
+                      - name: GID
+                        value: "991"
+                    ports:
+                      - containerPort: 8008
+                        name: http
+                    startupProbe:
+                      httpGet:
+                        path: /health
+                        port: 8008
+                      failureThreshold: 30
+                      periodSeconds: 10
+                    readinessProbe:
+                      httpGet:
+                        path: /health
+                        port: 8008
+                      periodSeconds: 10
+                      timeoutSeconds: 3
+                    livenessProbe:
+                      tcpSocket:
+                        port: 8008
+                      periodSeconds: 30
+                      timeoutSeconds: 5
+                      failureThreshold: 3
+                    resources:
+                      requests:
+                        cpu: "{{ matrix.resources.synapse.cpu_request }}"
+                        memory: "{{ matrix.resources.synapse.memory_request }}"
+                      limits:
+                        cpu: "{{ matrix.resources.synapse.cpu_limit }}"
+                        memory: "{{ matrix.resources.synapse.memory_limit }}"
+                    volumeMounts:
+                      - name: data
+                        mountPath: /data
+                      - name: synapse-config
+                        mountPath: /config/homeserver.yaml
+                        subPath: homeserver.yaml
+                        readOnly: true
+                      - name: synapse-config
+                        mountPath: /data/log.config
+                        subPath: log.config
+                        readOnly: true
+                volumes:
+                  - name: data
+                    hostPath:
+                      path: "{{ matrix.data_base }}"
+                      type: DirectoryOrCreate
+                  - name: synapse-config
+                    secret:
+                      secretName: synapse-config
+
+    # =======================================================================
+    # Cinny web client — static SPA, config points straight at matrix.<base>.
+    # =======================================================================
+
+    - name: Create cinny-config ConfigMap
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: cinny-config
+            namespace: "{{ matrix.namespace }}"
+          data:
+            config.json: |
+              {
+                "defaultHomeserver": 0,
+                "homeserverList": [
+                  "https://matrix.{{ matrix.base_domain }}"
+                ]
+              }
+
+    - name: Create cinny Service
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: cinny
+            namespace: "{{ matrix.namespace }}"
+            labels:
+              app: cinny
+          spec:
+            selector:
+              app: cinny
+            ports:
+              - port: 80
+                name: http
+                targetPort: 80
+
+    - name: Create cinny Deployment
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: cinny
+            namespace: "{{ matrix.namespace }}"
+            labels:
+              app: cinny
+            annotations:
+              keel.sh/policy: force
+              keel.sh/match-tag: "true"
+              keel.sh/pollSchedule: "@every 24h"
+              keel.sh/trigger: poll
+          spec:
+            replicas: 1
+            strategy:
+              type: RollingUpdate
+            selector:
+              matchLabels:
+                app: cinny
+            template:
+              metadata:
+                labels:
+                  app: cinny
+              spec:
+                restartPolicy: Always
+                enableServiceLinks: false
+                nodeSelector:
+                  kubernetes.io/arch: "amd64"
+                containers:
+                  - name: cinny
+                    image: "{{ matrix.images.cinny.repo }}:{{ matrix.images.cinny.tag }}"
+                    imagePullPolicy: Always
+                    ports:
+                      - containerPort: 80
+                        name: http
+                    readinessProbe:
+                      httpGet:
+                        path: /
+                        port: 80
+                      periodSeconds: 10
+                    livenessProbe:
+                      httpGet:
+                        path: /
+                        port: 80
+                      periodSeconds: 30
+                    resources:
+                      requests:
+                        cpu: "{{ matrix.resources.cinny.cpu_request }}"
+                        memory: "{{ matrix.resources.cinny.memory_request }}"
+                      limits:
+                        cpu: "{{ matrix.resources.cinny.cpu_limit }}"
+                        memory: "{{ matrix.resources.cinny.memory_limit }}"
+                    volumeMounts:
+                      - name: cinny-config
+                        mountPath: /app/config.json
+                        subPath: config.json
+                        readOnly: true
+                volumes:
+                  - name: cinny-config
+                    configMap:
+                      name: cinny-config
+
+    # =======================================================================
+    # DNS (nsupdate) — register A records for matrix + cinny under base_domain.
+    # Requires the cluster TSIG key to authorise records under matrix.base_domain
+    # (kikube.eu). If it doesn't, set matrix.manage_dns=false and manage DNS
+    # externally. record MUST be the full FQDN with a trailing dot.
+    # =======================================================================
+
+    - name: Register DNS A records for matrix + cinny
+      community.general.nsupdate:
+        server: "{{ nsupdate_server }}"
+        zone: "{{ matrix.base_domain }}"
+        key_name: "{{ nsupdate_tsig_key_name }}"
+        key_secret: "{{ nsupdate_tsig_key_secret }}"
+        key_algorithm: "{{ nsupdate_tsig_algorithm }}"
+        record: "{{ item }}.{{ matrix.base_domain }}."
+        type: A
+        ttl: "{{ nsupdate_ttl }}"
+        value: "{{ nsupdate_ingress_ip }}"
+        state: present
+      loop:
+        - matrix
+        - cinny
+      when: matrix.manage_dns | bool
+
+    # =======================================================================
+    # Ingress (Traefik) + TLS. Shared middlewares, then per-host cert + routes.
+    # matrix.<base> is PUBLIC (federation/clients need it) — no ip-allowlist.
+    # cinny.<base> sits behind the internal allowlist (remove its middleware
+    # line below to expose Cinny publicly too).
+    # =======================================================================
+
+    - name: Create matrix redirect-myhttps Middleware
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: Middleware
+          metadata:
+            name: redirect-myhttps
+            namespace: "{{ matrix.namespace }}"
+          spec:
+            redirectScheme:
+              scheme: https
+
+    - name: Create matrix ip allowlist Middleware
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: Middleware
+          metadata:
+            name: matrix-ip-allowlist
+            namespace: "{{ matrix.namespace }}"
+          spec:
+            ipAllowList:
+              sourceRange: "{{ traefik_internal_allowlist }}"
+
+    - name: Create matrix + cinny TLS certificates
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: "{{ item }}.{{ matrix.base_domain }}"
+            namespace: "{{ matrix.namespace }}"
+          spec:
+            dnsNames:
+              - "{{ item }}.{{ matrix.base_domain }}"
+            secretName: "{{ item }}.{{ matrix.base_domain }}"
+            issuerRef:
+              name: letsencrypt-production
+              kind: ClusterIssuer
+      loop:
+        - matrix
+        - cinny
+
+    # --- Synapse (public) ---
+    - name: Create synapse http IngressRoute (redirect to https)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: IngressRoute
+          metadata:
+            name: synapse-ingress
+            namespace: "{{ matrix.namespace }}"
+          spec:
+            entryPoints:
+              - web
+            routes:
+              - kind: Rule
+                match: "Host(`matrix.{{ matrix.base_domain }}`)"
+                priority: 10
+                services:
+                  - kind: Service
+                    name: synapse
+                    namespace: "{{ matrix.namespace }}"
+                    passHostHeader: true
+                    port: 8008
+                middlewares:
+                  - name: redirect-myhttps
+
+    - name: Create synapse https IngressRoute (public — no allowlist)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: IngressRoute
+          metadata:
+            name: synapse-https-ingress
+            namespace: "{{ matrix.namespace }}"
+          spec:
+            entryPoints:
+              - websecure
+            routes:
+              - kind: Rule
+                match: "Host(`matrix.{{ matrix.base_domain }}`)"
+                priority: 10
+                services:
+                  - kind: Service
+                    name: synapse
+                    namespace: "{{ matrix.namespace }}"
+                    passHostHeader: true
+                    port: 8008
+            tls:
+              secretName: "matrix.{{ matrix.base_domain }}"
+
+    # --- Cinny (internal allowlist) ---
+    - name: Create cinny http IngressRoute (redirect to https)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: IngressRoute
+          metadata:
+            name: cinny-ingress
+            namespace: "{{ matrix.namespace }}"
+          spec:
+            entryPoints:
+              - web
+            routes:
+              - kind: Rule
+                match: "Host(`cinny.{{ matrix.base_domain }}`)"
+                priority: 10
+                services:
+                  - kind: Service
+                    name: cinny
+                    namespace: "{{ matrix.namespace }}"
+                    passHostHeader: true
+                    port: 80
+                middlewares:
+                  - name: redirect-myhttps
+                  - name: matrix-ip-allowlist
+
+    - name: Create cinny https IngressRoute
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: IngressRoute
+          metadata:
+            name: cinny-https-ingress
+            namespace: "{{ matrix.namespace }}"
+          spec:
+            entryPoints:
+              - websecure
+            routes:
+              - kind: Rule
+                match: "Host(`cinny.{{ matrix.base_domain }}`)"
+                priority: 10
+                middlewares:
+                  - name: matrix-ip-allowlist
+                services:
+                  - kind: Service
+                    name: cinny
+                    namespace: "{{ matrix.namespace }}"
+                    passHostHeader: true
+                    port: 80
+            tls:
+              secretName: "cinny.{{ matrix.base_domain }}"
+
+    # =======================================================================
+    # Admin + bot bootstrap (idempotent). register_new_matrix_user authenticates
+    # via registration_shared_secret (NOT OIDC), so it works with local auth
+    # even though enable_registration is false. `|| true` swallows the harmless
+    # "user already exists" error on re-runs.
+    # =======================================================================
+
+    - name: Wait for synapse Deployment to be available
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: synapse
+        namespace: "{{ matrix.namespace }}"
+        wait: true
+        wait_condition:
+          type: Available
+          status: "True"
+        wait_timeout: 600
+
+    - name: Get synapse pod
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: "{{ matrix.namespace }}"
+        label_selectors:
+          - app=synapse
+        field_selectors:
+          - status.phase=Running
+      register: matrix_synapse_pods
+
+    - name: Set synapse pod name fact
+      ansible.builtin.set_fact:
+        matrix_synapse_pod_name: "{{ matrix_synapse_pods.resources[0].metadata.name }}"
+
+    - name: Ensure synapse admin user exists
+      kubernetes.core.k8s_exec:
+        namespace: "{{ matrix.namespace }}"
+        pod: "{{ matrix_synapse_pod_name }}"
+        command: >
+          register_new_matrix_user
+          -c /config/homeserver.yaml
+          -u {{ matrix.admin.username | quote }}
+          -p {{ matrix.admin.password | quote }}
+          -a
+          http://localhost:8008
+      register: matrix_admin_ensure
+      changed_when: "'User registered' in matrix_admin_ensure.stdout"
+      failed_when:
+        - matrix_admin_ensure.rc != 0
+        - "'User already exists' not in (matrix_admin_ensure.stdout + matrix_admin_ensure.stderr)"
+
+    - name: Ensure synapse regular users exist (non-admin)
+      kubernetes.core.k8s_exec:
+        namespace: "{{ matrix.namespace }}"
+        pod: "{{ matrix_synapse_pod_name }}"
+        command: >
+          register_new_matrix_user
+          -c /config/homeserver.yaml
+          -u {{ item.user | quote }}
+          -p {{ item.password | quote }}
+          --no-admin
+          http://localhost:8008
+      loop: "{{ matrix.users | default([]) }}"
+      loop_control:
+        label: "{{ item.user }}"
+      register: matrix_user_ensure
+      changed_when: "'User registered' in matrix_user_ensure.stdout"
+      failed_when:
+        - matrix_user_ensure.rc != 0
+        - "'User already exists' not in (matrix_user_ensure.stdout + matrix_user_ensure.stderr)"
+
+    - name: Ensure synapse bot users exist (non-admin)
+      kubernetes.core.k8s_exec:
+        namespace: "{{ matrix.namespace }}"
+        pod: "{{ matrix_synapse_pod_name }}"
+        command: >
+          register_new_matrix_user
+          -c /config/homeserver.yaml
+          -u {{ item.user | quote }}
+          -p {{ item.password | quote }}
+          --no-admin
+          http://localhost:8008
+      loop: "{{ matrix.bot_users | default([]) }}"
+      loop_control:
+        label: "{{ item.user }}"
+      register: matrix_bot_ensure
+      changed_when: "'User registered' in matrix_bot_ensure.stdout"
+      failed_when:
+        - matrix_bot_ensure.rc != 0
+        - "'User already exists' not in (matrix_bot_ensure.stdout + matrix_bot_ensure.stderr)"
+
+# ===========================================================================
+# Teardown (opt-in `-e matrix_teardown=true`). Namespace delete cascades all
+# matrix resources (Deployments, Services, ConfigMap, Secrets, Middlewares,
+# Certificates, IngressRoutes). The `synapse` Postgres DB is DELIBERATELY
+# PRESERVED (holds rooms/messages/media metadata) — drop by hand to abandon:
+#   psql -U postgres -c 'DROP DATABASE synapse;'
+# Uses only kubernetes.core.k8s / nsupdate (no bare kubectl — dgxarley rule).
+# ===========================================================================
+
+- name: Matrix — teardown (opt-in `-e matrix_teardown=true`)
+  when: matrix_teardown | default(false) | bool
+  block:
+    - name: Delete matrix namespace (cascades all matrix resources)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ matrix.namespace }}"
+
+    - name: Remove matrix + cinny DNS A records
+      community.general.nsupdate:
+        server: "{{ nsupdate_server }}"
+        zone: "{{ matrix.base_domain }}"
+        key_name: "{{ nsupdate_tsig_key_name }}"
+        key_secret: "{{ nsupdate_tsig_key_secret }}"
+        key_algorithm: "{{ nsupdate_tsig_algorithm }}"
+        record: "{{ item }}.{{ matrix.base_domain }}."
+        type: A
+        state: absent
+      loop:
+        - matrix
+        - cinny
+      when: matrix.manage_dns | bool
