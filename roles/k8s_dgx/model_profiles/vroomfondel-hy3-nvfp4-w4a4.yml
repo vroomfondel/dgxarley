@@ -197,7 +197,7 @@ _model_profile:
     # vLLM W4A16-marlin (QUANT_HY3_GOTCHAS.md prior-art), a path SGLang lacks (Blocker A).
     # The `unquant` value below is LEFT for documentation of intent but is inert — do NOT
     # rely on it; it does not prevent the crash.
-    speculative_enabled: false
+    speculative_enabled: true
     speculative_algo: EAGLE
     speculative_num_steps: 2
     speculative_eagle_topk: 1
