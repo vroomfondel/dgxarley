@@ -1375,10 +1375,15 @@ def main() -> None:
         "--reasoning-effort",
         type=str,
         default=None,
-        choices=["none", "low", "medium", "high", "max"],
+        choices=["none", "no_think", "low", "medium", "high", "max"],
         help="Enable/level reasoning per request via SGLang's native reasoning_effort field. "
         "Required to turn ON reasoning for Mistral Large-3 / Medium-3.5 (use 'high'; they "
-        "default to no reasoning and accept only none/high). Ignored with --no-think.",
+        "default to no reasoning and accept only none/high). "
+        "⚠ Valid values are MODEL-FAMILY-SPECIFIC and unvalidated ones raise a chat-template "
+        "error server-side: Hy3/Hunyuan accepts ONLY high/low/no_think (its OFF value is "
+        "'no_think', NOT 'none' — 'none'/'medium'/'max' error); Mistral takes none/high. "
+        "Ignored with --no-think (which sends reasoning_effort=none — wrong for Hy3; use "
+        "--reasoning-effort no_think to turn Hy3 thinking OFF).",
     )
     parser.add_argument(
         "--temperature",
