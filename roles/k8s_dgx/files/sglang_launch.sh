@@ -2122,7 +2122,23 @@ fi
 # NOTE: thinking_budget does NOT go here — it uses SGLang's custom logit processor
 # system (--enable-custom-logit-processor), not the chat template.
 if [ -n "$SGLANG_CHAT_TEMPLATE_KWARGS" ] && [ "$SGLANG_CHAT_TEMPLATE_KWARGS" != "{}" ]; then
-  args+=(--chat-template-kwargs "$SGLANG_CHAT_TEMPLATE_KWARGS")
+  # CAPABILITY GUARD: some SGLang builds (e.g. the 0.5.12/0.5.14-sm121 images) do
+  # NOT expose a server-side --chat-template-kwargs flag — passing it aborts the
+  # server at argparse ("unrecognized arguments: --chat-template-kwargs") and
+  # crash-loops the head. The flag's `dest` (chat_template_kwargs) is present in
+  # server_args.py ONLY on builds that support it, so grep that file to decide.
+  # When the flag is UNsupported we skip it and rely on the LiteLLM extra_body
+  # default (_sglang_extra_body_defaults, same profile key) — which still applies
+  # the reasoning default to all LiteLLM-routed traffic. Direct-to-SGLang requests
+  # get no server-side default on such images (pass reasoning_effort per request).
+  SGLANG_ARGS_FILE="/usr/local/lib/python3.12/dist-packages/sglang/srt/server_args.py"
+  if grep -q "chat_template_kwargs" "$SGLANG_ARGS_FILE" 2>/dev/null; then
+    args+=(--chat-template-kwargs "$SGLANG_CHAT_TEMPLATE_KWARGS")
+  else
+    echo "[launch] NOTE: this SGLang build has no --chat-template-kwargs flag; skipping the" \
+         "server-side chat_template_kwargs default ($SGLANG_CHAT_TEMPLATE_KWARGS)." \
+         "LiteLLM extra_body still carries it for proxied requests."
+  fi
 fi
 # Enable custom logit processors (required for per-request thinking_budget via
 # Qwen3ThinkingBudgetLogitProcessor). Safe to always enable — no-op if unused.

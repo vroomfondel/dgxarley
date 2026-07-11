@@ -85,6 +85,29 @@ _model_profile:
     # TokenizersBackend (the "still TokenizersBackend" warning is cosmetic — the
     # repo ships no custom tokenizer .py, so nothing model-specific is missing).
 
+    # --- Reasoning default: thinking ON via reasoning_effort (hybrid model) ---
+    # Hy3's chat template gates thinking ONLY on `reasoning_effort` (values
+    # high|low|no_think; template DEFAULT is no_think = OFF). This key flips the
+    # default to ON. HOW IT REACHES A REQUEST (code-verified 2026-07-11):
+    #   • LiteLLM-routed traffic (hermes-default, honcho, hindsight, openwebui):
+    #     this key renders into _sglang_extra_body_defaults → the LiteLLM model_list
+    #     entry's extra_body → LiteLLM merges {chat_template_kwargs:{reasoning_effort:
+    #     high}} into EVERY upstream request → SGLang serving_chat.py pops it into the
+    #     template's reasoning_effort → <think:opensource> opens → THINKING ON. ✓
+    #   • The SAME key ALSO renders the SERVER flag --chat-template-kwargs
+    #     (SGLANG_CHAT_TEMPLATE_KWARGS). The 0.5.14-sm121 image has NO such flag, so
+    #     sglang_launch.sh's capability-guard SKIPS it (else the head crash-loops on
+    #     "unrecognized arguments"). ⇒ requests hitting SGLang DIRECTLY (SGLANG_URL,
+    #     bypassing LiteLLM) get NO server-side default → thinking OFF unless they pass
+    #     reasoning_effort themselves (e.g. sglang-test --reasoning-effort high). On a
+    #     future image that DOES support the flag, the guard passes it and direct
+    #     requests default-on too — automatically, no profile change needed.
+    # Valid Hy3 values: high | low | no_think (NOT none/medium/max — those raise a
+    # chat-template error). Set "low" for lighter reasoning, or REMOVE this key to
+    # default OFF (per-request reasoning_effort still works either way).
+    chat_template_kwargs:
+      reasoning_effort: "high"
+
     # --- Context: native 256K (full window) ---
     # Base supports 262144, and it fits: ~40 GB/GPU weights leaves ~80 GB/GPU free
     # on the 128 GB GB10, while one full 256K sequence's FP8 KV is only ~10 GB/GPU
