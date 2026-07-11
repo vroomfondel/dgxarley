@@ -15,6 +15,18 @@ matrix:
   data_base: "/mnt/nfs/matrix-synapse"
   time_zone: "Europe/Berlin"
   manage_dns: true
+  # Optional per-matrix nsupdate overrides (own DNS server / TSIG for the kikube.eu
+  # zone). Any omitted key falls back to the cluster-wide nsupdate_* var. Real
+  # values (esp. tsig_key_secret) go in vault. Example shape:
+  #   dns:
+  #     server: "203.0.113.53"
+  #     zone: "kikube.eu"
+  #     tsig_key_name: "kikube-key"
+  #     tsig_key_secret: "BASE64_TSIG_SECRET"
+  #     tsig_algorithm: "hmac-sha256"
+  #     ttl: 3600
+  #     ingress_ip: "203.0.113.10"
+  dns: {}
   enable_registration: false
   enable_token_authenticator: true
   trusted_proxies: "10.68.0.0/16,10.69.0.0/16"
@@ -30,8 +42,9 @@ matrix:
   users:
     - {user: "alice", password: "changeme"}
     - {user: "bob", password: "changeme"}
-  # Bot accounts (same shape). Use with the token-authenticator jwt module for
-  # Hermes-agent Matrix bots.
+  # Bot accounts — TECHNICALLY IDENTICAL to `users` (same register --no-admin
+  # flow); the split is purely naming (humans vs. automated clients). The jwt
+  # module is server-wide, so any account can token-login — nothing exclusive here.
   bot_users:
     - {user: "hermes-bot", password: "changeme"}
   images:

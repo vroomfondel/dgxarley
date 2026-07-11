@@ -445,22 +445,30 @@
 
     # =======================================================================
     # DNS (nsupdate) — register A records for matrix + cinny under base_domain.
-    # Requires the cluster TSIG key to authorise records under matrix.base_domain
-    # (kikube.eu). If it doesn't, set matrix.manage_dns=false and manage DNS
-    # externally. record MUST be the full FQDN with a trailing dot.
+    # Every nsupdate parameter is overridable per-matrix via the OPTIONAL
+    # matrix.dns.* sub-dict (server / zone / tsig_key_name / tsig_key_secret /
+    # tsig_algorithm / ttl / ingress_ip); each key falls back to the cluster-wide
+    # nsupdate_* value (zone -> nsupdate_zone) when omitted.
+    # IMPORTANT: the record is <item>.<base_domain> (matrix.kikube.eu), and
+    # nsupdate REFUSES a record outside its zone. So if base_domain is a zone of
+    # its OWN (kikube.eu), you MUST set matrix.dns.zone (+ likely server/TSIG) to
+    # match — the nsupdate_zone fallback only fits when base_domain sits under it.
+    # kikube.eu is a separate zone, so it typically needs its own server + TSIG +
+    # ingress IP here. If none is available, set matrix.manage_dns=false and
+    # manage DNS externally. record MUST be the full FQDN with a trailing dot.
     # =======================================================================
 
     - name: Register DNS A records for matrix + cinny
       community.general.nsupdate:
-        server: "{{ nsupdate_server }}"
-        zone: "{{ matrix.base_domain }}"
-        key_name: "{{ nsupdate_tsig_key_name }}"
-        key_secret: "{{ nsupdate_tsig_key_secret }}"
-        key_algorithm: "{{ nsupdate_tsig_algorithm }}"
+        server: "{{ matrix.dns.server | default(nsupdate_server) }}"
+        zone: "{{ matrix.dns.zone | default(nsupdate_zone) }}"
+        key_name: "{{ matrix.dns.tsig_key_name | default(nsupdate_tsig_key_name) }}"
+        key_secret: "{{ matrix.dns.tsig_key_secret | default(nsupdate_tsig_key_secret) }}"
+        key_algorithm: "{{ matrix.dns.tsig_algorithm | default(nsupdate_tsig_algorithm) }}"
         record: "{{ item }}.{{ matrix.base_domain }}."
         type: A
-        ttl: "{{ nsupdate_ttl }}"
-        value: "{{ nsupdate_ingress_ip }}"
+        ttl: "{{ matrix.dns.ttl | default(nsupdate_ttl) }}"
+        value: "{{ matrix.dns.ingress_ip | default(nsupdate_ingress_ip) }}"
         state: present
       loop:
         - matrix
@@ -737,11 +745,11 @@
 
     - name: Remove matrix + cinny DNS A records
       community.general.nsupdate:
-        server: "{{ nsupdate_server }}"
-        zone: "{{ matrix.base_domain }}"
-        key_name: "{{ nsupdate_tsig_key_name }}"
-        key_secret: "{{ nsupdate_tsig_key_secret }}"
-        key_algorithm: "{{ nsupdate_tsig_algorithm }}"
+        server: "{{ matrix.dns.server | default(nsupdate_server) }}"
+        zone: "{{ matrix.dns.zone | default(nsupdate_zone) }}"
+        key_name: "{{ matrix.dns.tsig_key_name | default(nsupdate_tsig_key_name) }}"
+        key_secret: "{{ matrix.dns.tsig_key_secret | default(nsupdate_tsig_key_secret) }}"
+        key_algorithm: "{{ matrix.dns.tsig_algorithm | default(nsupdate_tsig_algorithm) }}"
         record: "{{ item }}.{{ matrix.base_domain }}."
         type: A
         state: absent

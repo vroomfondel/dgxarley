@@ -41,6 +41,12 @@ matrix:
   data_base: "/mnt/nfs/matrix-synapse"
   time_zone: "Europe/Berlin"
   manage_dns: true
+  # Optional per-matrix nsupdate overrides. kikube.eu is a separate zone from the
+  # cluster domain, so it usually needs its own DNS server / TSIG key / ingress IP.
+  # Any omitted key falls back to the cluster-wide nsupdate_* var. Keys:
+  #   server, zone, tsig_key_name, tsig_key_secret, tsig_algorithm, ttl, ingress_ip
+  # Real values (TSIG secret!) belong in vault. Leave {} to inherit cluster values.
+  dns: {}
   enable_registration: false
   enable_token_authenticator: true
   # Traefik pods source X-Forwarded-For from the K3s pod CIDR.
