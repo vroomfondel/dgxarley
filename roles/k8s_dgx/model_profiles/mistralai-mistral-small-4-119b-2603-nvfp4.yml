@@ -88,10 +88,23 @@ _model_profile:
     # --load-format mistral / --tokenizer-mode mistral trio (vllm_launch.sh). Inert
     # on the SGLang path (name-based dispatch there, no such flags).
     mistral_format: true
-    # 256K = the card's tested window (YaRN allows up to 1048576, not enabled here).
-    # Memory is NOT the constraint (unlike the 675B, which had to start at 64K), so
-    # the full tested context fits comfortably. Raise toward 1M only after a sweep.
+    # FULL 256K window (Option B). The Mistral-native checkpoint (params.json, no
+    # config.json) carries a YaRN block (verified against HF params.json 2026-07-11:
+    # yarn factor 128 over original_max_position_embeddings 8192 → real ceiling
+    # max_position_embeddings 1048576, rope_theta 10000.0). SGLang SYNTHESIZES the
+    # deepseek_yarn rope from it (the boot log shows rope_type=deepseek_yarn), so the
+    # SCALING is applied — but _derive_context_length can't compute the ceiling OFFLINE
+    # and falls back to 128000, which then aborts any higher context_length with
+    # "User-specified context_length > derived" (reference_mistral_native_draft_context_fallback).
+    # Fix = SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1, which sglang_instance.yml:102
+    # auto-sets to "1" IFF json_model_override_args is non-empty. So the override below
+    # both (a) trips that env to bypass the offline-derive guard and (b) lifts the config
+    # cap to the window we actually use. UNLIKE the plain-"yarn" Qwen3-235B case, NO
+    # rope_scaling is injected: SGLang already builds the deepseek_yarn rope from
+    # params.json, and 262144 is well within the real 1048576 ceiling. UNVALIDATED —
+    # verify long-context coherence on first boot; raise toward 1M only after a sweep.
     context_length: 262144
+    json_model_override_args: '{"max_position_embeddings": 262144}'
     # compressed-tensors NVFP4 — autodetected from the checkpoint metadata. On the
     # vLLM path leave VLLM_QUANTIZATION empty (autodetect); do NOT force modelopt_fp4
     # (this is llm-compressor / compressed-tensors, NOT a ModelOpt export).
