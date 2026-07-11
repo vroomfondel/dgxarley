@@ -493,23 +493,31 @@ PATCH_GET_CONFIG_EOF
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# [patch] _sgl_mistral_common_tokenizer_ — route Mistral-native checkpoints to
-# MistralCommonTokenizer in get_tokenizer().
+# [patch] _sgl_mistral_native_tokenizer_ — let get_tokenizer() load the shipped HF
+# tokenizer.json OFFLINE for Mistral-native checkpoints (no config.json).
 #
-# Mistral-native repos (params.json + tekken.json, e.g. Mistral-Small-4-119B-NVFP4)
-# ship NO config.json. SGLang's ModelConfig + get_processor handle that via the
-# name-triggered is_mistral_model()/load_mistral_config() path, BUT get_processor's
-# TokenizersBackend reload (and any DIRECT get_tokenizer call) falls to
-# AutoTokenizer.from_pretrained → which loads config.json → offline OSError, crashing
+# Mistral-native repos (params.json + tekken.json + tokenizer.json, e.g.
+# Mistral-Small-4-119B-NVFP4) ship NO config.json. SGLang's ModelConfig + get_processor
+# already handle that via the name-triggered is_mistral_model()/load_mistral_config()
+# path, BUT get_processor's TokenizersBackend reload (and any DIRECT get_tokenizer call)
+# hits AutoTokenizer.from_pretrained → which loads config.json → offline OSError, crashing
 # tokenizer init before any weight load. Upstream only special-cases BARE-tekken
 # (tekken.json AND no tokenizer.json); these repos ALSO ship tokenizer.json, so the
-# upstream is_bare_tekken_checkpoint branch is skipped and upstream main fails
-# identically — an image bump does NOT fix this. Verified in a debug pod (0.5.14-sm121):
-# MistralCommonTokenizer loads OFFLINE from tekken.json and yields token IDs identical
-# to the shipped tokenizer.json. See reference_sglang_mistral_native_support.
+# upstream is_bare_tekken_checkpoint branch is skipped and upstream main fails identically
+# — an image bump does NOT fix this.
+#
+# Fix: inject the config built from params.json (load_mistral_config) into common_kwargs
+# so AutoTokenizer (and _resolve_tokenizers_backend) skip the config.json fetch and load
+# the shipped tokenizer.json as a standard HF TokenizersBackend. This keeps the full HF
+# tokenizer API (add_special_tokens / apply_chat_template) that the pixtral MM processor
+# requires — routing to MistralCommonTokenizer instead would need the ~119-line
+# multimodal adaptation (add_special_tokens stub, pixtral markers) our image's
+# patch_mistral_common_tokenizer lacks. Verified in a debug pod (0.5.14-sm121): loads
+# offline, token IDs match the shipped tokenizer.json, pixtral add_special_tokens passes.
+# See reference_sglang_mistral_native_support.
 TOKPY="/usr/local/lib/python3.12/dist-packages/sglang/srt/utils/hf_transformers/tokenizer.py"
-if grep -q 'common_kwargs = dict(' "$TOKPY" 2>/dev/null && ! grep -q '_sgl_mistral_common_tokenizer_' "$TOKPY" 2>/dev/null; then
-  python3 << 'PATCH_MISTRAL_COMMON_TOK_EOF'
+if grep -q 'common_kwargs = dict(' "$TOKPY" 2>/dev/null && ! grep -q '_sgl_mistral_native_tokenizer_' "$TOKPY" 2>/dev/null; then
+  python3 << 'PATCH_MISTRAL_NATIVE_TOK_EOF'
 f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/utils/hf_transformers/tokenizer.py"
 with open(f) as fh:
     code = fh.read()
@@ -530,30 +538,26 @@ new = '''    common_kwargs = dict(
         **kwargs,
     )
 
-    # [patch] _sgl_mistral_common_tokenizer_ — Mistral-native (params.json, tekken.json,
-    # NO config.json) checkpoints: AutoTokenizer needs config.json which these repos omit
-    # -> offline OSError. Load the canonical mistral-common tokenizer from tekken.json
-    # instead (token IDs verified identical to the shipped tokenizer.json). Broader than
-    # the upstream is_bare_tekken_checkpoint branch, which skips repos that ship
-    # tokenizer.json alongside tekken.json.
-    from .mistral_utils import is_mistral_model
-    if is_mistral_model(tokenizer_name):
-        from transformers.tokenization_mistral_common import MistralCommonTokenizer
-        _tk = MistralCommonTokenizer.from_pretrained(
-            tokenizer_name, revision=tokenizer_revision
+    # [patch] _sgl_mistral_native_tokenizer_ — Mistral-native (params.json, tekken.json,
+    # tokenizer.json, NO config.json) checkpoints make AutoTokenizer fetch config.json
+    # -> offline OSError. Inject the config built from params.json so the shipped HF
+    # tokenizer.json loads offline as a standard TokenizersBackend (full HF API the pixtral
+    # MM processor needs). MistralCommonBackend would miss add_special_tokens here.
+    from .mistral_utils import is_mistral_model, load_mistral_config
+    if is_mistral_model(tokenizer_name) and "config" not in common_kwargs:
+        common_kwargs["config"] = load_mistral_config(
+            tokenizer_name, trust_remote_code=trust_remote_code, revision=tokenizer_revision
         )
-        patch_mistral_common_tokenizer(_tk)  # in-place; returns None in this image
-        return _tk
 
     try:'''
 if old in code:
     code = code.replace(old, new, 1)
     with open(f, 'w') as fh:
         fh.write(code)
-    print("Patched tokenizer.py: is_mistral_model -> MistralCommonTokenizer routing")
+    print("Patched tokenizer.py: Mistral-native config injection (offline tokenizer.json)")
 else:
-    print("tokenizer.py: _sgl_mistral_common_tokenizer_ anchor not found, skipping")
-PATCH_MISTRAL_COMMON_TOK_EOF
+    print("tokenizer.py: _sgl_mistral_native_tokenizer_ anchor not found, skipping")
+PATCH_MISTRAL_NATIVE_TOK_EOF
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
