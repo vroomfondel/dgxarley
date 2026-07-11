@@ -61,6 +61,16 @@
 #   fixed for the RecViking Medium-3.5 sibling by `_sgl_vlm_ignore_fix` in
 #   sglang_launch.sh (see reference_vlm_compressed_tensors_ignore_mismatch). Verify
 #   the multimodal path end-to-end on first SGLang boot. Not a vLLM-path concern.
+#   SHARED-EXPERT LOADER-NAME risk (the ACTUAL demonstrated GB10 failure class for
+#   experts-only-FP4 MoE, NOT a W4A4-on-attention numerics issue — see
+#   reference_qwen35moe_linear_attn_nvfp4_unloadable + reference_hybrid_uniform_w4a4_nan):
+#   this checkpoint has num_shared_experts=1 whose FFN IS FP4 (not in the ignore
+#   list). If SGLang's Mistral-native loader remaps the routed experts but not the
+#   shared-expert name, the shared MLP zero-inits → FP4-quantizes a zero input →
+#   degenerate scale → NaN on the FIRST request (exactly the Hy3 shared_experts→
+#   shared_mlp gap). On first SGLang boot, if inference NaNs after a clean weight
+#   load, --debug-tensor-dump the first forward and check the shared-expert down_proj
+#   before suspecting the FP4 kernels. Not a vLLM-path concern.
 _model_profile:
   "mistralai/Mistral-Small-4-119B-2603-NVFP4":
     knowledge_cutoff: null  # not officially disclosed (Mistral Small 4 card silent)
@@ -107,10 +117,49 @@ _model_profile:
     reasoning_parser: "mistral"
     tool_call_parser: "mistral"
     recommended_sampling:
-      # Mistral card guidance: low temperature for production (non-thinking). Raise
+      # Mistral card guidance: low temperature for production (non-thinking). Raise from 0.15
       # toward ~0.7 when reasoning_effort="high" (thinking traces need slack).
-      temperature: 0.15
+      temperature: 0.7
       top_p: 1.0
     sampling_overrides: {}
-    # No EAGLE/MTP draft published for Small 4 (no mtp block in params.json); speculative off.
+    # ── MTP / speculative via the official EAGLE head — PRE-STAGED, OFF ──────────
+    # No NATIVE MTP (no mtp block in params.json of base OR NVFP4). Speculation is a
+    # SEPARATE Mistral-trained EAGLE head, named in the base model card:
+    #   mistralai/Mistral-Small-4-119B-2603-eagle — n_layers 2, dim 4096 (matches this
+    #   target), MLA geometry identical (q_lora 1024 / kv_lora 256 / qk 64+64 / v 128),
+    #   vocab 131072, FP8 (params.json quantization.qformat_weight fp8_e4m3, ~392 MB),
+    #   Mistral-native (params.json + consolidated.safetensors, NO config.json). EAGLE
+    #   v1 (not EAGLE3). Structurally the twin of the RecViking Medium-3.5 EAGLE draft.
+    # >>> STAYS DISABLED — but only because it's UNMEASURED for THIS model, NOT because
+    # of a numerics risk. This exact shape is KNOWN-GOOD elsewhere <<<
+    #   ✅ NO cross-precision "drift" blocker: the DIRECT twin — a Mistral-native fp8
+    #      EAGLE-v1 draft against an NVFP4 target (RecViking/Mistral-Medium-3.5-128B-NVFP4
+    #      + mistralai/Mistral-Medium-3.5-128B-EAGLE) — BOOTS CLEAN, accept_len ~1.8,
+    #      coherent, NO NaN (verified 2026-06-27, reference_mistral_native_eagle_dtype).
+    #      Do NOT cite the nvidia-qwen3-235b "EAGLE3×NVFP4 degenerate" note as a risk
+    #      here: that was a DIFFERENT draft type (EAGLE3, BF16), on old SGLang v0.5.10,
+    #      and its "FP4→BF16 distribution drift" was an ATTRIBUTED hypothesis, not a
+    #      proven mechanism (same measured-NaN→plausible-cause trap as the W4A4 saga).
+    #   The two REAL gotchas are mundane + already solved for the twin:
+    #     a. dtype: "bfloat16" — the fp8 draft's params.json has no dtype → --dtype auto
+    #        → fp32→fp16 fallback → "out_dtype must be Half or BFloat16" crash vs the bf16
+    #        target. Fix = pin --dtype bfloat16 (reference_mistral_native_eagle_dtype).
+    #     b. context cap 128000 — the Mistral-native draft's YaRN is SGLang-unparseable
+    #        offline → _derive_context_length → 128000; target 262144 > 128000 aborts the
+    #        draft-worker init → head crash-loop. Cap context_length to 128000 (or feed
+    #        the draft an HF config.json). See reference_mistral_native_draft_context_fallback.
+    #   The ONE genuine reason to validate before trusting it: SGLang is WIP for the
+    #   TARGET itself (see FORMAT header) — the base path isn't confirmed to load, so
+    #   validate spec on the vLLM path first, then re-check on SGLang.
+    # TO ENABLE (after a positive accept-rate bench, no NaN storm): flip
+    # speculative_enabled true, cap context_length to 128000, AND add dtype: "bfloat16"
+    # (the fp8 draft's params.json has no dtype → --dtype auto → fp32→fp16 fallback →
+    # "out_dtype must be Half or BFloat16" crash against the bf16 target — same root fix
+    # as the Medium-3.5 EAGLE; see reference_mistral_native_eagle_dtype).
     speculative_enabled: false
+    speculative_algo: "EAGLE"
+    speculative_draft_model_path: "mistralai/Mistral-Small-4-119B-2603-eagle"
+    speculative_draft_model_quantization: "fp8"  # draft ships fp8_e4m3; keep fp8 (auto-detect agrees)
+    speculative_num_steps: 2
+    speculative_eagle_topk: 1
+    speculative_num_draft_tokens: 3

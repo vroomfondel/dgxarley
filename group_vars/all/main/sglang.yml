@@ -45,13 +45,15 @@ sglang_port: 8000
 # sglang_model: "nvidia/GLM-5-NVFP4"
 # sglang_model: "nvidia/GLM-5.2-NVFP4"                          # 753B/40B MoE (256 exp/8 active +1 shared), GlmMoeDsa (MLA+DSA), NVFP4 (modelopt, official NVIDIA) → PP=4/TP=1 (EP4/TP4 OOMs); 1M ctx; needs transformers>=5.3.0. UNVALIDATED first-contact
 # sglang_model: "0xSero/GLM-5.2-504B"                           # ~504B GLM-5.2 REAP keep-168 (256→168 exp, 34% pruned) + Router-KD, NVFP4 (modelopt) → PP=4/TP=1; MTP/NEXTN on; min_p=0.05+rep_pen anti-loop guardrail. UNVALIDATED first-contact
+# sglang_model: "0xSero/glm-5.2-reap-504B-v2"                   # ~504B GLM-5.2 REAP keep-168 v2 re-cut (256→168 exp, UNIFORM prune), NVFP4 (modelopt) → TP4/EP1, 16K ctx, MTP/NEXTN; glm45/glm47 parsers. UNVALIDATED first-contact
+# sglang_model: "0xSero/GLM-5.2-REAP-NU176-526B"               # ⛔ PLACEHOLDER/metadata only — NON-UNIFORM REAP (per-layer expert count, 216 max/~176 mean); stock SGLang+vLLM mis-load the renumbered gate rows, needs author's patched vLLM fork. NOT deployable as-is; prefer the uniform keep-168 v2 above
 #
 # --- Hermes (Nous Research) ---
 # sglang_model: "cyankiwi/Hermes-4.3-36B-AWQ-4bit"              # 36B DENSE (ByteDance Seed-OSS base), compressed-tensors int4 W4A16 (repo NAME says AWQ, format is compressed-tensors), hybrid <think> reasoning OFF by default → ~4.5 GB/GPU TP4 (tiny). UNVALIDATED first-contact
 # sglang_model: "TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ"  # 47B/13B MoE (Mixtral 8x7B), GENUINE AWQ int4 (gemm), ChatML, 32K ctx, no reasoning → ~6.2 GB/GPU TP4 (tiny). UNVALIDATED first-contact
 #
 # --- Hunyuan-3 (Tencent; hy_v3 arch) ---
-sglang_model: "vroomfondel/Hy3-NVFP4-W4A4"                     # ✅ VALIDATED WORKING on GB10/sm121 (2026-07-10) — full W4A4, 295B/21B-active Hunyuan-3 MoE (192 exp/top-8 +1 shared), modelopt NVFP4 + FP8 KV, 256K ctx → ~40 GB/GPU TP4/EP1; hunyuan tool/reasoning parser; BF16 MTP head (EAGLE staged). Serves coherently once the sglang_launch.sh shared_experts→shared_mlp loader remap is applied (see profile). The long "W4A4 garbles/NaNs" story was a weight-name-load gap, now fixed.
+# sglang_model: "vroomfondel/Hy3-NVFP4-W4A4"                     # ✅ VALIDATED WORKING on GB10/sm121 (2026-07-10) — full W4A4, 295B/21B-active Hunyuan-3 MoE (192 exp/top-8 +1 shared), modelopt NVFP4 + FP8 KV, 256K ctx → ~40 GB/GPU TP4/EP1; hunyuan tool/reasoning parser; BF16 MTP head (EAGLE staged). Serves coherently once the sglang_launch.sh shared_experts→shared_mlp loader remap is applied (see profile). The long "W4A4 garbles/NaNs" story was a weight-name-load gap, now fixed.
 # sglang_model: "kodelow/Hy3-NVFP4-W4A16"                      # SAME hy_v3 295B MoE, WEIGHT-ONLY NVFP4 (compressed-tensors nvfp4-pack-quantized; experts-only, attn/dense/KV BF16). DEAD END in SGLang: no weight-only-NVFP4 MoE scheme → crashes at load (Blocker A in QUANT_HY3_GOTCHAS.md). Use the W4A4 build above (now working); kodelow only serves via vLLM+MARLIN.
 #
 # --- MiniMax ---
@@ -61,7 +63,9 @@ sglang_model: "vroomfondel/Hy3-NVFP4-W4A4"                     # ✅ VALIDATED W
 # sglang_model: "saricles/MiniMax-M2.5-REAP-139B-A10B-NVFP4-GB10"  # REAP-pruned M2.5 (256→154 experts), 139B/10B MoE, NVFP4 compressed-tensors, GB10-tuned
 #
 # --- Mistral (NVFP4; reasoning OFF by default, per-request reasoning_effort=high) ---
-# sglang_model: "RecViking/Mistral-Medium-3.5-128B-NVFP4"        # 128B DENSE, multimodal, HF-format → ~20 GB/GPU TP4 (easy fit). EAGLE-MTP pre-staged/off
+# sglang_model: "RecViking/Mistral-Medium-3.5-128B-NVFP4"        # 128B DENSE, multimodal, HF-format, compressed-tensors NVFP4 (W4A4 text transformer, vision BF16) → ~20 GB/GPU TP4 (easy fit). EAGLE-MTP pre-staged/off
+# sglang_model: "nvidia/Mistral-Medium-3.5-128B-NVFP4"           # 128B DENSE, multimodal, HF-format, ModelOpt MIXED_PRECISION (FP8 attn + NVFP4 MLP + FP8 KV → needs sglang_launch.sh _sgl_mixed_nvfp4_* patch) → ~20-25 GB/GPU TP4. No EAGLE draft (spec off). UNVALIDATED first-contact
+sglang_model: "mistralai/Mistral-Small-4-119B-2603-NVFP4"      # 119B/6.5B MLA-MoE (128 exp/4 active +1 shared), multimodal, mistral-NATIVE, compressed-tensors NVFP4 (experts-only W4A4; attn/vision/gates/lm_head BF16) → ~17 GB/GPU TP4 (easy). SGLang WIP → vLLM path; 256K ctx. UNVALIDATED first-contact
 # sglang_model: "mistralai/Mistral-Large-3-675B-Instruct-2512-NVFP4"  # 675B MLA-MoE, multimodal, mistral-NATIVE (name-loaded) → ~101 GB/GPU TP4 (TIGHT, start ctx 64K)
 #
 # --- Nemotron-3 ---
@@ -78,7 +82,6 @@ sglang_model: "vroomfondel/Hy3-NVFP4-W4A4"                     # ✅ VALIDATED W
 #
 # --- Qwen3 ---
 # sglang_model: "nvidia/Qwen3-235B-A22B-NVFP4"                  # 235B/22B MoE NVFP4 (modelopt), YaRN→131K ctx — Test-17 winner (validated)
-# sglang_model: "RedHatAI/Qwen3-235B-A22B-NVFP4"                # 235B/22B MoE NVFP4 (compressed-tensors), YaRN→131K ctx, triton-MoE — UNTESTED first-contact
 # sglang_model: "nvidia/Qwen3-235B-A22B-Instruct-2507-NVFP4"    # 235B/22B MoE NVFP4 (modelopt), NATIVE 262K ctx, non-thinking — backend inherited from original-235B Test-17 winner, not re-measured on 2507
 # sglang_model: "nvidia/Qwen3-235B-A22B-Thinking-2507-NVFP4"    # 235B/22B MoE NVFP4 (modelopt), NATIVE 262K ctx, THINKING — backend inherited from original-235B Test-17 winner, not re-measured on 2507
 # sglang_model: "Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8"
@@ -91,6 +94,7 @@ sglang_model: "vroomfondel/Hy3-NVFP4-W4A4"                     # ✅ VALIDATED W
 # sglang_model: "Qwen/Qwen3.5-122B-A10B-FP8"
 # sglang_model: "nvidia/Qwen3.5-122B-A10B-NVFP4"
 # sglang_model: "nvidia/Qwen3.5-397B-A17B-NVFP4"
+# sglang_model: "nvidia/Qwen3.5-397B-A17B-NVFP4-V2"            # "NVFP4 2.0" re-quant of 397B/17B Qwen3.5 MoE (512 exp +1 shared, hybrid 15 full-GQA + 45 linear attn), MIXED: NVFP4 experts + FP8 attn/shared + BF16 linear_attn/MTP → TP4/EP1, 262K ctx, MTP/NEXTN. Arch = V1 winner; V2 knobs INHERITED, UNVALIDATED
 # --- Qwen3.6 ---
 # sglang_model: "Qwen/Qwen3.6-27B-FP8"
 # sglang_model: "nvidia/Qwen3.6-27B-NVFP4"                      # 27B dense NVFP4 (modelopt MIXED_PRECISION → needs sglang_launch.sh _sgl_mixed_nvfp4_* patch), Gated DeltaNet+Attention; FP8 sibling above
@@ -98,10 +102,14 @@ sglang_model: "vroomfondel/Hy3-NVFP4-W4A4"                     # ✅ VALIDATED W
 # sglang_model: "RedHatAI/Qwen3.6-35B-A3B-NVFP4"                # 35B/3B MoE, uniform NVFP4 (compressed-tensors) — patch-free winner
 # sglang_model: "nvidia/Qwen3.6-35B-A3B-NVFP4"                  # 35B/3B MoE NVFP4 (modelopt MIXED_PRECISION → needs sglang_launch.sh _sgl_mixed_nvfp4_* patch)
 # sglang_model: "vroomfondel/Qwen3.6-35B-A3B-NVFP4-ModelOpt"    # ⛔ DOES NOT BOOT (2026-07-10): UNIFORM W4A4 NVFP4 (our kikube/quantizer export) — full-model weight-load AssertionError at linear_attn.in_proj_qkvz. Root cause UNPINNED: in_proj_qkvz IS quantized NVFP4 & loads in isolation (TP1/TP4) — full-model name-map suspect, NOT unquantizable. Recommended fix = re-quant nvfp4_mlp_only (see profile). Documented negative result
+# sglang_model: "vroomfondel/Qwen3.6-35B-A3B-NVFP4-MLP-Only-ModelOpt"  # ✅ RECOMMENDED re-quant (fix #1) for the ⛔ uniform-W4A4 sibling above — MLP-ONLY NVFP4 (experts FP4; linear_attn/dense/attn EXCLUDED, kept high-precision) → clears the in_proj_qkvz boot wall. 256 exp, TP4/EP1, 262K ctx, MTP/NEXTN. NOT YET VALIDATED
 
 #
 # --- Qwen3-VL (multimodal companion) ---
 # sglang_model: "Qwen/Qwen3-VL-8B-Instruct-FP8"                  # 8B dense multimodal (vision), block-128 FP8, 256K ctx → ~9 GB, tp=1. Vision companion for the text-only Nemotron; run as its OWN instance (see sglang_instances). UNVALIDATED first-contact
+#
+# --- Qwen3-Embedding (embedding companion; run via sglang_instances `embed`, NOT as the main selector) ---
+# sglang_model: "chroma-core/Qwen3-Embedding-4B-FP8-Dynamic"     # 4B Qwen3 embedding decoder (last-token pooling), FP8-dynamic, 2560-dim, 32K ctx — the TEXT-EMBEDDING backend (replaces Ollama qwen3-embed). Runs as its OWN tp=1 embed instance (is_embedding), NOT a chat model; gated by enable_embedding_model
 #
 # --- Tilde (European multilingual foundation) ---
 # sglang_model: "TildeAI/TildeOpen-30b-64k"                     # 30B DENSE BF16 (Llama arch), BASE/foundation — NOT instruct, no chat template, completion-only; 33+ EU languages, 64K via YaRN → ~15.3 GB/GPU TP4. UNVALIDATED first-contact

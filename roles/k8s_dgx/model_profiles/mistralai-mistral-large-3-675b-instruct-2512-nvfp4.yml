@@ -2,9 +2,11 @@
 # Model profile: mistralai/Mistral-Large-3-675B-Instruct-2512-NVFP4
 # Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
 #
-# UNTESTED first-contact (written 2026-06-20) — pre-staged but SGLang-LOADABLE.
-# (Earlier draft called this "format-blocked" — WRONG, corrected after reading
-# the SGLang source + probing the live image; see >>> FORMAT <<< below.)
+# UNTESTED first-contact (drafted 2026-06-20, refreshed 2026-07-11 against the
+# LIVE 0.5.14-sm121 SGLang source). SGLang-LOADABLE on our current image via a
+# NATIVE, purpose-built model class — see >>> FORMAT / SGLANG <<< below.
+# (An even earlier draft called this "format-blocked" / "SGLang stays blocked" —
+# BOTH WRONG; that leftover contradiction is now removed.)
 #
 # mistralai/... vs RedHatAI/... — IDENTICAL CHECKPOINT. Verified 2026-06-20:
 # byte-for-byte same safetensors (matching sha256 across sampled shards), same
@@ -12,8 +14,8 @@
 # longer README. This profile keys on the mistralai upstream; the bits are the
 # same either way, so there is nothing to choose between them at runtime.
 #
-# WHAT THIS CHECKPOINT IS (verified against HF params.json 2026-06-20) ─────────
-#   DeepSeek-V3-style MLA MoE, multimodal. params.json:
+# WHAT THIS CHECKPOINT IS (verified against HF params.json 2026-06-20/07-11) ────
+#   DeepSeek-V3-style MLA MoE, multimodal checkpoint. params.json:
 #     dim 7168, n_layers 61, head_dim 192, n_heads 128, n_kv_heads 128.
 #     MLA: q_lora_rank 1536, kv_lora_rank 512, qk_nope 128 / qk_rope 64,
 #       v_head_dim 128 → compressed KV (small KV footprint, like DeepSeek).
@@ -22,39 +24,67 @@
 #     Context: max_position_embeddings 294912; YaRN factor 36 over 8192.
 #     Vision encoder: 2.5B (48 layers, hidden 1664) — BF16, NOT quantized.
 #   QUANT: compressed-tensors NVFP4 (nvfp4-pack-quantized, group_size 16,
-#     weights + input_activations FP4). IGNORE list excludes embeddings,
-#     re:.*attn.* (ALL attention incl. the MLA q/kv-lora projections),
-#     re:.*gate$, lm_head, and the WHOLE vision stack → ONLY the routed-expert
-#     FFN Linear ops are FP4. kv_cache_scheme null (KV BF16 in-checkpoint).
+#     weights + input_activations FP4 → genuine W4A4). IGNORE list excludes
+#     embeddings, re:.*attn.* (ALL attention incl. the MLA q/kv-lora projections),
+#     re:.*gate$ (router gates), lm_head, and the WHOLE vision stack → ONLY the
+#     dense + routed-expert FFN Linear ops are FP4. kv_cache_scheme null
+#     (KV BF16 in-checkpoint; the fp8 KV below is a RUNTIME choice, see note).
 #     NOTE: because attention is NOT quantized, the compressed-tensors fused-QKV
 #     matcher gap that kills the DSV4 NVFP4 repos (UPSTREAM_DSV4_BUGS §2) does
-#     NOT apply here — the gap is about quantized attn projections, absent here.
-#   ~403 GB safetensors (273 shards) → ~101 GB/GPU at TP=4. TIGHT: only ~15-20
-#   GB/GPU left (of 128) for KV + activations + CUDA graphs + the BF16 vision
-#   encoder. MLA keeps KV small, which is what makes it fit at all. Expect to
-#   start with a REDUCED context_length (NOT the 294912 native cap) and tune up.
+#     NOT apply here — that gap is about quantized attn projections, absent here.
 #
-# ── >>> FORMAT: MISTRAL-NATIVE (params.json) — SGLang HANDLES IT ──────────────
+#   >>> HOW THIS COMPARES TO "OUR" W4A4 (the Hy3 modelopt profile) <<<
+#     Same NVFP4 W4A4 FAMILY (weights+activations 4-bit, group 16), but a
+#     DIFFERENT recipe/loader:
+#       - tool/format: compressed-tensors (llm-compressor, nvfp4-pack-quantized)
+#         → SGLang compressed-tensors path — NOT modelopt_fp4.
+#       - Mistral leaves ATTENTION (MLA) and the VISION tower in BF16, and ships
+#         NO KV scales (kv_cache_scheme null); our Hy3 recipe quantizes the attn
+#         Linears too and bakes FP8 KV. So Mistral is the ZAHMER (more
+#         conservative) NVFP4 — only the FFN/expert GEMMs are 4-bit.
+#     → do NOT copy the Hy3 knobs blindly: quantization key, kv_cache handling,
+#       and the weight-name remaps are all different (the remap is done inside
+#       SGLang's mistral_large_3.py, not by a launch patch).
+#
+#   ~403 GB safetensors (273 shards) → ~101 GB/GPU at TP=4. TIGHT: only ~15-20
+#   GB/GPU left (of 128) for KV + activations + CUDA graphs. MLA keeps KV small,
+#   which is what makes it fit at all. Start with a REDUCED context_length (NOT
+#   the 294912 native cap) and tune up. This MEMORY FIT is the dominant risk.
+#
+# ── >>> FORMAT / SGLANG: MISTRAL-NATIVE (params.json) — NATIVE v0.5.14 CLASS ───
 #   Files: params.json + consolidated-*.safetensors + tekken.json, NO config.json.
-#   SGLang 0.5.12 has a dedicated Mistral-native code path (verified PRESENT in
-#   scitrera/dgx-spark-sglang:0.5.12 via a live probe pod, 2026-06-20):
-#     utils/hf_transformers/mistral_utils.py::is_mistral_model() matches the
-#     substring "mistral-large-3" → params.json is parsed by MistralConfigParser
-#     → because moe.num_shared_experts>0 AND llama_4_scaling is present (both true
-#     here), adapt_config_dict() sets architectures=[MistralLarge3ForCausalLM],
-#     model_type=deepseek_v3 (MLA), then the vision_encoder triggers the pixtral
-#     multimodal wrap. NO server flag needed — the dispatch is NAME-based.
-#   So this loads on the STOCK SGLang path. compressed-tensors NVFP4 survives the
-#   parse (params.json carries quantization_config, not a `quantization` key, so
-#   it's passed through and auto-detected) — leave `quantization` empty below.
+#   Verified in the LIVE 0.5.14 source (2026-07-11, github tag v0.5.14):
+#     - models/mistral_large_3.py: class MistralLarge3ForCausalLM(DeepseekV3ForCausalLM)
+#       — a THIN DeepSeek-V3 subclass that remaps the Mistral-native weight names
+#       (attention.wkv_a_with_mqa→kv_a_proj_with_mqa, feed_forward.w1/2/3→
+#       mlp.gate/down/up_proj, experts.*, shared_experts.*) AND the NVFP4 scale
+#       names (qscale_weight→weight_scale, qscale_act→*_scale). Purpose-built for
+#       EXACTLY this checkpoint.
+#     - configs/model_config.py lists "MistralLarge3ForCausalLM" in the MLA
+#       "special judge" block → full DeepSeek MLA treatment (same as DSV4).
+#     - mistral-native dispatch: utils/hf_transformers/mistral_utils.py
+#       is_mistral_model() matches the name → MistralConfigParser parses
+#       params.json → adapt_config sets architectures=[MistralLarge3ForCausalLM],
+#       model_type=deepseek_v3. NAME-based; no server flag needed on SGLang.
+#     - compressed-tensors NVFP4 W4A4 schemes are present
+#       (compressed_tensors_w4a4_nvfp4.py + _moe.py), both get_min_capability()=100
+#       → GB10 is capability 121 ≥ 100 → the quant path is ELIGIBLE on sm121.
+#   ⚠ TEXT-ONLY on SGLang: MistralLarge3ForCausalLM is a `ForCausalLM` with NO
+#   vision encoder (the multimodal Mistral3ForConditionalGeneration is a DIFFERENT,
+#   older arch). The checkpoint's vision_encoder/patch_merger/adapter weights
+#   (BF16, already in the quant `ignore` list) are NOT served by this class →
+#   IMAGE INPUT DOES NOT WORK here; text inference only. (Earlier "pixtral
+#   multimodal wrap" note was WRONG for the dedicated v0.5.14 class — removed.)
+#   Confirm at first boot that the unused vision shards are skipped cleanly.
 #
 #   vLLM is a SECOND path (model card's documented engine): the `mistral_format`
 #   key + VLLM_MISTRAL_FORMAT (vllm.yml / vllm_launch.sh) add --config-format
 #   mistral --load-format mistral --tokenizer-mode mistral. Use it as a fallback
 #   or for the :8001 lane; not required for SGLang.
 #
-#   The DOMINANT risk here is therefore MEMORY + first-contact arch validation,
-#   NOT format. ~101 GB/GPU at TP=4 leaves little headroom — see sizing above.
+# Image: default is 0.5.14-sm121 (xomoxcc/dgx-spark-sglang:0.5.14-sm121), which
+#   carries mistral_large_3.py natively. (The 2026-06-20 draft was probed against
+#   the older scitrera:0.5.12 image — now superseded.)
 _model_profile:
   "mistralai/Mistral-Large-3-675B-Instruct-2512-NVFP4":
     knowledge_cutoff: null  # not officially disclosed
@@ -64,39 +94,89 @@ _model_profile:
     # ~403 GB / TP=4 → ~101 GB/GPU. Cluster is fixed at 4 nodes → TP=4 (the only
     # way to shard 403 GB under 128 GB/GPU). No weight headroom for a smaller TP.
     tp_size: 4
-    # >>> MISTRAL-NATIVE FORMAT — see BLOCKER. Drives vLLM's --config-format mistral
-    # / --load-format mistral / --tokenizer-mode mistral trio (vllm_launch.sh).
-    # Inert on the SGLang path (which has no such flags) — SGLang stays blocked.
-    mistral_format: true
-    # START REDUCED, not the 294912 native cap — only ~15-20 GB/GPU free after
-    # weights for KV+activations+vision. Raise after a clean boot if memory allows.
-    context_length: 65536
-    # compressed-tensors NVFP4 — autodetected from the checkpoint metadata. On the
-    # vLLM path leave VLLM_QUANTIZATION empty (autodetect); do NOT force modelopt_fp4.
-    quantization: ""
-    trust_remote_code: true
-    kv_cache_dtype: "fp8_e4m3"
-    # mem_fraction TIGHT — this is the 675B's dominant risk, same story as the
-    # Nemotron-550B-Ultra. Start mid-band and tune; too low → KV pool negative.
-    mem_fraction_static: "0.85"
-    # 128 routed experts. On the vLLM path EP is the boolean --enable-expert-parallel
-    # (VLLM_ENABLE_EP); 128 % 4 == 0 so EP=TP=4 is valid. Seed EP off (TP-sharded
-    # experts) for first contact; flip on after a clean boot if MoE all-reduce
-    # dominates. (SGLang-style moe_runner_backend keys are inert on the vLLM path.)
-    num_experts: 128
     ep_size: 1
-    # REASONING — Large-3 IS a thinking model (tokenizer_config has [THINK] special
-    # tokens). Like Medium-3.5 it's OFF by default and toggled PER REQUEST via
+    num_experts: 128
+    # Mistral-native format (params.json/tekken.json, no config.json). On SGLang
+    # this is NAME-auto-detected (is_mistral_model → adapt_config), so the key is
+    # INERT on the SGLang path. It DOES drive the vLLM fallback's
+    # --config-format/--load-format/--tokenizer-mode mistral trio (vllm_launch.sh).
+    mistral_format: true
+    # trust_remote_code: harmless but likely unnecessary — MistralLarge3ForCausalLM
+    # is a BUILT-IN SGLang class (no custom model .py in the mistral-native repo).
+    trust_remote_code: true
+
+    # --- Context: START REDUCED (fit-driven, NOT the 294912 native cap) ---
+    # ~101 GB/GPU weights leaves only ~15-20 GB/GPU for KV+activations+graphs.
+    # MLA's compressed KV is what makes even this fit. Raise after a clean boot if
+    # memory allows.
+    context_length: 65536
+
+    # --- Quantization: compressed-tensors NVFP4, AUTODETECTED ---
+    # params.json carries quantization_config (nvfp4-pack-quantized), so SGLang
+    # auto-detects compressed-tensors → leave `quantization` empty. Do NOT force
+    # modelopt_fp4 (wrong loader for this checkpoint). On the vLLM path likewise
+    # leave VLLM_QUANTIZATION empty (autodetect).
+    quantization: ""
+
+    # --- KV cache: fp8 is a RUNTIME fit choice, NOT from the checkpoint ---
+    # The checkpoint has kv_cache_scheme: null (no baked KV scales) → this is
+    # SGLang ONLINE fp8 KV quantization, chosen purely to shrink the KV pool given
+    # the ~15-20 GB/GPU headroom. ⚠ VERIFY SGLang MLA + fp8_e4m3 KV works for this
+    # arch at first boot; if it misbehaves, drop this key (KV falls back to BF16 —
+    # costs more memory, so lower context_length to compensate).
+    kv_cache_dtype: "fp8_e4m3"
+
+    # --- Backends: sm121/GB10 — MUST use cutlass, NOT flashinfer_trtllm ---
+    # compressed_tensors_w4a4_nvfp4_moe.py branches: is_flashinfer_trtllm() →
+    # trtllm_fp4_block_scale_moe (SM100-only TVM kernel, CRASHES on sm121, our
+    # known GB10 wall #26324) ELSE → cutlass_moe_fp4. So force cutlass. Linear FP4
+    # GEMM likewise goes through the cutlass path (same family Hy3/DSV4 validated
+    # on sm121). attention=triton is the safe MLA backend on GB10 (as DSV4/Hy3).
+    moe_runner_backend: "flashinfer_cutlass"   # → cutlass_moe_fp4 (avoid trtllm on sm121)
+    fp4_gemm_backend: "flashinfer_cutlass"
+    attention_backend: "triton"
+    # DeepGemm targets FP8 ue8m0; NVFP4 scale_fmt != ue8m0, and DeepGEMM paths
+    # hard-block sm121 for DeepSeek anyway (reference_dsv4_sm121_dsa_kernels) →
+    # disable to avoid a JIT stall / watchdog kill at startup. Safe sm121 default;
+    # UNTESTED for this exact arch.
+    disable_deep_gemm: true
+
+    # --- Memory: TIGHT (the dominant risk, like Nemotron-550B-Ultra) ---
+    # mem_fraction_static on this cluster = fraction of the AFTER-WEIGHTS free
+    # memory given to the KV pool (NOT vLLM's total-fraction; see
+    # reference_sglang_mem_fraction_static). With only ~15-20 GB/GPU free, 0.85 is
+    # a mid-band seed. Too high → OOM at graph capture; too low → KV pool negative.
+    # Tune at first boot alongside context_length.
+    mem_fraction_static: "0.85"
+
+    # --- Reasoning: Large-3 IS a thinking model, OFF by default ---
+    # tokenizer_config has [THINK]/[/THINK] special tokens. Toggled PER REQUEST via
     # reasoning_effort="high" (OpenAI param / chat_template_kwargs), NOT a launch
-    # flag. SGLang's MistralDetector (key "mistral", tokens [THINK]/[/THINK]) splits
-    # the thinking block into reasoning_content when present — harmless when off.
+    # flag. SGLang's MistralDetector (key "mistral") splits the thinking block into
+    # reasoning_content when present — harmless when off.
     reasoning_parser: "mistral"
-    tool_call_parser: "mistral"
+    tool_call_parser: "mistral"    # needed by honcho/hindsight tool-calling paths
     recommended_sampling:
       # Model card: temperature < 0.1 for production (non-thinking). Raise toward
       # ~0.7 when reasoning_effort="high".
       temperature: 0.08
       top_p: 1.0
     sampling_overrides: {}
-    # No usable EAGLE/MTP draft for the 675B published; speculative off.
+
+    # --- Speculative: OFF (no published 675B draft) ---
+    # SGLang v0.5.14 SHIPS the draft class (models/mistral_large_3_eagle.py:
+    # MistralLarge3ForCausalLMEagle with the eagle_linear fusion) — so if Mistral
+    # (or a repackager) ever publishes matching EAGLE draft weights for the 675B,
+    # speculative decode is wireable. None published as of 2026-07-11 → OFF.
     speculative_enabled: false
+
+    # ── FIRST-BOOT CHECKLIST (this profile is UNTESTED) ──────────────────────────
+    #   1. Gated-MoE padding assert: expert_hidden_dim 4096 on the cutlass_moe_fp4
+    #      path (reference_nvfp4_gated_moe_padding). 4096 is well-aligned → likely
+    #      OK, but the single hard-wall candidate on sm121 (trtllm, the only escape,
+    #      is dead here). Watch the boot for "intermediate size required padding".
+    #   2. Memory fit at ~101 GB/GPU + fp8 KV — expect to tune context_length /
+    #      mem_fraction_static. If graph capture OOMs, try disable_cuda_graph:false
+    #      + disable_piecewise_cuda_graph:true (Hy3 pattern) or lower context.
+    #   3. Vision shards skipped cleanly by the text-only class.
+    #   4. MLA + fp8 KV correctness (see kv_cache_dtype note).
