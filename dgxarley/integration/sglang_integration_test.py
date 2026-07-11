@@ -375,8 +375,10 @@ def create_sglang_client(verbose: bool = False, reasoning_effort: str | None = N
     Args:
         verbose: If ``True``, the client will print request payloads and
             reasoning tokens during test runs.
-        reasoning_effort: If set, every request the client sends carries a
-            top-level ``reasoning_effort`` field. Use ``"high"`` to turn ON
+        reasoning_effort: If set, every request the client sends carries this
+            reasoning level (top-level ``reasoning_effort`` field, except
+            ``"no_think"`` which routes via ``chat_template_kwargs`` — see
+            :meth:`LLMClient` for the 422 rationale). Use ``"high"`` to turn ON
             reasoning for Mistral Large-3 / Medium-3.5 in the sequential tests
             (they default to none). ``None`` leaves the model default.
 
@@ -1065,10 +1067,29 @@ async def run_parallel_test(
             payload.setdefault("chat_template_kwargs", {})["enable_thinking"] = False  # type: ignore[index]
             payload["reasoning_effort"] = "none"
         elif reasoning_effort is not None:
-            # Enable/level reasoning via SGLang's native top-level field;
-            # serving_chat maps it into the chat template's reasoning_effort kwarg
-            # (Mistral [THINK] blocks → reasoning_content via reasoning_parser=mistral).
-            payload["reasoning_effort"] = reasoning_effort
+            # Enable/level reasoning. SGLang (verified against v0.5.14 upstream)
+            # forwards the top-level ``reasoning_effort`` field into the chat template
+            # UNIFORMLY on the generic Jinja path that Hy3/Hunyuan uses: serving_chat.py
+            # first pops any ``chat_template_kwargs.reasoning_effort`` and hoists it onto
+            # the top-level field (chat_template_kwargs wins on conflict), then injects
+            # ``request.reasoning_effort`` into the apply_chat_template() kwargs. So for
+            # high/low/medium/max/none the top-level field ALONE reaches the template —
+            # we still MIRROR it into chat_template_kwargs as belt-and-suspenders for
+            # older images (e.g. 0.5.12) that did NOT forward the top-level field.
+            #   (Hy3's GA chat template does NOT silently reset an unrecognized value to
+            #   no_think — it raises a Jinja exception → HTTP 400. Only the older
+            #   Hy3-preview template silently reset. Valid Hy3 values: high/low/no_think.)
+            #
+            # EXCEPTION — 'no_think' (Hy3's thinking-OFF value): it is NOT in SGLang's
+            # request-schema enum (Literal["none","low","medium","high","max"]), so
+            # sending it as the TOP-LEVEL field fails pydantic validation with HTTP 422
+            # BEFORE the template runs. It is valid ONLY as a chat_template_kwarg, so
+            # route it there ONLY — never top-level.
+            if reasoning_effort == "no_think":
+                payload.setdefault("chat_template_kwargs", {})["reasoning_effort"] = reasoning_effort  # type: ignore[index]
+            else:
+                payload["reasoning_effort"] = reasoning_effort
+                payload.setdefault("chat_template_kwargs", {})["reasoning_effort"] = reasoning_effort  # type: ignore[index]
         # thinking_budget: CLI arg overrides profile default
         _profile = _dgx_defaults.get("sglang_model_profiles", {}).get(model_id, {})  # type: ignore[attr-defined]
         _effective_budget = thinking_budget if thinking_budget is not None else _profile.get("thinking_budget")
