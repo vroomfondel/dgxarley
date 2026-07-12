@@ -1,0 +1,45 @@
+Bake `accelerate` into the image as an always-on runtime dependency.
+
+SGLang's ModelOptModelLoader (srt/model_loader/loader.py -> _load_modelopt_base_model)
+imports `accelerate`, and the upstream scitrera/dgx-spark-sglang base image does NOT
+ship it. It is triggered by GLM-5-NVFP4 (modelopt base-model load path) and by EAGLE3 /
+speculative decoding against a modelopt-quantized target (the draft worker loads the
+target's embeddings via _load_modelopt_base_model and ImportErrors without it).
+
+Until now sglang_launch.sh installed it at container start
+(`python3 -c "import accelerate" || pip install accelerate`), costing a pip resolve +
+download on every GLM-5 / speculative boot. Baking it here turns that guard into a fast
+no-op (the launch-script block is kept as belt-and-suspenders for non-baked images).
+
+Mirrors the dockerfile-audio-deps.patch / dockerfile-cutlass-dsl-pin.patch mechanism:
+an `ARG ACCELERATE_DEPS` + gated `uv pip install` RUN in the builder stage (BEFORE the
+dist-packages split, so it is carried into the runtime stage like the kernels/cutlass
+pins). Unlike AUDIO_DEPS the ARG DEFAULTS to "accelerate" so every image gets it even
+if a recipe doesn't set the var; a recipe can set ACCELERATE_DEPS="" to opt out.
+
+Anchors on the `# SM121 ... shared memory fix` comment block, so it MUST be applied
+AFTER dockerfile-cutlass-dsl-pin.patch (which inserts its block just above the same
+anchor). Remove if/when the upstream base image ships accelerate by default.
+
+Apply to: container-build/Dockerfile.sglang-nightly in the local clone of
+scitrera/cuda-containers.
+
+--- a/container-build/Dockerfile.sglang-nightly
++++ b/container-build/Dockerfile.sglang-nightly
+@@ -292,3 +292,16 @@
++# dgxarley: bake `accelerate` into the image. SGLang's ModelOptModelLoader
++# (_load_modelopt_base_model) imports it; the upstream base image omits it, so
++# GLM-5-NVFP4 and EAGLE/speculative-decode against a modelopt-quantized target
++# would ImportError. Gated by ACCELERATE_DEPS (default "accelerate"; set empty in
++# a recipe to opt out). The sglang_launch.sh `import accelerate || pip install`
++# guard becomes a fast no-op once this is baked. See patches/dockerfile-accelerate.patch.
++ARG ACCELERATE_DEPS="accelerate"
++RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
++    if [ -n "$ACCELERATE_DEPS" ]; then \
++        echo "=== Installing accelerate deps: ${ACCELERATE_DEPS} ==="; \
++        uv pip install ${ACCELERATE_DEPS}; \
++    fi
++
+ # SM121 (DGX Spark GB10) shared memory fix for cutlass_moe_fp4.
+ # Patches run_fp4_blockwise_scaled_group_mm_sm120() in the JIT-compiled
+ # nvfp4_blockwise_moe.cuh to use KernelPtrArrayTmaWarpSpecializedCooperative

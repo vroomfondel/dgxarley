@@ -151,6 +151,17 @@ CUTLASS_DSL_VERSION=4.6.0
 # only AUDIO input needs it. Empty/remove to drop the audio stack from the image.
 AUDIO_DEPS="librosa"
 
+# accelerate — baked into the image (was a runtime `pip install` in
+# sglang_launch.sh). SGLang's ModelOptModelLoader (_load_modelopt_base_model)
+# imports it; the upstream base image omits it, so GLM-5-NVFP4 and any
+# EAGLE/speculative-decode target with a modelopt-quantized base ImportError
+# without it. Installed by dockerfile-accelerate.patch (gated ARG, default
+# "accelerate"). The launch-script `import accelerate || pip install` guard
+# stays as belt-and-suspenders for non-baked images and becomes a fast no-op
+# here. Set empty to opt out (unset also defaults to "accelerate" — the ARG
+# default in the Dockerfile patch).
+ACCELERATE_DEPS="accelerate"
+
 SGLANG_VERSION=0.5.14
 SGLANG_REF="v0.5.14"
 
