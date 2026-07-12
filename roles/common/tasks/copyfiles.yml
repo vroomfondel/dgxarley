@@ -37,7 +37,21 @@
     - execrootscripts
     - savetablesandipsets
 
-- name: copy script files
+- name: copy root dotfiles
+  # Config files, not scripts → 0644 (non-executable) and NO iptables-handler notify
+  # (editing .bashrc/.tmux.conf has nothing to do with re-running the root scripts).
+  copy:
+    src: "{{ item }}"
+    dest: "/root/{{ item }}"
+    owner: root
+    group: root
+    mode: '0644'
+  with_items:
+    - .bashrc
+    - .vimrc
+    - .tmux.conf
+
+- name: copy root helper scripts
   copy:
     src: "{{ item }}"
     dest: "/root/{{ item }}"
@@ -45,9 +59,6 @@
     group: root
     mode: '0755'
   with_items:
-    - .bashrc
-    - .vimrc
-    - .tmux.conf
     - blacklist.sh
     - blockbadhosts_ipset.sh
     - savetablesandipsets.sh
