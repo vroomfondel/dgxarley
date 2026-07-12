@@ -133,6 +133,8 @@
       - multitail
       - sysstat
       - htop
+      - btop
+      - nmon
       - bmon
       - rsync
       - python3-certbot-dns-rfc2136
@@ -174,6 +176,19 @@
     - installbasicpackages
 
 
+
+# bottom (btm) is not packaged in Ubuntu apt — install from the GitHub release
+# .deb. Version pinned via bottom_version; arch derived from the host so this
+# works on both k3smaster (amd64) and the arm64 sparks. The apt module compares
+# the .deb version to what's installed, so it's a no-op once up to date.
+- name: install bottom (btm) from GitHub release .deb
+  apt:
+    deb: "https://github.com/ClementTsang/bottom/releases/download/{{ bottom_version }}/bottom-musl_{{ bottom_version }}-1_{{ _bottom_arch }}.deb"
+  vars:
+    _bottom_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_architecture] }}"
+  tags:
+    - installbasicpackages
+    - bottom
 
 - name: Install software-properties-common on Ubuntu
   apt:

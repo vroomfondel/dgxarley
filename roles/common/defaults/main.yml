@@ -7,6 +7,13 @@ postfix_relayhost: "[mail.example.com]"
 # AppArmor removal - set to true for cloud/dns servers
 deinstall_apparmor: false
 
+# bottom (btm) system monitor — NOT in Ubuntu apt, installed from the GitHub
+# release .deb. Pin the version here (tag has no leading "v"). Asset naming is
+# `bottom-musl_<version>-1_<arch>.deb`; arch is derived from ansible_architecture
+# (x86_64→amd64 on k3smaster, aarch64→arm64 on the sparks).
+# curl -s https://api.github.com/repos/ClementTsang/bottom/releases/latest | jq -r '.tag_name'
+bottom_version: "0.14.4"
+
 # smartd monitoring
 smartd_mail_recipients: "root,admin@example.com"
 smartd_devices: []  # Override per host in hosts.yml
