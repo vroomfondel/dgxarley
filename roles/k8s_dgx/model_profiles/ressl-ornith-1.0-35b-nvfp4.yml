@@ -1,0 +1,144 @@
+---
+# Model profile: ressl/Ornith-1.0-35B-NVFP4
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+#
+# Robert Ressl's (rressl) NVIDIA-ModelOpt NVFP4 export of
+# deepreinforce-ai/Ornith-1.0-35B (a Qwen3.5-MoE *code* model, 34.7B params).
+# Same checkpoint FORM as nvidia/Qwen3.6-35B-A3B-NVFP4
+# (Qwen3_5MoeForConditionalGeneration / qwen3_5_moe) — so the closest working
+# analog in-repo is vroomfondel-qwen3.6-35b-a3b-nvfp4-mlp-only-modelopt.yml
+# (same arch, same experts-only recipe). License MIT (base_model MIT).
+#
+# ── ✅ QUANT CONFIRMED from hf_quant_config.json + weight index (2026-07-13) ──
+# modelopt 0.44.0, `NVFP4_EXPERTS_ONLY_CFG`. This is a UNIFORM `quant_algo: NVFP4`
+# checkpoint (NOT MIXED_PRECISION) → plain `modelopt_fp4`, NO modelopt_mixed /
+# _sgl_mixed_nvfp4_* dispatch patch (that is the nvidia MIXED_PRECISION upload's
+# path). Verified at the tensor level from model.safetensors.index.json:
+#   * Only the 256 routed MoE experts are FP4: 30720 `experts.*.weight_scale_2`
+#     tensors = 256 experts × 40 layers × 3 (gate/up/down). group_size 16, W4A4
+#     (config.json input_activations num_bits 4 → activations also FP4).
+#   * exclude_modules (122 entries) keep in BF16: `lm_head`, per-layer
+#     `linear_attn*` (Gated-DeltaNet), `shared_expert*`/`shared_expert_gate`, the
+#     `self_attn*` of every full-attention layer, AND the whole vision tower
+#     (`model.visual*`). Confirmed: 0 `weight_scale` tensors under model.visual →
+#     vision encoder is genuinely BF16.
+#   * `kv_cache_quant_algo: null` → NO baked KV quant (differs from the nvidia /
+#     vroomfondel siblings, which bake FP8 KV). So kv_cache_dtype below is a pure
+#     MEMORY LEVER here, not checkpoint-mandated — revert to "auto" (bf16) if a KV
+#     dtype mismatch is ever suspected.
+# This experts-only shape is exactly the recommended-on-merits recipe for this
+# hybrid arch: quantizing the linear_attn path to 4-bit is the "wrong layer
+# quantized" anti-pattern (vLLM #40252) and the boot wall a uniform-W4A4 export of
+# this base hits (linear_attn.in_proj_qkvz.input_scale not found). Keeping
+# linear_attn/attention/shared-expert high-precision pre-empts it.
+# See [[reference_qwen35moe_linear_attn_nvfp4_unloadable]], [[reference_hybrid_uniform_w4a4_nan]].
+#
+# ── ARCHITECTURE (Qwen3_5MoeForConditionalGeneration, model_type qwen3_5_moe) ──
+#   * MULTIMODAL (text + vision). text: 40 layers, hidden 2048, head_dim 256,
+#     num_attention_heads 16, num_key_value_heads 2, vocab 248320.
+#   * Hybrid: layer_types = 3×linear_attention then 1×full_attention
+#     (full_attention_interval 4) → 10 full-attn layers, 30 Gated-DeltaNet layers.
+#     SGLang routes this through the mamba scheduler path (linear-attn recurrent
+#     state, not KV) — only the 10 full-attn layers populate the KV pool, so KV is
+#     modest even at 262K.
+#   * MoE: 256 experts, 8 routed + 1 shared per token, moe_intermediate_size 512.
+#   * mrope (mrope_interleaved, section [11,11,10]), rope_theta 1e7,
+#     partial_rotary_factor 0.25, max_position_embeddings 262144 (native, no YaRN).
+#   * Vision: qwen3_5_moe_vision ViT (depth 27, hidden 1152, out 2048), BF16.
+#   * ⚠ mtp_num_hidden_layers: 1 is DECLARED in config BUT the quantized checkpoint
+#     ships NO MTP/nextn weights (0 mtp tensors; decoder layers 0–39 only) → NEXTN
+#     speculative decoding is UNAVAILABLE here → speculative_enabled: false (see
+#     below). This is the concrete difference from the 3.6-35B siblings (which have
+#     a working MTP head + validated NEXTN s=2/draft=3).
+#   ~34.7B total / ~3B active; NVFP4 weights ≈ 23 GB → ≈ 6 GB/GPU at TP=4 — ample
+#   KV/state headroom on GB10 128 GB unified.
+#
+# ── ⚠️ VALIDATION STATUS: UNVALIDATED SEED (2026-07-13). ──
+# Config- + weight-index-derived only; NOT booted on this stack. The model card
+# reports vLLM-only validation (`--quantization modelopt --moe-backend marlin
+# --attention-backend flashinfer`) on a single Blackwell GPU. Every backend knob
+# below is inherited from the validated same-arch sibling (nvidia/vroomfondel
+# 3.6-35B-A3B), NOT measured for THIS checkpoint. Boot + first-contact matrix
+# required before trusting throughput; do NOT quote numbers until measured.
+# Top boot risks to watch, in order:
+#   1. VISION-TOWER EXCLUSION name-match: the exclude uses `model.visual*`, but
+#      SGLang can strip the `model.` prefix when resolving is_layer_skipped → the
+#      exclusion may miss → SGLang tries to build the BF16 ViT as quantized →
+#      KeyError on a missing visual weight_scale. Same failure family as
+#      [[reference_vlm_compressed_tensors_ignore_mismatch]] (there fixed for
+#      compressed-tensors via a should_ignore name-remap; modelopt path here is
+#      UNVERIFIED). If it crashes in the vision tower, that patch is the lead.
+#   2. flashinfer_cutlass MoE "intermediate size required padding" assert
+#      (moe_intermediate_size 512) → switch moe_runner_backend to flashinfer_trtllm
+#      ([[reference_nvfp4_gated_moe_padding]]).
+#   3. attention_backend flashinfer is the validated choice for this exact arch
+#      (nvidia 3.6-35B-A3B served on it); triton is the hybrid-GDN fallback if the
+#      full-attn path rejects flashinfer.
+_model_profile:
+  "ressl/Ornith-1.0-35B-NVFP4":
+    knowledge_cutoff: null       # base deepreinforce-ai/Ornith-1.0-35B — not disclosed
+    release_date: null           # base Ornith-1.0-35B date unconfirmed; NVFP4 export by rressl (modelopt 0.44.0)
+    info_url: "https://huggingface.co/ressl/Ornith-1.0-35B-NVFP4"
+    # ALTERNATIVES: BF16 source https://huggingface.co/deepreinforce-ai/Ornith-1.0-35B
+    #
+    # SM121 sgl-kernel build required for NVFP4 on GB10. Pinned to the current
+    # siblings' image so this profile resolves without a -e override.
+    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.15-sm121"
+    # Uniform-NVFP4 unified ModelOpt checkpoint (experts FP4, linear_attn / attn /
+    # shared-expert / vision EXCLUDED) → standard modelopt_fp4 loader. NO
+    # modelopt_mixed / _sgl_mixed_nvfp4_* patch (that is the nvidia MIXED_PRECISION
+    # upload's path).
+    quantization: "modelopt_fp4"
+    trust_remote_code: true
+    # 262K native (mrope, no YaRN). Only the 10 full-attn layers use KV.
+    context_length: 262144
+    # ⚠ NOT baked (kv_cache_quant_algo: null) — pure memory lever here. fp8_e4m3
+    # keeps the 262K KV pool small and matches cluster convention; set "auto" (bf16)
+    # if a KV-dtype mismatch is ever suspected.
+    kv_cache_dtype: "fp8_e4m3"
+    # 0.6 conservative first-contact (matches both 3.6-35B NVFP4 siblings); NVFP4
+    # weights ~6 GB/GPU leave plenty of slack.
+    mem_fraction_static: "0.6"
+    nccl_transport: roce
+    # Backend mirrors the validated same-arch NVFP4 sibling: flashinfer_cutlass MoE
+    # runner + flashinfer attn + flashinfer_cutlass FP4 GEMM. ⚠ if boot asserts on
+    # "intermediate size required padding", switch the MoE runner to
+    # flashinfer_trtllm (see [[reference_nvfp4_gated_moe_padding]]).
+    moe_runner_backend: flashinfer_cutlass
+    attention_backend: flashinfer
+    fp4_gemm_backend: flashinfer_cutlass
+    disable_deep_gemm: true
+    # eager (disable_cuda_graph) is broken on any cutlass_moe_fp4 path (TURBOQUANT.md);
+    # piecewise graphs crash at startup in this kernel family on SM121 → start safe.
+    disable_cuda_graph: false
+    disable_piecewise_cuda_graph: true
+    pp_async_batch_depth: 0
+    cuda_graph_max_bs: 32
+    jit_max_jobs: 4
+    ep_size: 1
+    tp_size: 4
+    num_experts: 256
+    enable_eplb: false
+    enable_expert_distribution_metrics: false
+    # Multimodal (vision) attention backend. Empty → SGLang default. Bisect
+    # (sdpa / fa3 / triton_attn / flashinfer_cudnn) if image requests crash; the
+    # vision path is UNTESTED on this cluster.
+    mm_attention_backend: ""
+    reasoning_parser: "qwen3"
+    # vLLM card recommends --tool-call-parser qwen3_xml; the SGLang equivalent for
+    # the Qwen3.5/3.6 XML tool-call format is qwen3_coder (used by both 3.6-35B
+    # siblings → Honcho/Hermes-OK). Switch if tool parsing misbehaves.
+    tool_call_parser: "qwen3_coder"
+    # generation_config.json ships temperature 1.0 / top_p 0.95 / top_k 20.
+    # thinking (default) + non-thinking via chat_template_kwargs={"enable_thinking":false}.
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95
+      top_k: 20
+    sampling_overrides: {}
+    # ⚠ NO speculative decoding: config declares mtp_num_hidden_layers 1 but this
+    # experts-only export ships ZERO MTP/nextn weights (verified in the weight
+    # index) — enabling NEXTN would crash on missing draft weights. Leave off unless
+    # a future re-export includes the MTP head (then mirror the 3.6-35B siblings:
+    # NEXTN s=2/draft=3 + mamba_scheduler_strategy=extra_buffer + enable_spec_v2).
+    speculative_enabled: false
