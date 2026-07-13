@@ -91,17 +91,23 @@ patch sections re-applied:
 
   [PATCH-1] module docstring (this block)
   [PATCH-2] __init__: new self._* attributes
-  [PATCH-3] new helpers: _open_imap (port-based SSL/STARTTLS), _ensure_folder,
-            _imap_move, _finalize_message, _append_to_sent
+  [PATCH-3] new helpers: module-level _open_imap_conn (port-based SSL/STARTTLS)
+            + _imap_append_to_sent (shared Sent APPEND); EmailAdapter._open_imap
+            and _append_to_sent are thin instance wrappers over them. Plus
+            _ensure_folder, _imap_move, _finalize_message
   [PATCH-4] connect(): conditional pre-fill + folder ensure + route through
             _open_imap so 143/STARTTLS endpoints work
   [PATCH-5] _fetch_new_messages(): route through _open_imap + INBOX→Working
             MOVE per UID
   [PATCH-6] _dispatch_message(): finalize MOVE after handle_message returns
   [PATCH-7] _send_email{,_with_attachment,_with_attachments}(): APPEND to Sent
+  [PATCH-8] _standalone_send() (plugin glue): APPEND to Sent via the shared
+            helper, so the out-of-process cron / `hermes send` path archives
+            too (parity with EmailAdapter; imap_tls preserved via _open_imap_conn)
 
 Upstreaming note: all of these behaviours are being upstreamed —
-  - Sent-folder APPEND ([PATCH-3] _append_to_sent + [PATCH-7] call sites) in
+  - Sent-folder APPEND ([PATCH-3] shared _imap_append_to_sent helper +
+    [PATCH-7] adapter call sites + [PATCH-8] standalone path) in
     PR NousResearch/hermes-agent#28697.
   - process-existing ([PATCH-4] conditional connect()-time pre-fill) in
     PR NousResearch/hermes-agent#28699.
@@ -110,7 +116,13 @@ Upstreaming note: all of these behaviours are being upstreamed —
 All three PRs' review-driven changes are adopted here so the patch matches what
 we submitted:
   - APPEND status-tuple check (warn on NO/BAD instead of assuming success):
-    backported into _append_to_sent below.
+    backported into _imap_append_to_sent below.
+  - Shared-helper refactor + standalone-path parity (#28697 review): the Sent
+    APPEND is factored into the module-level _imap_append_to_sent, called from
+    both EmailAdapter._append_to_sent AND _standalone_send (cron / `hermes
+    send`), so the "every SMTP send archives" guarantee holds off the live
+    adapter too. Unlike upstream's helper (unconditional IMAP4_SSL) ours routes
+    through _open_imap_conn, preserving the 143/STARTTLS imap_tls path.
   - Lifecycle bug-fixes (#28702 review): the Working MOVE in _fetch_new_messages
     is gated on done_folder AND working_folder AND a Message-ID being present
     (no Done → no moves; no Message-ID → cannot relocate after MOVE), and
@@ -269,6 +281,96 @@ def _send_imap_id(imap: "imaplib.IMAP4") -> None:
         )
     except Exception as e:  # noqa: BLE001 — best-effort, never fatal
         logger.debug("[Email] IMAP ID command not accepted: %s", e)
+
+
+def _open_imap_conn(
+    imap_host: str,
+    imap_port: int,
+    address: str,
+    password: str,
+) -> imaplib.IMAP4:
+    """Open an authenticated IMAP connection (caller logout()s).
+
+    Port-based auto-detect: 993 → implicit SSL (``IMAP4_SSL``); any other port
+    → plain ``IMAP4`` + ``STARTTLS`` upgrade — required for Dovecot/Postfix
+    setups that only expose 143. Module-level twin of
+    :meth:`EmailAdapter._open_imap` so the out-of-process ``_standalone_send``
+    opens IMAP over the SAME TLS logic.
+
+    dgxarley divergence from upstream PR #28697: the upstream shared APPEND
+    helper hard-codes ``IMAP4_SSL`` unconditionally, which fails on our
+    143/STARTTLS endpoints with ``[SSL: RECORD_LAYER_FAILURE]`` (the server
+    greets in plaintext before any handshake). Routing every APPEND through
+    here keeps ``imap_tls`` working.
+    """
+    if imap_port == 993:
+        imap: imaplib.IMAP4 = imaplib.IMAP4_SSL(imap_host, imap_port, timeout=30)
+    else:
+        imap = imaplib.IMAP4(imap_host, imap_port, timeout=30)
+        imap.starttls(ssl_context=ssl.create_default_context())
+    imap.login(address, password)
+    _send_imap_id(imap)
+    return imap
+
+
+def _imap_append_to_sent(
+    *,
+    imap_host: str,
+    imap_port: int,
+    address: str,
+    password: str,
+    sent_folder: str,
+    raw_bytes: bytes,
+) -> None:
+    """IMAP-APPEND a freshly-sent outbound mail to ``sent_folder``.
+
+    No-op when the folder is unset (empty string) or no IMAP host is
+    configured. Best-effort: failures are logged as warnings and never
+    re-raised — losing the Sent-folder copy must NOT roll back an SMTP send
+    that already succeeded.
+
+    Shared by the live :meth:`EmailAdapter._append_to_sent` and the
+    out-of-process ``_standalone_send`` so both SMTP paths archive identically
+    (parity with upstream PR #28697's review-driven refactor). Uses the
+    port-based :func:`_open_imap_conn` (NOT upstream's unconditional
+    ``IMAP4_SSL``) so ``imap_tls`` on 143/STARTTLS keeps working.
+    """
+    if not sent_folder or not imap_host:
+        return
+    try:
+        imap = _open_imap_conn(imap_host, imap_port, address, password)
+        try:
+            # CREATE is idempotent; most servers return NO on "already exists".
+            try:
+                imap.create(sent_folder)
+            except Exception:  # noqa: BLE001 — ignore "already exists" and similar
+                pass
+            # imaplib returns ("NO"/"BAD", ...) on a rejected APPEND WITHOUT
+            # raising — inspect the status tuple explicitly so a silent failure
+            # isn't logged as success.
+            typ, data = imap.append(
+                sent_folder,
+                "(\\Seen)",
+                imaplib.Time2Internaldate(time.time()),
+                raw_bytes,
+            )
+            if typ != "OK":
+                detail = b" ".join(p for p in data if isinstance(p, bytes)).decode("utf-8", "replace")
+                logger.warning(
+                    "[Email] APPEND to %r returned %s: %s",
+                    sent_folder,
+                    typ,
+                    detail,
+                )
+            else:
+                logger.debug("[Email] APPEND to %r ok", sent_folder)
+        finally:
+            try:
+                imap.logout()
+            except Exception:
+                pass
+    except Exception as e:  # noqa: BLE001 — Sent-folder mirror is best-effort
+        logger.warning("[Email] APPEND to %r failed: %s", sent_folder, e)
 
 
 def _is_automated_sender(address: str, headers: dict) -> bool:
@@ -712,22 +814,14 @@ class EmailAdapter(BasePlatformAdapter):
     def _open_imap(self) -> imaplib.IMAP4:
         """Open an authenticated IMAP connection (caller logout()s).
 
-        Port-based auto-detect: 993 → implicit SSL (``IMAP4_SSL``); any other
-        port → plain ``IMAP4`` + ``STARTTLS`` upgrade. The STARTTLS branch is
-        required for Dovecot/Postfix-style setups that only expose 143
-        (Submission with mandatory TLS upgrade) — upstream uses ``IMAP4_SSL``
-        unconditionally, which fails on those servers with
-        ``[SSL: RECORD_LAYER_FAILURE]`` because the server greets in plaintext
-        before any TLS handshake.
+        Thin instance wrapper over the module-level :func:`_open_imap_conn`
+        (port-based SSL/STARTTLS auto-detect) so the live adapter and the
+        out-of-process ``_standalone_send`` open IMAP over identical TLS logic.
+        The STARTTLS branch is required for Dovecot/Postfix-style setups that
+        only expose 143 — upstream uses ``IMAP4_SSL`` unconditionally, which
+        fails there with ``[SSL: RECORD_LAYER_FAILURE]``.
         """
-        if self._imap_port == 993:
-            imap: imaplib.IMAP4 = imaplib.IMAP4_SSL(self._imap_host, self._imap_port, timeout=30)
-        else:
-            imap = imaplib.IMAP4(self._imap_host, self._imap_port, timeout=30)
-            imap.starttls(ssl_context=ssl.create_default_context())
-        imap.login(self._address, self._password)
-        _send_imap_id(imap)
-        return imap
+        return _open_imap_conn(self._imap_host, self._imap_port, self._address, self._password)
 
     @staticmethod
     def _ensure_folder(imap: imaplib.IMAP4, name: str) -> None:
@@ -860,45 +954,19 @@ class EmailAdapter(BasePlatformAdapter):
     def _append_to_sent(self, raw_bytes: bytes) -> None:
         """IMAP-APPEND a freshly-sent outbound mail to ``self._sent_folder``.
 
-        No-op when the folder is unset. Best-effort: logged on failure but
-        never re-raised, because losing the Sent-folder copy must NOT roll
-        back the SMTP send that already happened.
+        Thin wrapper over the shared :func:`_imap_append_to_sent` helper so the
+        live adapter and the out-of-process ``_standalone_send`` archive
+        identically. Best-effort — see the helper for failure semantics
+        (no-op on empty folder; status-tuple checked; never re-raised).
         """
-        if not self._sent_folder:
-            return
-        try:
-            imap = self._open_imap()
-            try:
-                # Ensure the folder exists; many providers ship a Sent folder
-                # but bespoke setups (e.g. Dovecot without Sieve) may not.
-                self._ensure_folder(imap, self._sent_folder)
-                # imaplib returns ("NO"/"BAD", ...) on a rejected APPEND WITHOUT
-                # raising — inspect the status tuple explicitly so a silent
-                # failure isn't logged as success. (Backported from upstream PR
-                # NousResearch/hermes-agent#28697 review.)
-                typ, data = imap.append(
-                    self._sent_folder,
-                    "(\\Seen)",
-                    imaplib.Time2Internaldate(time.time()),
-                    raw_bytes,
-                )
-                if typ != "OK":
-                    detail = b" ".join(p for p in data if isinstance(p, bytes)).decode("utf-8", "replace")
-                    logger.warning(
-                        "[Email] APPEND to %r returned %s: %s",
-                        self._sent_folder,
-                        typ,
-                        detail,
-                    )
-                else:
-                    logger.debug("[Email] APPEND to %r ok", self._sent_folder)
-            finally:
-                try:
-                    imap.logout()
-                except Exception:
-                    pass
-        except Exception as e:  # noqa: BLE001 — Sent-folder is best-effort
-            logger.warning("[Email] APPEND to %r failed: %s", self._sent_folder, e)
+        _imap_append_to_sent(
+            imap_host=self._imap_host,
+            imap_port=self._imap_port,
+            address=self._address,
+            password=self._password,
+            sent_folder=self._sent_folder,
+            raw_bytes=raw_bytes,
+        )
 
     # ------------------------------------------------------------------
     # End of [PATCH-3] block.
@@ -1612,6 +1680,19 @@ async def _standalone_send(
     except (ValueError, TypeError):
         smtp_port = 587
 
+    # [PATCH-8] IMAP Sent-folder archival config (parity with EmailAdapter and
+    # upstream PR #28697's standalone-path review fix). The standalone path only
+    # requires SMTP, so IMAP may be unconfigured — the shared helper no-ops on a
+    # missing host or an empty folder. Port-based SSL/STARTTLS is handled inside
+    # the helper via _open_imap_conn, so imap_tls on 143 keeps working here too.
+    imap_host = extra.get("imap_host") or os.getenv("EMAIL_IMAP_HOST", "")
+    try:
+        imap_port = int(os.getenv("EMAIL_IMAP_PORT", "993"))
+    except (ValueError, TypeError):
+        imap_port = 993
+    # Empty string is a deliberate opt-out — do NOT collapse with `or`.
+    sent_folder = extra.get("sent_folder", "Sent")
+
     if not all([address, password, smtp_host]):
         return {"error": "Email not configured (EMAIL_ADDRESS, EMAIL_PASSWORD, EMAIL_SMTP_HOST required)"}
 
@@ -1627,6 +1708,17 @@ async def _standalone_send(
         server.login(address, password)
         server.send_message(msg)
         server.quit()
+        # [PATCH-8] Best-effort Sent-folder mirror — never fails the
+        # (already-completed) SMTP send. Shares the archival helper (and thus
+        # the port-based SSL/STARTTLS logic) with EmailAdapter.
+        _imap_append_to_sent(
+            imap_host=imap_host,
+            imap_port=imap_port,
+            address=address,
+            password=password,
+            sent_folder=sent_folder,
+            raw_bytes=msg.as_bytes(),
+        )
         return {"success": True, "platform": "email", "chat_id": chat_id}
     except Exception as e:
         try:
