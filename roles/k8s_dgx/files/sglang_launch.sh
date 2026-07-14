@@ -474,7 +474,8 @@ patch("/usr/local/lib/python3.12/dist-packages/sglang/srt/models/mllama4.py", [
                 return True
             if remapped_name != name:
                 self._handle_default_weight(remapped_name, loaded_weight, params_dict)
-            return True
+                return True
+            return False
         return False'''),
  ("B-call",
 '''            if self._handle_scale_remapping(name, params_dict):''',
