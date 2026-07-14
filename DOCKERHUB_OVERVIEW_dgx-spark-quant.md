@@ -25,11 +25,13 @@ Base = the **full `dgx-spark-sglang:<tag>` serving image, on purpose** — so
 quantize *and* smoke-serve share ONE image on the same Spark. The serving base
 already ships `nvidia-modelopt 0.45.0`, `torch 2.12.0/cu132`, `transformers 5.12.1`,
 `datasets 5.0.0`, `huggingface-hub 1.23.0` (+ the `hf` CLI), `ninja`, `typer`. This
-layer therefore adds **only the two genuinely-missing leaves** the quant scripts
+layer therefore adds **only the three genuinely-missing leaves** the quant scripts
 need:
 
 - **`accelerate`** — `device_map` weight placement / CPU offload for PTQ
 - **`hf_transfer`** — fast model download (`HF_XET_HIGH_PERFORMANCE=1` is set)
+- **`py-spy`** — self-contained Rust sampling profiler (no python deps) for
+  tracing a running quantize / smoke-serve process
 
 Everything else is reused as-is. To keep the add safe, the serving stack is first
 frozen with `pip freeze --all` as a **constraints file**, so the install can only
