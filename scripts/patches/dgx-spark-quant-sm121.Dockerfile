@@ -55,11 +55,19 @@ RUN python3 -m pip freeze --all > /tmp/serving-constraints.txt \
 # accelerate has no fsspec/datasets dep, so it resolves cleanly against the freeze.
 # py-spy is a self-contained Rust binary (no python deps) for sampling-profiler
 # tracing of a running serving process, so it also resolves cleanly.
+# flash-linear-attention (top-level module `fla`) is added for the NON-SGLANG
+# encoding/quant work done directly in this image: SGLang bundles its OWN copy under
+# sglang.srt.layers.attention.fla, which a plain `import fla` outside the serving
+# path CANNOT reach — so any encoding script that uses fla here needs the real PyPI
+# package. It is pure Python + Triton (no CUDA compile); under the freeze constraint
+# it can only ADD leaves (einops, ...), never MOVE torch/triton/transformers/
+# sgl-kernel. If a future base makes it ResolutionImpossible against the freeze,
+# install it separately with `--no-deps` and add its pure-python leaves explicitly.
 # NOTE (fallback): should a future base bump make even this conflict, rebase FROM
 # xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132 (no sglang stack to constrain) and
 # run smoke serving from the serving image instead.
 RUN python3 -m pip install --no-cache-dir -c /tmp/serving-constraints.txt \
-      accelerate hf_transfer py-spy
+      accelerate hf_transfer py-spy flash-linear-attention
 
 # --- 3. assert the base modelopt is new enough for the (later) mixed-precision recipe
 # path (>=0.45 = the release NVIDIA built Qwen3.5-397B-NVFP4-V2 with; first with the
@@ -74,7 +82,7 @@ RUN python3 -m pip uninstall -y deepspeed 2>/dev/null || true
 # NOTE: single-line `python3 -c` on purpose -- the imagebuilder on the arm64 build
 # host (podman 4.9.3) does NOT support `RUN <<'HEREDOC'` and parses its body lines as
 # Dockerfile instructions. Keep any in-Dockerfile python as one-liners.
-RUN python3 -c "import torch, transformers, datasets, accelerate, modelopt; import modelopt.torch.quantization; print('>>> OK: torch', torch.__version__, '(cuda', torch.version.cuda, ') transformers', transformers.__version__, 'datasets', datasets.__version__, 'accelerate', accelerate.__version__, 'modelopt', modelopt.__version__)"
+RUN python3 -c "import torch, transformers, datasets, accelerate, modelopt, fla; import modelopt.torch.quantization; print('>>> OK: torch', torch.__version__, '(cuda', torch.version.cuda, ') transformers', transformers.__version__, 'datasets', datasets.__version__, 'accelerate', accelerate.__version__, 'modelopt', modelopt.__version__, 'fla', getattr(fla, '__version__', '?'))"
 
 # The scripts expect HF_XET_HIGH_PERFORMANCE for fast downloads; harmless if unused.
 ENV HF_XET_HIGH_PERFORMANCE=1
