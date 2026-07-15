@@ -937,7 +937,19 @@ else:
                     ".v_proj.v_scale", ".attn.v_scale"
                 )
                 if _rm in params_dict:
-                    name = _rm
+                    # Load the scale DIRECTLY here and skip the rest of the loop. Just
+                    # renaming (name = _rm) is not enough: the non-stacked else-branch
+                    # below does not copy a remapped k/v_scale into its param, so the
+                    # value stayed at the 1.0 fallback. Mirror the copy the Llama-4 KV
+                    # patch B does explicitly.
+                    _p = params_dict[_rm]
+                    _wl = getattr(_p, "weight_loader", None)
+                    if _wl is not None:
+                        _wl(_p, loaded_weight)
+                    else:
+                        _p.data.copy_(loaded_weight.to(_p.dtype))
+                    loaded_params.add(_rm)
+                    continue
 """),
     ]
     for tag, marker, old, new in edits:
