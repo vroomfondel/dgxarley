@@ -6,7 +6,10 @@ levers to reach a fully accelerated decode path. Companion to `TURBOQUANT.md`.
 
 Status: root cause VERIFIED from the live head log of `0xSero/glm-5.2-reap-504B-v2`
 (TP=4, modelopt_fp4/NVFP4, image `xomoxcc/dgx-spark-sglang:0.5.15-sm121`), 2026-07-15.
-The fixes below are candidate approaches, NOT yet A/B-validated on this cluster.
+Approaches A-F further below are the ORIGINAL 2026-07-15 hypotheses and are now SUPERSEDED
+by the GPU-pod-verified conclusions in the UPDATE 2026-07-16 section directly below (in short:
+the sparse indexer cannot run on SM121 via any hardware kernel; the torch fallback in
+`dsalogitrework.md` is the one viable path). Read the UPDATE first.
 
 ## UPDATE 2026-07-16 (GPU-debug-pod verified) - the sparse path is a HARD SM121 block
 
@@ -34,13 +37,39 @@ A GPU-debug-pod test on GB10 (device capability (12,1)) settled the two candidat
   working config until the gap closes. The MTP weight patch + mem config ARE validated and
   ready. See memory reference_glm52_dsa_indexer_deepgemm_sm121.
 
-- **Revised forward path** (supersedes approach A/trtllm_mla guess below): the real lever is
-  the DeepGEMM paged-MQA-logits SM121 gap. Most promising local attempt = relax the
-  `is_sm100_supported()` gate on `cutedsl` to admit SM121 and test whether
-  `CuteDSLPagedMQALogitsRunner` runs (it uses the cutlass.cute already sm_121a-patched in the
-  image for FP4 GEMM). Else port a torch paged-MQA-logits fallback into `dsa_indexer.py`, or
-  wait for DeepGEMM SM121. Current prod state: stay on `"flashinfer"` (dense, known-working,
-  slow), MTP off.
+- **cutedsl: ALSO a HARD NO-GO (verified 2026-07-16, GPU pod).** Relaxing the
+  `is_sm100_supported()` gate lets `resolve("cutedsl")` through, but the kernel then fails at
+  `cute.compile()`: `_setup_mma` emits a `tcgen05.MmaF8F6F4Op`, a Tensor-Memory MMA that only
+  exists on datacenter Blackwell (sm_100/sm_103), NOT consumer Blackwell (sm_120/sm_121=GB10).
+  That is an ISA boundary, not a software gate - no flag brings back a missing instruction
+  (`expects arch sm_100a/103a..., got sm_121a`). Independently, the schedule metadata
+  (`get_paged_mqa_logits_metadata`) is DeepGEMM at TWO call sites regardless of the logits
+  backend (also eager in `dsa_backend.py::init_forward_metadata`), so it would crash anyway.
+
+- **DeepGEMM upstream: closed short-term.** PR #318 (Apr 2026) added SM12x kernels for exactly
+  `paged_mqa_logits` and was explicitly REJECTED by the maintainer (no hardware to test/maintain);
+  issue #372 (Jul 2026) is a second, independent SM12x block (`transform_sf_into_required_layout`,
+  NVFP4 expert scales). No image-bump / version-pin path via DeepGEMM.
+
+- **Warp-level cute-MMA: what our working kernels already run on, but NOT a quick DSA path**
+  (verified 2026-07-16, GPU pod). Our FP4 GEMM for GlmMoeDsa dispatches to
+  `flashinfer .../dense_blockscaled_gemm_sm120_b12x.py` (`@supported_compute_capability([120,121])`,
+  uses `MmaMXF4NVF4Op` - the SAME warp-level family as the `MmaF16BF16Op` the cutedsl error
+  suggests, not tcgen05). `MmaF16BF16Op` compiles + runs + passes a numeric check on GB10. BUT
+  reimplementing the DSA paged-MQA-logits on it is from-scratch kernel authoring: the build has
+  NO FP8 warp-MMA (`MmaMXF8Op` absent -> needs an fp8->bf16 dequant), and there is no
+  paged-attention / top-k template on warp-MMA in the image. Keep it as a LATER perf option,
+  after correctness via torch.
+
+- **The one viable path = torch fallback.** SGLang already merged a CUDA-graph-safe torch
+  paged-MQA-logits fallback for DeepSeek-V4 (`dsv4/indexer.py::fp8_paged_mqa_logits_torch_sm120`,
+  PR #24692, in v0.5.13 -> present in our v0.5.15 image) with a matching signature + KV layout;
+  it just is not wired into the generic `dsa/dsa_indexer.py` path GlmMoeDsa uses. The torch path
+  discards the DeepGEMM schedule metadata (`_ = deep_gemm_metadata`), so both metadata call sites
+  can simply be skipped. Port plan: `dsalogitrework.md`. Current prod state: stay on `"flashinfer"`
+  (dense MLA, known-working/slow), MTP off, until the torch port lands + is GSM8K-validated against
+  the dense baseline (a community torch fallback silently returned NaN/zeros on SM120 -> numeric
+  verification is mandatory, not optional).
 
 ## Symptom (measured)
 

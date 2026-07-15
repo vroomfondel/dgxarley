@@ -736,6 +736,467 @@ else:
 PATCH_DSNEXTN_MIXED_MTP_EOF
 fi
 
+# ── DSA paged-MQA-logits TORCH FALLBACK (GB10/SM121: DeepGEMM + CuteDSL both hard NO-GO) ──
+# GlmMoeDsa / DeepSeek-V3.2-family DSA models score paged KV via a paged-MQA-logits kernel
+# (sglang/srt/layers/attention/dsa/dsa_indexer.py::_get_topk_paged) before top-k selection.
+# On GB10/SM121, BOTH hardware kernel routes are dead ends, not just unconfigured:
+#   - DeepGEMM (the default): deep_gemm.get_paged_mqa_logits_metadata() throws a compiled
+#     C++ "Unsupported architecture" assert on SM121. Upstream declined SM120/SM121 support
+#     (DeepGEMM PR #318, maintainer cited lack of hardware/capacity) -- not a local gate.
+#   - cutedsl: gated behind is_sm100_supported()==False on GB10, and even bypassing that
+#     gate, the kernel's _setup_mma uses tcgen05.MmaF8F6F4Op, a datacenter-Blackwell-only
+#     (SM100/SM103) tensor-core instruction that does not exist on consumer Blackwell
+#     (SM121) -- a real ISA boundary, verified 2026-07-16 in a GPU debug pod.
+# This crashes the TARGET model's every decode step under attention_backend="dsa" (not just
+# the MTP/NEXTN draft, whose is_nextn indexer always computes topk_indices and needs this
+# kernel too). Full investigation + design: DSA_speedup.md, dsalogitrework.md (repo root).
+#
+# Fix: port SGLang's own dsv4-side answer to this exact problem --
+# fp8_paged_mqa_logits_torch_sm120 (dsv4/indexer.py, upstream PR #24692, merged 2026-06-01,
+# in this image since v0.5.13) -- into the generic dsa/dsa_indexer.py path GlmMoeDsa uses,
+# which has no equivalent. The torch path discards the DeepGEMM schedule metadata
+# (`_ = deep_gemm_metadata`), so all 3 eager DeepGEMM-metadata call sites (2 in
+# dsa_backend.py::init_forward_metadata + the shared _refresh_paged_mqa_schedule_metadata
+# cuda-graph-replay helper, which alone covers 2 more replay call sites) can simply be
+# skipped, not just the logits kernel itself -- verified live (numeric unit tests: dominant-
+# KV-slot test matches a hand-derived reference exactly, masking correct, no NaN/all-zero/
+# constant-across-seeds -- the failure signature a community SM120 fallback fork silently
+# hit). New backend value "torch", OPT-IN ONLY via --dsa-paged-mqa-logits-backend torch (NOT
+# selected by "auto", so archs where DeepGEMM/CuteDSL already work are unaffected).
+#
+# PHASE 1 ONLY (dsalogitrework.md Section 3): plain decode, next_n==1 -- unblocks ordinary
+# target-model decode AND each individual MTP/NEXTN draft step (the draft decodes one token
+# at a time). Phase 2 (target-verify / next_n>=2 multi-token batches) is NOT implemented;
+# the dispatch raises NotImplementedError there rather than silently mis-routing.
+#
+# 5 files patched/written, unconditionally (no model-name gate): paged_mqa_logits_backend.py
+# and server_args.py only add an opt-in enum value / CLI choice (zero behavior change unless
+# explicitly selected); dsa_backend.py / dsa_indexer.py / the new torch_paged_mqa_logits.py
+# are DSA-specific source files exercised only by actual DSA models (mirrors the mllama4.py
+# precedent above: the files are inert for every other model by construction).
+
+python3 - <<'PATCH_DSA_TORCH_ENUM_EOF'
+import pathlib
+
+# --- File 1: paged_mqa_logits_backend.py ---
+f1 = pathlib.Path("/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/attention/dsa/paged_mqa_logits_backend.py")
+src1 = f1.read_text()
+marker1 = "# [patch] _sgl_dsa_torch_fallback_enum_"
+old1 = '''class DSAPagedMQALogitsBackend(Enum):
+    DEEPGEMM = "deepgemm"
+    CUTEDSL = "cutedsl"
+    AITER = "aiter"
+
+    def is_deepgemm(self) -> bool:
+        return self == DSAPagedMQALogitsBackend.DEEPGEMM
+
+    def is_cutedsl(self) -> bool:
+        return self == DSAPagedMQALogitsBackend.CUTEDSL
+
+    def is_aiter(self) -> bool:
+        return self == DSAPagedMQALogitsBackend.AITER'''
+new1 = f'''{marker1}
+class DSAPagedMQALogitsBackend(Enum):
+    DEEPGEMM = "deepgemm"
+    CUTEDSL = "cutedsl"
+    AITER = "aiter"
+    TORCH = "torch"  # pure-torch fallback for archs DeepGEMM/CuteDSL don't cover (e.g. SM121/GB10)
+
+    def is_deepgemm(self) -> bool:
+        return self == DSAPagedMQALogitsBackend.DEEPGEMM
+
+    def is_cutedsl(self) -> bool:
+        return self == DSAPagedMQALogitsBackend.CUTEDSL
+
+    def is_aiter(self) -> bool:
+        return self == DSAPagedMQALogitsBackend.AITER
+
+    def is_torch(self) -> bool:
+        return self == DSAPagedMQALogitsBackend.TORCH'''
+old1b = '''        if value == "auto" or value == "deepgemm":
+            return DSAPagedMQALogitsBackend.DEEPGEMM
+        if value == "aiter":
+            raise ValueError("dsa_paged_mqa_logits_backend='aiter' requires ROCm.")
+        if value == "cutedsl":
+            if not is_sm100_supported():
+                raise ValueError(
+                    "dsa_paged_mqa_logits_backend='cutedsl' requires SM100 (Blackwell)."
+                )
+            return DSAPagedMQALogitsBackend.CUTEDSL
+        raise ValueError(f"Unknown dsa_paged_mqa_logits_backend: {value!r}")'''
+new1b = '''        if value == "auto" or value == "deepgemm":
+            return DSAPagedMQALogitsBackend.DEEPGEMM
+        if value == "aiter":
+            raise ValueError("dsa_paged_mqa_logits_backend='aiter' requires ROCm.")
+        if value == "cutedsl":
+            if not is_sm100_supported():
+                raise ValueError(
+                    "dsa_paged_mqa_logits_backend='cutedsl' requires SM100 (Blackwell)."
+                )
+            return DSAPagedMQALogitsBackend.CUTEDSL
+        if value == "torch":
+            # No arch gate: that is the whole point of this backend. NOT selected by
+            # "auto" (opt-in only) to avoid silently regressing perf on archs where
+            # DeepGEMM/CuteDSL already work (see dsalogitrework.md Section 4.1).
+            return DSAPagedMQALogitsBackend.TORCH
+        raise ValueError(f"Unknown dsa_paged_mqa_logits_backend: {value!r}")'''
+
+if marker1 in src1:
+    print("paged_mqa_logits_backend.py: torch fallback enum already patched, skipping")
+elif old1 not in src1:
+    print("ANCHOR-DRIFT: paged_mqa_logits_backend.py: DSAPagedMQALogitsBackend enum anchor missing (SGLang version drift; re-check anchor)")
+elif old1b not in src1:
+    print("ANCHOR-DRIFT: paged_mqa_logits_backend.py: resolve() anchor missing (SGLang version drift; re-check anchor)")
+else:
+    src1 = src1.replace(old1, new1, 1)
+    src1 = src1.replace(old1b, new1b, 1)
+    f1.write_text(src1)
+    print("Patched paged_mqa_logits_backend.py: added TORCH backend + resolve('torch')")
+PATCH_DSA_TORCH_ENUM_EOF
+
+python3 - <<'PATCH_DSA_TORCH_SERVERARGS_EOF'
+import pathlib
+
+f2 = pathlib.Path("/usr/local/lib/python3.12/dist-packages/sglang/srt/server_args.py")
+src2 = f2.read_text()
+marker2 = "# [patch] _sgl_dsa_torch_fallback_choice_"
+old2a = 'DSA_PAGED_MQA_LOGITS_BACKEND_CHOICES = ["auto", "deepgemm", "cutedsl", "aiter"]'
+new2a = (marker2 + '\n'
+          'DSA_PAGED_MQA_LOGITS_BACKEND_CHOICES = ["auto", "deepgemm", "cutedsl", "aiter", "torch"]')
+old2b = '''            help="DSA indexer paged MQA logits kernel backend. Options: 'auto' (default; DeepGEMM on CUDA, aiter on ROCm), 'deepgemm', 'cutedsl' (CuTe DSL kernel, SM 100 (Blackwell) only; wins at low batch size and long context), 'aiter' (ROCm only).",'''
+new2b = '''            help="DSA indexer paged MQA logits kernel backend. Options: 'auto' (default; DeepGEMM on CUDA, aiter on ROCm), 'deepgemm', 'cutedsl' (CuTe DSL kernel, SM 100 (Blackwell) only; wins at low batch size and long context), 'aiter' (ROCm only), 'torch' (pure-torch fallback, any CUDA arch, e.g. SM120/SM121 where neither DeepGEMM nor CuteDSL run; slower, opt-in only).",'''
+
+if marker2 in src2:
+    print("server_args.py: dsa torch-backend choice already patched, skipping")
+elif old2a not in src2:
+    print("ANCHOR-DRIFT: server_args.py: DSA_PAGED_MQA_LOGITS_BACKEND_CHOICES anchor missing (SGLang version drift; re-check anchor)")
+elif old2b not in src2:
+    print("ANCHOR-DRIFT: server_args.py: dsa_paged_mqa_logits_backend help-string anchor missing (SGLang version drift; re-check anchor)")
+else:
+    src2 = src2.replace(old2a, new2a, 1)
+    src2 = src2.replace(old2b, new2b, 1)
+    f2.write_text(src2)
+    print("Patched server_args.py: added 'torch' to DSA_PAGED_MQA_LOGITS_BACKEND_CHOICES")
+PATCH_DSA_TORCH_SERVERARGS_EOF
+
+python3 - <<'PATCH_DSA_TORCH_NEWFILE_EOF'
+import pathlib
+f3 = pathlib.Path("/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/attention/dsa/torch_paged_mqa_logits.py")
+marker3 = "fp8_paged_mqa_logits_torch_dsa"
+new3 = '# SPDX-License-Identifier: Apache-2.0\n"""\nDSA paged-MQA-logits pure-torch fallback (Phase 1: plain decode, next_n == 1).\n\nPorted from sglang.srt.layers.attention.dsv4.indexer.fp8_paged_mqa_logits_torch_sm120\n(upstream SGLang PR #24692, merged 2026-06-01, first shipped v0.5.13) for the generic\nDSA indexer path (sglang.srt.layers.attention.dsa.dsa_indexer, used by GlmMoeDsa /\nDeepSeek-V3.2-family models), which has no equivalent fallback upstream. Copied rather\nthan imported cross-module: dsv4 and dsa are independent code paths in SGLang, and a\nshared import would create an unwanted coupling.\n\nWhy this exists: on GB10/SM121 (consumer Blackwell), deep_gemm.get_paged_mqa_logits_metadata\n/ fp8_paged_mqa_logits throw a compiled C++ "Unsupported architecture" assert (DeepGEMM\nupstream declined SM120/SM121 support, PR #318), and the CuteDSL alternative fails on a\nreal ISA boundary (tcgen05 MMA is datacenter-Blackwell-only, SM100/SM103). See\nDSA_speedup.md and dsalogitrework.md (repo root) for the full investigation.\n\nPhase 1 scope: plain decode only (next_n == 1), matching the call shape of\nsglang.jit_kernel.dsa.paged_mqa_logits.deepgemm_paged_mqa_logits_split. Phase 2\n(target-verify / next_n >= 2) is NOT implemented here; see dsalogitrework.md Section 3.\n\nCORRECTNESS WARNING (dsalogitrework.md Section 5): a community fork (kt-sglang) shipped\na similar-looking torch fallback for SM120 that ran without error but returned WRONG\nresults (all-zero/NaN logits). "Runs without crashing" is not sufficient verification of\nthis function — see the numeric checks required in dsalogitrework.md Section 5 before\ntrusting output from this path in production.\n"""\n\nfrom __future__ import annotations\n\nfrom typing import Any\n\nimport torch\nimport torch.nn.functional as F\n\nfrom sglang.srt.layers.quantization.fp8_kernel import is_fp8_fnuz\n\nFP8_DTYPE = torch.float8_e4m3fnuz if is_fp8_fnuz() else torch.float8_e4m3fn\n\n\ndef fp8_paged_mqa_logits_torch_dsa(\n    q_fp8: torch.Tensor,\n    kvcache_fp8: torch.Tensor,\n    weight: torch.Tensor,\n    seq_lens: torch.Tensor,\n    page_table: torch.Tensor,\n    deep_gemm_metadata: Any,\n    max_seq_len: int,\n    clean_logits: bool = True,\n) -> torch.Tensor:\n    """CUDA-graph-compatible FP8 paged MQA logits, pure torch (no DeepGEMM/CuteDSL).\n\n    Verbatim port of dsv4.indexer.fp8_paged_mqa_logits_torch_sm120 (vectorized,\n    no `.item()` / no data-dependent control flow -> CUDA-graph-capture-safe).\n    `deep_gemm_metadata` is accepted for call-site signature compatibility but\n    unused: this path does no SM-tiled scheduling (unlike DeepGEMM\'s kernel), so\n    it has no notion of a schedule to consume. Callers may pass None.\n    """\n    _ = deep_gemm_metadata\n    batch_size, _, num_heads, head_dim = q_fp8.shape\n    block_size = kvcache_fp8.shape[1]\n    device = q_fp8.device\n\n    assert head_dim == 128, "Vectorized torch impl hardcodes DSA indexer head_dim=128"\n    assert (\n        block_size == 64\n    ), "Vectorized torch impl hardcodes block_size=64 cache layout"\n    assert q_fp8.shape == (batch_size, 1, num_heads, head_dim)\n    assert kvcache_fp8.shape[1:] == (block_size, 1, head_dim + 4)\n    assert weight.shape == (batch_size, num_heads)\n    if seq_lens.dim() > 1:\n        seq_lens = seq_lens.squeeze(-1)\n    assert seq_lens.shape == (batch_size,)\n    assert page_table.shape[0] == batch_size\n    assert clean_logits == False\n\n    max_pages = (max_seq_len + block_size - 1) // block_size\n    max_padded_seq = max_pages * block_size\n\n    kvcache_flat = kvcache_fp8.view(-1, block_size * (head_dim + 4))\n    SCALE_OFFSET = block_size * head_dim\n\n    page_ids = page_table[:, :max_pages]\n    kvcache_gathered = kvcache_flat[page_ids]\n\n    kv_value_raw = kvcache_gathered[..., :SCALE_OFFSET]\n    kv_scale_raw = kvcache_gathered[..., SCALE_OFFSET:]\n\n    kv_value = kv_value_raw.contiguous().view(dtype=FP8_DTYPE).to(torch.float32)\n    kv_value = kv_value.view(batch_size, max_padded_seq, head_dim)\n\n    kv_scale = kv_scale_raw.contiguous().view(dtype=torch.float32)\n    kv_scale = kv_scale.view(batch_size, max_padded_seq)\n\n    q = q_fp8[:, 0].to(torch.float32)\n\n    score = torch.bmm(kv_value, q.transpose(1, 2))\n\n    score = F.relu(score)\n    score = score * weight.unsqueeze(1)\n    score = score.sum(dim=2)\n\n    score = score * kv_scale\n\n    out_width = min(max_padded_seq, max_seq_len)\n    logits = score.new_full((batch_size, max_seq_len), float("-inf"))\n    logits[:, :out_width] = score[:, :out_width]\n\n    positions = torch.arange(max_seq_len, device=device)\n    invalid_mask = positions.unsqueeze(0) >= seq_lens.unsqueeze(1)\n    logits.masked_fill_(invalid_mask, float("-inf"))\n\n    return logits\n'
+
+if f3.exists() and marker3 in f3.read_text():
+    print("dsa/torch_paged_mqa_logits.py: already written, skipping")
+else:
+    f3.write_text(new3)
+    print("Wrote sglang/srt/layers/attention/dsa/torch_paged_mqa_logits.py: fp8_paged_mqa_logits_torch_dsa (phase 1)")
+PATCH_DSA_TORCH_NEWFILE_EOF
+
+python3 - <<'PATCH_DSA_TORCH_BACKEND_EOF'
+import pathlib
+
+f4 = pathlib.Path("/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/attention/dsa_backend.py")
+src4 = f4.read_text()
+marker4 = "# [patch] _sgl_dsa_torch_fallback_backend_"
+
+# --- 4a: import DSAPagedMQALogitsBackend ---
+old4a = '''from sglang.srt.layers.attention.dsa.dsa_indexer import BaseIndexerMetadata
+from sglang.srt.layers.attention.dsa.dsa_topk_backend import (
+    DSATopKBackend,
+    TopkTransformMethod,
+)'''
+new4a = f'''{marker4}
+from sglang.srt.layers.attention.dsa.dsa_indexer import BaseIndexerMetadata
+from sglang.srt.layers.attention.dsa.dsa_topk_backend import (
+    DSATopKBackend,
+    TopkTransformMethod,
+)
+from sglang.srt.layers.attention.dsa.paged_mqa_logits_backend import (
+    DSAPagedMQALogitsBackend,
+)'''
+
+# --- 4b: resolve self.paged_mqa_logits_backend in __init__ ---
+old4b = '''        self.dsa_topk_backend: DSATopKBackend = DSATopKBackend(
+            model_runner.server_args.dsa_topk_backend
+        )'''
+new4b = '''        self.dsa_topk_backend: DSATopKBackend = DSATopKBackend(
+            model_runner.server_args.dsa_topk_backend
+        )
+        # Independent resolve mirroring dsa_indexer.py's Indexer.__init__ (both must agree
+        # on the backend so the eager metadata precompute here and the indexer's dispatch
+        # don't disagree about whether DeepGEMM is being used).
+        self.paged_mqa_logits_backend = DSAPagedMQALogitsBackend.resolve(
+            model_runner.server_args.dsa_paged_mqa_logits_backend
+        )'''
+
+# --- 4c: gate init_forward_metadata call site A (~953-991, forward_batch.* variant) ---
+old4c = '''        paged_mqa_schedule_metadata = None
+        paged_mqa_ctx_lens_2d = None
+        if is_cuda() and (
+            forward_batch.forward_mode.is_decode_or_idle()
+            or forward_batch.forward_mode.is_target_verify()
+            or forward_batch.forward_mode.is_draft_extend_v2()
+        ):
+            paged_mqa_ctx_lens_2d = self._build_paged_mqa_schedule_2d_ctx_lens(
+                forward_batch.forward_mode,
+                cache_seqlens_int32,
+                seqlens_expanded,
+                forward_batch.batch_size,
+            )
+            # NOTE: block_kv arg must be 64 here — DG computes SPLIT_KV =
+            # block_kv * 4 and both DG's and the indexer's compute kernels
+            # require SPLIT_KV = 256; this is independent of the cache page size.
+            paged_mqa_schedule_metadata = deep_gemm.get_paged_mqa_logits_metadata(
+                paged_mqa_ctx_lens_2d, 64, deep_gemm.get_num_sms()
+            )'''
+new4c = '''        paged_mqa_schedule_metadata = None
+        paged_mqa_ctx_lens_2d = None
+        if is_cuda() and (
+            forward_batch.forward_mode.is_decode_or_idle()
+            or forward_batch.forward_mode.is_target_verify()
+            or forward_batch.forward_mode.is_draft_extend_v2()
+        ):
+            paged_mqa_ctx_lens_2d = self._build_paged_mqa_schedule_2d_ctx_lens(
+                forward_batch.forward_mode,
+                cache_seqlens_int32,
+                seqlens_expanded,
+                forward_batch.batch_size,
+            )
+            # ctx_lens_2d is still needed unconditionally (consumed downstream as
+            # seqlens_32_2d regardless of logits backend); only the DeepGEMM schedule
+            # metadata call is skipped for the torch backend, which discards it anyway
+            # (dsalogitrework.md Section 2: `_ = deep_gemm_metadata` in the torch fn).
+            if not self.paged_mqa_logits_backend.is_torch():
+                # NOTE: block_kv arg must be 64 here — DG computes SPLIT_KV =
+                # block_kv * 4 and both DG's and the indexer's compute kernels
+                # require SPLIT_KV = 256; this is independent of the cache page size.
+                paged_mqa_schedule_metadata = deep_gemm.get_paged_mqa_logits_metadata(
+                    paged_mqa_ctx_lens_2d, 64, deep_gemm.get_num_sms()
+                )'''
+
+# --- 4d: gate init_forward_metadata call site B (~1297-1320, forward_mode.* variant) ---
+old4d = '''        paged_mqa_schedule_metadata = None
+        paged_mqa_ctx_lens_2d = None
+        if is_cuda() and (
+            forward_mode.is_decode_or_idle()
+            or forward_mode.is_target_verify()
+            or forward_mode.is_draft_extend_v2()
+        ):
+            paged_mqa_ctx_lens_2d = self._build_paged_mqa_schedule_2d_ctx_lens(
+                forward_mode, cache_seqlens_int32, seqlens_expanded, bs
+            )
+            paged_mqa_schedule_metadata = deep_gemm.get_paged_mqa_logits_metadata(
+                paged_mqa_ctx_lens_2d, 64, deep_gemm.get_num_sms()
+            )'''
+new4d = '''        paged_mqa_schedule_metadata = None
+        paged_mqa_ctx_lens_2d = None
+        if is_cuda() and (
+            forward_mode.is_decode_or_idle()
+            or forward_mode.is_target_verify()
+            or forward_mode.is_draft_extend_v2()
+        ):
+            paged_mqa_ctx_lens_2d = self._build_paged_mqa_schedule_2d_ctx_lens(
+                forward_mode, cache_seqlens_int32, seqlens_expanded, bs
+            )
+            if not self.paged_mqa_logits_backend.is_torch():
+                paged_mqa_schedule_metadata = deep_gemm.get_paged_mqa_logits_metadata(
+                    paged_mqa_ctx_lens_2d, 64, deep_gemm.get_num_sms()
+                )'''
+
+# --- 4e: gate the shared graph-replay refresh helper (covers both replay call sites) ---
+old4e = '''    def _refresh_paged_mqa_schedule_metadata(
+        self,
+        metadata: DSAMetadata,
+        seqlens_32_2d: torch.Tensor,
+    ) -> None:
+        new_schedule = deep_gemm.get_paged_mqa_logits_metadata(
+            seqlens_32_2d, 64, deep_gemm.get_num_sms()
+        )
+        if metadata.paged_mqa_schedule_metadata is None:
+            object.__setattr__(metadata, "paged_mqa_schedule_metadata", new_schedule)
+        else:
+            metadata.paged_mqa_schedule_metadata.copy_(new_schedule)'''
+new4e = '''    def _refresh_paged_mqa_schedule_metadata(
+        self,
+        metadata: DSAMetadata,
+        seqlens_32_2d: torch.Tensor,
+    ) -> None:
+        # Torch backend: schedule metadata is unused (discarded by the torch fn) and
+        # was never allocated (init_forward_metadata skips it too) -> nothing to refresh.
+        # This single helper covers BOTH cuda-graph-replay refresh call sites, so gating
+        # it here is sufficient without touching each call site separately.
+        if self.paged_mqa_logits_backend.is_torch():
+            return
+        new_schedule = deep_gemm.get_paged_mqa_logits_metadata(
+            seqlens_32_2d, 64, deep_gemm.get_num_sms()
+        )
+        if metadata.paged_mqa_schedule_metadata is None:
+            object.__setattr__(metadata, "paged_mqa_schedule_metadata", new_schedule)
+        else:
+            metadata.paged_mqa_schedule_metadata.copy_(new_schedule)'''
+
+edits = [("4a-import", old4a, new4a), ("4b-init", old4b, new4b), ("4c-site-A", old4c, new4c),
+         ("4d-site-B", old4d, new4d), ("4e-refresh-helper", old4e, new4e)]
+
+if marker4 in src4:
+    print("dsa_backend.py: torch fallback wiring already patched, skipping")
+else:
+    missing = [tag for tag, old, new in edits if old not in src4]
+    if missing:
+        for tag in missing:
+            print(f"ANCHOR-DRIFT: dsa_backend.py: torch fallback wiring anchor '{tag}' missing (SGLang version drift; re-check anchor)")
+    else:
+        for tag, old, new in edits:
+            src4 = src4.replace(old, new, 1)
+        f4.write_text(src4)
+        print("Patched dsa_backend.py: torch backend resolve + gated 2 init_forward_metadata sites + graph-replay refresh helper")
+PATCH_DSA_TORCH_BACKEND_EOF
+
+python3 - <<'PATCH_DSA_TORCH_INDEXER_EOF'
+import pathlib
+
+f5 = pathlib.Path("/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/attention/dsa/dsa_indexer.py")
+src5 = f5.read_text()
+marker5 = "# [patch] _sgl_dsa_torch_fallback_dispatch_"
+
+# --- 5a: import the new function ---
+old5a = '''from sglang.srt.layers.attention.dsa.paged_mqa_logits_backend import (
+    DSAPagedMQALogitsBackend,
+)'''
+new5a = f'''{marker5}
+from sglang.srt.layers.attention.dsa.paged_mqa_logits_backend import (
+    DSAPagedMQALogitsBackend,
+)
+from sglang.srt.layers.attention.dsa.torch_paged_mqa_logits import (
+    fp8_paged_mqa_logits_torch_dsa,
+)'''
+
+# --- 5b: use_dg_native must exclude torch backend (else next_n>=2 target-verify with
+#     TORCH selected would still route to DeepGEMM's native path and crash on SM121). ---
+old5b = '''        use_dg_native = (
+            not use_cute_dsl
+            and _is_cuda
+            and forward_batch.forward_mode.is_target_verify()
+            and next_n >= 2
+            and ctx_2d is not None
+            and ctx_2d.shape == (B, next_n)
+        )'''
+new5b = '''        use_dg_native = (
+            not use_cute_dsl
+            and not self.paged_mqa_logits_backend.is_torch()
+            and _is_cuda
+            and forward_batch.forward_mode.is_target_verify()
+            and next_n >= 2
+            and ctx_2d is not None
+            and ctx_2d.shape == (B, next_n)
+        )'''
+
+# --- 5c: skip the DeepGEMM metadata fallback call when torch backend (metadata unused) ---
+old5c = '''        if _is_cuda:
+            if schedule_metadata is None:
+                schedule_metadata = deep_gemm.get_paged_mqa_logits_metadata(
+                    seqlens_32_2d, blocksize, self.sm_count
+                )'''
+new5c = '''        if _is_cuda and not self.paged_mqa_logits_backend.is_torch():
+            if schedule_metadata is None:
+                schedule_metadata = deep_gemm.get_paged_mqa_logits_metadata(
+                    seqlens_32_2d, blocksize, self.sm_count
+                )'''
+
+# --- 5d: new dispatch branch, inserted before the final `else` (deepgemm_paged_mqa_logits_split) ---
+old5d = '''        elif use_dg_native:
+            logits = deepgemm_paged_mqa_logits_native(
+                deep_gemm.fp8_paged_mqa_logits,
+                q_fp8,
+                kv_cache_fp8,
+                weights,
+                seqlens_32_2d,
+                block_tables,
+                schedule_metadata,
+                max_seq_len,
+                q_offset=q_offset,
+                B=B,
+                next_n=next_n,
+            )
+        else:
+            logits = deepgemm_paged_mqa_logits_split(
+                deep_gemm.fp8_paged_mqa_logits,
+                q_fp8,
+                kv_cache_fp8,
+                weights,
+                seqlens_32_2d,
+                block_tables,
+                schedule_metadata,
+                max_seq_len,
+                q_offset=q_offset,
+            )'''
+new5d = '''        elif use_dg_native:
+            logits = deepgemm_paged_mqa_logits_native(
+                deep_gemm.fp8_paged_mqa_logits,
+                q_fp8,
+                kv_cache_fp8,
+                weights,
+                seqlens_32_2d,
+                block_tables,
+                schedule_metadata,
+                max_seq_len,
+                q_offset=q_offset,
+                B=B,
+                next_n=next_n,
+            )
+        elif self.paged_mqa_logits_backend.is_torch():
+            # Phase 1 (dsalogitrework.md): plain decode only (next_n==1), the shape
+            # deepgemm_paged_mqa_logits_split below handles. next_n>=2 is the
+            # target-verify multi-token batch (Phase 2, not implemented) -- raise
+            # clearly instead of silently mis-routing into a wrong-shape call.
+            if next_n >= 2:
+                raise NotImplementedError(
+                    "dsa_paged_mqa_logits_backend='torch' (phase 1) only supports "
+                    "plain single-token decode (next_n==1); target-verify/multi-token "
+                    "batches (next_n>=2) are not yet implemented. See dsalogitrework.md "
+                    "Section 3 (Phase 2)."
+                )
+            logits = fp8_paged_mqa_logits_torch_dsa(
+                q_fp8.unsqueeze(1)[:q_offset],
+                kv_cache_fp8,
+                weights[:q_offset],
+                seqlens_32_2d,
+                block_tables,
+                None,  # schedule_metadata unused by the torch path
+                max_seq_len,
+                clean_logits=False,
+            )
+        else:
+            logits = deepgemm_paged_mqa_logits_split(
+                deep_gemm.fp8_paged_mqa_logits,
+                q_fp8,
+                kv_cache_fp8,
+                weights,
+                seqlens_32_2d,
+                block_tables,
+                schedule_metadata,
+                max_seq_len,
+                q_offset=q_offset,
+            )'''
+
+edits = [("5a-import", old5a, new5a), ("5b-use-dg-native", old5b, new5b),
+         ("5c-fallback-metadata", old5c, new5c), ("5d-dispatch-branch", old5d, new5d)]
+
+if marker5 in src5:
+    print("dsa_indexer.py: torch fallback dispatch already patched, skipping")
+else:
+    missing = [tag for tag, old, new in edits if old not in src5]
+    if missing:
+        for tag in missing:
+            print(f"ANCHOR-DRIFT: dsa_indexer.py: torch fallback dispatch anchor '{tag}' missing (SGLang version drift; re-check anchor)")
+    else:
+        for tag, old, new in edits:
+            src5 = src5.replace(old, new, 1)
+        f5.write_text(src5)
+        print("Patched dsa_indexer.py: added torch-backend dispatch branch (phase 1, next_n==1) + gated DeepGEMM fallback + excluded dg_native")
+PATCH_DSA_TORCH_INDEXER_EOF
+
+
 # Patch SGLang get_config() to convert dict sub_configs after loading (transformers 5.5.0 bug).
 # Transformers 5.x auto-generates __init__ for PretrainedConfig subclasses with sub_configs,
 # bypassing dict→config conversion. from_pretrained() also bypasses __post_init__.
