@@ -33,6 +33,13 @@ Structural changes to container-build/Dockerfile.sglang-nightly:
    invalidates the final layers, not the expensive sgl-kernel wheel
    build.
 
+6. Add runtime debug/init tooling to the RUNTIME stage apt list (the
+   one that lands in the final serving image, NOT the builder stage):
+   tini, iproute2, iputils-ping, net-tools, ethtool. These give the
+   served SGLang pods an init binary plus in-pod network diagnostics
+   (ip/ping/ifconfig/ethtool) — useful for QSFP/RoCE/VF debugging. curl
+   is already present in the runtime list, so it is not re-added.
+
 Idempotency: Every patch application is preceded by a dry-run so
 upstream drift fails immediately with a clear diagnostic instead of
 producing a half-patched image. Post-apply `grep -q '<marker>'` calls
@@ -178,3 +185,14 @@ carries this patch; see scripts/build_sm121_image.sh.
  # Break up dist-packages into smaller layers to avoid hitting Docker layer size limits
  COPY stages/directory_split2.sh /opt/directory_split2.sh
  RUN chmod +x /opt/directory_split2.sh && \
+@@ -219,6 +219,11 @@ RUN apt update && \
+     libibverbs-dev \
+     rdma-core \
+     libxcb1 \
++    tini \
++    iproute2 \
++    iputils-ping \
++    net-tools \
++    ethtool \
+     && rm -rf /var/lib/apt/lists/* && \
+     pip install uv && (pip uninstall -y flash-attn || true)
