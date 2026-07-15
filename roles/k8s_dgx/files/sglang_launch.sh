@@ -1,33 +1,49 @@
 #!/bin/bash
 set -e
 
-# Runtime deps (tini/ping/ip/ethtool/net-tools — NOT baked into the sglang image,
-# verified 2026-07-15) must be apt-installed at boot. Canonical's ports.ubuntu.com
-# is US-hosted behind a ~40-60% packet-loss Zayo transit path from this site
-# (measured: 60% ICMP loss from the workstation, path exits via Zayo → Boston/US;
-# 1.1.1.1 is 0% loss), so a single apt attempt fails ~80% of the time and, under
-# `set -e`, crashloops head+workers with exit 100. Three mitigations:
-#   1. Force IPv4 (cluster is IPv4-only; belt to the CoreDNS no-AAAA change).
-#   2. Repoint apt at the well-peered German FAU Erlangen ports mirror
-#      (ftp.fau.de/ubuntu-ports — 0% loss, ~29ms, full noble suites verified).
-#   3. Retry the whole update+install in a bounded loop as a final safety net.
-# The block is non-fatal on total failure (a later ping-dependent step would then
-# surface a clearer error). See remote-control 2026-07-15.
-echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
-sed -i 's|ports.ubuntu.com/ubuntu-ports|ftp.fau.de/ubuntu-ports|g' \
-  /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list 2>/dev/null || true
+# Runtime deps (tini/ping/ip/ethtool/net-tools/curl — used for ARP priming + the
+# QSFP peer-wait) are NOT in the stock upstream sglang image and get apt-installed
+# at boot. Our custom sm121 image bakes them in, so skip the whole apt bootstrap
+# when either signal says the deps are already there:
+#   1. DGXARLEY_RUNTIME_LIBS_BAKED=1 — explicit marker set in our image Dockerfile.
+#   2. Every needed binary is already on PATH (works even without the marker).
+# This keeps the stock image working (installs below) while our image starts
+# instantly and never touches the mirror.
+_skip_apt=true
+if [ "${DGXARLEY_RUNTIME_LIBS_BAKED:-0}" = "1" ]; then
+  echo "[launch] DGXARLEY_RUNTIME_LIBS_BAKED=1 — runtime deps baked into image, skipping apt bootstrap"
+else
+  for _b in tini ip ping ethtool netstat curl; do
+    if ! command -v "$_b" >/dev/null 2>&1; then _skip_apt=false; break; fi
+  done
+  [ "$_skip_apt" = true ] && echo "[launch] runtime deps already on PATH — skipping apt bootstrap"
+fi
 
-apt_ok=false
-for i in $(seq 1 15); do
-  apt-get update -qq 2>/dev/null || true
-  if apt-get install -y -qq tini iproute2 iputils-ping net-tools curl ethtool >/dev/null 2>&1; then
-    apt_ok=true
-    break
-  fi
-  echo "[launch] apt install attempt ${i}/15 failed (lossy mirror), retrying in 5s..."
-  sleep 5
-done
-[ "$apt_ok" = true ] || echo "[launch] WARNING: apt install failed after 15 attempts; continuing (ping-dependent steps may fail)"
+# apt bootstrap for the stock image only. Canonical's ports.ubuntu.com is US-hosted
+# behind a ~40-60% packet-loss Zayo transit path from this site (measured 2026-07-15:
+# 60% ICMP loss from the workstation, path exits via Zayo → Boston/US; 1.1.1.1 is 0%
+# loss), so a single apt attempt fails ~80% of the time and, under `set -e`,
+# crashloops the pod with exit 100. Three mitigations: (1) force IPv4 (cluster is
+# IPv4-only; belt to the CoreDNS no-AAAA change); (2) repoint apt at the well-peered
+# German FAU Erlangen ports mirror (0% loss, ~29ms, full noble suites verified);
+# (3) retry update+install in a bounded loop. Non-fatal on total failure.
+if [ "$_skip_apt" != true ]; then
+  echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/99force-ipv4
+  sed -i 's|ports.ubuntu.com/ubuntu-ports|ftp.fau.de/ubuntu-ports|g' \
+    /etc/apt/sources.list /etc/apt/sources.list.d/*.sources /etc/apt/sources.list.d/*.list 2>/dev/null || true
+
+  apt_ok=false
+  for i in $(seq 1 15); do
+    apt-get update -qq 2>/dev/null || true
+    if apt-get install -y -qq tini iproute2 iputils-ping net-tools curl ethtool >/dev/null 2>&1; then
+      apt_ok=true
+      break
+    fi
+    echo "[launch] apt install attempt ${i}/15 failed (lossy mirror), retrying in 5s..."
+    sleep 5
+  done
+  [ "$apt_ok" = true ] || echo "[launch] WARNING: apt install failed after 15 attempts; continuing (ping-dependent steps may fail)"
+fi
 
 # accelerate: required by SGLang's ModelOptModelLoader
 # (srt/model_loader/loader.py → _load_modelopt_base_model). Triggered by:
@@ -55,38 +71,70 @@ if [[ "$SGLANG_MODEL" == *"GLM-5"* ]]; then
   # triggers a CUDA context init during import that breaks torch.cuda.mem_get_info()
   # on GB10 (cudaErrorMemoryAllocation). nvidia-smi also can't report memory on GB10.
   # Fix: fall back to /proc/meminfo (GB10 unified memory = system RAM).
+  #
+  # RE-ANCHORED 2026-07-16: upstream refactored the old inline "torch.cuda.mem_get_info()
+  # failed -> raise RuntimeError" branch of get_nvgpu_memory_capacity() into a standalone
+  # helper function ALSO named _cuda_mem_fallback() (name collision with our marker, not
+  # our patch — it's upstream's own tier-1 nvidia-smi->mem_get_info() fallback, called from
+  # 3 sites). Our tier-2 (mem_get_info() ALSO fails -> /proc/meminfo) now anchors inside
+  # that function's except block. NOTE: in practice this tier is not exercised on this
+  # cluster (mem_get_info() succeeds — see live logs: "Falling back to
+  # torch.cuda.mem_get_info(). Reported total GPU memory per device (MiB): [124546]"), but
+  # kept as defense-in-depth for the driver-stack edge case the comment above describes.
+  # Also fixed here: the old anchor had no dedicated "already applied" marker in the
+  # outer bash gate (it grepped the function NAME, which now collides with upstream's own
+  # function) — re-running against an already-patched file would silently re-match part of
+  # its own injected code and could double-patch on every pod restart. Now gated on the
+  # marker string itself.
   COMMON_PY="/usr/local/lib/python3.12/dist-packages/sglang/srt/utils/common.py"
-  if grep -q '_cuda_mem_fallback' "$COMMON_PY" 2>/dev/null; then
+  if [ ! -f "$COMMON_PY" ]; then
+    echo "ANCHOR-DRIFT: common.py: _sgl_cuda_mem_fallback_proc_meminfo_ target file missing (SGLang restructured/renamed?)"
+  elif grep -q '_sgl_cuda_mem_fallback_proc_meminfo_' "$COMMON_PY" 2>/dev/null; then
+    echo "common.py: _cuda_mem_fallback proc-meminfo tier already patched, skipping"
+  elif grep -q 'def _cuda_mem_fallback' "$COMMON_PY" 2>/dev/null; then
     python3 << 'PATCH_MEM_FALLBACK_EOF'
 f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/utils/common.py"
 with open(f) as fh:
     code = fh.read()
-old = '    raise RuntimeError(\n        f"Failed to get GPU memory capacity from nvidia-smi. "'
-if old in code:
-    new = '''    # GB10 unified memory: read total from /proc/meminfo
-    import logging as _logging
-    try:
-        with open("/proc/meminfo") as _mf:
-            for _line in _mf:
-                if _line.startswith("MemTotal:"):
-                    _mem_mib = int(_line.split()[1]) // 1024  # kB → MiB
-                    break
-        _logging.getLogger(__name__).warning(
-            f"nvidia-smi and torch.cuda.mem_get_info() both failed. "
-            f"Falling back to /proc/meminfo MemTotal: {_mem_mib} MiB."
-        )
-        return _mem_mib
-    except Exception as _e:
-        _logging.getLogger(__name__).warning(f"/proc/meminfo fallback also failed: {_e}")
-    raise RuntimeError(
-        f"Failed to get GPU memory capacity from nvidia-smi. "'''
+marker = "# [patch] _sgl_cuda_mem_fallback_proc_meminfo_"
+old = '''    except (RuntimeError, ValueError, OSError) as e:
+        raise RuntimeError(
+            f"{reason} torch.cuda.mem_get_info() fallback also failed: {e}"
+        ) from e'''
+new = '''    except (RuntimeError, ValueError, OSError) as e:
+        ''' + marker + ''' -- GB10 unified memory: try /proc/meminfo as a last resort
+        # before giving up (rare case: transformers/huggingface_hub break
+        # torch.cuda.mem_get_info() during import, cudaErrorMemoryAllocation).
+        try:
+            with open("/proc/meminfo") as _mf:
+                _mem_mib = None
+                for _line in _mf:
+                    if _line.startswith("MemTotal:"):
+                        _mem_mib = int(_line.split()[1]) // 1024  # kB -> MiB
+                        break
+            if _mem_mib is not None:
+                logger.warning(
+                    f"{reason} torch.cuda.mem_get_info() fallback also failed: {e}. "
+                    f"Falling back to /proc/meminfo MemTotal: {_mem_mib} MiB."
+                )
+                return _mem_mib
+        except OSError:
+            pass
+        raise RuntimeError(
+            f"{reason} torch.cuda.mem_get_info() fallback also failed: {e}"
+        ) from e'''
+if marker in code:
+    print("common.py: _cuda_mem_fallback proc-meminfo tier already patched, skipping")
+elif old not in code:
+    print("ANCHOR-DRIFT: common.py: _sgl_cuda_mem_fallback_proc_meminfo_ (SGLang version drift; re-check anchor)")
+else:
     code = code.replace(old, new, 1)
     with open(f, 'w') as fh:
         fh.write(code)
-    print("Patched _cuda_mem_fallback: /proc/meminfo fallback for unified memory (GB10)")
-else:
-    print("_cuda_mem_fallback: patch target not found, skipping")
+    print("Patched common.py: _cuda_mem_fallback proc-meminfo tier added")
 PATCH_MEM_FALLBACK_EOF
+  else
+    echo "ANCHOR-DRIFT: common.py: _cuda_mem_fallback function not found (SGLang version drift; re-check anchor)"
   fi
 else
   echo "SKIPPING GLM-5 specific patches..."
@@ -277,7 +325,7 @@ def resolve_hunyuan_tokens(tokenizer=None):
         )'''
     missing = [n for n, s in (("anchor", anchor), ("__init__", old_init), ("structure_info", old_si)) if s not in code]
     if missing:
-        print("hunyuan_detector.py: patch anchors NOT found:", missing, "- skipping (code changed?)")
+        print("ANCHOR-DRIFT: hunyuan_detector.py: resolve_hunyuan_tokens backport, missing:", missing, "(SGLang version drift; re-check anchor)")
     else:
         code = code.replace(anchor, anchor + helper, 1)
         code = code.replace(old_init, new_init, 1)
@@ -289,13 +337,23 @@ PATCH_HUNYUAN_TOOL_EOF
 
   # --- 2) parser/reasoning_parser.py: HunyuanDetector reasoning think/tool
   #        tokens resolved via the same backported helper. ---
+  #
+  # RE-CHECKED 2026-07-16: PR #29920 has LANDED upstream on this image — HunyuanDetector
+  # now natively does `t = resolve_hunyuan_tokens(tokenizer)` and builds think_open/
+  # think_close/tool_start_token from it (verified in the live source), i.e. exactly what
+  # this sub-patch injects. The old "already applied" check only recognized OUR OWN
+  # local-alias import (`resolve_hunyuan_tokens as _resolve_hunyuan_tokens`, hence the
+  # leading-underscore substring match) and did not recognize upstream's unaliased native
+  # call, so it fell through to the (now-stale) `old` anchor and reported a false
+  # ANCHOR-DRIFT even though there is nothing left to patch. Fixed to match on the bare
+  # function name, same idiom sub-patch (1) above already uses successfully.
   python3 << 'PATCH_HUNYUAN_REASON_EOF'
 f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/parser/reasoning_parser.py"
 with open(f) as fh:
     code = fh.read()
 
-if "_resolve_hunyuan_tokens" in code:
-    print("reasoning_parser.py: hunyuan suffix backport already present, skipping")
+if "resolve_hunyuan_tokens" in code:
+    print("reasoning_parser.py: hunyuan suffix backport already present (native or patched), skipping")
 else:
     old = r'''        super().__init__(
             "<think>",
@@ -326,7 +384,7 @@ else:
             previous_content=previous_content,
         )'''
     if old not in code:
-        print("reasoning_parser.py: HunyuanDetector super().__init__ anchor not found, skipping")
+        print("ANCHOR-DRIFT: reasoning_parser.py: HunyuanDetector suffix backport (SGLang version drift; re-check anchor)")
     else:
         code = code.replace(old, new, 1)
         with open(f, "w") as fh:
@@ -366,7 +424,7 @@ else:
             fh.write(code)
         print("Patched hunyuan_v3.py: remap .shared_experts. -> .shared_mlp. in load_weights")
     else:
-        print("hunyuan_v3.py: load_weights loop anchor not found, skipping")
+        print("ANCHOR-DRIFT: hunyuan_v3.py: shared_experts remap (SGLang version drift; re-check anchor)")
 PATCH_HUNYUAN_SHARED_EOF
 fi
 
@@ -429,7 +487,7 @@ for tag, old, new in edits:
     elif new.strip() in s:
         print(f">>> mllama4 patch {tag}: already applied")
     else:
-        print(f">>> mllama4 patch {tag}: ANCHOR NOT FOUND (SGLang version drift?)")
+        print(f"ANCHOR-DRIFT: mllama4.py: {tag} (SGLang version drift; re-check anchor)")
 open(f, "w").write(s)
 PATCH_MLLAMA4_LOADER_EOF
 
@@ -456,7 +514,7 @@ def patch(f, edits):
         elif new.strip() in s:
             print(f">>> kv patch {tag}: already applied")
         else:
-            print(f">>> kv patch {tag}: ANCHOR NOT FOUND (SGLang version drift?)")
+            print(f"ANCHOR-DRIFT: llama4/mllama4 kv-scale: {tag} (SGLang version drift; re-check anchor)")
     open(f, "w").write(s)
 
 patch("/usr/local/lib/python3.12/dist-packages/sglang/srt/models/llama4.py", [
@@ -529,7 +587,7 @@ if { [[ "$SGLANG_MODEL" == *"Hy3"* ]] || [[ "$SGLANG_MODEL" == *"Hunyuan"* ]]; }
 import pathlib
 p = pathlib.Path("/usr/local/lib/python3.12/dist-packages/sglang/srt/models/hunyuan_v3_nextn.py")
 if not p.exists():
-    print("hunyuan_v3_nextn.py: not found, skipping")
+    print("ANCHOR-DRIFT: hunyuan_v3_nextn.py: BF16-head override target file missing (SGLang restructured/renamed?)")
 else:
     src = p.read_text()
     marker = "# [patch] _sgl_hy3_nextn_bf16_head_"
@@ -554,7 +612,7 @@ else:
     if marker in src:
         print("hunyuan_v3_nextn.py: BF16-head override already patched, skipping")
     elif anchor not in src:
-        print("hunyuan_v3_nextn.py: __init__ anchor not found, skipping (code changed?)")
+        print("ANCHOR-DRIFT: hunyuan_v3_nextn.py: BF16-head override (SGLang version drift; re-check anchor)")
     else:
         p.write_text(src.replace(anchor, inject, 1))
         print("Patched hunyuan_v3_nextn.py: NEXTN/MTP head forced unquantized (BF16)")
@@ -569,7 +627,7 @@ PATCH_HY3_NEXTN_BF16_EOF
 import pathlib
 p = pathlib.Path("/usr/local/lib/python3.12/dist-packages/sglang/srt/models/hunyuan_v3_nextn.py")
 if not p.exists():
-    print("hunyuan_v3_nextn.py: not found, skipping")
+    print("ANCHOR-DRIFT: hunyuan_v3_nextn.py: final_layernorm remap target file missing (SGLang restructured/renamed?)")
 else:
     src = p.read_text()
     marker = "# [patch] _sgl_hy3_nextn_final_layernorm_"
@@ -591,11 +649,91 @@ else:
     if marker in src:
         print("hunyuan_v3_nextn.py: final_layernorm remap already patched, skipping")
     elif anchor not in src:
-        print("hunyuan_v3_nextn.py: load_weights name-map anchor not found, skipping (code changed?)")
+        print("ANCHOR-DRIFT: hunyuan_v3_nextn.py: final_layernorm remap (SGLang version drift; re-check anchor)")
     else:
         p.write_text(src.replace(anchor, inject, 1))
         print("Patched hunyuan_v3_nextn.py: final_layernorm -> shared_head.norm (PR #30331)")
 PATCH_HY3_NEXTN_FINALNORM_EOF
+fi
+
+# ── DeepSeek/GLM NEXTN: honour the checkpoint's per-module NVFP4 exclude on the
+#    built-in MTP head (upstream blindly nulls the whole quant_config) ───────────
+# GlmMoeDsaForCausalLM (0xSero/glm-5.2-reap-504B-v2) and plain DeepSeek-V3 route
+# their built-in NEXTN/MTP head through deepseek_nextn.py, which UNCONDITIONALLY
+# nulls a modelopt_fp4 quant_config for the ENTIRE MTP decoder layer. Correct when
+# the whole MTP layer is BF16 (normal DeepSeek-V3), WRONG for this REAP export:
+# its hf_quant_config 'ignore' keeps only attn/eh_proj/gate/shared_experts of
+# layer N BF16 while the ROUTED EXPERTS stay NVFP4. Blindly nulling -> FusedMoE
+# builds a BF16 (unpacked) w13 buffer -> the NVFP4-packed checkpoint tensor
+# mismatches in _load_w13 ("size of tensor a (6144) must match b (3072)" = hidden
+# 6144 unpacked vs 3072 packed, 2 fp4/byte) -> head crash-loop. The nextn decoder
+# is built under the 'model.decoder.*' prefix, which never matches the checkpoint's
+# 'model.layers.N.*' exclude entries, so is_layer_excluded can't discriminate per
+# submodule on its own. Fix: when the checkpoint actually leaves the MTP experts
+# quantized, KEEP the fp4 config and add 'model.decoder.*' aliases of the layer-N
+# excludes -> attn/gate/shared build BF16, experts build NVFP4, exactly the mix the
+# main model uses (only touches build-time quant choice, load path unchanged).
+# Self-gated (is_layer_excluded + non-empty aliases) -> inert for all-BF16-MTP
+# checkpoints, so it falls back to the upstream blanket null. Note:
+# --speculative-draft-model-quantization=unquant does NOT reach this path
+# (deepseek_nextn.py never reads that flag; only glm4_moe_nextn / qwen3_*_mtp do).
+if [ "$SGLANG_SPECULATIVE_ENABLED" = "true" ]; then
+  python3 - <<'PATCH_DSNEXTN_MIXED_MTP_EOF'
+import pathlib
+p = pathlib.Path("/usr/local/lib/python3.12/dist-packages/sglang/srt/models/deepseek_nextn.py")
+if not p.exists():
+    print("ANCHOR-DRIFT: deepseek_nextn.py: mixed-MTP quant override target file missing (SGLang restructured/renamed?)")
+else:
+    src = p.read_text()
+    marker = "# [patch] _sgl_dsnextn_mixed_mtp_"
+    anchor = (
+        '        if quant_config is not None and quant_config.get_name() == "modelopt_fp4":\n'
+        '            logger.warning(\n'
+        '                "Overriding DeepseekV3ForCausalLMNextN quant config for modelopt_fp4 Deepseek model."\n'
+        '            )\n'
+        '            quant_config = None\n'
+    )
+    inject = (
+        '        ' + marker + '  # honour per-module NVFP4 exclude on the MTP head\n'
+        '        _dsnextn_kept_fp4 = False\n'
+        '        if quant_config is not None and quant_config.get_name() == "modelopt_fp4":\n'
+        '            _mtp_experts = f"model.layers.{config.num_hidden_layers}.mlp.experts"\n'
+        '            _excl = getattr(quant_config, "exclude_modules", None)\n'
+        '            _tag = f".layers.{config.num_hidden_layers}."\n'
+        '            if (\n'
+        '                isinstance(_excl, list)\n'
+        '                and hasattr(quant_config, "is_layer_excluded")\n'
+        '                and not quant_config.is_layer_excluded(_mtp_experts)\n'
+        '            ):\n'
+        '                _aliases = [\n'
+        '                    e.replace(_tag, ".decoder.")\n'
+        '                    for e in _excl\n'
+        '                    if _tag in e and e.replace(_tag, ".decoder.") not in _excl\n'
+        '                ]\n'
+        '                if _aliases:\n'
+        '                    quant_config.exclude_modules = _excl + _aliases\n'
+        '                    _dsnextn_kept_fp4 = True\n'
+        '                    logger.warning(\n'
+        '                        "NextN modelopt_fp4: checkpoint keeps the MTP experts quantized; "\n'
+        '                        "aliasing %d layer-%d excludes to model.decoder.* so attn/gate/shared "\n'
+        '                        "stay BF16 while experts stay NVFP4.",\n'
+        '                        len(_aliases),\n'
+        '                        config.num_hidden_layers,\n'
+        '                    )\n'
+        '            if not _dsnextn_kept_fp4:\n'
+        '                logger.warning(\n'
+        '                    "Overriding DeepseekV3ForCausalLMNextN quant config for modelopt_fp4 Deepseek model."\n'
+        '                )\n'
+        '                quant_config = None\n'
+    )
+    if marker in src:
+        print("deepseek_nextn.py: mixed-MTP quant override already patched, skipping")
+    elif anchor not in src:
+        print("ANCHOR-DRIFT: deepseek_nextn.py: mixed-MTP quant override (SGLang version drift; re-check anchor)")
+    else:
+        p.write_text(src.replace(anchor, inject, 1))
+        print("Patched deepseek_nextn.py: NEXTN/MTP honours per-module NVFP4 exclude (mixed-precision MTP head)")
+PATCH_DSNEXTN_MIXED_MTP_EOF
 fi
 
 # Patch SGLang get_config() to convert dict sub_configs after loading (transformers 5.5.0 bug).
@@ -603,28 +741,39 @@ fi
 # bypassing dict→config conversion. from_pretrained() also bypasses __post_init__.
 # Both vision_config and text_config arrive as raw dicts → AttributeError on .hidden_size etc.
 # Fix: patch get_config() to convert dict sub-configs after loading for any config with sub_configs.
-HF_UTILS="/usr/local/lib/python3.12/dist-packages/sglang/srt/utils/hf_transformers_utils.py"
-if grep -q 'return config' "$HF_UTILS" 2>/dev/null && ! grep -q 'sub_configs dict fix' "$HF_UTILS" 2>/dev/null; then
+#
+# RE-ANCHORED 2026-07-16: sglang/srt/utils/hf_transformers_utils.py is now a bare
+# backward-compat shim ("all code has moved to sglang.srt.utils.hf_transformers") — it
+# has no get_config()/"return config" left, so the old anchor silently never matched on
+# this image. The real get_config() lives in sglang/srt/utils/hf_transformers/config.py.
+# The underlying transformers-5.x sub_configs bug is STILL UNSOLVED there: only the
+# Mistral parser path calls the sglang-native _ensure_sub_configs() helper (for
+# text_config/vision_config); the generic "hf" parser path (used by everything else,
+# incl. GLM/DeepSeek/NemotronH) does not call it anywhere — verified by grepping the
+# whole hf_transformers package. So this patch still applies, just at the new home.
+HF_UTILS="/usr/local/lib/python3.12/dist-packages/sglang/srt/utils/hf_transformers/config.py"
+if [ ! -f "$HF_UTILS" ]; then
+  echo "ANCHOR-DRIFT: hf_transformers/config.py: get_config sub_configs fix target file missing (SGLang restructured/renamed?)"
+elif grep -q 'sub_configs dict fix' "$HF_UTILS" 2>/dev/null; then
+  echo "get_config() sub_configs dict fix: already applied, skipping"
+elif grep -q 'def get_config' "$HF_UTILS" 2>/dev/null; then
   python3 << 'PATCH_GET_CONFIG_EOF'
-f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/utils/hf_transformers_utils.py"
+f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/utils/hf_transformers/config.py"
 with open(f) as fh:
     code = fh.read()
 # Find the final "return config" in get_config() and add sub_configs conversion before it.
-# The function ends with:
-#     return config
-# We insert a conversion block just before.
+# The gguf branch was refactored (model_type/config.update -> _set_architectures helper)
+# since this patch was first written; anchor matches the current shape.
 old = '''    if is_gguf:
         if config.model_type not in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES:
             raise RuntimeError(f"Can't get gguf config for {config.model_type}.")
-        model_type = MODEL_FOR_CAUSAL_LM_MAPPING_NAMES[config.model_type]
-        config.update({"architectures": [model_type]})
+        _set_architectures(config, MODEL_FOR_CAUSAL_LM_MAPPING_NAMES[config.model_type])
 
     return config'''
 new = '''    if is_gguf:
         if config.model_type not in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES:
             raise RuntimeError(f"Can't get gguf config for {config.model_type}.")
-        model_type = MODEL_FOR_CAUSAL_LM_MAPPING_NAMES[config.model_type]
-        config.update({"architectures": [model_type]})
+        _set_architectures(config, MODEL_FOR_CAUSAL_LM_MAPPING_NAMES[config.model_type])
 
     # [patch] sub_configs dict fix — transformers 5.x from_pretrained() leaves sub-configs
     # as raw dicts instead of converting to their declared config classes.
@@ -649,10 +798,12 @@ if old in code:
     code = code.replace(old, new, 1)
     with open(f, 'w') as fh:
         fh.write(code)
-    print("Patched get_config(): sub_configs dict→config conversion after loading")
+    print("Patched hf_transformers/config.py get_config(): sub_configs dict→config conversion after loading")
 else:
-    print("get_config(): patch target not found (code changed?)")
+    print("ANCHOR-DRIFT: hf_transformers/config.py: get_config sub_configs fix (SGLang version drift; re-check anchor)")
 PATCH_GET_CONFIG_EOF
+else
+  echo "ANCHOR-DRIFT: hf_transformers/config.py: get_config() function not found (SGLang version drift; re-check anchor)"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -679,7 +830,11 @@ fi
 # offline, token IDs match the shipped tokenizer.json, pixtral add_special_tokens passes.
 # See reference_sglang_mistral_native_support.
 TOKPY="/usr/local/lib/python3.12/dist-packages/sglang/srt/utils/hf_transformers/tokenizer.py"
-if grep -q 'common_kwargs = dict(' "$TOKPY" 2>/dev/null && ! grep -q '_sgl_mistral_native_tokenizer_' "$TOKPY" 2>/dev/null; then
+if [ ! -f "$TOKPY" ]; then
+  echo "ANCHOR-DRIFT: tokenizer.py: _sgl_mistral_native_tokenizer_ target file missing (SGLang restructured/renamed?)"
+elif grep -q '_sgl_mistral_native_tokenizer_' "$TOKPY" 2>/dev/null; then
+  echo "tokenizer.py: _sgl_mistral_native_tokenizer_ already applied, skipping"
+elif grep -q 'common_kwargs = dict(' "$TOKPY" 2>/dev/null; then
   python3 << 'PATCH_MISTRAL_NATIVE_TOK_EOF'
 f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/utils/hf_transformers/tokenizer.py"
 with open(f) as fh:
@@ -719,8 +874,10 @@ if old in code:
         fh.write(code)
     print("Patched tokenizer.py: Mistral-native config injection (offline tokenizer.json)")
 else:
-    print("tokenizer.py: _sgl_mistral_native_tokenizer_ anchor not found, skipping")
+    print("ANCHOR-DRIFT: tokenizer.py: _sgl_mistral_native_tokenizer_ (SGLang version drift; re-check anchor)")
 PATCH_MISTRAL_NATIVE_TOK_EOF
+else
+  echo "ANCHOR-DRIFT: tokenizer.py: common_kwargs anchor not found (SGLang version drift; re-check anchor)"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -749,49 +906,61 @@ python3 - <<'PATCH_MIXED_NVFP4_DISPATCH_EOF'
 import pathlib
 p = pathlib.Path("/usr/local/lib/python3.12/dist-packages/sglang/srt/configs/model_config.py")
 if not p.exists():
-    print("sglang/srt/configs/model_config.py: not found, skipping")
+    print("ANCHOR-DRIFT: model_config.py: _sgl_mixed_nvfp4_dispatch_ target file missing (SGLang restructured/renamed?)")
 else:
     src = p.read_text()
     marker = "# [patch] _sgl_mixed_nvfp4_dispatch_"
-    old = (
-        '        if quant_algo == "MIXED_PRECISION":\n'
-        '            architectures = getattr(self.hf_config, "architectures", []) or []\n'
-        '            if getattr(self.hf_config, "model_type", None) == "nemotron_h" or any(\n'
-        '                arch.startswith("NemotronH") for arch in architectures\n'
-        '            ):\n'
-        '                return {"quant_method": "modelopt_mixed", "quant_algo": quant_algo}\n'
-        '            return {"quant_method": "w4afp8", "quant_algo": quant_algo}\n'
-    )
-    new = (
-        '        if quant_algo == "MIXED_PRECISION":\n'
-        '            architectures = getattr(self.hf_config, "architectures", []) or []\n'
-        '            ' + marker + '\n'
-        '            # Route NVFP4-bearing MIXED_PRECISION checkpoints (e.g.\n'
-        '            # nvidia/Qwen3.6-35B-A3B-NVFP4: W4A16_NVFP4 MoE + FP8 attn) to the\n'
-        '            # modelopt_mixed loader. Upstream gates modelopt_mixed to NemotronH\n'
-        '            # only; other archs fall through to w4afp8 (W4A8 int4), the wrong\n'
-        '            # weight format for NVFP4 experts. Discriminate on real format.\n'
-        '            _qlayers = json_quant_configs.get("quantized_layers", {}) or {}\n'
-        '            _has_nvfp4 = any(\n'
-        '                "NVFP4" in str(_li.get("quant_algo", "")).upper()\n'
-        '                for _li in _qlayers.values()\n'
-        '                if isinstance(_li, dict)\n'
-        '            )\n'
-        '            if (\n'
-        '                getattr(self.hf_config, "model_type", None) == "nemotron_h"\n'
-        '                or any(arch.startswith("NemotronH") for arch in architectures)\n'
-        '                or _has_nvfp4\n'
-        '            ):\n'
-        '                return {"quant_method": "modelopt_mixed", "quant_algo": quant_algo}\n'
-        '            return {"quant_method": "w4afp8", "quant_algo": quant_algo}\n'
-    )
+    # RE-CHECKED 2026-07-16: upstream's _parse_modelopt_quant_config() now discriminates
+    # MIXED_PRECISION checkpoints by scanning quantized_layers for NVFP4/W4A16_NVFP4
+    # entries (has_modelopt_nvfp4_layers) and routes to modelopt_mixed generically -- the
+    # NemotronH-only arch-name gate this patch targeted is GONE, replaced by exactly the
+    # real-format discrimination this patch wanted (verified live, same semantics as our
+    # own _has_nvfp4 check below, just upstream-native now). OBSOLETE: self-disable
+    # instead of forcing a stale re-anchor onto code upstream already solved better.
     if marker in src:
         print("model_config.py: MIXED_PRECISION NVFP4 dispatch already patched, skipping")
-    elif old not in src:
-        print("model_config.py: MIXED_PRECISION dispatch target not found, skipping")
+    elif "has_modelopt_nvfp4_layers" in src:
+        print("model_config.py: upstream already discriminates MIXED_PRECISION NVFP4 vs w4afp8 "
+              "natively (has_modelopt_nvfp4_layers, no NemotronH-only gate), skipping "
+              "_sgl_mixed_nvfp4_dispatch_ (obsolete)")
     else:
-        p.write_text(src.replace(old, new, 1))
-        print("Patched model_config.py: MIXED_PRECISION NVFP4 -> modelopt_mixed dispatch")
+        old = (
+            '        if quant_algo == "MIXED_PRECISION":\n'
+            '            architectures = getattr(self.hf_config, "architectures", []) or []\n'
+            '            if getattr(self.hf_config, "model_type", None) == "nemotron_h" or any(\n'
+            '                arch.startswith("NemotronH") for arch in architectures\n'
+            '            ):\n'
+            '                return {"quant_method": "modelopt_mixed", "quant_algo": quant_algo}\n'
+            '            return {"quant_method": "w4afp8", "quant_algo": quant_algo}\n'
+        )
+        new = (
+            '        if quant_algo == "MIXED_PRECISION":\n'
+            '            architectures = getattr(self.hf_config, "architectures", []) or []\n'
+            '            ' + marker + '\n'
+            '            # Route NVFP4-bearing MIXED_PRECISION checkpoints (e.g.\n'
+            '            # nvidia/Qwen3.6-35B-A3B-NVFP4: W4A16_NVFP4 MoE + FP8 attn) to the\n'
+            '            # modelopt_mixed loader. Upstream gates modelopt_mixed to NemotronH\n'
+            '            # only; other archs fall through to w4afp8 (W4A8 int4), the wrong\n'
+            '            # weight format for NVFP4 experts. Discriminate on real format.\n'
+            '            _qlayers = json_quant_configs.get("quantized_layers", {}) or {}\n'
+            '            _has_nvfp4 = any(\n'
+            '                "NVFP4" in str(_li.get("quant_algo", "")).upper()\n'
+            '                for _li in _qlayers.values()\n'
+            '                if isinstance(_li, dict)\n'
+            '            )\n'
+            '            if (\n'
+            '                getattr(self.hf_config, "model_type", None) == "nemotron_h"\n'
+            '                or any(arch.startswith("NemotronH") for arch in architectures)\n'
+            '                or _has_nvfp4\n'
+            '            ):\n'
+            '                return {"quant_method": "modelopt_mixed", "quant_algo": quant_algo}\n'
+            '            return {"quant_method": "w4afp8", "quant_algo": quant_algo}\n'
+        )
+        if old not in src:
+            print("ANCHOR-DRIFT: model_config.py: _sgl_mixed_nvfp4_dispatch_ (SGLang version drift; re-check anchor)")
+        else:
+            p.write_text(src.replace(old, new, 1))
+            print("Patched model_config.py: MIXED_PRECISION NVFP4 -> modelopt_mixed dispatch")
 PATCH_MIXED_NVFP4_DISPATCH_EOF
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -799,32 +968,45 @@ PATCH_MIXED_NVFP4_DISPATCH_EOF
 # in the ModelOptMixedPrecisionConfig per-layer dispatch.
 #
 # modelopt 0.44 labels weight-only NVFP4 layers as quant_algo "W4A16_NVFP4"
-# (4-bit NVFP4 weights, higher-precision activations), NOT plain "NVFP4". SGLang's
-# ModelOptMixedPrecisionConfig.get_quant_method() does exact `quant_algo == "NVFP4"`
-# comparisons, so W4A16_NVFP4 experts/linears match NEITHER the FP8 nor the NVFP4
-# branch → get NO quant method → are built as unquantized → load_weights crashes on
-# the missing w*_weight_scale_2 params (KeyError model.layers.0.mlp.experts.w2_weight_scale_2).
-# The checkpoint ships the FULL NVFP4 tensor set per layer (weight, weight_scale,
-# weight_scale_2, input_scale) — exactly what ModelOptNvFp4FusedMoEMethod /
-# ModelOptFp4LinearMethod register — so normalizing the variant string to "NVFP4"
-# routes them to the right loader. Also fixes the from_config group_size probe (same
-# exact-match bug; harmless here since group_size is 16 either way, patched for
-# robustness). Pairs with the _sgl_mixed_nvfp4_dispatch_ patch above.
+# (4-bit NVFP4 weights, higher-precision activations), NOT plain "NVFP4". On the
+# OLD image this patch targeted, SGLang's ModelOptMixedPrecisionConfig.get_quant_method()
+# did exact `quant_algo == "NVFP4"` comparisons, so W4A16_NVFP4 experts/linears
+# matched NEITHER the FP8 nor the NVFP4 branch → got NO quant method → were built
+# as unquantized → load_weights crashed on the missing w*_weight_scale_2 params
+# (KeyError model.layers.0.mlp.experts.w2_weight_scale_2). Normalizing the variant
+# string to "NVFP4" routed them to the right loader (ModelOptNvFp4FusedMoEMethod /
+# ModelOptFp4LinearMethod). Pairs with the _sgl_mixed_nvfp4_dispatch_ patch above.
 # Target: nvidia/Qwen3.6-35B-A3B-NVFP4 (W4A16_NVFP4 MoE + shared-expert linears).
+#
+# SELF-DISABLING as of 2026-07-15/16: newer images resolve W4A16_NVFP4 natively —
+# a DEDICATED dispatch branch (`quant_algo == "W4A16_NVFP4": return
+# ModelOptNvFp4A16LinearMethod(self.nvfp4a16_config)` for both the Linear and
+# FusedMoE arms, plus a separate `nvfp4a16_config` instance) that correctly keeps
+# W4A16 (weight-only) distinct from full NVFP4 (weight+activation). On such an
+# image, THIS patch's variant-collapse (`"NVFP4" in quant_algo -> quant_algo =
+# "NVFP4"`) fires BEFORE that dedicated branch is ever reached and silently
+# reroutes W4A16 layers into the wrong (full-quant) method/config — a REGRESSION,
+# not a fix, on the current image. Guard below detects the native branch
+# (`ModelOptNvFp4A16LinearMethod` / `nvfp4a16_config` in source) and skips the
+# whole patch (both A and B) as an explicit no-op when present, so it only ever
+# applies on a genuine pre-native-W4A16 image.
 # ─────────────────────────────────────────────────────────────────────────────
 python3 - <<'PATCH_MIXED_NVFP4_VARIANT_EOF'
 import pathlib
 p = pathlib.Path("/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/quantization/modelopt_quant.py")
 if not p.exists():
-    print("sglang/srt/layers/quantization/modelopt_quant.py: not found, skipping")
+    print("ANCHOR-DRIFT: modelopt_quant.py: _sgl_mixed_nvfp4_variant_ target file missing (SGLang restructured/renamed?)")
 else:
     src = p.read_text()
+    if "ModelOptNvFp4A16LinearMethod" in src or "nvfp4a16_config" in src:
+        print("modelopt_quant.py: upstream already handles W4A16_NVFP4 natively, skipping _sgl_mixed_nvfp4_variant_ (obsolete)")
+        raise SystemExit
     marker = "# [patch] _sgl_mixed_nvfp4_variant_"
     # Patch A: normalize the resolved quant_algo in get_quant_method.
     old_a = (
         '        quant_algo = self._resolve_quant_algo(prefix)\n'
         '\n'
-        '        if isinstance(layer, LinearBase):\n'
+        '        if isinstance(layer, (LinearBase, ParallelLMHead)):\n'
     )
     new_a = (
         '        quant_algo = self._resolve_quant_algo(prefix)\n'
@@ -836,7 +1018,7 @@ else:
         '        if quant_algo and "NVFP4" in quant_algo:\n'
         '            quant_algo = "NVFP4"\n'
         '\n'
-        '        if isinstance(layer, LinearBase):\n'
+        '        if isinstance(layer, (LinearBase, ParallelLMHead)):\n'
     )
     # Patch B: group_size probe in from_config (exact-match → substring).
     old_b = '            if layer_info.get("quant_algo", "").upper() == "NVFP4":\n'
@@ -845,14 +1027,15 @@ else:
     if marker in src:
         print("modelopt_quant.py: NVFP4-variant normalization already patched, skipping")
     elif old_a not in src:
-        print("modelopt_quant.py: get_quant_method resolve anchor not found, skipping")
+        print("ANCHOR-DRIFT: modelopt_quant.py: _sgl_mixed_nvfp4_variant_ get_quant_method dispatch (SGLang version drift; re-check anchor)")
     else:
         src = src.replace(old_a, new_a, 1)
         if old_b in src:
             src = src.replace(old_b, new_b, 1)
             print("Patched modelopt_quant.py: NVFP4-variant dispatch + group_size probe")
         else:
-            print("Patched modelopt_quant.py: NVFP4-variant dispatch (group_size probe anchor not found)")
+            print("Patched modelopt_quant.py: NVFP4-variant dispatch (A only)")
+            print("ANCHOR-DRIFT: modelopt_quant.py: _sgl_mixed_nvfp4_variant_ group_size probe (SGLang version drift; re-check anchor)")
         p.write_text(src)
 PATCH_MIXED_NVFP4_VARIANT_EOF
 
@@ -889,7 +1072,7 @@ python3 - <<'PATCH_QWEN35_ATTN_QUANT_EOF'
 import os
 f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/models/qwen3_5.py"
 if not os.path.exists(f):
-    print(">>> qwen3_5 attn-quant patch: qwen3_5.py not found, skipping")
+    print("ANCHOR-DRIFT: qwen3_5.py: attn-quant override target file missing (SGLang restructured/renamed?)")
 else:
     s = open(f).read()
     old = '            if quant_config and quant_config.get_name() == "modelopt_fp4"'
@@ -901,7 +1084,7 @@ else:
     elif new.strip() in s:
         print(">>> qwen3_5 attn-quant patch: already applied")
     else:
-        print(">>> qwen3_5 attn-quant patch: ANCHOR NOT FOUND (SGLang version drift?)")
+        print("ANCHOR-DRIFT: qwen3_5.py: attn-quant override (SGLang version drift; re-check anchor)")
 PATCH_QWEN35_ATTN_QUANT_EOF
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -927,11 +1110,11 @@ python3 - <<'PATCH_QWEN35_KVSCALE_EOF'
 import os
 f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/models/qwen3_5.py"
 if not os.path.exists(f):
-    print(">>> qwen3_5 kv-scale patch: qwen3_5.py not found, skipping")
+    print("ANCHOR-DRIFT: qwen3_5.py: kv-scale target file missing (SGLang restructured/renamed?)")
 else:
     s = open(f).read()
     edits = [
-        ("A-radixattn-quant_config", "# [patch] A: RadixAttention quant_config",
+        ("A-radixattn-quant_config", "# [patch]  A: RadixAttention quant_config",
 """            num_kv_heads=self.num_kv_heads,
             layer_id=layer_id,
             prefix=f"{prefix}.attn",
@@ -986,7 +1169,7 @@ else:
                 s = s.replace(old, new)
                 print(f">>> qwen3_5 kv-scale patch {tag}: APPLIED ({n} occurrence(s))")
             else:
-                print(f">>> qwen3_5 kv-scale patch {tag}: ANCHOR NOT FOUND (SGLang drift?)")
+                print(f"ANCHOR-DRIFT: qwen3_5.py: kv-scale {tag} (SGLang version drift; re-check anchor)")
     open(f, "w").write(s)
 PATCH_QWEN35_KVSCALE_EOF
 
@@ -1008,7 +1191,7 @@ python3 - <<'PATCH_LINEAR_NVFP4SCALE_EOF'
 import os
 f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/linear.py"
 if not os.path.exists(f):
-    print(">>> linear.py nvfp4-scale patch: linear.py not found, skipping")
+    print("ANCHOR-DRIFT: linear.py: nvfp4-scale target file missing (SGLang restructured/renamed?)")
 else:
     s = open(f).read()
     edits = [
@@ -1075,7 +1258,7 @@ else:
                 s = s.replace(old, new)
                 print(f">>> linear.py nvfp4-scale patch {tag}: APPLIED ({n} occurrence(s))")
             else:
-                print(f">>> linear.py nvfp4-scale patch {tag}: ANCHOR NOT FOUND (SGLang drift?)")
+                print(f"ANCHOR-DRIFT: linear.py: nvfp4-scale {tag} (SGLang version drift; re-check anchor)")
     open(f, "w").write(s)
 PATCH_LINEAR_NVFP4SCALE_EOF
 
@@ -1117,7 +1300,7 @@ p = pathlib.Path(
     "/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/quantization/compressed_tensors/utils.py"
 )
 if not p.exists():
-    print("compressed_tensors/utils.py: not found, skipping")
+    print("ANCHOR-DRIFT: compressed_tensors/utils.py: _sgl_vlm_ignore_fix target file missing (SGLang restructured/renamed?)")
 else:
     src = p.read_text()
     marker = "# [patch] _sgl_vlm_ignore_fix"
@@ -1172,7 +1355,7 @@ def should_ignore_layer(layer_name, ignore=tuple(), fused_mapping=None):
     if marker in src:
         print("compressed_tensors/utils.py: VLM ignore fix already patched, skipping")
     elif "def should_ignore_layer(" not in src:
-        print("compressed_tensors/utils.py: should_ignore_layer anchor not found, skipping")
+        print("ANCHOR-DRIFT: compressed_tensors/utils.py: _sgl_vlm_ignore_fix should_ignore_layer (SGLang version drift; re-check anchor)")
     else:
         p.write_text(src + block)
         print("Patched compressed_tensors/utils.py: VLM vision/projector ignore-list fix")
@@ -1193,44 +1376,74 @@ PATCH_VLM_IGNORE_EOF
 # moe_runner_backend=flashinfer_cutlass in the profile doesn't fix it — the hook also
 # does the llm_config field resolution this needs.
 # Fix (PR #25024): (1) server_args dispatch list includes the wrapper archs;
-# (2) nemotron_h_hook reads NemotronH fields from hf_config.llm_config for wrappers;
+# (2) NemotronH overrides read fields from hf_config.llm_config for wrappers;
 # (3) scheduler.init_moe_gemm_config resolves the LLM sub-config via hf_text_config.
 # Drop this block once PR #25024 lands in a release tag we use (the grep guards make it
 # a safe no-op if the targets are already changed, e.g. on a future baked image).
+#
+# RE-ANCHORED 2026-07-16: sub-patch (1) originally targeted the standalone
+# arg_groups/nemotron_h_hook.py, which no longer exists on this image — upstream
+# ABSORBED it into arg_groups/overrides.py::_nemotron_h_overrides (module docstring:
+# "absorbed from the retired arg_groups/nemotron_h_hook.py"). BUT that absorption did
+# NOT carry over the wrapper-arch fix: the @_register_for(...) decorator on
+# _nemotron_h_overrides still only lists the two bare NemotronH archs, so the VL/Omni
+# wrappers still dispatch to NO override function at all (verified: zero hits for
+# NemotronH_Nano_VL_V2 / _Nano_Omni_Reasoning_V3 anywhere in overrides.py/server_args.py/
+# scheduler.py on this image) — same bug, new home. Sub-patch (1) below now targets
+# overrides.py: extends the decorator to the wrapper archs AND keeps the llm_config
+# field resolution for mlp_hidden_act. Sub-patches (2)/(3) are unchanged (still apply).
 # ─────────────────────────────────────────────────────────────────────────────
 python3 - <<'PATCH_NEMOTRONH_OMNI_WRAPPER_EOF'
 import pathlib
 DIST = "/usr/local/lib/python3.12/dist-packages/sglang/srt"
 marker = "# [patch] _sgl_nemotronh_omni_wrapper_"
 
-# --- 1) arg_groups/nemotron_h_hook.py ---
-p = pathlib.Path(DIST + "/arg_groups/nemotron_h_hook.py")
+# --- 1) arg_groups/overrides.py: _nemotron_h_overrides (formerly nemotron_h_hook.py) ---
+p = pathlib.Path(DIST + "/arg_groups/overrides.py")
 if not p.exists():
-    print("nemotron_h_hook.py: not found, skipping")
+    print("ANCHOR-DRIFT: overrides.py: _sgl_nemotronh_omni_wrapper_ target file missing (SGLang restructured/renamed?)")
 else:
     s = p.read_text()
-    old1a = ('    model_config = server_args.get_model_config()\n'
+    old1a = '@_register_for("NemotronHForCausalLM", "NemotronHPuzzleForCausalLM")\n'
+    new1a = ('@_register_for(\n'
+             '    "NemotronHForCausalLM",\n'
+             '    "NemotronHPuzzleForCausalLM",\n'
+             '    "NemotronH_Nano_VL_V2",\n'
+             '    "NemotronH_Nano_Omni_Reasoning_V3",\n'
+             ')\n')
+    old1b = ('    model_arch = hf_config.architectures[0]\n'
+             '    model_config = server_args.get_model_config()\n'
+             '    overrides: Dict[str, Any] = {}\n'
+             '\n'
              '    is_modelopt = model_config.quantization in [\n')
-    new1a = ('    model_config = server_args.get_model_config()\n'
-             '    ' + marker + ' (PR #25024)\n'
-             '    # NemotronH config fields live on inner llm_config for the VL/Omni wrappers\n'
-             '    # (NemotronH_Nano_VL_V2 / _Nano_Omni_Reasoning_V3), on hf_config for standalone.\n'
+    new1b = ('    ' + marker + ' (PR #25024, re-anchored 2026-07-16 onto\n'
+             '    # upstream-absorbed overrides.py::_nemotron_h_overrides; the decorator above\n'
+             '    # was extended to also dispatch the VL/Omni wrapper archs, which upstream\n'
+             '    # never registered here -> they fell through with NO overrides at all.\n'
+             '    # NemotronH config fields live on inner llm_config for the wrappers, on\n'
+             '    # hf_config for standalone.\n'
+             '    model_arch = hf_config.architectures[0]\n'
+             '    model_config = server_args.get_model_config()\n'
              '    nemotron_h_cfg = getattr(model_config.hf_config, "llm_config", model_config.hf_config)\n'
+             '    overrides: Dict[str, Any] = {}\n'
+             '\n'
              '    is_modelopt = model_config.quantization in [\n')
-    old1b = '        assert model_config.hf_config.mlp_hidden_act == "relu2"\n'
-    new1b = '        assert nemotron_h_cfg.mlp_hidden_act == "relu2"\n'
+    old1c = '        assert model_config.hf_config.mlp_hidden_act == "relu2"\n'
+    new1c = '        assert nemotron_h_cfg.mlp_hidden_act == "relu2"\n'
     if marker in s:
-        print("nemotron_h_hook.py: already patched, skipping")
-    elif old1a not in s or old1b not in s:
-        print("nemotron_h_hook.py: anchor(s) not found, skipping")
+        print("overrides.py: nemotronh_omni_wrapper already patched, skipping")
+    elif old1a not in s or old1b not in s or old1c not in s:
+        missing = [n for n, v in (("decorator", old1a), ("body-header", old1b), ("assert", old1c)) if v not in s]
+        print("ANCHOR-DRIFT: overrides.py: _sgl_nemotronh_omni_wrapper_ (SGLang version drift; missing:", missing, ")")
     else:
-        p.write_text(s.replace(old1a, new1a, 1).replace(old1b, new1b, 1))
-        print("Patched nemotron_h_hook.py: read NemotronH fields from llm_config (wrappers)")
+        s = s.replace(old1a, new1a, 1).replace(old1b, new1b, 1).replace(old1c, new1c, 1)
+        p.write_text(s)
+        print("Patched overrides.py: NemotronH VL/Omni wrapper archs registered + llm_config field resolution")
 
 # --- 2) managers/scheduler.py: init_moe_gemm_config via hf_text_config ---
 p = pathlib.Path(DIST + "/managers/scheduler.py")
 if not p.exists():
-    print("scheduler.py: not found, skipping")
+    print("ANCHOR-DRIFT: scheduler.py: _sgl_nemotronh_omni_wrapper_ target file missing (SGLang restructured/renamed?)")
 else:
     s = p.read_text()
     old2 = ('        # For the MM models, check the text_config for MoE settings\n'
@@ -1244,7 +1457,7 @@ else:
     if marker in s:
         print("scheduler.py: already patched, skipping")
     elif old2 not in s:
-        print("scheduler.py: init_moe_gemm_config anchor not found, skipping")
+        print("ANCHOR-DRIFT: scheduler.py: _sgl_nemotronh_omni_wrapper_ init_moe_gemm_config (SGLang version drift; re-check anchor)")
     else:
         p.write_text(s.replace(old2, new2, 1))
         print("Patched scheduler.py: init_moe_gemm_config uses hf_text_config")
@@ -1252,7 +1465,7 @@ else:
 # --- 3) server_args.py: add wrapper archs to the NemotronH dispatch ---
 p = pathlib.Path(DIST + "/server_args.py")
 if not p.exists():
-    print("server_args.py: not found, skipping")
+    print("ANCHOR-DRIFT: server_args.py: _sgl_nemotronh_omni_wrapper_ target file missing (SGLang restructured/renamed?)")
 else:
     s = p.read_text()
     old3 = '        elif model_arch in ["NemotronHForCausalLM", "NemotronHPuzzleForCausalLM"]:\n'
@@ -1261,7 +1474,7 @@ else:
     if marker in s:
         print("server_args.py: NemotronH dispatch already patched, skipping")
     elif old3 not in s:
-        print("server_args.py: NemotronH dispatch anchor not found, skipping")
+        print("ANCHOR-DRIFT: server_args.py: _sgl_nemotronh_omni_wrapper_ NemotronH dispatch (SGLang version drift; re-check anchor)")
     else:
         p.write_text(s.replace(old3, new3, 1))
         print("Patched server_args.py: NemotronH dispatch includes VL/Omni wrappers")
@@ -1295,18 +1508,27 @@ echo "All ${#peers[@]} QSFP peers reachable."
 # nvfp4_blockwise_moe kernel falls back to an incompatible code path → device-side assert.
 # Fix: add sm_120a + sm_121a to admissible_archs in both CUTLASS DSL copies.
 # External validation: BTankut/dgx-spark-sglang-moe-configs achieved 356 TFLOPS NVFP4 on GB10.
+_mma_existing_any=false
 for mma_py in \
   /usr/local/lib/python3.12/dist-packages/nvidia_cutlass_dsl/python_packages/cutlass/cute/nvgpu/tcgen05/mma.py \
   /usr/local/lib/python3.12/dist-packages/flashinfer/data/cutlass/python/CuTeDSL/cutlass/cute/nvgpu/tcgen05/mma.py; do
-  if [ -f "$mma_py" ] && grep -q 'admissible_archs = \[' "$mma_py" 2>/dev/null; then
-    if ! grep -q 'sm_121a' "$mma_py" 2>/dev/null; then
-      sed -i 's/Arch\.sm_100a,/Arch.sm_100a, Arch.sm_120a, Arch.sm_121a,/' "$mma_py"
-      echo "Patched $(basename $(dirname $(dirname $(dirname "$mma_py"))))/mma.py: added sm_120a + sm_121a to BlockScaledMmaOp.admissible_archs"
+  if [ -f "$mma_py" ]; then
+    _mma_existing_any=true
+    if grep -q 'admissible_archs = \[' "$mma_py" 2>/dev/null; then
+      if ! grep -q 'sm_121a' "$mma_py" 2>/dev/null; then
+        sed -i 's/Arch\.sm_100a,/Arch.sm_100a, Arch.sm_120a, Arch.sm_121a,/' "$mma_py"
+        echo "Patched $(basename $(dirname $(dirname $(dirname "$mma_py"))))/mma.py: added sm_120a + sm_121a to BlockScaledMmaOp.admissible_archs"
+      else
+        echo "$(basename "$mma_py"): sm_121a already present"
+      fi
     else
-      echo "$(basename "$mma_py"): sm_121a already present"
+      echo "ANCHOR-DRIFT: $(basename "$mma_py"): BlockScaledMmaOp admissible_archs anchor missing (CUTLASS version drift; re-check anchor)"
     fi
   fi
 done
+if [ "$_mma_existing_any" = false ]; then
+  echo "ANCHOR-DRIFT: cutlass mma.py: neither CUTLASS DSL copy (nvidia_cutlass_dsl / flashinfer bundled) found (dep restructured/renamed?)"
+fi
 
 # NOTE: nvfp4_blockwise_moe.cuh SM121 tile fix was attempted but cannot be solved
 # via runtime patching. The CUTLASS FP4 grouped GEMM kernel requires SM121-specific
@@ -1332,7 +1554,7 @@ python3 - <<'PATCH_TRANSFORMERS_TOPK_EOF'
 import pathlib
 p = pathlib.Path("/usr/local/lib/python3.12/dist-packages/sglang/srt/models/transformers.py")
 if not p.exists():
-    print("sglang/srt/models/transformers.py: not found, skipping")
+    print("ANCHOR-DRIFT: transformers.py: _sgl_gemma4_topk_ target file missing (SGLang restructured/renamed?)")
 else:
     src = p.read_text()
     marker = "# [patch] _sgl_gemma4_topk_"
@@ -1341,7 +1563,7 @@ else:
     if marker in src:
         print("sglang/srt/models/transformers.py: already patched (top_k_experts), skipping")
     elif old not in src:
-        print("sglang/srt/models/transformers.py: top_k lookup pattern not found, skipping")
+        print("ANCHOR-DRIFT: transformers.py: _sgl_gemma4_topk_ (SGLang version drift; re-check anchor)")
     else:
         # Replace the tuple inline. Marker goes on a NEW line above to avoid
         # breaking the closing paren of _getattr_first(...).
@@ -1386,7 +1608,7 @@ python3 - <<'PATCH_FP8_OUT_DTYPE_EOF'
 import pathlib
 p = pathlib.Path("/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/quantization/fp8_utils.py")
 if not p.exists():
-    print("sglang fp8_utils.py: not found, skipping")
+    print("ANCHOR-DRIFT: fp8_utils.py: _sgl_eagle_fp8_out_dtype_fix target file missing (SGLang restructured/renamed?)")
 else:
     src = p.read_text()
     marker = "# [patch] _sgl_eagle_fp8_out_dtype_fix"
@@ -1394,7 +1616,7 @@ else:
     if marker in src:
         print("sglang fp8_utils.py: out_dtype fix already patched, skipping")
     elif anchor not in src:
-        print("sglang fp8_utils.py: input_2d anchor not found, skipping")
+        print("ANCHOR-DRIFT: fp8_utils.py: _sgl_eagle_fp8_out_dtype_fix (SGLang version drift; re-check anchor)")
     else:
         inject = (
             "    " + marker + " — EAGLE fc fuses NVFP4 target hidden states → input\n"
@@ -1436,7 +1658,7 @@ python3 - <<'PATCH_FI_CUDA_VER_EOF'
 import pathlib
 p = pathlib.Path("/usr/local/lib/python3.12/dist-packages/flashinfer/jit/cpp_ext.py")
 if not p.exists():
-    print("flashinfer/jit/cpp_ext.py: not found, skipping")
+    print("ANCHOR-DRIFT: flashinfer/jit/cpp_ext.py: _fi_cuda_ver_subprocess_bypass_ target file missing (SGLang restructured/renamed? flashinfer dep)")
 else:
     src = p.read_text()
     marker = "# [patch] _fi_cuda_ver_subprocess_bypass_"
@@ -1467,7 +1689,7 @@ else:
             p.write_text(src.replace(target, replacement, 1))
             print("Patched flashinfer/jit/cpp_ext.py:get_cuda_version to bypass subprocess")
         else:
-            print("flashinfer/jit/cpp_ext.py: get_cuda_version target pattern not found, skipping")
+            print("ANCHOR-DRIFT: flashinfer/jit/cpp_ext.py: _fi_cuda_ver_subprocess_bypass_ (SGLang version drift; re-check anchor)")
 PATCH_FI_CUDA_VER_EOF
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1512,7 +1734,7 @@ python3 - <<'PATCH_FI_FP4_ALLOW_EOF'
 import pathlib
 p = pathlib.Path("/usr/local/lib/python3.12/dist-packages/flashinfer/quantization/fp4_quantization.py")
 if not p.exists():
-    print("flashinfer/quantization/fp4_quantization.py: not found, skipping")
+    print("ANCHOR-DRIFT: flashinfer/quantization/fp4_quantization.py: _fi_fp4_allow_in_graph_ target file missing (SGLang restructured/renamed? flashinfer dep)")
 else:
     src = p.read_text()
     marker = "# [patch] _fi_fp4_allow_in_graph_"
@@ -1541,7 +1763,7 @@ else:
         print("flashinfer/quantization/fp4_quantization.py: already patched (allow_in_graph), writing back only cleanup")
         p.write_text(src)
     elif "def fp4_quantize(" not in src:
-        print("flashinfer/quantization/fp4_quantization.py: fp4_quantize not found, skipping")
+        print("ANCHOR-DRIFT: flashinfer/quantization/fp4_quantization.py: _fi_fp4_allow_in_graph_ (SGLang version drift; re-check anchor)")
     else:
         # The registration must run at module import time AFTER fp4_quantize
         # has been defined. We append a trailing block that imports torch
@@ -1619,7 +1841,9 @@ fi
 # buffered_multi_thread_safetensors_weights_iterator (not the old single-thread one).
 # We patch both to cover all cases.
 WEIGHT_UTILS="/usr/local/lib/python3.12/dist-packages/sglang/srt/model_loader/weight_utils.py"
-if [ -f "$WEIGHT_UTILS" ]; then
+if [ ! -f "$WEIGHT_UTILS" ]; then
+  echo "ANCHOR-DRIFT: weight_utils.py: safetensors tqdm->logger progress patches target file missing (SGLang restructured/renamed?)"
+else
   python3 << 'PATCH_SAFETENSORS_TQDM_EOF'
 import os
 f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/model_loader/weight_utils.py"
@@ -1649,100 +1873,117 @@ if old_single in code:
     code = code.replace(old_single, new_single, 1)
     patched = True
     print("Patched safetensors_weights_iterator: tqdm → logger.info")
+elif "Loading safetensors shard {_i}/{_total}" in code:
+    print("safetensors_weights_iterator: tqdm->logger patch already applied, skipping")
+elif "def safetensors_weights_iterator(" in code:
+    print("ANCHOR-DRIFT: weight_utils.py: safetensors_weights_iterator tqdm->logger anchor missing "
+          "(SGLang version drift; re-check anchor) -- single-thread shard load will NOT log per-shard progress.")
+else:
+    print("ANCHOR-DRIFT: weight_utils.py: safetensors_weights_iterator function not found "
+          "(SGLang version drift; re-check anchor)")
 
-# --- Patch 2: buffered_multi_thread_safetensors_weights_iterator (v0.5.10 default) ---
-# Replace tqdm progress bar in the sliding-window loop with logger.info per shard.
-old_buffered = '''        with tqdm(
-            total=len(hf_weights_files),
-            desc="Multi-thread loading shards",
-            disable=not enable_tqdm,
-            bar_format=BAR_FORMAT,
-            position=tqdm._get_free_pos(),
-        ) as pbar:
-            while pending:
-                future = pending.popleft()
+# --- Patch 2: buffered_multi_thread_safetensors_weights_iterator (v0.5.15) ---
+# v0.5.15 stores (st_file, future) TUPLES in `pending` and does
+# `st_file, future = pending.popleft()` (for the drop_cache_after_load feature).
+# The old whole-block anchor (expecting `future = pending.popleft()`) silently
+# MISSED on v0.5.15 -> the multi-thread NVFP4 weight load logged NOTHING (the tqdm
+# bar writes \r to non-forwarded stderr; this is the default load path for the big
+# NVFP4 models like glm-5.2-reap-504B). Minimal + drift-resistant fix: keep the
+# (invisible) tqdm bar, add ONE logger.info per shard, anchored on the stable
+# 2-line pop+result. See remote-control 2026-07-15.
+old_buffered = '''                st_file, future = pending.popleft()
+                state_dict = future.result()'''
+new_buffered = '''                st_file, future = pending.popleft()
                 state_dict = future.result()
-                del future  # let GC reclaim the Future's internal result
-
-                # Replenish: submit the next file to keep the buffer full.
-                next_file = next(file_iter, None)
-                if next_file is not None:
-                    pending.append(executor.submit(_load_file, next_file))
-
-                for name in sorted(state_dict.keys()):
-                    yield name, state_dict[name]
-                del state_dict
-                pbar.update(1)'''
-new_buffered = '''        _shard_done = 0
-        _shard_total = len(hf_weights_files)
-        while pending:
-            future = pending.popleft()
-            state_dict = future.result()
-            del future  # let GC reclaim the Future's internal result
-            _shard_done += 1
-
-            if enable_tqdm:
-                logger.info(f"Loading shard {_shard_done}/{_shard_total} ({len(state_dict)} tensors)")
-
-            # Replenish: submit the next file to keep the buffer full.
-            next_file = next(file_iter, None)
-            if next_file is not None:
-                pending.append(executor.submit(_load_file, next_file))
-
-            for name in sorted(state_dict.keys()):
-                yield name, state_dict[name]
-            del state_dict'''
-if old_buffered in code:
+                # [patch] _sgl_buf_iter_per_shard_log_
+                if enable_tqdm:
+                    logger.info(f"Loading shard (multi-thread): {os.path.basename(st_file)} ({len(state_dict)} tensors)")'''
+# Idempotency (2026-07-16): key the already-applied check on a DEDICATED marker checked
+# FIRST. old_buffered is a PREFIX of new_buffered, so `old_buffered in code` stays true
+# after patching -> checking it first would re-inject a second logger.info on any re-run.
+# The marker is also patch-specific: Patch 3 injects the same "Loading shard (multi-thread): "
+# string, so keying the guard on that string would cross-contaminate between the two patches.
+_buf_marker = "# [patch] _sgl_buf_iter_per_shard_log_"
+if _buf_marker in code:
+    print("buffered_multi_thread_safetensors_weights_iterator: per-shard logger.info already applied, skipping")
+elif old_buffered in code:
     code = code.replace(old_buffered, new_buffered, 1)
     patched = True
-    print("Patched buffered_multi_thread_safetensors_weights_iterator: tqdm → logger.info")
+    print("Patched buffered_multi_thread_safetensors_weights_iterator: +per-shard logger.info")
+elif "def buffered_multi_thread_safetensors_weights_iterator(" in code:
+    print("ANCHOR-DRIFT: weight_utils.py: buffered_multi_thread_safetensors_weights_iterator pop+result "
+          "anchor missing (SGLang version drift; re-check anchor) -- the DEFAULT multi-thread NVFP4 weight "
+          "load will NOT log per-shard progress (silent load, e.g. glm-5.2-reap-504B).")
+else:
+    print("ANCHOR-DRIFT: weight_utils.py: buffered_multi_thread_safetensors_weights_iterator function not "
+          "found (SGLang version drift; re-check anchor)")
 
 # --- Patch 3: multi_thread_safetensors_weights_iterator (non-buffered variant) ---
-old_mt = '''        if enable_tqdm:
-            futures_iter = tqdm(
-                concurrent.futures.as_completed(futures),
-                total=len(hf_weights_files),
-                desc="Multi-thread loading shards",
-                disable=not enable_tqdm,
-                bar_format=BAR_FORMAT,
-            )
-        else:
-            futures_iter = concurrent.futures.as_completed(futures)
-
-        for future in futures_iter:
-            state_dict = future.result()
-            for name, param in state_dict.items():
-                yield name, param'''
-new_mt = '''        _mt_done = 0
-        _mt_total = len(hf_weights_files)
-        for future in concurrent.futures.as_completed(futures):
-            state_dict = future.result()
-            _mt_done += 1
-            if enable_tqdm:
-                logger.info(f"Loading shard {_mt_done}/{_mt_total} ({len(state_dict)} tensors)")
-            for name, param in state_dict.items():
-                yield name, param'''
-if old_mt in code:
+# RE-ANCHORED 2026-07-16: _load_file() now returns a (st_file, result) TUPLE (same
+# shape change already handled for the buffered variant in Patch 2 above), so
+# `future.result()` unpacks as `st_file, state_dict = future.result()`, not a bare
+# state_dict — the old single-value anchor never matched. New anchor also covers the
+# drop_cache_after_load tail so that logic is not silently dropped by the patch.
+_mt_marker = "# [patch] _sgl_mt_iter_per_shard_log_"
+old_mt = (
+    "        for future in futures_iter:\n"
+    "            st_file, state_dict = future.result()\n"
+    "            for name, param in state_dict.items():\n"
+    "                yield name, param\n"
+    "            del state_dict\n"
+)
+new_mt = (
+    "        " + _mt_marker + "\n"
+    "        _mt_total = len(hf_weights_files)\n"
+    "        _mt_done = 0\n"
+    "        for future in futures_iter:\n"
+    "            st_file, state_dict = future.result()\n"
+    "            _mt_done += 1\n"
+    "            if enable_tqdm:\n"
+    "                logger.info(\n"
+    "                    f\"Loading shard (multi-thread): {_mt_done}/{_mt_total} \"\n"
+    "                    f\"{os.path.basename(st_file)} ({len(state_dict)} tensors)\"\n"
+    "                )\n"
+    "            for name, param in state_dict.items():\n"
+    "                yield name, param\n"
+    "            del state_dict\n"
+)
+if _mt_marker in code:
+    print("multi_thread_safetensors_weights_iterator: per-shard logger.info already applied, skipping")
+elif old_mt in code:
     code = code.replace(old_mt, new_mt, 1)
     patched = True
-    print("Patched multi_thread_safetensors_weights_iterator: tqdm → logger.info")
+    print("Patched multi_thread_safetensors_weights_iterator: per-shard logger.info (st_file tuple aware)")
+elif "def multi_thread_safetensors_weights_iterator(" in code:
+    print("ANCHOR-DRIFT: weight_utils.py: multi_thread_safetensors_weights_iterator tqdm->logger anchor "
+          "missing (SGLang version drift; re-check anchor) -- that multi-thread load path will NOT log "
+          "per-shard progress.")
+else:
+    print("ANCHOR-DRIFT: weight_utils.py: multi_thread_safetensors_weights_iterator function not found "
+          "(SGLang version drift; re-check anchor)")
 
 if patched:
     if "import os" not in code:
         code = "import os\n" + code
     with open(f, 'w') as fh:
         fh.write(code)
-else:
-    print("weight_utils: no tqdm patch targets found (already patched or code changed)")
+# else: each of the 3 sub-patches above already printed its own precise
+# already-applied / ANCHOR-DRIFT status; no generic catch-all needed here.
 PATCH_SAFETENSORS_TQDM_EOF
 fi
 
 # Patch ShardedStateLoader to log progress per shard file (no progress bar by default)
 LOADER="/usr/local/lib/python3.12/dist-packages/sglang/srt/model_loader/loader.py"
-if grep -q 'for path in filepaths:' "$LOADER" 2>/dev/null; then
+if [ ! -f "$LOADER" ]; then
+  echo "ANCHOR-DRIFT: loader.py: ShardedStateLoader progress logging target file missing (SGLang restructured/renamed?)"
+elif grep -q 'for path in filepaths:' "$LOADER" 2>/dev/null; then
   sed -i 's/for path in filepaths:/for _shard_i, path in enumerate(filepaths, 1):/' "$LOADER"
   sed -i '/_shard_i, path in enumerate(filepaths/a\                logger.info(f"Loading shard {_shard_i}\/{len(filepaths)}: {os.path.basename(path)}")' "$LOADER"
   echo "Patched ShardedStateLoader for per-file progress logging"
+elif grep -q 'for _shard_i, path in enumerate(filepaths' "$LOADER" 2>/dev/null; then
+  echo "ShardedStateLoader progress logging: already applied, skipping"
+else
+  echo "ANCHOR-DRIFT: loader.py: ShardedStateLoader 'for path in filepaths:' anchor missing (SGLang version drift; re-check anchor)"
 fi
 
 # Patch moe_wna16 weight loader for EP-aware qzeros handling (SGLang 0.5.9 bug).
@@ -1751,7 +1992,9 @@ fi
 #   2. Uses global tp_rank for TP-slice, but moe_tp_size=tp/ep — need tp_rank % moe_tp_size
 # Safe no-op when ep_size=1 (identity mapping, tp_rank unchanged).
 MOE_WNA16="/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/quantization/moe_wna16.py"
-if grep -q 'param\.data\[expert_id' "$MOE_WNA16" 2>/dev/null; then
+if [ ! -f "$MOE_WNA16" ]; then
+  echo "ANCHOR-DRIFT: moe_wna16.py: EP-aware qzeros remap target file missing (SGLang restructured/renamed?)"
+else
   python3 << 'PATCH_QZEROS_EOF'
 import sys
 f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/quantization/moe_wna16.py"
@@ -1789,17 +2032,27 @@ new_w2 = '''            elif "w2_qzeros" in weight_name:
                 param.data[_local_id] = loaded_weight.view(
                     loaded_weight.size(0), layer.moe_tp_size, -1
                 )[:, _moe_tp_rank]'''
-if old_w13 not in code:
-    print("w13_qzeros: already patched or source changed, skipping")
+changed = False
+if new_w13 in code:
+    print("w13_qzeros: already applied, skipping")
+elif old_w13 not in code:
+    print("ANCHOR-DRIFT: moe_wna16.py: w13_qzeros EP-aware remap anchor missing (SGLang version drift; re-check anchor)")
     sys.exit(0)
-if old_w2 not in code:
-    print("w2_qzeros: already patched or source changed, skipping")
+else:
+    code = code.replace(old_w13, new_w13, 1)
+    changed = True
+if new_w2 in code:
+    print("w2_qzeros: already applied, skipping")
+elif old_w2 not in code:
+    print("ANCHOR-DRIFT: moe_wna16.py: w2_qzeros EP-aware remap anchor missing (SGLang version drift; re-check anchor)")
     sys.exit(0)
-code = code.replace(old_w13, new_w13, 1)
-code = code.replace(old_w2, new_w2, 1)
-with open(f, 'w') as fh:
-    fh.write(code)
-print("Patched moe_wna16.py: EP-aware expert_id + tp_rank remapping for qzeros")
+else:
+    code = code.replace(old_w2, new_w2, 1)
+    changed = True
+if changed:
+    with open(f, 'w') as fh:
+        fh.write(code)
+    print("Patched moe_wna16.py: EP-aware expert_id + tp_rank remapping for qzeros")
 PATCH_QZEROS_EOF
 fi
 
@@ -1816,7 +2069,9 @@ fi
 # The cutedsl branch has _slice_scale() but the else-branch is missing it.
 # Fix: slice input_scale to local experts in the else-branch.
 MODELOPT_QUANT="/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/quantization/modelopt_quant.py"
-if grep -q 'w13_input_scale\.max(dim=-1)' "$MODELOPT_QUANT" 2>/dev/null; then
+if [ ! -f "$MODELOPT_QUANT" ]; then
+  echo "ANCHOR-DRIFT: modelopt_quant.py: EP-aware input_scale slicing target file missing (SGLang restructured/renamed?)"
+elif grep -q 'w13_input_scale\.max(dim=-1)' "$MODELOPT_QUANT" 2>/dev/null; then
   python3 << 'PATCH_MODELOPT_EOF'
 import sys
 f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/quantization/modelopt_quant.py"
@@ -1835,24 +2090,36 @@ new = '''        else:
                 _ep_end = _ep_start + layer.num_local_experts
                 w13_input_scale = w13_input_scale[_ep_start:_ep_end]
                 w2_input_scale = w2_input_scale[_ep_start:_ep_end]'''
-if old not in code:
-    print("modelopt_quant.py else-branch: already patched or source changed, skipping")
+_already_marker = "# EP-aware slicing: input_scale has shape"
+if _already_marker in code:
+    print("modelopt_quant.py else-branch: already applied, skipping")
+elif old not in code:
+    print("ANCHOR-DRIFT: modelopt_quant.py: EP-aware input_scale slicing else-branch anchor missing (SGLang version drift; re-check anchor)")
     sys.exit(0)
-code = code.replace(old, new, 1)
-with open(f, 'w') as fh:
-    fh.write(code)
-print("Patched modelopt_quant.py: EP-aware input_scale slicing in else-branch")
+else:
+    code = code.replace(old, new, 1)
+    with open(f, 'w') as fh:
+        fh.write(code)
+    print("Patched modelopt_quant.py: EP-aware input_scale slicing in else-branch")
 PATCH_MODELOPT_EOF
+else
+  echo "ANCHOR-DRIFT: modelopt_quant.py: EP-aware input_scale slicing outer probe missing (SGLang version drift; re-check anchor)"
 fi
 
 # Patch modelopt_quant.py: CutlassMoEParams uses layer.num_experts (global=256)
 # instead of layer.num_local_experts (128 with EP=2). The cutlass_moe_fp4 forward
 # function then asserts num_experts == weight expert dim, which fails because
 # weights are EP-sliced to num_local_experts. Fix: use num_local_experts.
-if grep -q 'num_experts=layer.num_experts,  # global num experts' "$MODELOPT_QUANT" 2>/dev/null; then
+if [ ! -f "$MODELOPT_QUANT" ]; then
+  echo "ANCHOR-DRIFT: modelopt_quant.py: CutlassMoEParams num_local_experts EP fix target file missing (SGLang restructured/renamed?)"
+elif grep -q 'num_experts=layer.num_experts,  # global num experts' "$MODELOPT_QUANT" 2>/dev/null; then
   sed -i 's/num_experts=layer\.num_experts,  # global num experts/num_experts=layer.num_local_experts,  # EP-aware: use local expert count/' "$MODELOPT_QUANT"
   sed -i 's/existing_params\.num_experts != layer\.num_experts/existing_params.num_experts != layer.num_local_experts/' "$MODELOPT_QUANT"
   echo "Patched modelopt_quant.py: CutlassMoEParams uses num_local_experts for EP"
+elif grep -q 'num_experts=layer.num_local_experts,  # EP-aware: use local expert count' "$MODELOPT_QUANT" 2>/dev/null; then
+  echo "modelopt_quant.py: CutlassMoEParams EP fix already applied, skipping"
+else
+  echo "ANCHOR-DRIFT: modelopt_quant.py: CutlassMoEParams num_local_experts EP fix anchor missing (SGLang version drift; re-check anchor)"
 fi
 
 # Patch cutlass_moe.py: cutlass_moe_fp4 EP correctness fix. Two independent
@@ -1894,7 +2161,11 @@ fi
 # cutlass_moe_fp4 codepath under EP that we are aware of. See
 # SGLANG_NVFP4_SHUFFLE_ROWS_OOB_UPSTREAM_BUG.md for the full debug ordeal.
 CUTLASS_MOE="/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/moe/cutlass_moe.py"
-if grep -q 'a_map = torch.empty((topk_ids.numel())' "$CUTLASS_MOE" 2>/dev/null; then
+if [ ! -f "$CUTLASS_MOE" ]; then
+  echo "ANCHOR-DRIFT: cutlass_moe.py: a_map/c_map zero-init target file missing (SGLang restructured/renamed?)"
+elif grep -q 'EP-aware: mask topk_weights where topk_ids' "$CUTLASS_MOE" 2>/dev/null; then
+  echo "cutlass_moe.py: EP-aware zero-init already applied, skipping"
+elif grep -q 'a_map = torch.empty((topk_ids.numel())' "$CUTLASS_MOE" 2>/dev/null; then
   python3 << 'PATCH_CUTLASS_MOE_ZEROINIT_EOF'
 import sys
 f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/moe/cutlass_moe.py"
@@ -1926,13 +2197,15 @@ new = '''    num_topk = topk_ids.shape[1]
     a_map = torch.zeros((topk_ids.numel()), dtype=torch.int32, device=device)
     c_map = torch.zeros((topk_ids.numel()), dtype=torch.int32, device=device)'''
 if old not in code:
-    print("cutlass_moe.py: already patched or source changed, skipping")
+    print("ANCHOR-DRIFT: cutlass_moe.py: a_map/c_map zero-init + topk_weights mask anchor missing (SGLang version drift; re-check anchor)")
     sys.exit(0)
 code = code.replace(old, new, 1)
 with open(f, 'w') as fh:
     fh.write(code)
 print("Patched cutlass_moe.py: a_map/c_map zero-init + topk_weights mask for EP")
 PATCH_CUTLASS_MOE_ZEROINIT_EOF
+else
+  echo "ANCHOR-DRIFT: cutlass_moe.py: a_map/c_map zero-init anchor missing (SGLang version drift; re-check anchor)"
 fi
 
 # [removed 2026-07-12] ModelOptModelLoader sharded_state patch dropped: verified the
@@ -1945,7 +2218,11 @@ fi
 # calls to share the target model's embed/head weights with the draft model.
 # Every other NEXTN-capable model (DeepSeek, GLM, Llama) has this method.
 MINIMAX_M2="/usr/local/lib/python3.12/dist-packages/sglang/srt/models/minimax_m2.py"
-if [ -f "$MINIMAX_M2" ] && grep -q 'def get_embed_and_head' "$MINIMAX_M2" && ! grep -q 'def set_embed_and_head' "$MINIMAX_M2"; then
+if [ ! -f "$MINIMAX_M2" ]; then
+  echo "ANCHOR-DRIFT: minimax_m2.py: set_embed_and_head NEXTN patch target file missing (SGLang restructured/renamed?)"
+elif grep -q 'def set_embed_and_head' "$MINIMAX_M2"; then
+  echo "MiniMax NEXTN patch: already applied, skipping"
+elif grep -q 'def get_embed_and_head' "$MINIMAX_M2"; then
   python3 << 'PATCH_MINIMAX_NEXTN_EOF'
 f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/models/minimax_m2.py"
 with open(f) as fh:
@@ -1967,7 +2244,7 @@ with open(f, 'w') as fh:
 print("Patched MiniMaxM2ForCausalLM: added set_embed_and_head for NEXTN speculative decoding")
 PATCH_MINIMAX_NEXTN_EOF
 else
-  echo "MiniMax NEXTN patch: not needed or already applied, skipping"
+  echo "ANCHOR-DRIFT: minimax_m2.py: get_embed_and_head anchor missing (SGLang version drift; re-check anchor)"
 fi
 
 # Patch DeepseekV3Config.kv_lora_rank to allow None for the DeepSeek-V4-Flash
@@ -1990,7 +2267,9 @@ fi
 # reimport. NOTE: clears the config-parse blocker only — Flash serving may still
 # hit further upstream issues downstream (sglang #25165 / #23743).
 DEEPSEEK_V3_CFG="/usr/local/lib/python3.12/dist-packages/transformers/models/deepseek_v3/configuration_deepseek_v3.py"
-if [ -f "$DEEPSEEK_V3_CFG" ] && grep -q 'kv_lora_rank: int = 512' "$DEEPSEEK_V3_CFG"; then
+if [ ! -f "$DEEPSEEK_V3_CFG" ]; then
+  echo "ANCHOR-DRIFT: configuration_deepseek_v3.py: kv_lora_rank Optional widening target file missing (transformers restructured/renamed?)"
+elif grep -q 'kv_lora_rank: int = 512' "$DEEPSEEK_V3_CFG"; then
   python3 << 'PATCH_DSV4_KVLORA_EOF'
 f = "/usr/local/lib/python3.12/dist-packages/transformers/models/deepseek_v3/configuration_deepseek_v3.py"
 with open(f) as fh:
@@ -1998,7 +2277,7 @@ with open(f) as fh:
 old = "    kv_lora_rank: int = 512"
 new = "    kv_lora_rank: int | None = 512"
 if old not in code:
-    print("DeepseekV3Config kv_lora_rank patch: marker not found, skipping")
+    print("ANCHOR-DRIFT: configuration_deepseek_v3.py: kv_lora_rank Optional widening (SGLang version drift; re-check anchor)")
 else:
     code = code.replace(old, new, 1)
     with open(f, 'w') as fh:
@@ -2027,7 +2306,9 @@ fi
 # exactly as the normal safetensors iterator yields them. Inert unless
 # load_format=fastsafetensors. See UPSTREAM_DSV4_BUGS.md.
 FST_F="/usr/local/lib/python3.12/dist-packages/sglang/srt/model_loader/weight_utils.py"
-if [ -f "$FST_F" ] && grep -q 'device = torch.device(f"cuda:{rank}")' "$FST_F"; then
+if [ ! -f "$FST_F" ]; then
+  echo "ANCHOR-DRIFT: weight_utils.py: fastsafetensors target file missing (SGLang restructured/renamed?)"
+elif grep -q 'device = torch.device(f"cuda:{rank}")' "$FST_F"; then
   python3 << 'PATCH_DSV4_FST_EOF'
 f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/model_loader/weight_utils.py"
 code = open(f).read()
@@ -2061,11 +2342,11 @@ else:
     if old1 in code:
         code = code.replace(old1, new1, 1); changed = True
     else:
-        print("fastsafetensors patch: pg/device marker not found")
+        print("ANCHOR-DRIFT: weight_utils.py: fastsafetensors pg/device (SGLang version drift; re-check anchor)")
     if old2 in code:
         code = code.replace(old2, new2, 1); changed = True
     else:
-        print("fastsafetensors patch: SafeTensorsFileLoader marker not found")
+        print("ANCHOR-DRIFT: weight_utils.py: fastsafetensors SafeTensorsFileLoader (SGLang version drift; re-check anchor)")
     if changed:
         open(f, "w").write(code)
         print("Patched fastsafetensors_weights_iterator: SingleGroup + local device + nogds")

@@ -58,8 +58,30 @@ _model_profile:
     # matrix for this checkpoint.
     moe_runner_backend: "flashinfer_cutlass"
     kv_cache_dtype: "fp8_e4m3"
-    mem_fraction_static: "0.80"  # PP=4 with ~20 layers/GPU; fewer experts than base → extra room, can raise after validation
-    attention_backend: "flashinfer"
+    mem_fraction_static: "0.99"  # 2026-07-15 MTP config: 0.99 (tiny post-weight reserve) makes the
+                                 # memory-derived KV capacity large so the max_total_tokens cap BINDS and
+                                 # KV is deterministic. Base-only needed >=0.847 (ValueError floor). mem_fraction
+                                 # is a POST-WEIGHT reserve (higher = smaller reserve = more KV), NOT
+                                 # fraction-of-total. Paired with max_total_tokens below: KV pool fixed ~13 GB,
+                                 # the rest stays FREE for base+draft CUDA-graph capture.
+    max_total_tokens: "262144"   # 256k cap. min(memory-derived, this) -> KV pool = 256k tokens (~13 GB),
+                                 # leftover memory stays free for the MTP draft worker's weights + graph capture.
+                                 # UNMEASURED: draft weight size unknown (earlier MTP crashed on the w13 bug pre-
+                                 # alloc) -> watch avail_mem at draft capture + the KV alloc line, adjust if tight.
+    attention_backend: "flashinfer"  # KEEP flashinfer. "dsa" was tried 2026-07-16 and is a HARD NO-GO on
+                                 # GB10/SM121 (GPU-debug-pod verified): DeepseekSparseAttnBackend's indexer
+                                 # dispatches paged-MQA-logits to DeepGEMM (dsa_paged_mqa_logits_backend=auto ->
+                                 # DEEPGEMM), and deep_gemm.get_paged_mqa_logits_metadata() throws a compiled
+                                 # C++ "Unsupported architecture" assert on SM121. That path runs on EVERY decode
+                                 # step (not just draft), so "dsa" would crash the TARGET on its first token.
+                                 # Alternatives dead on GB10: cutedsl gated behind is_sm100_supported()=False;
+                                 # the SGLANG_FP8_PAGED_MQA_LOGITS_TORCH fallback is wired only into dsv4/indexer.py
+                                 # (DeepSeek-V4), NOT the dsa.dsa_indexer.Indexer that GlmMoeDsa uses; aiter=ROCm.
+                                 # KEY: under "flashinfer", FlashInferMLAAttnBackend.get_indexer_metadata() returns
+                                 # None -> the sparse indexer is a silent no-op -> this model runs DENSE MLA
+                                 # (correct but slow, the fa2 path in DSA_speedup.md). DSA sparse never actually
+                                 # runs here. MTP/NEXTN needs the indexer (draft is_nextn always computes
+                                 # topk_indices) -> blocked by the same DeepGEMM SM121 gap until it is closed.
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 4
     disable_piecewise_cuda_graph: true
@@ -98,10 +120,26 @@ _model_profile:
     # num_nextn_predict_layers=1, and REAP kept 168 experts on the MTP layer too, so
     # it "loads and serves cleanly." NEXTN uses the model's own MTP head (no external
     # draft model). Same GLM family as nvidia/GLM-4.7-NVFP4, where MTP is VALIDATED:
-    # +68% n=1, +35% n=4/n=8. Values mirror that profile. UNTESTED on this GLM-5.2
-    # checkpoint — the sibling GLM-5 / GLM-5.2 profiles leave MTP off pending a
-    # matrix; flip speculative_enabled:false if the head misbehaves at boot.
-    speculative_enabled: true
+    # +68% n=1, +35% n=4/n=8. Values mirror that profile.
+    # DISABLED 2026-07-15 (verified crash, user go): the "loads and serves cleanly"
+    # claim is FALSE for this NVFP4 export. The base model loads native+clean
+    # (GlmMoeDsa, modelopt_fp4, Load weight end elapsed=1422s), but the NEXTN head
+    # crash-loops the boot in deepseek_nextn.load_weights → fused_moe _load_w13
+    # expert_data.copy_(loaded_weight): "size of tensor a (6144) must match b (3072)"
+    # — the MTP layer's MoE w13 (2×intermediate) is shape-incompatible with the
+    # main-model config the deepseek_nextn loader assumes (REAP pruned the main MoE
+    # but the MTP head's intermediate does not line up). Base serves fine without it.
+    # PATCHED 2026-07-15: sglang_launch.sh carries _sgl_dsnextn_mixed_mtp_ — it keeps
+    # modelopt_fp4 on the NextN head and aliases the layer-N excludes to model.decoder.*
+    # so the MTP experts load NVFP4 while attn/gate/shared stay BF16 (verified: bash -n,
+    # real-anchor apply, py_compile, is_layer_excluded logic test). WEIGHT-LOAD LIVE-VALIDATED
+    # 2026-07-16: draft loaded (DeepseekV3ForCausalLMNextN, NVFP4, 2.47 GB), both KV pools
+    # allocated at the 256k cap, no w13 crash. BUT draft cuda-graph capture then crashed on a
+    # SEPARATE issue: flashinfer MLA forward_decode() lacks topk_indices (DSA draft path) ->
+    # fix is attention_backend "flashinfer"->"dsa" above. TURNED OFF here to isolate + validate
+    # the dsa backend on the BASE model first (one variable per step); re-enable after dsa is
+    # confirmed serving. The patch itself is proven; only the DSA draft-attention path remains.
+    speculative_enabled: false
     speculative_algo: NEXTN
     speculative_num_steps: 3
     speculative_num_draft_tokens: 4

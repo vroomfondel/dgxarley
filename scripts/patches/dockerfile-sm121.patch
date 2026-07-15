@@ -62,6 +62,20 @@ Structural changes to container-build/Dockerfile.sglang-nightly:
    loop. No `#` comments live inside these RUNs — shell-form joins every
    continued line into one, where a `#` would comment out the remainder.
 
+8. Set ENV DGXARLEY_RUNTIME_LIBS_BAKED=1 in the RUNTIME stage (right after the
+   runtime apt/pip step). The runtime launch script
+   (roles/k8s_dgx/files/sglang_launch.sh) reads it to SKIP its own apt bootstrap
+   entirely — our image bakes the runtime deps in, so a served pod never touches
+   the (lossy, US-hosted) Ubuntu mirror at start. Stock upstream images (no marker)
+   still install via that script's FAU-mirror + retry loop.
+
+9. Build-time smoke test at the END of the RUNTIME stage:
+     RUN python3 -c "import cutlass.cute; import sglang.srt.models.deepseek_v2, glm4_moe"
+   FAILS the build (instead of shipping a broken image) if the pinned cutlass-dsl
+   version drops cutlass.cute. Its absence silently unregisters every
+   DeepSeek-V2-derived model class (DeepSeek-V2/V3/V4, GLM-5/glm_moe_dsa) and
+   forces the slow/broken Transformers backend — caught at BUILD, not at deploy.
+
 Idempotency: Every patch application is preceded by a dry-run so
 upstream drift fails immediately with a clear diagnostic instead of
 producing a half-patched image. Post-apply `grep -q '<marker>'` calls
@@ -253,7 +267,7 @@ carries this patch; see scripts/build_sm121_image.sh.
  # Break up dist-packages into smaller layers to avoid hitting Docker layer size limits
  COPY stages/directory_split2.sh /opt/directory_split2.sh
  RUN chmod +x /opt/directory_split2.sh && \
-@@ -203,23 +322,44 @@
+@@ -203,25 +322,50 @@
      TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
  
  # runtime base installs
@@ -314,4 +328,23 @@ carries this patch; see scripts/build_sm121_image.sh.
 +    rm -rf /var/lib/apt/lists/* && \
      pip install uv && (pip uninstall -y flash-attn || true)
  
++# dgxarley: marks OUR custom image so the runtime launch script skips its apt
++# bootstrap (roles/k8s_dgx/files/sglang_launch.sh); runtime deps baked in above.
++ENV DGXARLEY_RUNTIME_LIBS_BAKED=1 PYTHONUNBUFFERED=1
++
  # Copy Python dependencies from builder (split into 4 layers for size management)
+ COPY --from=builder /usr/local/lib/python3.12/dist-packages-1/ /usr/local/lib/python3.12/dist-packages/
+ COPY --from=builder /usr/local/lib/python3.12/dist-packages-2/ /usr/local/lib/python3.12/dist-packages/
+@@ -235,6 +379,12 @@
+ WORKDIR /data/sglang
+ RUN apt-get clean && rm -rf /var/lib/apt/lists/*
+ 
++# dgxarley: build-time smoke test — FAIL the build (instead of shipping a broken
++# image) if the cutlass-dsl pin drops cutlass.cute. Its absence silently
++# unregisters every DeepSeek-V2-derived model (DeepSeek-V2/V3/V4,
++# GLM-5/glm_moe_dsa) -> forced Transformers backend -> MLA-TP crash at load.
++RUN python3 -c "import cutlass.cute; import sglang.srt.models.deepseek_v2, sglang.srt.models.glm4_moe; print('cutlass.cute + deepseek/glm registry import OK')"
++
+ # =============================================================================
+ # Wheel carrier stage: minimal image containing just the built wheels
+ # Consumers use: COPY --from=ghcr.io/scitrera/sglang-nightly-wheels:tag /wheels/ /tmp/wheels/

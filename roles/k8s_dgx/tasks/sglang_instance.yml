@@ -412,8 +412,67 @@
               - name: model-download
                 image: "{{ sglang_image }}"
                 imagePullPolicy: Always
-                command: ["python3", "/scripts/download_models.py"]
+                command: ["/bin/bash", "-c"]
+                args:
+                  - |
+                    JFS="{{ hf_hub_cache_on_juicefs | bool | ternary('yes', 'no') }}"
+                    MARKDIR=/root/.cache/huggingface/hub/.preload-done
+                    if [ "$JFS" != "yes" ]; then
+                      exec python3 /scripts/download_models.py   # local per-node cache: every pod downloads itself
+                    fi
+                    if [ "${SGLANG_ROLE:-}" = "head" ]; then
+                      # Shared JuiceFS: the HEAD is the single downloader (one writer to the
+                      # shared dir), then drops a per-model done-marker for the workers.
+                      python3 /scripts/download_models.py || exit $?
+                      mkdir -p "$MARKDIR"
+                      for m in $(printf '%s' "$HF_PRELOAD_MODELS" | tr ',' ' '); do
+                        touch "$MARKDIR/$(printf '%s' "$m" | sed 's#/#--#g')"
+                      done
+                      echo "[preload] head download complete; markers written"
+                    else
+                      # Worker on shared JuiceFS: do NOT download (avoids a concurrent-write race
+                      # on the shared dir + redundant work). Wait for the head's per-model markers;
+                      # kick off a BACKGROUND warmup so warming overlaps the wait without blocking
+                      # the poll, and print the cache-fill % (juicefs warmup --check) each round.
+                      # Non-fatal 30min timeout -> sglang then fails loudly on a missing model.
+                      echo "[preload-wait] shared JuiceFS -> waiting for head preload markers (<=30min); background-warming"
+                      start=$(date +%s); deadline=$(( start + 1800 ))
+                      MODELS=$(printf '%s' "$HF_PRELOAD_MODELS" | tr ',' ' ')
+                      HAVE_JFS=no; [ -x /usr/local/bin/juicefs ] && HAVE_JFS=yes
+                      if [ "$HAVE_JFS" = yes ]; then
+                        for m in $MODELS; do
+                          d="/root/.cache/huggingface/hub/models--$(printf '%s' "$m" | sed 's#/#--#g')"
+                          [ -d "$d" ] && /usr/local/bin/juicefs warmup --threads 1 --background "$d" >/dev/null 2>&1 || true
+                        done
+                      fi
+                      while :; do
+                        now=$(date +%s); elapsed=$(( now - start )); pending=
+                        for m in $MODELS; do
+                          [ -e "$MARKDIR/$(printf '%s' "$m" | sed 's#/#--#g')" ] || pending="$pending $m"
+                        done
+                        [ -z "$pending" ] && { echo "[preload-wait] all markers present after ${elapsed}s"; break; }
+                        [ "$now" -ge "$deadline" ] && { echo "[preload-wait] TIMEOUT after ${elapsed}s; still pending:$pending (non-fatal)"; break; }
+                        if [ "$HAVE_JFS" = yes ]; then
+                          for m in $MODELS; do
+                            d="/root/.cache/huggingface/hub/models--$(printf '%s' "$m" | sed 's#/#--#g')"
+                            [ -d "$d" ] || continue
+                            pct=$(/usr/local/bin/juicefs warmup --check "$d" 2>&1 | grep -oE '\([0-9.]+%\)' | tail -1)
+                            echo "[preload-wait] ${elapsed}s; pending:$pending; warming $(basename "$d") cached=${pct:-?}"
+                          done
+                        else
+                          echo "[preload-wait] ${elapsed}s; pending:$pending"
+                        fi
+                        sleep 20
+                      done
+                    fi
                 env:
+                  # Role from the pod's own label (downward API) so the SAME manifest
+                  # branches head=download / worker=wait at runtime (structure stays
+                  # constant -> strategic-merge-safe, no orphaned containers).
+                  - name: SGLANG_ROLE
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: "metadata.labels['role']"
                   - name: HF_PRELOAD_MODELS
                     value: "{{ _sglang_active_model }}{{ ',' + sglang_speculative_draft_model_path if (sglang_speculative_enabled | bool) and sglang_speculative_draft_model_path else '' }}"
                   - name: HF_TOKEN
@@ -435,6 +494,53 @@
                   - name: model-download-script
                     mountPath: /scripts
                     readOnly: true
+                  - name: juicefs-bin
+                    mountPath: /usr/local/bin/juicefs
+                    readOnly: true
+              - name: jfs-warmup
+                image: "{{ sglang_image }}"
+                # Pre-warm THIS node's JuiceFS blockcache for the active model so the
+                # sglang container starts with a WARM cache (fast load) instead of pulling
+                # cold shards from the single spark4 backend mid-startup. Runs in an
+                # initContainer (no liveness/startup probe), gated on hf_hub_cache_on_juicefs.
+                # `juicefs warmup` is cache-aware -> fetches ONLY uncached blocks, so a warm
+                # node is a quick no-op (no wasteful full re-read). Non-fatal. When JuiceFS is
+                # off the juicefs-bin volume points at /bin/true and the command exits early.
+                env:
+                  - name: HF_PRELOAD_MODELS
+                    value: "{{ _sglang_active_model }}{{ ',' + sglang_speculative_draft_model_path if (sglang_speculative_enabled | bool) and sglang_speculative_draft_model_path else '' }}"
+                command: ["/bin/bash", "-c"]
+                args:
+                  - |
+                    if [ "{{ hf_hub_cache_on_juicefs | bool | ternary('yes', 'no') }}" != "yes" ]; then
+                      echo "[jfs-warmup] JuiceFS cache off -> no warmup"; exit 0
+                    fi
+                    if [ ! -x /usr/local/bin/juicefs ]; then
+                      echo "[jfs-warmup] juicefs binary not mounted -> skip"; exit 0
+                    fi
+                    # Warm the SAME comma-list the preload downloads (primary + MTP/draft):
+                    # submit a BACKGROUND warmup, then poll `juicefs warmup --check` and print the
+                    # cache-fill % until fully cached (or a ~40min cap). Non-fatal.
+                    for m in $(printf '%s' "$HF_PRELOAD_MODELS" | tr ',' ' '); do
+                      DIR="/root/.cache/huggingface/hub/models--$(printf '%s' "$m" | sed 's#/#--#g')"
+                      [ -d "$DIR" ] || { echo "[jfs-warmup] ${DIR} absent -> skip"; continue; }
+                      echo "[jfs-warmup] warming ${DIR} (background)"
+                      /usr/local/bin/juicefs warmup --threads 1 --background "${DIR}" || echo "[jfs-warmup] submit rc=$? (non-fatal)"
+                      for i in $(seq 1 80); do
+                        chk=$(/usr/local/bin/juicefs warmup --check "${DIR}" 2>&1)
+                        pct=$(printf '%s' "$chk" | grep -oE '\([0-9.]+%\)' | tail -1)
+                        echo "[jfs-warmup] ${DIR} cached=${pct:-?}"
+                        printf '%s' "$chk" | grep -q '(100.0%)' && { echo "[jfs-warmup] ${DIR} fully cached"; break; }
+                        sleep 30
+                      done
+                    done
+                volumeMounts:
+                  - name: hf-cache
+                    mountPath: /root/.cache/huggingface
+                    mountPropagation: "{{ 'HostToContainer' if hf_hub_cache_on_juicefs | bool else 'None' }}"
+                  - name: juicefs-bin
+                    mountPath: /usr/local/bin/juicefs
+                    readOnly: true
             containers:
               - name: sglang
                 image: "{{ sglang_image }}"
@@ -444,6 +550,10 @@
                   - configMapRef:
                       name: "{{ inst.prefix }}-config"
                 env:
+                  # Unbuffered stdout/stderr so logger/print lines reach kubectl
+                  # logs immediately (esp. the per-shard weight-load progress).
+                  - name: PYTHONUNBUFFERED
+                    value: "1"
                   - name: SGLANG_IMAGE
                     value: "{{ sglang_image }}"
                   - name: NODE_RANK
@@ -550,6 +660,12 @@
                 configMap:
                   name: "{{ inst.prefix }}-launch-script"
                   defaultMode: 0755
+              # Host juicefs binary (read-only) for the jfs-warmup initContainer. Points
+              # at /bin/true when JuiceFS is off so the hostPath File mount stays valid.
+              - name: juicefs-bin
+                hostPath:
+                  path: "{{ '/usr/local/bin/juicefs' if hf_hub_cache_on_juicefs | bool else '/bin/true' }}"
+                  type: File
 
 - name: Deploy SGLang head Deployment ({{ inst.prefix }})
   kubernetes.core.k8s:
@@ -608,8 +724,67 @@
               - name: model-download
                 image: "{{ sglang_image }}"
                 imagePullPolicy: Always
-                command: ["python3", "/scripts/download_models.py"]
+                command: ["/bin/bash", "-c"]
+                args:
+                  - |
+                    JFS="{{ hf_hub_cache_on_juicefs | bool | ternary('yes', 'no') }}"
+                    MARKDIR=/root/.cache/huggingface/hub/.preload-done
+                    if [ "$JFS" != "yes" ]; then
+                      exec python3 /scripts/download_models.py   # local per-node cache: every pod downloads itself
+                    fi
+                    if [ "${SGLANG_ROLE:-}" = "head" ]; then
+                      # Shared JuiceFS: the HEAD is the single downloader (one writer to the
+                      # shared dir), then drops a per-model done-marker for the workers.
+                      python3 /scripts/download_models.py || exit $?
+                      mkdir -p "$MARKDIR"
+                      for m in $(printf '%s' "$HF_PRELOAD_MODELS" | tr ',' ' '); do
+                        touch "$MARKDIR/$(printf '%s' "$m" | sed 's#/#--#g')"
+                      done
+                      echo "[preload] head download complete; markers written"
+                    else
+                      # Worker on shared JuiceFS: do NOT download (avoids a concurrent-write race
+                      # on the shared dir + redundant work). Wait for the head's per-model markers;
+                      # kick off a BACKGROUND warmup so warming overlaps the wait without blocking
+                      # the poll, and print the cache-fill % (juicefs warmup --check) each round.
+                      # Non-fatal 30min timeout -> sglang then fails loudly on a missing model.
+                      echo "[preload-wait] shared JuiceFS -> waiting for head preload markers (<=30min); background-warming"
+                      start=$(date +%s); deadline=$(( start + 1800 ))
+                      MODELS=$(printf '%s' "$HF_PRELOAD_MODELS" | tr ',' ' ')
+                      HAVE_JFS=no; [ -x /usr/local/bin/juicefs ] && HAVE_JFS=yes
+                      if [ "$HAVE_JFS" = yes ]; then
+                        for m in $MODELS; do
+                          d="/root/.cache/huggingface/hub/models--$(printf '%s' "$m" | sed 's#/#--#g')"
+                          [ -d "$d" ] && /usr/local/bin/juicefs warmup --threads 1 --background "$d" >/dev/null 2>&1 || true
+                        done
+                      fi
+                      while :; do
+                        now=$(date +%s); elapsed=$(( now - start )); pending=
+                        for m in $MODELS; do
+                          [ -e "$MARKDIR/$(printf '%s' "$m" | sed 's#/#--#g')" ] || pending="$pending $m"
+                        done
+                        [ -z "$pending" ] && { echo "[preload-wait] all markers present after ${elapsed}s"; break; }
+                        [ "$now" -ge "$deadline" ] && { echo "[preload-wait] TIMEOUT after ${elapsed}s; still pending:$pending (non-fatal)"; break; }
+                        if [ "$HAVE_JFS" = yes ]; then
+                          for m in $MODELS; do
+                            d="/root/.cache/huggingface/hub/models--$(printf '%s' "$m" | sed 's#/#--#g')"
+                            [ -d "$d" ] || continue
+                            pct=$(/usr/local/bin/juicefs warmup --check "$d" 2>&1 | grep -oE '\([0-9.]+%\)' | tail -1)
+                            echo "[preload-wait] ${elapsed}s; pending:$pending; warming $(basename "$d") cached=${pct:-?}"
+                          done
+                        else
+                          echo "[preload-wait] ${elapsed}s; pending:$pending"
+                        fi
+                        sleep 20
+                      done
+                    fi
                 env:
+                  # Role from the pod's own label (downward API) so the SAME manifest
+                  # branches head=download / worker=wait at runtime (structure stays
+                  # constant -> strategic-merge-safe, no orphaned containers).
+                  - name: SGLANG_ROLE
+                    valueFrom:
+                      fieldRef:
+                        fieldPath: "metadata.labels['role']"
                   - name: HF_PRELOAD_MODELS
                     value: "{{ _sglang_active_model }}{{ ',' + sglang_speculative_draft_model_path if (sglang_speculative_enabled | bool) and sglang_speculative_draft_model_path else '' }}"
                   - name: HF_TOKEN
@@ -630,6 +805,53 @@
                     mountPropagation: "{{ 'HostToContainer' if hf_hub_cache_on_juicefs | bool else 'None' }}"
                   - name: model-download-script
                     mountPath: /scripts
+                    readOnly: true
+                  - name: juicefs-bin
+                    mountPath: /usr/local/bin/juicefs
+                    readOnly: true
+              - name: jfs-warmup
+                image: "{{ sglang_image }}"
+                # Pre-warm THIS node's JuiceFS blockcache for the active model so the
+                # sglang container starts with a WARM cache (fast load) instead of pulling
+                # cold shards from the single spark4 backend mid-startup. Runs in an
+                # initContainer (no liveness/startup probe), gated on hf_hub_cache_on_juicefs.
+                # `juicefs warmup` is cache-aware -> fetches ONLY uncached blocks, so a warm
+                # node is a quick no-op (no wasteful full re-read). Non-fatal. When JuiceFS is
+                # off the juicefs-bin volume points at /bin/true and the command exits early.
+                env:
+                  - name: HF_PRELOAD_MODELS
+                    value: "{{ _sglang_active_model }}{{ ',' + sglang_speculative_draft_model_path if (sglang_speculative_enabled | bool) and sglang_speculative_draft_model_path else '' }}"
+                command: ["/bin/bash", "-c"]
+                args:
+                  - |
+                    if [ "{{ hf_hub_cache_on_juicefs | bool | ternary('yes', 'no') }}" != "yes" ]; then
+                      echo "[jfs-warmup] JuiceFS cache off -> no warmup"; exit 0
+                    fi
+                    if [ ! -x /usr/local/bin/juicefs ]; then
+                      echo "[jfs-warmup] juicefs binary not mounted -> skip"; exit 0
+                    fi
+                    # Warm the SAME comma-list the preload downloads (primary + MTP/draft):
+                    # submit a BACKGROUND warmup, then poll `juicefs warmup --check` and print the
+                    # cache-fill % until fully cached (or a ~40min cap). Non-fatal.
+                    for m in $(printf '%s' "$HF_PRELOAD_MODELS" | tr ',' ' '); do
+                      DIR="/root/.cache/huggingface/hub/models--$(printf '%s' "$m" | sed 's#/#--#g')"
+                      [ -d "$DIR" ] || { echo "[jfs-warmup] ${DIR} absent -> skip"; continue; }
+                      echo "[jfs-warmup] warming ${DIR} (background)"
+                      /usr/local/bin/juicefs warmup --threads 1 --background "${DIR}" || echo "[jfs-warmup] submit rc=$? (non-fatal)"
+                      for i in $(seq 1 80); do
+                        chk=$(/usr/local/bin/juicefs warmup --check "${DIR}" 2>&1)
+                        pct=$(printf '%s' "$chk" | grep -oE '\([0-9.]+%\)' | tail -1)
+                        echo "[jfs-warmup] ${DIR} cached=${pct:-?}"
+                        printf '%s' "$chk" | grep -q '(100.0%)' && { echo "[jfs-warmup] ${DIR} fully cached"; break; }
+                        sleep 30
+                      done
+                    done
+                volumeMounts:
+                  - name: hf-cache
+                    mountPath: /root/.cache/huggingface
+                    mountPropagation: "{{ 'HostToContainer' if hf_hub_cache_on_juicefs | bool else 'None' }}"
+                  - name: juicefs-bin
+                    mountPath: /usr/local/bin/juicefs
                     readOnly: true
               - name: wait-for-worker
                 image: bitnami/kubectl:latest
@@ -656,6 +878,10 @@
                   - configMapRef:
                       name: "{{ inst.prefix }}-config"
                 env:
+                  # Unbuffered stdout/stderr so logger/print lines reach kubectl
+                  # logs immediately (esp. the per-shard weight-load progress).
+                  - name: PYTHONUNBUFFERED
+                    value: "1"
                   - name: SGLANG_IMAGE
                     value: "{{ sglang_image }}"
                   - name: NODE_RANK
@@ -726,7 +952,12 @@
                   httpGet:
                     path: /v1/models
                     port: "{{ inst.port }}"
-                  initialDelaySeconds: 1800
+                  # 1h startup grace (3600 + 3×30s ≈ 61 min): a COLD per-node JuiceFS
+                  # blockcache pulls the big NVFP4 checkpoints (e.g. glm-5.2-reap-504B,
+                  # 63 shards) from the single backend at ~117 MB/s, which can exceed the
+                  # old 1800s before the server binds :port. Once the NVMe cache is warm
+                  # the load is fast again (juicefs warmup or one full load). remote-control 2026-07-15.
+                  initialDelaySeconds: 3600
                   periodSeconds: 30
                   failureThreshold: 3
                 volumeMounts:
@@ -783,6 +1014,12 @@
                 configMap:
                   name: "{{ inst.prefix }}-launch-script"
                   defaultMode: 0755
+              # Host juicefs binary (read-only) for the jfs-warmup initContainer. Points
+              # at /bin/true when JuiceFS is off so the hostPath File mount stays valid.
+              - name: juicefs-bin
+                hostPath:
+                  path: "{{ '/usr/local/bin/juicefs' if hf_hub_cache_on_juicefs | bool else '/bin/true' }}"
+                  type: File
               - name: haproxy-config
                 configMap:
                   name: "{{ inst.prefix }}-haproxy-config"

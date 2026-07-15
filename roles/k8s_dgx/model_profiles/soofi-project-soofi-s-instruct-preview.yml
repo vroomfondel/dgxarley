@@ -1,0 +1,122 @@
+---
+# Model profile: Soofi-Project/Soofi-S-Instruct-Preview
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+#
+# ⚠️ SCAFFOLD — created 2026-07-15 while the 0.5.15-sm121 image rebuild ran. Many
+# values below are UNVERIFIED because the repo is HF-GATED and could not be read
+# yet (see GATE below). Treat every "# TODO(config)" as a placeholder to fill from
+# config.json + the model card once access is granted. Do NOT serve blindly.
+#
+# WHAT SOOFI-S IS: the German "sovereign AI" open model ("Soofi S", ~30B), by the
+# Soofi-Project consortium (Deutsche Telekom / ellamind et al.), released ~2026-07.
+# https://www.soofi.info/ · org: https://huggingface.co/Soofi-Project
+# ARCHITECTURE = NemotronH (confirmed from the repo file list: config uses
+# configuration_nemotron_h.py, model_type=nemotron_h, tag "moe") — i.e. the SAME
+# hybrid Mamba2 + MoE + select-attention family as
+# nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4 (see that profile for the
+# arch-specific serving rationale this one is modelled on). It is NOT an NVIDIA
+# checkpoint — a separate consortium post-train — so parsers/geometry/MTP must be
+# re-verified against Soofi's own config.json + chat_template.jinja, NOT copied.
+#
+# GATE (BLOCKER): every Soofi-Project/Soofi-S-* repo is `gated: manual`. Fetching
+# config.json returns HTTP 403 even with the cluster HF token — the token's HF
+# account has not been granted access. To finish this profile AND to let the
+# in-pod model-download job pull weights, ACCEPT THE GATE for our HF account at
+# https://huggingface.co/Soofi-Project/Soofi-S-Instruct-Preview (manual approval),
+# then re-fetch:
+#   curl -H "Authorization: Bearer $HF_TOKEN" \
+#     https://huggingface.co/Soofi-Project/Soofi-S-Instruct-Preview/resolve/main/config.json
+#
+# ARCH (cards + launch coverage 2026-07-15 — shared across all Soofi-S variants):
+# hybrid Mamba-2/MoE, **52 layers = 23 Mamba-2 + 23 MoE + 6 GQA attention**,
+# **128 routing experts, 6 activated/token**, **~31.6B total / ~3.2B active**.
+# Trained from scratch on ~25-27T tokens, knowledge cutoff end-2025. Languages:
+# EN + DE primary; FR/IT/ES limited. Per winbuzzer's launch write-up it "adopts the
+# **NVIDIA Nemotron-3-Nano reference architecture without modification**" → the
+# CLOSEST in-repo template is nvidia-nemotron-3-nano-omni-30b-a3b-reasoning-nvfp4.yml
+# (same 30B-A3B NemotronH class), not just the Super-120B referenced below.
+# hidden_size / moe_intermediate / ssm dims / context are still TODO(config) — gated.
+#
+# VARIANT TAXONOMY (from the cards — this is what the user asked to compare):
+#   * Instruct  — standard instruction/chat, **NO <think> reasoning block**.  ← THIS PROFILE (BF16)
+#   * Isar      — reasoning ("thinking") variant: emits explicit chain-of-thought
+#                 in a <think> block before the answer. For math/logic/planning/agents.
+#   * Rhine     — ALSO a reasoning ("thinking") <think>-block variant. The cards say
+#                 Isar vs Rhine differ in training data / reasoning style / target
+#                 tasks but leave the specifics as a literal "TODO" (undocumented).
+#   * Base      — foundation model (no post-training).
+# => For a general chat/serving model, Instruct (this file) is right. For CoT
+#    reasoning, clone this to an Isar or Rhine profile AND add a reasoning_parser
+#    (the <think> markup) — Instruct must NOT set one (it emits no think block).
+# QUANT: no NVFP4 exists. FP8 alt = Soofi-S-Instruct-Preview-FP8, BUT the FP8 MoE
+#    runner on this NemotronH LatentMoE shape is UNTESTED here (the NVFP4 NemotronH
+#    sibling needs flashinfer_cutlass because triton MoE crashes) — switch only
+#    after BF16 boots clean (kv fp8_e4m3 + fp8_gemm_runner_backend cutlass +
+#    mem_fraction_static ~0.50, then re-validate the MoE runner).
+_model_profile:
+  "Soofi-Project/Soofi-S-Instruct-Preview":
+    knowledge_cutoff: "2025-12"  # "end of 2025" per the model cards
+    release_date: "2026-06-16"  # HF createdAt of Soofi-S-Instruct-Preview; refine from the card
+    info_url: "https://huggingface.co/Soofi-Project/Soofi-S-Instruct-Preview"
+    nccl_transport: "roce"
+    # PARALLELISM — cluster default TP=4 across the 4 sparks (PP = nnodes/tp = 1).
+    # A ~30B BF16 model (~60 GB) shards to ~15 GB/GPU → ample KV headroom.
+    tp_size: 4
+    # quantization: UNSET — BF16 checkpoint, SGLang auto-detects (no modelopt_fp4).
+    # trust_remote_code: REQUIRED — NemotronH ships custom model + tokenizer code
+    # (configuration_nemotron_h.py, __init__.py) that SGLang must execute.
+    trust_remote_code: true
+    # context_length: TODO(config) — read config.json max_position_embeddings.
+    # NemotronH is typically long-context (NoPE attention + Mamba order); if Soofi
+    # trained >256K, raising this may also need json_model_override_args to lift the
+    # config cap (see the Nemotron-3-Super profile's long-context note). Start
+    # conservative until verified.
+    context_length: 32768       # TODO(config): placeholder — confirm real ctx from config.json
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.75"
+    # ── NemotronH ARCH CONSTRAINTS (generic to the family — safe to keep) ──
+    # attention_backend MUST NOT be triton: SGLang's apply_nemotron_h_defaults hook
+    # hard-asserts against it (the hybrid pattern starts with a Mamba layer, not
+    # attention). flashinfer works.
+    attention_backend: "flashinfer"
+    # disable_piecewise_cuda_graph: the Mamba2/attention hybrid graph does not
+    # piecewise-capture cleanly (NVIDIA's own NemotronH launch line sets this).
+    disable_piecewise_cuda_graph: true
+    disable_cuda_graph: false
+    # DeepGemm JIT is disabled on GB10/SM121 for both FP4 and FP8 here (watchdog
+    # stalls / RAM exhaustion). Keep true unless a boot test proves otherwise.
+    disable_deep_gemm: true
+    # CONCURRENCY CEILING on a hybrid model is the Mamba state-cache pool, not KV:
+    # SGLang clamps max_running_requests = max_mamba_cache_size // mamba_ratio. Leave
+    # auto-fit (unset) for the first boot; read the boot log's "max_mamba_cache_size:"
+    # / "max_running_requests=" lines, then pin max_mamba_cache_size if the auto-fit
+    # lands too low. cf. Nemotron-3-Super profile.
+    # max_mamba_cache_size: 0   # TODO(boot): set from the boot-log pool line if needed
+    # PARSERS:
+    # reasoning_parser — DELIBERATELY UNSET: the Instruct variant emits NO <think>
+    #   block (per the card, reasoning is the Isar/Rhine variants only). Do NOT add
+    #   one here; if you clone this to an Isar/Rhine profile, add the reasoning_parser
+    #   that matches Soofi's <think> markup.
+    # tool_call_parser — TODO(verify): Soofi advertises AI-agent/tool-use, so it has a
+    #   tool-call format, but Soofi ships its OWN chat_template.jinja — inspect it +
+    #   generation_config.json to pick the right parser (do NOT assume nvidia's qwen3_coder).
+    # MoE runner: TODO(config+boot) — 128 experts / 6-active LatentMoE. The NVFP4
+    # NemotronH sibling forces flashinfer_cutlass (triton MoE crashes); the BF16 path
+    # differs. Leave unset (SGLang default) for the first boot, then tune.
+    num_experts: 128            # model cards: 128 routing experts, 6 activated/token; verify vs config.json
+    # ── Native MTP / speculative decoding ──
+    # TODO(config): NemotronH commonly ships 1 built-in MTP layer
+    # (num_nextn_predict_layers=1). If Soofi has it, enable EAGLE speculative
+    # decoding (start steps=3 / draft=4 / topk=1, the validated NemotronH optimum;
+    # see the Nemotron-3-Super profile). Leave OFF until the config confirms the MTP
+    # layer AND a boot test shows accept_len > 1.
+    # speculative_enabled: true
+    # speculative_algo: EAGLE
+    # speculative_num_steps: 3
+    # speculative_num_draft_tokens: 4
+    # speculative_eagle_topk: 1
+    # speculative_draft_model_path: ""
+    recommended_sampling:
+      temperature: 1.0          # TODO(card): use Soofi's recommended sampling if the card states one
+      top_p: 0.95
+    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.15-sm121"

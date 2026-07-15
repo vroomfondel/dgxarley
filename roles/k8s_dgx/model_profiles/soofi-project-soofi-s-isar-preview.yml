@@ -1,0 +1,94 @@
+---
+# Model profile: Soofi-Project/Soofi-S-Isar-Preview
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+#
+# ⚠️ SCAFFOLD — created 2026-07-15 alongside soofi-project-soofi-s-instruct-preview.yml.
+# Many values are UNVERIFIED because the repo is HF-GATED (see GATE below); every
+# "# TODO(config)" is a placeholder to fill from config.json + chat_template.jinja
+# once access is granted. Do NOT serve blindly.
+#
+# WHAT THIS IS: the **Isar** = REASONING ("thinking") variant of Soofi-S, the German
+# "sovereign AI" open model by the Soofi-Project consortium (Deutsche Telekom /
+# ellamind et al.). https://www.soofi.info/ · https://huggingface.co/Soofi-Project
+# It emits an explicit chain-of-thought in a literal **`<think>` … `</think>`** block
+# before the final answer (confirmed from the model card). Target: math / logic /
+# planning / analysis + AI-agent / tool-use.
+#
+# RELATION TO THE INSTRUCT PROFILE (soofi-project-soofi-s-instruct-preview.yml):
+# SAME architecture — hybrid Mamba-2/MoE, 52 layers = 23 Mamba-2 + 23 MoE + 6 GQA
+# attention, 128 routing experts / 6 active per token, ~31.6B total / ~3.2B active,
+# from scratch on ~25-27T tokens, cutoff end-2025, EN+DE primary (FR/IT/ES limited).
+# "Adopts the NVIDIA Nemotron-3-Nano reference architecture without modification"
+# (winbuzzer) → closest in-repo template: nvidia-nemotron-3-nano-omni-30b-a3b-reasoning-nvfp4.yml.
+# The ONLY meaningful serving delta is REASONING: Instruct emits no <think> block
+# (no reasoning_parser); Isar DOES → reasoning_parser is set below, and callers must
+# budget generous output length for the thinking trace. The sibling **Rhine** is
+# ALSO a <think> reasoning variant; the cards say Isar vs Rhine differ in training
+# data / reasoning style / target tasks but leave the specifics a literal "TODO"
+# (undocumented). Isar was picked over Rhine here on community traction (HF downloads
+# 4382 vs 613). To serve Rhine instead, clone this file to the Rhine repo id.
+#
+# GATE (BLOCKER): every Soofi-Project/Soofi-S-* repo is `gated: manual`. config.json
+# returns HTTP 403 even with the cluster HF token (account not granted). Accept the
+# gate for our HF account at
+# https://huggingface.co/Soofi-Project/Soofi-S-Isar-Preview then re-fetch:
+#   curl -H "Authorization: Bearer $HF_TOKEN" \
+#     https://huggingface.co/Soofi-Project/Soofi-S-Isar-Preview/resolve/main/config.json
+# to fill context_length / hidden_size / SSM dims / MTP presence / the tool parser.
+#
+# QUANT: BF16 checkpoint (safest first boot). No NVFP4 exists; the FP8 alt is
+# Soofi-S-Isar-Preview-FP8 (untested NemotronH FP8 MoE runner — see the Instruct
+# profile's QUANT note before switching).
+_model_profile:
+  "Soofi-Project/Soofi-S-Isar-Preview":
+    knowledge_cutoff: "2025-12"  # "end of 2025" per the model cards
+    release_date: "2026-06-16"  # HF createdAt of Soofi-S-Isar-Preview; refine from the card
+    info_url: "https://huggingface.co/Soofi-Project/Soofi-S-Isar-Preview"
+    nccl_transport: "roce"
+    # PARALLELISM — cluster default TP=4 across the 4 sparks (PP = nnodes/tp = 1).
+    # ~30B BF16 (~60 GB) shards to ~15 GB/GPU → ample KV headroom.
+    tp_size: 4
+    # quantization: UNSET — BF16 checkpoint, SGLang auto-detects.
+    # trust_remote_code: REQUIRED — NemotronH ships custom model + tokenizer code.
+    trust_remote_code: true
+    # context_length: TODO(config) — the card leaves max context as a "TODO"; read
+    # config.json max_position_embeddings. Reasoning traces are long, so if the real
+    # context is large, keep this generous. Placeholder below is conservative.
+    context_length: 32768       # TODO(config): placeholder — confirm real ctx from config.json
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.75"
+    # ── NemotronH ARCH CONSTRAINTS (generic to the family — safe to keep) ──
+    # attention_backend MUST NOT be triton (NemotronH hard-asserts: hybrid pattern
+    # starts with a Mamba layer). flashinfer works.
+    attention_backend: "flashinfer"
+    # hybrid Mamba2/attention graph doesn't piecewise-capture cleanly.
+    disable_piecewise_cuda_graph: true
+    disable_cuda_graph: false
+    # DeepGemm JIT disabled on GB10/SM121 (watchdog stalls / RAM exhaustion).
+    disable_deep_gemm: true
+    # CONCURRENCY CEILING = Mamba state-cache pool, not KV: SGLang clamps
+    # max_running_requests = max_mamba_cache_size // mamba_ratio. Leave auto-fit for
+    # the first boot; read the boot-log "max_mamba_cache_size:" line, then pin below.
+    # max_mamba_cache_size: 0   # TODO(boot): set from the boot-log pool line if needed
+    # ── REASONING (the Isar-vs-Instruct difference) ──
+    # Isar emits a literal <think> … </think> CoT block. reasoning_parser set so
+    # SGLang splits the thinking trace out of the answer (reasoning_content vs
+    # content). "deepseek-r1" is the canonical SGLang parser for the <think>/</think>
+    # tag pair — INFERRED from the card's format, NOT named by the card (the card's
+    # serving examples set no parser flag). VERIFY against chat_template.jinja once
+    # ungated; if the tags/behaviour differ, candidates are "qwen3" / "glm45".
+    reasoning_parser: "deepseek-r1"   # TODO(verify) — inferred from <think>/</think>
+    # tool_call_parser — TODO(verify): Isar advertises AI-agent/tool-use → has a
+    # tool-call format, but pick the parser from Soofi's own chat_template.jinja.
+    # MoE runner: TODO(config+boot) — 128 experts / 6-active LatentMoE; NVFP4 sibling
+    # forces flashinfer_cutlass (triton MoE crashes), BF16 path differs. Unset = default.
+    num_experts: 128            # model cards: 128 routing experts, 6 activated/token; verify vs config.json
+    # MTP: the card mentions NO MTP head (unlike nvidia's NemotronH). Leave spec
+    # decoding OFF unless config.json shows num_nextn_predict_layers >= 1.
+    # ── Sampling ── card gives no explicit values (uses generation_config.json) but
+    # stresses a GENEROUS output budget (the <think> trace precedes the answer) —
+    # callers should raise max_tokens. TODO(card): pin temperature/top_p if stated.
+    recommended_sampling:
+      temperature: 0.6          # TODO(card): reasoning models often want lower temp; verify
+      top_p: 0.95
+    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.15-sm121"
