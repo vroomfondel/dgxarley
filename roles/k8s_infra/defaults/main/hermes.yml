@@ -38,8 +38,11 @@ hermes:
   # hermes_email_gateway_patched.py re-sync (all 7 [PATCH-N] sections re-applied,
   # + upstream SPF/DKIM/DMARC sender-auth folded in), the email-patch ConfigMap
   # data key, and the webui subPath mount were all re-targeted to adapter.py.
-  # Re-synced against v2026.7.1 (md5 8d01ff755f33df1b9867b5ecf0febc11) 2026-07-06.
-  image_tag: "v2026.7.1"             # agent image (nousresearch/hermes-agent)
+  # Re-synced against v2026.7.7.2 (md5 39ed5d135762806451a944a9b279b8ad) 2026-07-15
+  # (upstream diff v2026.7.1→v2026.7.7.2 = 3 robustness fixes: IMAP-fetch guard,
+  # _message_id_domain() @-less-address fallback, 3 msg_id call-sites; folded in,
+  # no [PATCH-N] change — our PRs #28697/#28699/#28702 still OPEN at this tag).
+  image_tag: "v2026.7.7.2"           # agent image (nousresearch/hermes-agent)
   # NOTE: the venv site-packages dir (mount point for the hermes_health_patch
   # .py/.pth) is NOT configured here — it carries a pythonX.Y segment that bumps
   # with the base image. hermes.yml probes the actual image ONCE at deploy time

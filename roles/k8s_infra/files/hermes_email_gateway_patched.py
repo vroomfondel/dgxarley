@@ -15,9 +15,9 @@ Environment variables:
     EMAIL_ALLOWED_USERS — Comma-separated list of allowed sender addresses
 
 ------------------------------------------------------------------------------
-LOCAL PATCH (dgxarley) — synced to upstream tag v2026.7.1
-(plugins/platforms/email/adapter.py, md5 8d01ff755f33df1b9867b5ecf0febc11,
-49488 bytes). Current for the pinned image (hermes.image_tag v2026.7.1).
+LOCAL PATCH (dgxarley) — synced to upstream tag v2026.7.7.2
+(plugins/platforms/email/adapter.py, md5 39ed5d135762806451a944a9b279b8ad,
+50848 bytes). Current for the pinned image (hermes.image_tag v2026.7.7.2).
 
 FILE MOVED at this bump: upstream #41112/#3823 landed the plugin refactor that
 the v2026.6.19 patch header warned about — the adapter moved from
@@ -53,6 +53,21 @@ upstream-only; none collide with the [PATCH-N] logic):
   - check_email_requirements() now .strip()s and treats blank as missing.
   - `import time` was REMOVED upstream — re-added below (our _append_to_sent
     needs time.time() for imaplib.Time2Internaldate).
+
+Upstream changes folded in during the v2026.7.1 → v2026.7.7.2 re-sync (all are
+upstream-only robustness fixes; none collide with the [PATCH-N] logic, each sits
+on original context our patches leave untouched):
+  - _fetch_new_messages: guard `raw_email = msg_data[0][1]` against
+    IndexError/TypeError + non-bytes payloads (skip the UID, don't abort the
+    batch). Sits ABOVE our [PATCH-5] Working-MOVE, on original context.
+  - new EmailAdapter._message_id_domain() helper: EMAIL_ADDRESS without an `@`
+    now falls back to "localhost" instead of crashing send with IndexError.
+  - the three _send_email{,_with_attachment,_with_attachments} msg_id sites now
+    call _message_id_domain() instead of self._address.split('@')[1]. These are
+    the same three methods our [PATCH-7] Sent-APPEND lives in; the msg_id line
+    sits ABOVE each [PATCH-7] block, on original context.
+  Marked inline with [UPSTREAM v2026.7.7.2]. Our three PRs (#28697/#28699/#28702)
+  are still OPEN at this tag, so no [PATCH-N] section could be dropped.
 
 Adds three behaviours that upstream lacks:
 
@@ -1117,7 +1132,23 @@ class EmailAdapter(BasePlatformAdapter):
                     if status != "OK":
                         continue
 
-                    raw_email = msg_data[0][1]
+                    # [UPSTREAM v2026.7.7.2] IMAP fetch can return unexpected
+                    # structures (e.g. a single bytes item instead of a list of
+                    # tuples). Guard against IndexError / TypeError so one
+                    # malformed response doesn't abort the batch — the UID is
+                    # already in _seen_uids, so an abort would permanently skip
+                    # the remaining messages in this batch.
+                    try:
+                        raw_email = msg_data[0][1]
+                    except (IndexError, TypeError):
+                        logger.warning(
+                            "[Email] Unexpected IMAP response structure for UID %s, skipping",
+                            uid,
+                        )
+                        continue
+                    if not isinstance(raw_email, (bytes, bytearray)):
+                        logger.warning("[Email] Non-bytes IMAP payload for UID %s, skipping", uid)
+                        continue
                     msg = email_lib.message_from_bytes(raw_email)
 
                     sender_raw = msg.get("From", "")
@@ -1380,6 +1411,17 @@ class EmailAdapter(BasePlatformAdapter):
             logger.error("[Email] Send failed to %s: %s", chat_id, e)
             return SendResult(success=False, error=str(e))
 
+    def _message_id_domain(self) -> str:
+        """Domain part for generated Message-IDs.
+
+        [UPSTREAM v2026.7.7.2] EMAIL_ADDRESS may lack an ``@``
+        (misconfiguration); fall back to ``localhost`` instead of crashing
+        send with an IndexError.
+        """
+        if "@" in self._address:
+            return self._address.rsplit("@", 1)[-1] or "localhost"
+        return "localhost"
+
     def _send_email(
         self,
         to_addr: str,
@@ -1405,7 +1447,7 @@ class EmailAdapter(BasePlatformAdapter):
             msg["References"] = original_msg_id
 
         msg["Date"] = formatdate(localtime=True)
-        msg_id = f"<hermes-{uuid.uuid4().hex[:12]}@{self._address.split('@')[1]}>"
+        msg_id = f"<hermes-{uuid.uuid4().hex[:12]}@{self._message_id_domain()}>"
         msg["Message-ID"] = msg_id
 
         msg.attach(MIMEText(body, "plain", "utf-8"))
@@ -1520,7 +1562,7 @@ class EmailAdapter(BasePlatformAdapter):
             msg["References"] = original_msg_id
 
         msg["Date"] = formatdate(localtime=True)
-        msg_id = f"<hermes-{uuid.uuid4().hex[:12]}@{self._address.split('@')[1]}>"
+        msg_id = f"<hermes-{uuid.uuid4().hex[:12]}@{self._message_id_domain()}>"
         msg["Message-ID"] = msg_id
 
         if body:
@@ -1602,7 +1644,7 @@ class EmailAdapter(BasePlatformAdapter):
             msg["References"] = original_msg_id
 
         msg["Date"] = formatdate(localtime=True)
-        msg_id = f"<hermes-{uuid.uuid4().hex[:12]}@{self._address.split('@')[1]}>"
+        msg_id = f"<hermes-{uuid.uuid4().hex[:12]}@{self._message_id_domain()}>"
         msg["Message-ID"] = msg_id
 
         if body:
