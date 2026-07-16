@@ -149,6 +149,30 @@ Podman + GPU auf spark5 (Methode wie p34/p35-Validierung, kein Cluster):
    0xSero nach einem selektiven Export fragen oder es lassen).
 4. Nebenbefund dokumentieren: Verhalten bei bs=8/32 (Concurrency-Regime).
 
+### Phase 0 — ERGEBNIS 2026-07-16: GO (GB10-gemessen)
+
+Synthetischer GEMV-Bench auf spark5 (bf16-cuBLAS vs. der servierte NVFP4-Pfad:
+flashinfer.fp4_quantize Weight offline + Aktivierung dynamisch pro Call +
+cutlass_scaled_fp4_mm; Timing INKL. Aktivierungs-Quant). Per-Rank-TP4-Shapes:
+
+| Shape | bs=1 | bs=8 | bs=32 |
+|---|---|---|---|
+| o_proj (out 6144, in 4096) | **5.58x** | 3.15x | 3.86x |
+| q_b (out 4096, in 2048) | **2.89x** | 0.91x | 1.22x |
+
+**GO** (beide bs=1 > 2.5x). Zwei Einordnungen: (1) der Gewinn ist
+SINGLE-STREAM (bs=1 GEMV, memory-bound = unser Decode-Boden); q_b faellt ab
+bs=8 unter 1x (compute-bound + Quant-Overhead), o_proj bleibt auch bei Batch
+schneller. (2) mean_rel_err ~0.13 ist auf SYNTHETISCHEN Zufallsgewichten mit
+naivem Global-Scale, KEIN Qualitaetsbeweis -- die Genauigkeit klaert erst das
+GSM8K-Gate (Phase 3) auf echten, modelopt-kalibrierten Gewichten. Bench-Skript:
+`$CLAUDE_JOB_DIR/tmp/gemv_phase0.py` (auf spark5 unter /root/quantwork/).
+
+NB: der servierte Pfad ist W4A4 (Aktivierung dynamisch fp4, keine Kalibrierung
+noetig), nicht W4A16 -- bei bs=1 ist die Aktivierungs-Quant ein [1,in]-Tensor,
+vernachlaessigbar, und das oben ist bereits inklusive. Das vereinfacht Phase 1:
+Standard-modelopt-NVFP4 auf o_proj/q_b (dynamic input), kein Sonder-W4A16-Preset.
+
 ### Phase 1 — Shard-Rewrite-Script
 
 `../kikube/quantizer/` (dort lebt das Quant-Tooling): Script
