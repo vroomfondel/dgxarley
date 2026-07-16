@@ -748,3 +748,26 @@ read; unlocked by p34, verify runs through the same sparse kernel) and
 question, not a serving-code one). p35 remains valuable: the logits cost scales
 linearly with table width, so at a 128k-context profile it WOULD be the wall
 (1.476 ms/layer measured at width 131072); plus the halved capture memory.
+
+## PHASE 2 IMPLEMENTED 2026-07-16 (MTP verify support in the torch/triton indexer)
+
+The p30 dispatch's `next_n >= 2` NotImplementedError is replaced by the Section-3
+"option b" folding, and it turned out even smaller than planned: at the call site,
+`seqlens_32_2d` for target-verify/draft-extend-v2 comes from
+`get_seqlens_expanded()` and is ALREADY per-token `[q_offset, 1]`, and q/weights are
+already sliced per token (`[:q_offset]`). The ONLY per-request tensor is
+`block_tables [B, W]` -> `repeat_interleave(next_n, dim=0)` maps row b to tokens
+b*next_n..(b+1)*next_n-1. The torch module and the p35 Triton kernel need ZERO
+changes (both are per-token by construction; the folding happens in the dispatch).
+Graph-safe (static shapes).
+
+Verified on spark5 (B=4, next_n=4, mixed ctx lens 64..1900, live 256-page width):
+folded call vs a per-token-loop reference is **bit-exact on BOTH kernel paths**
+(triton and pure torch); patch chain idempotent, 0 drift.
+
+Profile: `speculative_enabled: true` (NEXTN, 3 steps, 4 draft tokens). All MTP
+preconditions are now met: p42 (NVFP4 NextN weight load, live-validated), p34
+(verify runs through the native sparse kernel via the decode impl), Phase 2
+(indexer next_n>=2). Rationale: the profiled decode floor is bf16-projection
+weight BANDWIDTH -> MTP multiplies tokens per weight read (GLM-4.7 reference:
++68% single-stream). NOT yet deployed.

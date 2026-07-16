@@ -175,17 +175,22 @@ _model_profile:
     # — the MTP layer's MoE w13 (2×intermediate) is shape-incompatible with the
     # main-model config the deepseek_nextn loader assumes (REAP pruned the main MoE
     # but the MTP head's intermediate does not line up). Base serves fine without it.
-    # PATCHED 2026-07-15: sglang_launch.sh carries _sgl_dsnextn_mixed_mtp_ — it keeps
-    # modelopt_fp4 on the NextN head and aliases the layer-N excludes to model.decoder.*
-    # so the MTP experts load NVFP4 while attn/gate/shared stay BF16 (verified: bash -n,
-    # real-anchor apply, py_compile, is_layer_excluded logic test). WEIGHT-LOAD LIVE-VALIDATED
-    # 2026-07-16: draft loaded (DeepseekV3ForCausalLMNextN, NVFP4, 2.47 GB), both KV pools
-    # allocated at the 256k cap, no w13 crash. BUT draft cuda-graph capture then crashed on a
-    # SEPARATE issue: flashinfer MLA forward_decode() lacks topk_indices (DSA draft path) ->
-    # fix is attention_backend "flashinfer"->"dsa" above. TURNED OFF here to isolate + validate
-    # the dsa backend on the BASE model first (one variable per step); re-enable after dsa is
-    # confirmed serving. The patch itself is proven; only the DSA draft-attention path remains.
-    speculative_enabled: false
+    # PATCHED 2026-07-15: p42 (_sgl_dsnextn_mixed_mtp_) keeps modelopt_fp4 on the NextN
+    # head and aliases the layer-N excludes to model.decoder.* so the MTP experts load
+    # NVFP4 while attn/gate/shared stay BF16. WEIGHT-LOAD LIVE-VALIDATED 2026-07-16:
+    # draft loaded (DeepseekV3ForCausalLMNextN, NVFP4, 2.47 GB), no w13 crash. The old
+    # follow-up crash (flashinfer forward_decode lacks topk_indices) is MOOT under the
+    # dsa backend.
+    # RE-ENABLED 2026-07-16: all preconditions met — dsa backend live-proven (p34
+    # native sparse: verify/target-verify runs through the SAME sparse kernel via the
+    # decode impl), and the indexer torch/triton path now handles next_n>=2 (Phase 2:
+    # the dispatch folds the verify batch per-token, seqlens_expanded is per-token
+    # already, block_tables repeat_interleaved; folded-vs-per-token BIT-EXACT on both
+    # kernels, spark5 2026-07-16). Rationale: profiled decode floor is bf16-projection
+    # weight bandwidth -> MTP multiplies tokens per weight read (GLM-4.7 reference:
+    # +68% n=1). Memory: draft 2.47 GB + draft graphs vs 11.55 GB avail post-capture —
+    # watch the draft capture avail_mem on first boot.
+    speculative_enabled: true
     speculative_algo: NEXTN
     speculative_num_steps: 3
     speculative_num_draft_tokens: 4

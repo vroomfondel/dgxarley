@@ -29,8 +29,11 @@ selected by "auto", so archs where DeepGEMM/CuteDSL already work are unaffected)
 
 PHASE 1 ONLY (dsalogitrework.md Section 3): plain decode, next_n==1 -- unblocks ordinary
 target-model decode AND each individual MTP/NEXTN draft step (the draft decodes one token
-at a time). Phase 2 (target-verify / next_n>=2 multi-token batches) is NOT implemented;
-the dispatch raises NotImplementedError there rather than silently mis-routing.
+at a time). Phase 2 (target-verify / draft-extend-v2, next_n>=2) added 2026-07-16 for
+MTP: seqlens_expanded is already per-token and q/weights are sliced per token, so the
+dispatch only repeat_interleaves block_tables to per-token rows; the kernel itself is
+shape-agnostic (batch dim = flattened tokens). Numerically verified against a
+per-request-slice reference (see dsalogitrework.md Section 5 discipline).
 
 5 files patched/written, unconditionally (no model-name gate): paged_mqa_logits_backend.py
 and server_args.py only add an opt-in enum value / CLI choice (zero behavior change unless
@@ -175,7 +178,9 @@ DSA_speedup.md and dsalogitrework.md (repo root) for the full investigation.
 
 Phase 1 scope: plain decode only (next_n == 1), matching the call shape of
 sglang.jit_kernel.dsa.paged_mqa_logits.deepgemm_paged_mqa_logits_split. Phase 2
-(target-verify / next_n >= 2) is NOT implemented here; see dsalogitrework.md Section 3.
+(target-verify / next_n >= 2): handled by the DISPATCH in dsa_indexer.py, which folds
+the verify batch to per-token form (seqlens_expanded is per-token already; block_tables
+repeat_interleaved) -- this kernel stays per-token and needs no next_n awareness.
 
 CORRECTNESS WARNING (dsalogitrework.md Section 5): a community fork (kt-sglang) shipped
 a similar-looking torch fallback for SM120 that ran without error but returned WRONG
@@ -524,23 +529,25 @@ NEW_DISPATCH_BRANCH = """        elif use_dg_native:
                 next_n=next_n,
             )
         elif self.paged_mqa_logits_backend.is_torch():
-            # Phase 1 (dsalogitrework.md): plain decode only (next_n==1), the shape
-            # deepgemm_paged_mqa_logits_split below handles. next_n>=2 is the
-            # target-verify multi-token batch (Phase 2, not implemented) -- raise
-            # clearly instead of silently mis-routing into a wrong-shape call.
-            if next_n >= 2:
-                raise NotImplementedError(
-                    "dsa_paged_mqa_logits_backend='torch' (phase 1) only supports "
-                    "plain single-token decode (next_n==1); target-verify/multi-token "
-                    "batches (next_n>=2) are not yet implemented. See dsalogitrework.md "
-                    "Section 3 (Phase 2)."
-                )
+            # Phase 1+2 (dsalogitrework.md Section 3): the torch/triton kernel is
+            # per-TOKEN (batch dim = flattened q tokens). Plain decode (next_n==1)
+            # is already per-token. For target-verify / draft-extend-v2
+            # (next_n>=2), seqlens_32_2d comes from get_seqlens_expanded() and is
+            # ALREADY per-token [q_offset, 1]; q/weights are sliced per token
+            # below. The ONLY per-REQUEST tensor is block_tables [B, W]: repeat
+            # each request row next_n times so row i belongs to flattened token i
+            # (token (b, n) -> row b; graph-safe, static shapes).
+            _bt_torch = (
+                block_tables.repeat_interleave(next_n, dim=0)
+                if next_n >= 2
+                else block_tables
+            )
             logits = fp8_paged_mqa_logits_torch_dsa(
                 q_fp8.unsqueeze(1)[:q_offset],
                 kv_cache_fp8,
                 weights[:q_offset],
                 seqlens_32_2d,
-                block_tables,
+                _bt_torch,
                 None,  # schedule_metadata unused by the torch path
                 max_seq_len,
                 clean_logits=False,
