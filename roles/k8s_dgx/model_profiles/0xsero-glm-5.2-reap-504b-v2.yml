@@ -68,21 +68,17 @@ _model_profile:
                                  # leftover memory stays free for the MTP draft worker's weights + graph capture.
                                  # UNMEASURED: draft weight size unknown (earlier MTP crashed on the w13 bug pre-
                                  # alloc) -> watch avail_mem at draft capture + the KV alloc line, adjust if tight.
-    attention_backend: "flashinfer"  # PROD config (dense MLA, known-working). "dsa" (real sparse) is NOT
-                                 # viable on GB10/SM121 - a full kernel-path survey (2026-07-16) found the
-                                 # WHOLE DSA decode path blocked, not just the indexer:
-                                 #   - indexer paged-MQA-logits: deepgemm/cutedsl blocked; our torch fallback
-                                 #     (dsa_paged_mqa_logits_backend=torch) WORKS + is committed, but is
-                                 #     necessary-not-sufficient.
-                                 #   - MLA decode attention: trtllm=trtllm-gen FMHA ISA wall (live crash),
-                                 #     flashmla_*=extension not built in image, fa3=hard sm==8/9 gate,
-                                 #     tilelang=compiles on sm121 but OOMs GB10 shared-mem (tile tuned for H100).
-                                 # So DSA-sparse needs kernel work (tilelang tile-tuning, uncertain) or upstream
-                                 # SM121 support. To retry "dsa": set attention_backend: "dsa" +
-                                 # dsa_paged_mqa_logits_backend: "torch" (both wired; the torch fix is applied).
-                                 # Full detail: DSA_speedup.md. Under flashinfer the indexer is a silent no-op
-                                 # (dense MLA) - correct, this is what serves.
-    # dsa_paged_mqa_logits_backend: "torch"   # only meaningful with attention_backend: "dsa" (see above)
+    attention_backend: "dsa"     # 2026-07-16 DSA-SPARSE VALIDATION run. Real DSA sparse attention on
+                                 # GB10/SM121, now that BOTH SM121 blockers have a fallback:
+                                 #   - indexer paged-MQA-logits -> dsa_paged_mqa_logits_backend: torch (committed)
+                                 #   - MLA decode attention -> dsa_decode_backend: flashinfer_gather (committed):
+                                 #     gather the top-2048 KV (SGLang's dequantize_k_cache_paged) + run the
+                                 #     working dense fa2 MLA over the subset. Both bypass the dead DeepGEMM /
+                                 #     trtllm-gen / tilelang kernels. Full detail: DSA_speedup.md + dsalogitrework.md.
+                                 # This run tests: boots past both crash points, GSM8K-correct vs dense, cuda-graph
+                                 # capture of flashinfer_gather. Revert to "flashinfer" (dense) if it regresses.
+    dsa_paged_mqa_logits_backend: "torch"       # SM121 torch indexer fallback (necessary for dsa)
+    dsa_decode_backend: "flashinfer_gather"     # SM121 gather+dense-fa2 MLA attention fallback
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 4
     disable_piecewise_cuda_graph: true

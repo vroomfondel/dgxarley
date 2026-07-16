@@ -172,8 +172,18 @@ for model_id in models:
                     raise RuntimeError(f"rsync to {target} failed with exit code {rc}")
                 print(f"Sync to {target} complete.", flush=True)
     except Exception as e:
-        print(f"FAILED: {model_id}: {e}", flush=True)
-        failed.append(model_id)
+        # Online path failed (e.g. HF API 504 / unreachable / egress down). A model
+        # that is already fully cached locally must still boot without HF, so retry
+        # offline (local_files_only) and treat a complete local snapshot as success.
+        # Only a genuinely-missing model (HF down AND not cached) is a real failure.
+        print(f"WARN: {model_id}: online fetch failed ({e}); trying local cache (offline) ...", flush=True)
+        try:
+            snapshot_download(repo_id=model_id, cache_dir=cache_dir, local_files_only=True)
+            print(f"Model ready from local cache (offline, HF unreachable): {model_id}", flush=True)
+            _state["active"] = False
+        except Exception as e2:
+            print(f"FAILED: {model_id}: online={e} | offline-cache={e2}", flush=True)
+            failed.append(model_id)
 
 _stop_monitor.set()
 print(f"\n{'='*60}", flush=True)
