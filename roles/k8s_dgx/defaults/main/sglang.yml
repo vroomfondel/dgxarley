@@ -389,6 +389,15 @@ sglang_attention_backend: "{{ sglang_model_profiles[_sglang_active_model].attent
 # fallback runtime-patched into dsa_indexer.py) to run the sparse indexer. Wired to
 # --dsa-paged-mqa-logits-backend. Only meaningful together with attention_backend: "dsa".
 sglang_dsa_paged_mqa_logits_backend: "{{ sglang_model_profiles[_sglang_active_model].dsa_paged_mqa_logits_backend | default('') }}"
+# DSA indexer Triton fast path (p35_dsa_indexer_triton_logits): the fused logits kernel
+# on top of the p30 torch fallback (61x at the live decode shape, bit-exact). Read at
+# MODULE IMPORT by the runtime-patched torch_paged_mqa_logits.py — an env gate, NOT an
+# SGLang server arg. true (default) = Triton kernel; false = KILL-SWITCH back to the
+# pure-torch reference path (the one-variable A/B lever if indexer output is ever
+# suspected: same everything, only the logits kernel differs). Only meaningful together
+# with dsa_paged_mqa_logits_backend: "torch"; inert otherwise (the patched module is
+# never imported).
+sglang_dsa_indexer_triton: "{{ sglang_model_profiles[_sglang_active_model].dsa_indexer_triton | default(true) }}"
 # DSA decode attention backend (the MLA attention step over the indexer's top-k KV
 # selection). Empty → SGLang default ("auto" → trtllm-gen FMHA). On GB10/SM121 every
 # dedicated DSA attention kernel is dead (trtllm-gen = datacenter-only ISA, flashmla =

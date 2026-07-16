@@ -79,6 +79,9 @@ _model_profile:
                                  # spark5 vs torch reference: decode bs4 0.072 ms, prefill 2400 tokens
                                  # 14.4 ms/layer, cuda-graph captures directly. DSA_speedup.md et al.
     dsa_paged_mqa_logits_backend: "torch"  # SM121 torch indexer fallback (necessary for dsa; p30)
+    dsa_indexer_triton: true     # p35 Triton-fused logits on the torch fallback (61x, bit-exact).
+                                 # false = kill-switch to the pure-torch reference path (one-variable
+                                 # A/B if indexer output is ever suspected). Env: SGLANG_DSA_INDEXER_TRITON.
     dsa_decode_backend: "trtllm"    # 2026-07-16 switched flashinfer_gather -> trtllm: with p34, SM12x
     dsa_prefill_backend: "trtllm"   # routes to the NATIVE sparse kernels (decode AND prefill). This
                                     # REPLACES the gather workaround (p31/p32/p33) which stays available:

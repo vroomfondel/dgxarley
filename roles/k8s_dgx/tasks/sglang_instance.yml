@@ -149,6 +149,9 @@
         SGLANG_DSA_PAGED_MQA_LOGITS_BACKEND: "{{ sglang_dsa_paged_mqa_logits_backend }}"
         SGLANG_DSA_DECODE_BACKEND: "{{ sglang_dsa_decode_backend }}"
         SGLANG_DSA_PREFILL_BACKEND: "{{ sglang_dsa_prefill_backend }}"
+        # p35 indexer Triton fast path; "0" = kill-switch to the pure-torch reference
+        # (read at module import by the patched torch_paged_mqa_logits.py).
+        SGLANG_DSA_INDEXER_TRITON: "{{ '1' if (sglang_dsa_indexer_triton | bool) else '0' }}"
         SGLANG_MM_ATTENTION_BACKEND: "{{ sglang_mm_attention_backend }}"
         SGLANG_PAGE_SIZE: "{{ sglang_page_size | string }}"
         SGLANG_SWA_FULL_TOKENS_RATIO: "{{ sglang_swa_full_tokens_ratio | string }}"
