@@ -482,6 +482,24 @@
                         touch "$MARKDIR/$(printf '%s' "$m" | sed 's#/#--#g')"
                       done
                       echo "[preload] head download complete; markers written"
+                      # [2026-07-16] BLOCKING cache warmup for the HEAD's own local JuiceFS
+                      # cache. Design intent of this initContainer: it ends only when the
+                      # local cache is actually warm -- previously the head never warmed
+                      # itself at all (only download/presence-check), so its shard reads
+                      # went to the HDD-backed JuiceFS backend on cold local cache.
+                      # Markers are written BEFORE this so the workers warm in parallel.
+                      # timeout is non-fatal: on a truly cold cache we degrade to the old
+                      # behaviour (sglang reads slower) instead of blocking the boot.
+                      if [ -x /usr/local/bin/juicefs ]; then
+                        for m in $(printf '%s' "$HF_PRELOAD_MODELS" | tr ',' ' '); do
+                          d="/root/.cache/huggingface/hub/models--$(printf '%s' "$m" | sed 's#/#--#g')"
+                          [ -d "$d" ] || continue
+                          echo "[preload] blocking warmup: $d"
+                          timeout 5400 /usr/local/bin/juicefs warmup --threads 2 "$d" \
+                            || echo "[preload] WARN: warmup incomplete for $m (timeout/error; non-fatal)"
+                          /usr/local/bin/juicefs warmup --check "$d" 2>&1 | tail -1
+                        done
+                      fi
                     else
                       # Worker on shared JuiceFS: do NOT download (avoids a concurrent-write race
                       # on the shared dir + redundant work). Wait for the head's per-model markers;
@@ -517,6 +535,22 @@
                         fi
                         sleep 20
                       done
+                      # [2026-07-16] Do NOT exit on markers alone: block until the local
+                      # cache is actually warm. Previously the container ended here with
+                      # the warmup still running detached in the background (markers
+                      # persist across deployments, so the wait was often 0s and the
+                      # "warmup" a pure fire-and-forget) -- the warm guarantee is the
+                      # whole point of this initContainer. Non-fatal timeout as above.
+                      if [ "$HAVE_JFS" = yes ]; then
+                        for m in $MODELS; do
+                          d="/root/.cache/huggingface/hub/models--$(printf '%s' "$m" | sed 's#/#--#g')"
+                          [ -d "$d" ] || continue
+                          echo "[preload-wait] blocking warmup: $d"
+                          timeout 5400 /usr/local/bin/juicefs warmup --threads 2 "$d" \
+                            || echo "[preload-wait] WARN: warmup incomplete for $m (timeout/error; non-fatal)"
+                          /usr/local/bin/juicefs warmup --check "$d" 2>&1 | tail -1
+                        done
+                      fi
                     fi
                 env:
                   # Role from the pod's own label (downward API) so the SAME manifest
@@ -804,6 +838,24 @@
                         touch "$MARKDIR/$(printf '%s' "$m" | sed 's#/#--#g')"
                       done
                       echo "[preload] head download complete; markers written"
+                      # [2026-07-16] BLOCKING cache warmup for the HEAD's own local JuiceFS
+                      # cache. Design intent of this initContainer: it ends only when the
+                      # local cache is actually warm -- previously the head never warmed
+                      # itself at all (only download/presence-check), so its shard reads
+                      # went to the HDD-backed JuiceFS backend on cold local cache.
+                      # Markers are written BEFORE this so the workers warm in parallel.
+                      # timeout is non-fatal: on a truly cold cache we degrade to the old
+                      # behaviour (sglang reads slower) instead of blocking the boot.
+                      if [ -x /usr/local/bin/juicefs ]; then
+                        for m in $(printf '%s' "$HF_PRELOAD_MODELS" | tr ',' ' '); do
+                          d="/root/.cache/huggingface/hub/models--$(printf '%s' "$m" | sed 's#/#--#g')"
+                          [ -d "$d" ] || continue
+                          echo "[preload] blocking warmup: $d"
+                          timeout 5400 /usr/local/bin/juicefs warmup --threads 2 "$d" \
+                            || echo "[preload] WARN: warmup incomplete for $m (timeout/error; non-fatal)"
+                          /usr/local/bin/juicefs warmup --check "$d" 2>&1 | tail -1
+                        done
+                      fi
                     else
                       # Worker on shared JuiceFS: do NOT download (avoids a concurrent-write race
                       # on the shared dir + redundant work). Wait for the head's per-model markers;
@@ -839,6 +891,22 @@
                         fi
                         sleep 20
                       done
+                      # [2026-07-16] Do NOT exit on markers alone: block until the local
+                      # cache is actually warm. Previously the container ended here with
+                      # the warmup still running detached in the background (markers
+                      # persist across deployments, so the wait was often 0s and the
+                      # "warmup" a pure fire-and-forget) -- the warm guarantee is the
+                      # whole point of this initContainer. Non-fatal timeout as above.
+                      if [ "$HAVE_JFS" = yes ]; then
+                        for m in $MODELS; do
+                          d="/root/.cache/huggingface/hub/models--$(printf '%s' "$m" | sed 's#/#--#g')"
+                          [ -d "$d" ] || continue
+                          echo "[preload-wait] blocking warmup: $d"
+                          timeout 5400 /usr/local/bin/juicefs warmup --threads 2 "$d" \
+                            || echo "[preload-wait] WARN: warmup incomplete for $m (timeout/error; non-fatal)"
+                          /usr/local/bin/juicefs warmup --check "$d" 2>&1 | tail -1
+                        done
+                      fi
                     fi
                 env:
                   # Role from the pod's own label (downward API) so the SAME manifest
