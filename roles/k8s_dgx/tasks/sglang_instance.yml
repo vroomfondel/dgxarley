@@ -240,6 +240,53 @@
         NCCL_NVLS_ENABLE: "{{ nccl_nvls_enable if (nccl_nvls_enable | default('')) | length > 0 else omit }}"
         NCCL_DEBUG: "INFO"
 
+# SGLang runtime source-patches: one .py per patch under files/sglang_patches/,
+# shipped as a ConfigMap and run by launch.sh's patch runner (see the refactor
+# plan: sglang_launch_patch_refactor_plan.md). Collected here rather than inline
+# in the ConfigMap because `lookup('file')` cannot be mapped over a list in a
+# single expression; the loop below builds {basename: content}.
+# _sglang_patch_data is reset per instance — set_fact facts persist across the
+# per-instance includes, so an unreset combine() would accumulate.
+- name: Reset SGLang patch-script accumulator ({{ inst.prefix }})
+  ansible.builtin.set_fact:
+    _sglang_patch_data: {}
+    _sglang_patch_files: "{{ query('fileglob', role_path ~ '/files/sglang_patches/p[0-9][0-9]_*.py') | sort }}"
+
+- name: Collect SGLang patch scripts ({{ inst.prefix }})
+  ansible.builtin.set_fact:
+    _sglang_patch_data: "{{ _sglang_patch_data | combine({item | basename: lookup('file', item)}) }}"
+  loop: "{{ _sglang_patch_files }}"
+  loop_control:
+    label: "{{ item | basename }}"
+
+# Every patch (name AND content, plus _patchlib) as one deterministic string for
+# the pod checksum annotation. WITHOUT this in the annotation, editing a patch
+# changes the ConfigMap but does NOT roll the pods — and since patches only run
+# at container start, the edit would silently have no effect.
+# to_json over the sorted name/content pairs rather than a join(): it needs no
+# separator (so no chance of two different file sets hashing equal), and it
+# covers renames and deletions because the filenames are part of the blob.
+- name: Build SGLang patch-script checksum blob ({{ inst.prefix }})
+  ansible.builtin.set_fact:
+    _sglang_patches_blob: >-
+      {{ (_sglang_patch_data | combine({'_patchlib.py': lookup('file', role_path ~ '/files/sglang_patches/_patchlib.py')}))
+         | dict2items | sort(attribute='key') | to_json }}
+
+- name: Create SGLang patch-scripts ConfigMap ({{ inst.prefix }})
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "{{ inst.prefix }}-patch-scripts"
+        namespace: "{{ sglang_namespace }}"
+      # apply: true — a full replace, so a DELETED patch file actually vanishes
+      # from the mount instead of lingering via strategic merge (a stale patch
+      # would keep being executed by the runner's glob).
+      data: "{{ _sglang_patch_data | combine({'_patchlib.py': lookup('file', role_path ~ '/files/sglang_patches/_patchlib.py')}) }}"
+
 - name: Create SGLang launch script ConfigMap ({{ inst.prefix }})
   kubernetes.core.k8s:
     state: present
@@ -404,7 +451,7 @@
             annotations:
               k8s.v1.cni.cncf.io/networks: "{{ '[{\"name\":\"qsfp-vf' ~ qsfp_sriov_assignments[_sglang_active_sriov_key].vf ~ '\",\"ips\":[\"' ~ _sglang_qsfp_ips[worker_rank] ~ '/24\"]}]' if qsfp_sriov_enabled | default(false) else 'qsfp-direct-worker' ~ worker_rank }}"
               kubectl.kubernetes.io/default-container: sglang
-              checksum/launch-script: "{{ (lookup('file', role_path ~ '/files/sglang_launch.sh') ~ lookup('file', role_path ~ '/files/dsv4_memprobe.py')) | hash('sha256') }}"
+              checksum/launch-script: "{{ (lookup('file', role_path ~ '/files/sglang_launch.sh') ~ lookup('file', role_path ~ '/files/dsv4_memprobe.py') ~ _sglang_patches_blob) | hash('sha256') }}"
               checksum/config: "{{ _sglang_configmap.result.data | to_json(sort_keys=True) | hash('sha256') }}"  # hash of the WHOLE rendered sglang-config ConfigMap (omit-stripped by k8s, sort_keys-stable) → rolls pods on ANY config/knob change (cuda_graph_max_bs, moe_runner_backend, mamba_*, …), not a hand-picked field subset
           spec:
             enableServiceLinks: false         # prevent K8s SGLANG_PORT=tcp://... injection
@@ -634,6 +681,12 @@
                   - name: launch-script
                     mountPath: /scripts
                     readOnly: true
+                  # Runtime source-patches, run by /scripts/launch.sh's patch runner.
+                  # Own mount (not a subdir of /scripts) to keep the two ConfigMaps
+                  # independent and avoid a nested configMap mount.
+                  - name: patch-scripts
+                    mountPath: /patches
+                    readOnly: true
             volumes:
               - name: hf-cache
                 hostPath:
@@ -663,6 +716,10 @@
                 configMap:
                   name: "{{ inst.prefix }}-launch-script"
                   defaultMode: 0755
+              - name: patch-scripts
+                configMap:
+                  name: "{{ inst.prefix }}-patch-scripts"
+                  defaultMode: 0644
               # Host juicefs binary (read-only) for the jfs-warmup initContainer. Points
               # at /bin/true when JuiceFS is off so the hostPath File mount stays valid.
               - name: juicefs-bin
@@ -715,7 +772,7 @@
               prometheus.io/scrape: "{{ inst.enable_metrics | string | lower }}"
               prometheus.io/port: "{{ inst.port | string }}"
               prometheus.io/path: "/metrics"
-              checksum/launch-script: "{{ (lookup('file', role_path ~ '/files/' ~ ('sglang_embed_launch.sh' if (inst.is_embedding | default(false)) else 'sglang_launch.sh')) ~ lookup('file', role_path ~ '/files/dsv4_memprobe.py')) | hash('sha256') }}"
+              checksum/launch-script: "{{ (lookup('file', role_path ~ '/files/' ~ ('sglang_embed_launch.sh' if (inst.is_embedding | default(false)) else 'sglang_launch.sh')) ~ lookup('file', role_path ~ '/files/dsv4_memprobe.py') ~ _sglang_patches_blob) | hash('sha256') }}"
               checksum/config: "{{ _sglang_configmap.result.data | to_json(sort_keys=True) | hash('sha256') }}"  # hash of the WHOLE rendered sglang-config ConfigMap (omit-stripped by k8s, sort_keys-stable) → rolls pods on ANY config/knob change (cuda_graph_max_bs, moe_runner_backend, mamba_*, …), not a hand-picked field subset
           spec:
             serviceAccountName: "{{ inst.prefix }}-head"
@@ -978,6 +1035,12 @@
                   - name: launch-script
                     mountPath: /scripts
                     readOnly: true
+                  # Runtime source-patches, run by /scripts/launch.sh's patch runner.
+                  # Own mount (not a subdir of /scripts) to keep the two ConfigMaps
+                  # independent and avoid a nested configMap mount.
+                  - name: patch-scripts
+                    mountPath: /patches
+                    readOnly: true
               - name: proxy
                 image: haproxy:lts-alpine
                 args: []
@@ -1017,6 +1080,10 @@
                 configMap:
                   name: "{{ inst.prefix }}-launch-script"
                   defaultMode: 0755
+              - name: patch-scripts
+                configMap:
+                  name: "{{ inst.prefix }}-patch-scripts"
+                  defaultMode: 0644
               # Host juicefs binary (read-only) for the jfs-warmup initContainer. Points
               # at /bin/true when JuiceFS is off so the hostPath File mount stays valid.
               - name: juicefs-bin

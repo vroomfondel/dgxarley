@@ -3142,75 +3142,8 @@ else
   echo "ANCHOR-DRIFT: loader.py: ShardedStateLoader 'for path in filepaths:' anchor missing (SGLang version drift; re-check anchor)"
 fi
 
-# Patch moe_wna16 weight loader for EP-aware qzeros handling (SGLang 0.5.9 bug).
-# Two bugs in the w13_qzeros/w2_qzeros branches:
-#   1. Uses raw global expert_id (0-127) instead of local EP index (0-63)
-#   2. Uses global tp_rank for TP-slice, but moe_tp_size=tp/ep — need tp_rank % moe_tp_size
-# Safe no-op when ep_size=1 (identity mapping, tp_rank unchanged).
-MOE_WNA16="/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/quantization/moe_wna16.py"
-if [ ! -f "$MOE_WNA16" ]; then
-  echo "ANCHOR-DRIFT: moe_wna16.py: EP-aware qzeros remap target file missing (SGLang restructured/renamed?)"
-else
-  python3 << 'PATCH_QZEROS_EOF'
-import sys
-f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/quantization/moe_wna16.py"
-with open(f) as fh:
-    code = fh.read()
-old_w13 = '''            if "w13_qzeros" in weight_name:
-                tensor = loaded_weight.view(
-                    layer.moe_tp_size, -1, loaded_weight.size(1)
-                )[tp_rank]
-                if shard_id == "w1":
-                    param.data[expert_id, : shard_size // 2] = tensor
-                else:
-                    param.data[expert_id, shard_size // 2 :] = tensor'''
-new_w13 = '''            if "w13_qzeros" in weight_name:
-                _local_id = layer._map_global_expert_id_to_local_expert_id(expert_id)
-                if _local_id == -1:
-                    return
-                _moe_tp_rank = tp_rank % layer.moe_tp_size
-                tensor = loaded_weight.view(
-                    layer.moe_tp_size, -1, loaded_weight.size(1)
-                )[_moe_tp_rank]
-                if shard_id == "w1":
-                    param.data[_local_id, : shard_size // 2] = tensor
-                else:
-                    param.data[_local_id, shard_size // 2 :] = tensor'''
-old_w2 = '''            elif "w2_qzeros" in weight_name:
-                param.data[expert_id] = loaded_weight.view(
-                    loaded_weight.size(0), layer.moe_tp_size, -1
-                )[:, tp_rank]'''
-new_w2 = '''            elif "w2_qzeros" in weight_name:
-                _local_id = layer._map_global_expert_id_to_local_expert_id(expert_id)
-                if _local_id == -1:
-                    return
-                _moe_tp_rank = tp_rank % layer.moe_tp_size
-                param.data[_local_id] = loaded_weight.view(
-                    loaded_weight.size(0), layer.moe_tp_size, -1
-                )[:, _moe_tp_rank]'''
-changed = False
-if new_w13 in code:
-    print("w13_qzeros: already applied, skipping")
-elif old_w13 not in code:
-    print("ANCHOR-DRIFT: moe_wna16.py: w13_qzeros EP-aware remap anchor missing (SGLang version drift; re-check anchor)")
-    sys.exit(0)
-else:
-    code = code.replace(old_w13, new_w13, 1)
-    changed = True
-if new_w2 in code:
-    print("w2_qzeros: already applied, skipping")
-elif old_w2 not in code:
-    print("ANCHOR-DRIFT: moe_wna16.py: w2_qzeros EP-aware remap anchor missing (SGLang version drift; re-check anchor)")
-    sys.exit(0)
-else:
-    code = code.replace(old_w2, new_w2, 1)
-    changed = True
-if changed:
-    with open(f, 'w') as fh:
-        fh.write(code)
-    print("Patched moe_wna16.py: EP-aware expert_id + tp_rank remapping for qzeros")
-PATCH_QZEROS_EOF
-fi
+# moe_wna16 EP-aware qzeros remap: moved to sglang_patches/p20_moe_wna16_qzeros_ep.py
+# (run by the patch runner near the top of this script).
 
 # [removed 2026-07-12] quantization/utils.py dot-boundary is_layer_skipped patch (PR #23467)
 # dropped: verified present in the 0.5.14-sm121 image (_module_path_match already defined in
@@ -3509,6 +3442,44 @@ else:
 PATCH_DSV4_FST_EOF
 else
   echo "fastsafetensors patch: not needed or already applied, skipping"
+fi
+
+# ============================================================================
+# Runtime source-patch runner
+# ----------------------------------------------------------------------------
+# Runs every patch in $SGLANG_PATCH_DIR (ConfigMap-mounted, one .py per patch)
+# in filename order. Each patch gates itself on the SGLANG_* env vars and is
+# idempotent, so the runner stays dumb: no registry, no conditionals here.
+# See sglang_patches/_patchlib.py for the contract.
+#
+# Placed AFTER the inline patch section so patches can read env vars this script
+# exports (SGLANG_HUNYUAN_TOKEN_SUFFIX), and BEFORE the .pth installs + flag
+# build. Ordering between patches only matters when two touch the same file;
+# those live in one file (see the NN_ prefix groups in the refactor plan).
+#
+# A failing patch must never crashloop the pod: patches themselves swallow
+# anchor drift, and the `||` here catches an interpreter-level blowup (syntax
+# error in a patch, missing _patchlib) so we degrade to unpatched SGLang the
+# same way the inline heredocs did.
+# SGLANG_PATCH_ONLY=1 stops the script right after this runner, before the .pth
+# installs and the exec. It exists for the patch-refactor verification harness:
+# apply the patches in a plain podman container (no GPU, no k3s), snapshot the
+# resulting dist-packages tree and diff it against the pre-refactor script's
+# tree. Byte-identical tree == the refactor is behaviour-preserving. Never set
+# in the pod spec.
+SGLANG_PATCH_DIR="${SGLANG_PATCH_DIR:-/patches}"
+if [ -d "$SGLANG_PATCH_DIR" ]; then
+  for _p in "$SGLANG_PATCH_DIR"/p[0-9][0-9]_*.py; do
+    [ -e "$_p" ] || continue
+    python3 "$_p" || echo "[launch] WARNING: patch $(basename "$_p") exited non-zero, continuing"
+  done
+else
+  echo "[launch] WARNING: no patch dir at $SGLANG_PATCH_DIR — SGLang runs UNPATCHED"
+fi
+
+if [ "${SGLANG_PATCH_ONLY:-0}" = "1" ]; then
+  echo "[launch] SGLANG_PATCH_ONLY=1 — patch phase complete, exiting before server start"
+  exit 0
 fi
 
 # DeepSeek-V4-Flash FlashMLA sparse-decode hook activation (sm_121a / GB10).
