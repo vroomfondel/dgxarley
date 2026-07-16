@@ -64,8 +64,10 @@ _model_profile:
                                  # is a POST-WEIGHT reserve (higher = smaller reserve = more KV), NOT
                                  # fraction-of-total. Paired with max_total_tokens below: KV pool fixed ~13 GB,
                                  # the rest stays FREE for base+draft CUDA-graph capture.
-    max_total_tokens: "262144"   # 256k cap. min(memory-derived, this) -> KV pool = 256k tokens (~13 GB),
-                                 # leftover memory stays free for the MTP draft worker's weights + graph capture.
+    max_total_tokens: "131072"   # 2026-07-16 lowered 256k->128k: measured KV @256k = 15.01 GB with only
+                                 # 26.05 GB avail after weight load (~11 GB rest) -> too tight for the DSA
+                                 # cuda-graph capture step. 128k halves KV to ~7.5 GB, freeing ~7.5 GB headroom.
+                                 # min(memory-derived, this) -> KV pool = 128k tokens (~7.5 GB).
                                  # UNMEASURED: draft weight size unknown (earlier MTP crashed on the w13 bug pre-
                                  # alloc) -> watch avail_mem at draft capture + the KV alloc line, adjust if tight.
     attention_backend: "dsa"     # 2026-07-16 DSA-SPARSE VALIDATION run. Real DSA sparse attention on
@@ -82,16 +84,64 @@ _model_profile:
     dsa_prefill_backend: "flashinfer_gather"    # SM121 same gather+dense-fa2 fallback for prefill/extend
                                                 # (dsa_prefill_backend=trtllm hits the same TllmGenFmhaRunner
                                                 # SM121 assert at the warmup prefill; reuses the decode impl)
+    # !! WARNING 2026-07-16: dsa_prefill_backend=flashinfer_gather is UNSAFE for
+    # CONCURRENT / LONG prefill and this profile WILL CRASH under real load. It is
+    # left as-is deliberately to preserve the investigated state; do NOT treat it as
+    # production-ready. Live: GSM8K (2-shot, concurrency 8) killed worker-2 + worker-3
+    # with "CUDA error: an illegal memory access" in _forward_flashinfer_gather via
+    # forward_extend. CAUSE: the gather materialises [num_tokens_q * topk, 576] plus an
+    # fp32 intermediate = ~4.7 MB PER QUERY TOKEN. Decode's num_tokens_q is the batch
+    # size (<=32 -> ~75 MB, fine); PREFILL's is EVERY extend token in the batch
+    # (~2400 tokens -> ~11.3 GB, vs ~11 GB avail -> boom; chunked_prefill_size 8192
+    # -> ~38 GB). A bs=1 smoke passes, which is why this survived to a live run.
+    # It is ALSO why prefill is only ~1-5 tok/s (614k gathered KV rows per layer for a
+    # 300-token prompt). NOT a bad index: the -1 padding is legal in torch.
+    # FIX = DENSE prefill (for seq<=2048 top-2048 IS the whole context, so dense is
+    # numerically identical AND fused), but no dense MLA path exists in the DSA backend
+    # on SM121 (trtllm ragged = dead, _forward_standard_mha = needs non-absorb MHA) ->
+    # it needs BatchPrefillWithRaggedKVCacheWrapper ported in = a project.
+    # Full analysis: dsalogitrework.md PART 3 + dsa_cuda_graph_plan.md 7ter.
+    # Before that project: measure the dense baseline (attention_backend: flashinfer).
+    # ── PATCH-ACTIVATION CONTRACT (read before changing any of the 4 keys above) ──
+    # The whole SM121-DSA runtime-patch stack in roles/k8s_dgx/files/sglang_launch.sh
+    # (torch paged-mqa-logits indexer, flashinfer_gather decode+prefill dispatch, the
+    # 576-byte dequant branch, and the cuda-graph plan/run-split) is INERT unless this
+    # EXACT backend combo is selected. Each patch only adds a NEW dispatch branch /
+    # choice-list entry / method that is reached ONLY when its backend is chosen:
+    #   attention_backend: dsa                    -> without this, NONE of the DSA code runs
+    #   dsa_paged_mqa_logits_backend: torch       -> selects the torch indexer fallback
+    #   dsa_decode_backend: flashinfer_gather     -> selects gather+dense-fa2 decode
+    #   dsa_prefill_backend: flashinfer_gather    -> selects gather+dense-fa2 prefill
+    # Set any of these to another value and the corresponding patch becomes a dormant
+    # no-op (the branch is simply never taken; the added method/choice is harmless). So
+    # the patches never affect other models/profiles that keep the upstream defaults.
+    #
+    # KNOWN-GOOD GB10/SM121 BASELINES (both boot + serve CORRECT; pick by speed need):
+    #   (A) DENSE, fastest-correct, NO DSA sparsity:
+    #         attention_backend: flashinfer   (drop all 4 dsa_* keys + disable_cuda_graph)
+    #       This is the safe revert if the DSA path ever regresses. Loses the top-2048
+    #       sparse-attention win but uses only stock, fully-supported SM121 kernels.
+    #   (B) DSA-SPARSE, EAGER (this combo + disable_cuda_graph: true): boots past both
+    #       SM121 crash walls and is numerically correct (smoke verified), but SLOW
+    #       (~5 tok/s decode, ~1-3 tok/s prefill: ungfused torch fallback + no graph).
+    #       This is the proven "it runs on GB10 but not fast" standard.
+    #   (C) DSA-SPARSE, CUDA-GRAPH (this combo + disable_cuda_graph: false): the target.
+    #       Requires the plan/run-split patch (dsa_cuda_graph_plan.md) so the decode
+    #       wrapper.plan() moves out of the captured region. Restores decode-graph perf.
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 4
     disable_piecewise_cuda_graph: true
-    disable_cuda_graph: true   # 2026-07-16 TEMP for the DSA-sparse FUNCTIONAL test: dsa_decode_backend
-                               # flashinfer_gather's _forward_flashinfer_gather calls wrapper.plan() inline,
-                               # which is NOT cuda-graph-capturable -> crash at decode-graph capture. Disabling
-                               # cuda graph runs decode eager (plan() outside a graph, works) so we can prove
-                               # DSA-sparse is end-to-end CORRECT (smoke + GSM8K). SLOW (no graph) - revert to
-                               # false once the plan/run-split fix (dsa_cuda_graph_plan.md) lands. Only meaningful
-                               # with attention_backend: dsa + dsa_decode_backend: flashinfer_gather.
+    disable_cuda_graph: false  # 2026-07-16 CUDA-GRAPH ON: the plan/run-split fix (dsa_cuda_graph_plan.md)
+                               # landed in sglang_launch.sh (PATCH_DSA_FIG_GRAPH_SPLIT). _forward_flashinfer_gather
+                               # no longer calls wrapper.plan() inside the captured region for decode: a per-bs
+                               # wrapper(use_cuda_graph=True) is real-planned OUT of graph (warmup run_once /
+                               # out_graph capture-prep), monkeypatched to fast_mla_decode_plan, and only
+                               # wrapper.run() is captured; out_graph fast-replans (fresh kv_len) each replay.
+                               # Validated bit-exact vs eager on synthetic tensors (scratchpad/microtest.py:
+                               # causal=True + short-seq) + full patch-chain py_compile/import in a GB10 debug pod.
+                               # Prefill stays eager (is_decode=False -> inline plan; prefill cuda-graph is
+                               # auto-disabled anyway). REVERT to true (eager, slow but proven) if capture crashes
+                               # -- e.g. an indexer graph-safety issue only reachable at real capture.
     cuda_graph_max_bs: 32
     pp_async_batch_depth: 0
     # DeepGemm is designed for FP8 with ue8m0 scale format. For NVFP4 models

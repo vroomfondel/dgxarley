@@ -465,3 +465,87 @@ Fix options, cheapest first:
 fp8 dequant correctness (scale handling), CUDA-graph compat of the wrapper plan-rebuild
 (plan-per-batch vs graph replay), mixed batches where some requests have seq<2048 (-1 padding in
 `page_table_1`), and `next_n>=2` (MTP multi-token draft verify - not covered by Phase 1, a follow-up).
+
+### RESOLVED 2026-07-16 (live)
+
+- **CUDA-graph compat: SOLVED.** The plan-rebuild is moved out of the captured region
+  (per-bs wrapper, real `.plan()` once, monkeypatch to `fast_mla_decode_plan`, only
+  `wrapper.run()` captured). Implemented as `PATCH_DSA_FIG_GRAPH_SPLIT`, validated
+  bit-exact vs eager on synthetic tensors AND live: capture 100%, decode
+  `cuda graph: True` @ **8.4 tok/s** (vs ~5 eager). Full record: `dsa_cuda_graph_plan.md`
+  §6 STATUS / §7bis / §7ter.
+- **fp8 dequant + the -1 padding: NOT the crash.** `_pad_topk_indices` pads with `-1`
+  and `_get_fused_topk_page_table` passes topk_indices through unchanged, but
+  `flat_kv_cache[-1]` is *legal* torch (negative indexing = last row), so -1 cannot
+  cause an illegal access. The clamp/mask hypothesis was investigated and FALSIFIED.
+
+# PART 3 - The PREFILL reuse was a DESIGN ERROR (2026-07-16, live crash)
+
+**Do not reuse `_forward_flashinfer_gather` for prefill/extend.** The
+`dsa_prefill_backend=flashinfer_gather` patch ("reuses the decode implementation
+UNCHANGED") is memory-naive and was the direct cause of a live worker crash.
+
+## The failure
+
+GSM8K (2-shot, n=20, concurrency 8) killed worker-2 + worker-3 (head survived; the
+dead TP ranks broke the group). Identical traceback:
+
+```
+dsa_backend.py:2089  forward_extend         <- PREFILL/extend
+  -> _forward_flashinfer_gather
+dsa_backend.py:2433  ckv = gathered[..., :v_head_dim].contiguous()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+```
+
+(CUDA errors are async - the illegal access happens in the gather a line earlier, the
+`.contiguous()` is only where it surfaces.)
+
+## Root cause: O(num_tokens_q x topk) memory AND work
+
+`_forward_flashinfer_gather` materialises `[num_tokens_q * topk, 576]` **plus an fp32
+intermediate** (`gathered_fp8.to(torch.float32)`) = **4.7 MB per query token**
+(2048 * 576 * 4 B).
+
+| case | num_tokens_q | fp32 intermediate |
+|---|---|---|
+| decode (bs<=32) | <=32 | ~75 MB - fine, this is why decode works |
+| smoke prefill (bs=1, #new-token 64) | 64 | ~0.3 GB - worked |
+| GSM8K 2-shot x8 concurrent | ~2400 | **~11.3 GB** (avail was ~11 GB) -> crash |
+| chunked_prefill_size cap | 8192 | **~38 GB** |
+
+**Decode's `num_tokens_q` is the batch size (1 query token per request). Prefill's is
+EVERY extend token in the batch.** That is the asymmetry the "reuse unchanged" claim
+missed. It explains why a bs=1 smoke passed in both the eager and the cuda-graph
+deploys while concurrent prefill died: the defect scales with prefill tokens.
+
+It is also why **prefill measured ~1-5 tok/s**: gathering top-2048 KV *per query token*
+is 614k gathered KV rows per layer for a 300-token prompt, x60+ layers.
+
+## The right fix: DENSE prefill (and why it is a project on SM121)
+
+For `seq <= 2048`, top-2048 selects the ENTIRE context -> **dense prefill is numerically
+identical to sparse**, with one fused kernel instead of 614k gathers. It fixes the crash
+AND the slowness. (`seq > 2048` = real sparse prefill, still a follow-up.) This is what
+`dsa_cuda_graph_plan.md` §1 prescribed from the start; the implementation missed it.
+
+But no ready dense path exists inside `DeepseekSparseAttnBackend` on SM121:
+
+- `_forward_trtllm_extend` (dsa_backend.py:2669) uses
+  `flashinfer.prefill.trtllm_ragged_attention_deepseek` for `device_sm_major >= 10`;
+  GB10 is sm_major=12 -> `TllmGenFmhaRunner ... Unsupported architecture`. **Dead.**
+- `_forward_standard_mha` requires real `k`/`v` + dense multi-head config; this model
+  runs MLA-**absorb** (`forward_absorb_core`). Not usable.
+- The only SM121-working dense MLA prefill is `BatchPrefillWithRaggedKVCacheWrapper`
+  (`FlashInferMLAAttnBackend`, what the dense baseline uses). Porting it into the DSA
+  backend = rebuilding the absorb / KV-layout plumbing. **Project, not a patch.**
+
+**Chunking the gather is NOT a solution:** it bounds peak memory (crash goes away) but
+not the work -> prefill stays ~1-5 tok/s (8-40 min of prefill for one 8-request batch),
+so GSM8K stays impractical.
+
+## Consequence
+
+`dsa_prefill_backend=flashinfer_gather` should be considered **unsafe for concurrent /
+long prefill** in its current form. Before building the dense-prefill project, measure
+the dense baseline (`attention_backend: flashinfer`, one profile line, zero code) to get
+the number DSA must justify itself against. See `dsa_cuda_graph_plan.md` §7ter(d).

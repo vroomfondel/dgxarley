@@ -246,6 +246,53 @@ not once short sequences are considered.)
 
 ## 6. Open risks
 
+> **STATUS 2026-07-16 (isolated GPU micro-test, PASSED):** the core plan/run-split
+> mechanic (§4) was validated on synthetic tensors in a debug pod on spark1
+> (image `xomoxcc/dgx-spark-sglang:0.5.15-sm121`, GB10/SM121) BEFORE touching the
+> real patch, exactly as §7 step 2 prescribes. Script:
+> `scratchpad/microtest.py`. It builds `BatchMLAPagedAttentionWrapper(
+> use_cuda_graph=True, backend="fa2")` over our gather shapes (bs=4, topk=2048,
+> num_heads=32, head_dim_ckv=512, head_dim_kpe=64, page_size=1, **causal=True**),
+> calls the REAL `.plan()` once, monkey-patches `wrapper.plan =
+> partial(fast_mla_decode_plan, wrapper)`, captures a graph whose body is
+> `wrapper.run(...)` ONLY, and replays. Results:
+> - REPLAY#1 (same kv_len): `max|graph-eager| = 0.000000`, no NaN. **Bit-exact.**
+> - REPLAY#2 (short kv_len `[2048,128,512,1]`, the padded-tail / real-context<topk
+>   case): `max|graph-eager| = 0.000000`, no NaN. **Bit-exact.**
+>
+> This RESOLVES two of the four "open risks" below:
+> - **Risk #4 (`fast_mla_decode_plan` + `causal=True`): RESOLVED.** Source-confirmed
+>   (`flashinfer_mla_backend.py:1085`): `fast_mla_decode_plan` threads `causal`
+>   generically to `self._cached_module.plan(...)` (no hardcoded `False`, no
+>   MLA-backend gate); its `kv_indices` param is accepted but unused (the indices
+>   were baked into `_cached_module` by the one real `.plan()`). Micro-test ran the
+>   whole split with `causal=True` bit-exact.
+> - **Risk #2 (short-seq `kv_len_arr` correctness): substantially de-risked.** The
+>   per-replay fast-plan with a fresh `kv_len_arr_cpu` (mixed lengths incl. len=1)
+>   matched eager bit-exact. The graph mechanic handles per-request length variation
+>   inside one captured `bs`. (What remains unproven is only the *upstream* wiring:
+>   that `metadata.dsa_cache_seqlens_int32` feeds the indexer's own top-k the right
+>   way for len<topk. That is a model-internal question, not a graph-mechanic one.)
+>
+> Also source-confirmed by the live-pod extraction: `metadata.dsa_cache_seqlens_int32`
+> is ALREADY a static, in-place-`.copy_()`-updated buffer (refreshed every replay by
+> the existing `_apply_cuda_graph_metadata` / `fused_dsa_decode_metadata` machinery),
+> so the `kv_len_arr` source needs NO new `.cpu()` sync (matches §5). And
+> `self.workspace_buffer` IS allocated on SM121 (device_sm_major=12 >= 10), so the
+> wrapper can be built. `DeepseekSparseAttnBackend` has NO
+> `init_forward_metadata_in_graph` (base no-op) and an INDEPENDENT 298-line
+> `init_forward_metadata` eager override that does NOT delegate to `_out_graph` — so
+> the plan step must be added to BOTH `init_forward_metadata_out_graph` (graph) and
+> the eager path (prefill is eager: `cuda_graph prefill.backend='disabled'`).
+>
+> Context: this micro-test only became safe to run after the live eager
+> deployment was scaled to 0 (the sparks are time-sliced; an earlier debug pod
+> sharing spark2's GB10 with a live TP worker triggered an NCCL collective-timeout
+> that restarted worker-1 and broke the TP group — never co-locate a GPU debug pod
+> with live SGLang serving on these nodes).
+
+REMAINING open risks (deploy-only):
+
 - **Indexer graph-safety, unverified.** No DSA decode backend has ever
   reached CUDA-graph capture successfully on this SM121 stack before
   `flashinfer_gather` (trtllm/tilelang/flashmla all died on kernel asserts
@@ -294,6 +341,167 @@ not once short sequences are considered.)
   inside one captured `bs` shape: `kv_len_arr_cpu` naturally handles
   per-request variation (it is a `[bs]` vector already), so this should fall
   out of the design for free — but has not been tested.
+
+## 7bis. IMPLEMENTED 2026-07-16 (`PATCH_DSA_FIG_GRAPH_SPLIT`)
+
+The plan is implemented in `roles/k8s_dgx/files/sglang_launch.sh` as a new heredoc
+block `PATCH_DSA_FIG_GRAPH_SPLIT_EOF` (after the decode + prefill gather blocks),
+7 anchored edits to `dsa_backend.py` (`# [patch] _sgl_dsa_fig_graph_split_`):
+- **S1** `__init__`: `self._flashinfer_gather_wrapper` (eager, kept) + new
+  `_flashinfer_gather_wrappers` (per-bs graph), `_fig_static`, `_fig_plan_params`.
+- **S2** `_forward_flashinfer_gather` signature: `+ is_decode: bool = True`.
+- **S3/S4** method body: gather+dequant unchanged; then split — `is_graph_decode`
+  (= `is_decode and decode_cuda_graph_metadata.get(bs) is not None`) → run-only on
+  the per-bs wrapper; else eager inline plan+run (original behavior, verbatim).
+- **S5** two new methods: `_fig_build_graph_wrapper` (build + REAL plan once +
+  monkeypatch `fast_mla_decode_plan`) and `_fig_replan_graph` (out-of-graph
+  build-if-params-known / fast-replan fresh kv_len).
+- **S6** `init_forward_metadata_out_graph`: after `_apply_cuda_graph_metadata`,
+  call `_fig_replan_graph(bs)` for decode. **S7** prefill dispatch: `is_decode=False`.
+
+Param sourcing (the §4 "layer not available in out_graph" problem): `sm_scale` +
+`num_heads` are stashed from the layer on the FIRST eager `_forward` (the
+memory-profile prefill, which runs before decode capture; MLA dims are model-wide
+constant so a prefill-sourced stash is correct for decode). The wrapper is then
+built by whichever runs first with params known: out_graph capture-prep, or the
+uncaptured warmup `run_once`. `head_dim_ckv`/`head_dim_kpe` come from
+`self.kv_lora_rank`/`self.qk_rope_head_dim` (on the backend at init).
+
+**Validated before deploy (§7 steps 1-2):**
+- `bash -n` on `sglang_launch.sh`: OK.
+- Full patch chain (torch-newfile/backend/indexer + gather decode/prefill + this
+  block) replayed against a GB10 debug pod's `dsa_backend.py`: all "Patched...",
+  **no ANCHOR-DRIFT**; `py_compile` OK; module imports; new methods + `is_decode` +
+  out_graph hook + `is_graph_decode` branch all present; `fast_mla_decode_plan`
+  importable. (p1 torch-backend touches out_graph-adjacent sites but the S6 anchor
+  still matched after it — no clobber.)
+- Core mechanic bit-exact vs eager (§6 STATUS box: microtest.py).
+- Indexer graph-safety static scan: `torch_paged_mqa_logits.py` documents itself
+  capture-safe (no `.item()`); `dsa_indexer.py` already has an
+  `is_current_stream_capturing()` guard around its `.item()`-heavy chunking path.
+- `disable_cuda_graph: false` set in the profile.
+
+PENDING: live deploy (§7 steps 3-5) — the only remaining unverified item is the
+indexer under REAL capture (deploy-only). Revert lever: `disable_cuda_graph: true`.
+
+## 7ter. LIVE DEPLOY RESULT 2026-07-16 — cuda-graph SUCCEEDED, prefill then failed
+
+Chronological, so the two outcomes are not conflated: **the cuda-graph fix this
+document specifies WORKED and is proven. A SEPARATE, pre-existing defect in the
+prefill (not introduced by this fix) then crashed the run.**
+
+### (a) The cuda-graph plan/run-split: PROVEN (§7 steps 3-4 PASS)
+
+Profile: `disable_cuda_graph: false`, `max_total_tokens: 131072`, dsa +
+torch-indexer + flashinfer_gather decode/prefill. Deploy 2026-07-16 ~11:43.
+
+```
+Load weight end. elapsed=1063.08 s, avail mem=26.47 GB, mem usage=78.99 GB
+KV Cache is allocated. #tokens: 131072, KV size: 7.51 GB      (was 15.01 GB @256k)
+Capture target decode CUDA graph begin. backend=full, bs=[1,2,4,8,12,16,24,32]
+Capturing batches (bs=32..1): 0/8 -> 100%   avail_mem ~11.5-12.8 GB throughout
+Capture target decode CUDA graph end. elapsed=21.39 s, mem usage=1.66 GB
+The server is fired up and ready to roll!
+```
+
+- **Capture completed 100%, no crash.** No `wrapper.plan` inside capture, no
+  `flashinfer_gather graph wrapper missing` assert (the build-ordering
+  belt-and-suspenders held), and **the §6 "indexer graph-safety" open risk did NOT
+  materialise** — the torch indexer captured fine (consistent with the static scan:
+  `torch_paged_mqa_logits.py` is `.item()`-free and `dsa_indexer.py` already has an
+  `is_current_stream_capturing()` guard around its `.item()`-heavy chunking path).
+- Smoke (bs=1) coherent + correct ("Paris"), 120 tok in ~15 s wall.
+- **Decode: `cuda graph: True`, gen throughput 8.19-8.41 tok/s vs ~5 tok/s eager
+  (+65%)** (§7 step 5). The graph removed the launch/Python overhead; the remaining
+  floor is the torch indexer's own (unfused) compute, not the graph.
+
+**Conclusion: this document's fix is done and validated. The remaining DSA perf
+ceiling is the indexer kernel (DSA_speedup.md), not cuda-graph.**
+
+### (b) The prefill defect that ended the run (NOT a cuda-graph issue)
+
+GSM8K (2-shot, n=20, concurrency 8) against the exposed endpoint killed
+**worker-2 and worker-3** (head survived, 0 restarts; TP group broken by the dead
+ranks). Identical traceback on both:
+
+```
+dsa_backend.py:2089  forward_extend          <- PREFILL/extend, not decode
+  -> _forward_flashinfer_gather
+dsa_backend.py:2433  ckv = gathered[..., :v_head_dim].contiguous()
+torch.AcceleratorError: CUDA error: an illegal memory access was encountered
+```
+
+**Root cause: memory explosion in the prefill gather, NOT a bad index.**
+Investigated and falsified in order:
+- Padding-sentinel hypothesis REJECTED: `_pad_topk_indices` pads with **-1** and
+  `_get_fused_topk_page_table` returns topk_indices unchanged, but
+  `flat_kv_cache[-1]` is *legal* in torch (negative indexing = last row). -1 cannot
+  produce an illegal access. A clamp would have been the wrong fix.
+- REAL cause: `_forward_flashinfer_gather` materialises `[num_tokens_q * topk, 576]`
+  **plus an fp32 intermediate** (`gathered_fp8.to(torch.float32)`) = **4.7 MB per
+  query token** (2048*576*4). Decode has `num_tokens_q = bs <= 32` -> ~75 MB, fine.
+  **Prefill has `num_tokens_q` = ALL extend tokens in the batch:**
+
+  | case | num_tokens_q | fp32 intermediate |
+  |---|---|---|
+  | smoke (bs=1, #new-token 64) | 64 | ~0.3 GB — worked |
+  | GSM8K 2-shot x8 concurrent | ~2400 | **~11.3 GB** — avail was ~11 GB -> boom |
+  | chunked_prefill_size cap | 8192 | **~38 GB** |
+
+  This is why the bs=1 smoke passed in BOTH the eager and the cuda-graph deploys and
+  only concurrent/ragged prefill crashed: the defect scales with prefill tokens.
+
+**The design error is mine and predates the cuda-graph fix:** the prefill patch
+"reuse the decode impl unchanged" is memory-naive. Gathering top-2048 KV *per query
+token* is O(num_tokens_q x topk) in both memory AND work — 614k gathered KV rows per
+layer for a 300-token prompt, x60+ layers. That is also why prefill measured
+**~1-5 tok/s**. §1 of THIS document already prescribed the right thing and the
+implementation missed it: *"reuse flashinfer's DENSE MLA prefill like the base
+model — dense for seq<=2048 ... sparse >2048 a follow-up"*.
+
+### (c) Why the prefill fix is a project, not a patch (SM121 dead-end)
+
+- **Chunking the gather** bounds peak memory (fixes the crash) but NOT the work:
+  prefill stays ~1-5 tok/s, i.e. an 8-request batch needs 8-40 min of prefill.
+  GSM8K remains impractical. Crash-fix only, not a solution.
+- **Dense prefill is the correct fix** (for `seq <= 2048`, top-2048 IS the whole
+  context -> dense is NUMERICALLY IDENTICAL, with one fused kernel instead of 614k
+  gathers; it would fix the crash AND the slowness). But on SM121 there is no
+  ready path inside `DeepseekSparseAttnBackend`:
+  - `_forward_trtllm_extend` (dsa_backend.py:2669) takes
+    `flashinfer.prefill.trtllm_ragged_attention_deepseek` for `device_sm_major >= 10`
+    — GB10 is sm_major=12 -> the `TllmGenFmhaRunner ... Unsupported architecture`
+    assert. **Dead.**
+  - `_forward_standard_mha` needs real `k`/`v` + "dense multi-head config"; this
+    model runs MLA-**absorb** (`forward_absorb_core` in the traceback). Not usable.
+  - The only SM121-working dense MLA prefill is
+    `BatchPrefillWithRaggedKVCacheWrapper` in `FlashInferMLAAttnBackend` (what the
+    dense baseline uses). Porting it into the DSA backend means rebuilding the
+    absorb / KV-layout plumbing = a real implementation project.
+
+### (d) Status / decision taken
+
+DSA on GB10 as of 2026-07-16:
+
+| component | status |
+|---|---|
+| indexer (torch fallback) | works; is the decode perf floor |
+| decode (flashinfer_gather + cuda-graph) | **works, proven, 8.4 tok/s** |
+| prefill | **no viable path**: trtllm dead, gather memory-explosive + ~1-5 tok/s, chunking insufficient, dense = project |
+
+**Decision (user, 2026-07-16): STOP here, commit + document.** Before investing in
+the dense-prefill project, the honest next step is to measure the DENSE BASELINE
+(`attention_backend: flashinfer`, one profile line, zero code) to get the tok/s
+number DSA must justify itself against. If dense clearly beats 8.4 tok/s decode AND
+has fast prefill, the DSA prefill rebuild is not justifiable on this hardware.
+
+Nothing here is wasted: the patches are INERT unless their backend combo is selected
+(see the profile's PATCH-ACTIVATION CONTRACT), the plan/run-split is proven and
+reusable, and the indexer fallback stays available.
+
+**Live state at stop:** sglang deployments scaled/left with the main instance
+deployed (head 2/2 healthy, worker-2/-3 restarted once -> TP group needs a clean
+restart before serving again). embed/vision were torn down by the user.
 
 ## 7. Verification / test plan
 
