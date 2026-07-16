@@ -98,3 +98,39 @@ DeepSeek-V4 (`fp8_paged_mqa_logits_torch_sm120`, PR #24692), but the generic
 
 Full local chronology: `dsalogitrework.md` (PART 1 = port plan, PHASE 2, p35
 LIVE RESULT, MTP LIVE RESULT).
+
+## Submission checklist (recherchiert 2026-07-16)
+
+**Unit-Tests: JA, zwingend und mit direktem Präzedenzfall.** Die Contribution-
+Guide (docs_new/docs/developer_guide/contribution_guide.mdx) verlangt Tests für
+jedes Feature, und PR #24692 (der dsv4-Fallback, den p30 portiert) shippte
+`test/registered/kernels/test_sm120_paged_mqa_logits.py` (314 Z.) — läuft auf
+JEDER CUDA-GPU ("no SM120 hardware required"), registriert via
+`register_cuda_ci(est_time=20, stage="base-b", runner_config="1-gpu-small")`.
+
+**Unser Test** (neu, `test/registered/kernels/test_dsa_paged_mqa_logits.py`,
+modelliert auf dem Präzedenzfall; Layout-Konstanten identisch — 64er-Pages,
+head_dim 128, 8448 B/Page):
+1. torch-Fn vs. loopy Referenz (Numerik + -inf-Masken),
+2. Triton vs. torch **bit-exakt** (inkl. identischer -inf-Masken),
+3. beide KV-dtype-Views (uint8 / float8_e4m3fn) — der historische
+   Garbled-Output-Bug aus dem Präzedenztest,
+4. variable per-Batch seq_lens + Masking-Semantik,
+5. **per-Token-Shapes (verify/next_n>=2)**: expanded seqlens + per-Token-
+   page_table-Zeilen (die Doppel-Expansions-Lektion als Regressionstest),
+6. cuda-graph capture + replay, inkl. seq-len-Änderung im statischen Buffer
+   zwischen Capture und Replay,
+7. num_heads<16-Fallback-Guard (tl.dot-Minimum).
+Alles CI-lauffähig auf H100-Runnern (torch + Triton sind arch-generisch);
+Entwicklung/Vorvalidierung auf spark5 möglich (podman-Methode).
+
+**Mechanik:**
+- Fork + Branch; die p30/p35-Anker in ECHTE Diffs gegen main portieren.
+  ACHTUNG: main hat die Kernel-Verzeichnisse restrukturiert
+  (`python/sglang/kernels/ops/attention/...` statt `srt/layers/attention/...`
+  für Teile) — Zielpfade gegen main verifizieren, nicht gegen v0.5.15.
+- `pre-commit run --all-files` (Pflicht laut Guide; ggf. zweimal laufen lassen).
+- CI-Registrierung des Tests via `register_cuda_ci` (Stage/Runner wie Präzedenz).
+- PR-Body aus diesem Dokument; Companion-PR verlinken.
+- Offen zu prüfen beim Einreichen: DCO/Sign-off-Pflicht (in der Guide nicht
+  gesehen, beim ersten Push gegen die PR-Checks verifizieren).

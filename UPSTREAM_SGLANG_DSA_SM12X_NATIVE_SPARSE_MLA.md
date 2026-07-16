@@ -99,3 +99,31 @@ behaviour is byte-identical.
 
 Full local chronology: `dsalogitrework.md` (PART 4 + LIVE-DEPLOY RESULT),
 `DSA_speedup.md`, `dsa_cuda_graph_plan.md` §8.
+
+## Submission checklist (recherchiert 2026-07-16)
+
+**Unit-Tests: JA (Guide-Pflicht), aber der Kernel selbst braucht SM12x-Hardware
+— Split-Strategie:**
+1. **CI-lauffähig ohne SM12x** (`test/registered/unit/` spiegelt den Source-
+   Tree): (a) `calculate_mla_kv_cache_dim`-Unit-Test mit gemocktem
+   `get_device_capability` (12 vs. 10) und Fake-Config → 656/576-Matrix
+   (Testlogik existiert schon: unsere spark5-Validierung `validate_p34.sh`
+   prüft exakt diese drei Fälle); (b) `_forward_trtllm`-Kwarg-Selektion:
+   flashinfer-Call monkeypatchen, Fake-Backend mit `device_sm_major=12` +
+   `dsa_kv_cache_store_fp8=True` → assert `backend="auto"`,
+   `kv_scale_format="arbitrary_fp32"`, uint8-View, `skip_softmax=None`, und
+   auf dem 10er-Pfad Byte-Gleichheit der Upstream-Kwargs.
+2. **SM12x-gebundener Kernel-Test** (skip-gated wie die bestehenden
+   sm120-Quant-Tests, z.B. `test/registered/quant/test_nvfp4_gemm_sm120.py`):
+   der Numerik-Test aus unserer spark5-Validierung (echtes
+   `quantize_k_cache`-Pool, torch-Referenz, decode/prefill/overshoot/graph) —
+   läuft in CI nur, wenn ein SM120/121-Runner existiert, sonst skip.
+3. Hardware-Evidenz im PR-Body (GB10-Zahlen aus diesem Dokument), da die
+   Maintainer vermutlich kein SM121 in CI haben (gleiche Lage wie DeepGEMM
+   PR #318).
+
+**Mechanik:** wie beim Companion-PR (Fork/Branch, echte Diffs gegen main —
+Pfad-Restrukturierung in main beachten, `pre-commit run --all-files`,
+`register_cuda_ci` für die CI-fähigen Tests, DCO beim ersten Push prüfen).
+flashinfer-Mindestversion (>= 0.6.x mit `_sparse_mla_sm120`) im PR nennen und
+ggf. als Import-Guard kodieren.
