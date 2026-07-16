@@ -153,3 +153,17 @@ Punkte, präventiv auf UNS angewendet:
    Companion verweisen, aber nicht mergen-lassen-abhängig machen.
 6. **Erwartungsmanagement**: mehrwöchige Review mit Iterationen einplanen;
    gemini-Bot-Review kommt zuerst und ist gründlich.
+
+
+## STATUS 2026-07-16: Branch gebaut + GPU-validiert, bereit zum Einreichen
+
+Branch `dsa-sm12x-native-sparse-mla` im Fork-Worktree `../sglang-wt-sparsemla`
+(von upstream/main 1f34911de7), EIN Commit `200a884d44`, pre-commit clean,
+NICHT gepusht. Tests: 11/11 CI-safe Units (kv-dim-Matrix, kwarg-Selektion,
+fuse-rope-Regression) + **5/5 SM121-Kernel-Test auf GB10** (nach zwei Fixes:
+KV-View muss die echte 64er-Page-Geometrie haben, sonst sind die
+Decode-Kernel nicht dispatchbar und der Orchestrator rejected num_tokens<=64;
+num_kv als 64er-Vielfaches). Port-Highlights: calculate_mla_kv_cache_dim ist
+in main nach mem_cache/kv_cache_configurator.py umgezogen; kanonische Util
+is_sm120_supported() (major==12, deckt SM121 mit ab) statt roher Checks;
+expliziter NotImplementedError für DSA-Prefill-CP auf dem Sparse-Pfad.

@@ -144,3 +144,16 @@ Arch-Utils statt roher Checks, `-1`-Sentinel explizit testen UND kommentieren,
 kein stilles Durchfallen für nicht unterstützte Pfade (next_n-Randfälle,
 CP-Zweige), Assert-Messages beschreibend halten, Scope eng (nur das
 Indexer-Backend, kein Beifang).
+
+
+## STATUS 2026-07-16: Branch gebaut + GPU-validiert, bereit zum Einreichen
+
+Branch `dsa-indexer-torch-triton-backend` im Fork-Worktree
+`../sglang-wt-indexer` (von upstream/main 1f34911de7), EIN Commit
+`d0b442f14f`, pre-commit clean, NICHT gepusht. Test
+`test/registered/kernels/test_dsa_paged_mqa_logits.py`: **17/17 auf GB10**
+(inkl. Verify-per-Token-Shapes, Doppel-Expansions-Regressionstest,
+Graph-Capture/Replay). Env-Gate sauber in upstreams environ.py-Registry.
+Bemerkenswerte main-Drift-Funde im Port-Report: dsa_indexer resolved das
+Backend inzwischen selbst; ForwardMode hat kein non-v2 draft_extend mehr
+(toter upstream-Zweig).
