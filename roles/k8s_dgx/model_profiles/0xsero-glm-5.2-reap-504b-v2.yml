@@ -82,7 +82,13 @@ _model_profile:
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 4
     disable_piecewise_cuda_graph: true
-    disable_cuda_graph: false
+    disable_cuda_graph: true   # 2026-07-16 TEMP for the DSA-sparse FUNCTIONAL test: dsa_decode_backend
+                               # flashinfer_gather's _forward_flashinfer_gather calls wrapper.plan() inline,
+                               # which is NOT cuda-graph-capturable -> crash at decode-graph capture. Disabling
+                               # cuda graph runs decode eager (plan() outside a graph, works) so we can prove
+                               # DSA-sparse is end-to-end CORRECT (smoke + GSM8K). SLOW (no graph) - revert to
+                               # false once the plan/run-split fix (dsa_cuda_graph_plan.md) lands. Only meaningful
+                               # with attention_backend: dsa + dsa_decode_backend: flashinfer_gather.
     cuda_graph_max_bs: 32
     pp_async_batch_depth: 0
     # DeepGemm is designed for FP8 with ue8m0 scale format. For NVFP4 models
