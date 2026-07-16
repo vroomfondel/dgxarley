@@ -495,7 +495,7 @@
                           d="/root/.cache/huggingface/hub/models--$(printf '%s' "$m" | sed 's#/#--#g')"
                           [ -d "$d" ] || continue
                           echo "[preload] blocking warmup: $d"
-                          timeout 5400 /usr/local/bin/juicefs warmup --threads 2 "$d" \
+                          timeout 5400 /usr/local/bin/juicefs warmup --threads 1 "$d" \
                             || echo "[preload] WARN: warmup incomplete for $m (timeout/error; non-fatal)"
                           /usr/local/bin/juicefs warmup --check "$d" 2>&1 | tail -1
                         done
@@ -546,7 +546,7 @@
                           d="/root/.cache/huggingface/hub/models--$(printf '%s' "$m" | sed 's#/#--#g')"
                           [ -d "$d" ] || continue
                           echo "[preload-wait] blocking warmup: $d"
-                          timeout 5400 /usr/local/bin/juicefs warmup --threads 2 "$d" \
+                          timeout 5400 /usr/local/bin/juicefs warmup --threads 1 "$d" \
                             || echo "[preload-wait] WARN: warmup incomplete for $m (timeout/error; non-fatal)"
                           /usr/local/bin/juicefs warmup --check "$d" 2>&1 | tail -1
                         done
@@ -851,7 +851,7 @@
                           d="/root/.cache/huggingface/hub/models--$(printf '%s' "$m" | sed 's#/#--#g')"
                           [ -d "$d" ] || continue
                           echo "[preload] blocking warmup: $d"
-                          timeout 5400 /usr/local/bin/juicefs warmup --threads 2 "$d" \
+                          timeout 5400 /usr/local/bin/juicefs warmup --threads 1 "$d" \
                             || echo "[preload] WARN: warmup incomplete for $m (timeout/error; non-fatal)"
                           /usr/local/bin/juicefs warmup --check "$d" 2>&1 | tail -1
                         done
@@ -902,7 +902,7 @@
                           d="/root/.cache/huggingface/hub/models--$(printf '%s' "$m" | sed 's#/#--#g')"
                           [ -d "$d" ] || continue
                           echo "[preload-wait] blocking warmup: $d"
-                          timeout 5400 /usr/local/bin/juicefs warmup --threads 2 "$d" \
+                          timeout 5400 /usr/local/bin/juicefs warmup --threads 1 "$d" \
                             || echo "[preload-wait] WARN: warmup incomplete for $m (timeout/error; non-fatal)"
                           /usr/local/bin/juicefs warmup --check "$d" 2>&1 | tail -1
                         done
