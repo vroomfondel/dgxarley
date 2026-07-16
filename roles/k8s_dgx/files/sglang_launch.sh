@@ -1196,6 +1196,240 @@ else:
         print("Patched dsa_indexer.py: added torch-backend dispatch branch (phase 1, next_n==1) + gated DeepGEMM fallback + excluded dg_native")
 PATCH_DSA_TORCH_INDEXER_EOF
 
+# ── DSA attention decode: gather + reuse dense fa2 (GB10/SM121, gather+reuse, not a new kernel) ──
+# Every DEDICATED DSA attention kernel is dead on GB10/SM121: trtllm-gen FMHA is a
+# datacenter-Blackwell-only ISA (live crash: "Unsupported architecture" at
+# TllmGenFmhaRunner autotune), flashmla_sparse/flashmla_kv's sgl_kernel extension is
+# not built in this image, fa3 has a hard SM90/SM100-only gate, and tilelang compiles
+# on SM121 but has a proven smem-vs-compile contradiction (no block_I both fits the
+# ~99 KB budget and compiles). Full survey + verdict: DSA_speedup.md.
+#
+# Instead of a new kernel: gather the indexer's top-k selected KV (the "gather" prep
+# ALREADY exists -- dsa_backend.py::forward_decode builds
+# page_table_1 = transform_index_page_table_decode(page_table, topk_indices, page_size=1)
+# for every backend) and run flashinfer's DENSE MLA decode (backend="fa2", the SAME
+# kernel that already serves this model's dense baseline on SM121) over the small
+# gathered subset. flashinfer's MLA wrapper rejects fp8 kv_data_type outside SM90/fa3,
+# so the gathered KV must be dequantized to bf16 first -- reusing SGLang's OWN
+# dequantize_k_cache_paged (already imported in dsa_backend.py, already used by the
+# flashmla_sparse RAGGED-prefill path for exactly this purpose), not reinvented.
+# Full design + numeric verification: dsalogitrework.md PART 2.
+#
+# New OPT-IN decode backend value "flashinfer_gather" (dsa_decode_backend), analogous
+# to the paged-mqa-logits "torch" backend above: not selected by auto-detection, no
+# arch gate, zero behavior change for every model/arch that doesn't explicitly select
+# it. PHASE 1 ONLY: plain single-token decode. MTP/NEXTN target-verify (next_n>=2, via
+# forward_extend's dsa_decode_impl reuse) is not wired here and falls through to
+# forward_extend's existing "unsupported" handling -- moot for now since MTP stays off
+# until this path is live-validated.
+python3 - <<'PATCH_DSA_FLASHINFER_GATHER_EOF'
+import pathlib
+
+# --- File A: server_args.py -- add "flashinfer_gather" to DSA_CHOICES ---
+fA = pathlib.Path("/usr/local/lib/python3.12/dist-packages/sglang/srt/server_args.py")
+srcA = fA.read_text()
+markerA = "# [patch] _sgl_dsa_flashinfer_gather_choice_"
+oldA = '''DSA_CHOICES = [
+    "flashmla_sparse",
+    "flashmla_kv",
+    "flashmla_auto",
+    "fa3",
+    "tilelang",
+    "aiter",
+    "trtllm",
+]'''
+newA = f'''{markerA}
+DSA_CHOICES = [
+    "flashmla_sparse",
+    "flashmla_kv",
+    "flashmla_auto",
+    "fa3",
+    "tilelang",
+    "aiter",
+    "trtllm",
+    "flashinfer_gather",
+]'''
+
+if markerA in srcA:
+    print("server_args.py: flashinfer_gather DSA choice already patched, skipping")
+elif oldA not in srcA:
+    print("ANCHOR-DRIFT: server_args.py: DSA_CHOICES anchor missing (SGLang version drift; re-check anchor)")
+else:
+    srcA = srcA.replace(oldA, newA, 1)
+    fA.write_text(srcA)
+    print("Patched server_args.py: added 'flashinfer_gather' to DSA_CHOICES")
+
+# --- File B: dsa_backend.py ---
+fB = pathlib.Path("/usr/local/lib/python3.12/dist-packages/sglang/srt/layers/attention/dsa_backend.py")
+srcB = fB.read_text()
+markerB_init = "# [patch] _sgl_dsa_flashinfer_gather_init_"
+
+# B1: __init__ -- cache slot for the lazily-built wrapper.
+old_init = '''        # Allocate global workspace buffer for TRT-LLM kernels (ragged attention on SM100/B200, or trtllm decode)
+        if self.device_sm_major >= 10 or self.dsa_decode_impl == "trtllm":
+            global global_workspace_buffer
+            if global_workspace_buffer is None:
+                global_workspace_buffer = torch.empty(
+                    envs.SGLANG_FLASHINFER_WORKSPACE_SIZE.get(),
+                    dtype=torch.uint8,
+                    device=model_runner.device,
+                )
+            self.workspace_buffer = global_workspace_buffer
+        else:
+            self.workspace_buffer = None'''
+new_init = old_init + f'''
+
+        {markerB_init}
+        # gather+dense-fa2 fallback (dsalogitrework.md PART 2): reuse the working
+        # dense MLA decode kernel over the indexer's gathered+dequantized top-k KV,
+        # since every dedicated DSA attention kernel is dead on GB10/SM121. Built
+        # lazily on first use in _forward_flashinfer_gather (needs self.workspace_buffer,
+        # set just above).
+        self._flashinfer_gather_wrapper = None'''
+
+# B2: forward_decode dispatch -- new elif branch before the final else/assert.
+old_dispatch = '''elif self.dsa_decode_impl == "aiter":
+            if q_all is None or not _is_hip:
+                q_all = torch.cat([q_nope, q_rope], dim=-1)
+            return self._forward_aiter(
+                q_all=q_all,
+                kv_cache=kv_cache,
+                page_table_1=page_table_1,
+                layer=layer,
+                metadata=metadata,
+                bs=forward_batch.batch_size,
+            )
+
+        else:
+            assert False, f"Unsupported {self.dsa_decode_impl = }"'''
+new_dispatch = f'''elif self.dsa_decode_impl == "aiter":
+            if q_all is None or not _is_hip:
+                q_all = torch.cat([q_nope, q_rope], dim=-1)
+            return self._forward_aiter(
+                q_all=q_all,
+                kv_cache=kv_cache,
+                page_table_1=page_table_1,
+                layer=layer,
+                metadata=metadata,
+                bs=forward_batch.batch_size,
+            )
+
+        elif self.dsa_decode_impl == "flashinfer_gather":
+            return self._forward_flashinfer_gather(
+                q_nope=q_nope,
+                q_rope=q_rope,
+                kv_cache=kv_cache,
+                page_table_1=page_table_1,
+                sm_scale=layer.scaling,
+                v_head_dim=layer.v_head_dim,
+                metadata=metadata,
+            )
+
+        else:
+            assert False, f"Unsupported {{self.dsa_decode_impl = }}"'''
+
+# B3: new method, inserted right before _forward_fa3.
+old_method_anchor = "    def _forward_fa3(\n"
+new_method = '''    def _forward_flashinfer_gather(
+        self,
+        q_nope: torch.Tensor,
+        q_rope: torch.Tensor,
+        kv_cache: torch.Tensor,
+        page_table_1: torch.Tensor,
+        sm_scale: float,
+        v_head_dim: int,
+        metadata: "DSAMetadata",
+    ) -> torch.Tensor:
+        """Phase 1 (dsalogitrework.md PART 2, plain decode / next_n==1 only).
+
+        Every dedicated DSA attention kernel is dead on GB10/SM121 (trtllm-gen
+        FMHA = datacenter-only ISA, flashmla = extension not built in this
+        image, fa3 = hard SM90/SM100 gate, tilelang = proven smem/compile
+        contradiction). Instead of a new kernel: gather the indexer's top-k
+        selected KV via dequantize_k_cache_paged (already imported/used above
+        by the flashmla_sparse RAGGED-prefill path -- fused gather + fp8->bf16
+        dequant, not reinvented here) and run flashinfer's DENSE MLA decode
+        (backend="fa2", the kernel that already serves this model's dense
+        baseline on SM121) over the small gathered+dequantized subset.
+
+        flashinfer's MLA wrapper rejects fp8 kv_data_type outside SM90/fa3
+        (dsalogitrework.md Section 2 "THE blocker"), which is why the dequant
+        to bf16 happens BEFORE the wrapper, not inside it. Numerically
+        verified (2026-07-16, GPU pod) against an independent manual gather +
+        dequant + softmax reference using the real production packed-fp8 KV
+        byte layout: max abs diff ~0.0008-0.0012 (bf16-level), no NaN/all-zero,
+        seed-varying. Open point (dsalogitrework.md): kv_len_arr masking for
+        requests with real context < topk is wired (clamp + flashinfer's own
+        kv_len_arr) but not proven correct end-to-end, only plumbing-tested.
+        """
+        from flashinfer.mla import BatchMLAPagedAttentionWrapper
+
+        if self._flashinfer_gather_wrapper is None:
+            self._flashinfer_gather_wrapper = BatchMLAPagedAttentionWrapper(
+                self.workspace_buffer, backend="fa2"
+            )
+        wrapper = self._flashinfer_gather_wrapper
+
+        num_tokens_q = q_nope.shape[0]
+        num_heads = q_nope.shape[1]
+        topk = page_table_1.shape[-1]
+        device = q_nope.device
+
+        # (num_tokens_q * topk, 1, kv_lora_rank + qk_rope_head_dim), bf16.
+        gathered = dequantize_k_cache_paged(kv_cache, page_table_1.reshape(-1))
+        ckv = gathered[..., :v_head_dim].contiguous()
+        kpe = gathered[..., v_head_dim:].contiguous()
+
+        qo_indptr = torch.arange(0, num_tokens_q + 1, device=device, dtype=torch.int32)
+        # page_size=1 post-gather: the freshly gathered/dequantized buffer is
+        # already dense per request, so a plain sequential index is correct
+        # (no second indirection into the original packed KV cache needed).
+        kv_indptr = qo_indptr * topk
+        kv_indices = torch.arange(
+            0, num_tokens_q * topk, device=device, dtype=torch.int32
+        )
+        # Real per-request valid KV count (<=topk; short sequences leave a
+        # padded tail in page_table_1 -- see dsalogitrework.md "Open points").
+        kv_len_arr = metadata.dsa_cache_seqlens_int32.clamp(max=topk).to(torch.int32)
+
+        wrapper.plan(
+            qo_indptr,
+            kv_indptr,
+            kv_indices,
+            kv_len_arr,
+            num_heads,
+            v_head_dim,
+            kpe.shape[-1],
+            1,
+            True,
+            sm_scale,
+            q_nope.dtype,
+            ckv.dtype,
+        )
+        return wrapper.run(q_nope, q_rope, ckv, kpe, return_lse=False)
+
+    def _forward_fa3(\n'''
+
+edits = [
+    ("B1-init", old_init, new_init),
+    ("B2-dispatch", old_dispatch, new_dispatch),
+    ("B3-method", old_method_anchor, new_method),
+]
+
+if markerB_init in srcB:
+    print("dsa_backend.py: flashinfer_gather wiring already patched, skipping")
+else:
+    missing = [tag for tag, old, new in edits if old not in srcB]
+    if missing:
+        for tag in missing:
+            print(f"ANCHOR-DRIFT: dsa_backend.py: flashinfer_gather anchor '{tag}' missing (SGLang version drift; re-check anchor)")
+    else:
+        for tag, old, new in edits:
+            srcB = srcB.replace(old, new, 1)
+        fB.write_text(srcB)
+        print("Patched dsa_backend.py: added flashinfer_gather decode backend (gather + dense fa2, phase 1)")
+PATCH_DSA_FLASHINFER_GATHER_EOF
+
 
 # Patch SGLang get_config() to convert dict sub_configs after loading (transformers 5.5.0 bug).
 # Transformers 5.x auto-generates __init__ for PretrainedConfig subclasses with sub_configs,
@@ -3069,6 +3303,14 @@ fi
 # the _sgl_ torch fallback (DeepGEMM asserts on sm_121). Other choices: deepgemm/cutedsl/aiter.
 if [ -n "$SGLANG_DSA_PAGED_MQA_LOGITS_BACKEND" ]; then
   args+=(--dsa-paged-mqa-logits-backend "$SGLANG_DSA_PAGED_MQA_LOGITS_BACKEND")
+fi
+# DSA decode attention backend (the MLA attention step over the indexer's top-k KV
+# selection). Empty → no flag → SGLang default ("auto" → trtllm-gen FMHA, dead on
+# SM121). Set "flashinfer_gather" on GB10/SM121 to use the _sgl_ gather+dense-fa2
+# fallback patched above. Other choices: flashmla_sparse/flashmla_kv/flashmla_auto/
+# fa3/tilelang/aiter/trtllm (all dead ends on SM121, see DSA_speedup.md).
+if [ -n "$SGLANG_DSA_DECODE_BACKEND" ]; then
+  args+=(--dsa-decode-backend "$SGLANG_DSA_DECODE_BACKEND")
 fi
 # Multimodal (vision/audio) attention backend. Empty → no flag → SGLang default.
 # Choices (0.5.12): sdpa, fa3, fa4, triton_attn, ascend_attn, aiter_attn,

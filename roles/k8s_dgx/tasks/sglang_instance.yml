@@ -147,6 +147,7 @@
         SGLANG_WATCHDOG_TIMEOUT: "{{ sglang_watchdog_timeout | string }}"
         SGLANG_ATTENTION_BACKEND: "{{ sglang_attention_backend }}"
         SGLANG_DSA_PAGED_MQA_LOGITS_BACKEND: "{{ sglang_dsa_paged_mqa_logits_backend }}"
+        SGLANG_DSA_DECODE_BACKEND: "{{ sglang_dsa_decode_backend }}"
         SGLANG_MM_ATTENTION_BACKEND: "{{ sglang_mm_attention_backend }}"
         SGLANG_PAGE_SIZE: "{{ sglang_page_size | string }}"
         SGLANG_SWA_FULL_TOKENS_RATIO: "{{ sglang_swa_full_tokens_ratio | string }}"

@@ -389,6 +389,15 @@ sglang_attention_backend: "{{ sglang_model_profiles[_sglang_active_model].attent
 # fallback runtime-patched into dsa_indexer.py) to run the sparse indexer. Wired to
 # --dsa-paged-mqa-logits-backend. Only meaningful together with attention_backend: "dsa".
 sglang_dsa_paged_mqa_logits_backend: "{{ sglang_model_profiles[_sglang_active_model].dsa_paged_mqa_logits_backend | default('') }}"
+# DSA decode attention backend (the MLA attention step over the indexer's top-k KV
+# selection). Empty → SGLang default ("auto" → trtllm-gen FMHA). On GB10/SM121 every
+# dedicated DSA attention kernel is dead (trtllm-gen = datacenter-only ISA, flashmla =
+# extension not built, fa3 = hard sm==8/9 gate, tilelang = proven smem/compile
+# contradiction — see DSA_speedup.md). "flashinfer_gather" (the _sgl_ runtime-patched
+# fallback) reuses the WORKING dense fa2 MLA-decode kernel over the gathered top-k KV
+# subset instead of a new kernel. Wired to --dsa-decode-backend. Only meaningful
+# together with attention_backend: "dsa".
+sglang_dsa_decode_backend: "{{ sglang_model_profiles[_sglang_active_model].dsa_decode_backend | default('') }}"
 # Multimodal (vision/audio) attention backend. Empty → SGLang default. Choices:
 # sdpa, fa3, fa4, triton_attn, ascend_attn, aiter_attn, flashinfer_cudnn. Only
 # relevant for multimodal models (e.g. MiMoV2 omni). Wired to --mm-attention-backend.
