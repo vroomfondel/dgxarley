@@ -83,7 +83,7 @@ CUDA-graph autotune of the MLA decode attention: `TllmGenFmhaRunner ... Unsuppor
 | `trtllm` (auto-default when kv fp8 + major>=10) | trtllm-gen FMHA (`TllmGenFmhaRunner`) | ISA wall, live crash |
 | `flashmla_sparse` / `flashmla_kv` | `sgl_kernel.flash_mla` (`flashmla_ops`) | extension NOT built in image (ImportError; only `sm100/common_ops`) |
 | `fa3` | flash-attention-v3 | hard gate `_is_fa3_supported()` = major==8 or 9; GB10=12 -> False |
-| `tilelang` | `dsa/tilelang_kernel.py` (own JIT) | COMPILES on sm121 (no ISA reject) but kernel-launch OOMs shared mem (231 KB req > GB10 99 KB; tile tuned for H100) |
+| `tilelang` | `dsa/tilelang_kernel.py` (own JIT) | PROVEN DEAD (GPU-tested): smem/compile contradiction, see below |
 | `aiter` | ROCm | N/A (AMD) |
 | indexer `dsa_paged_mqa_logits_backend=torch` | our port | WORKS (this is what got the boot past the indexer) |
 
@@ -92,14 +92,33 @@ Root cause of the auto-default: `arg_groups/overrides.py::_dsa_split_backend_res
 consumer Blackwell (SM120/121), and it recurs structurally across `dsa_backend.py` (flashmla padding,
 workspace-buffer gate, `_forward_standard_mha` dispatch), not a one-liner.
 
-**Verdict: the torch indexer fix was necessary but NOT sufficient.** The MLA decode attention has the
-same datacenter-vs-consumer gap, and unlike the indexer there is NO ready merged torch reference in the
-image to port. Of all attention backends only `tilelang` even compiles on SM121; it fails on shared-memory
-capacity, which is a TILE-TUNING problem (shrink for GB10's smaller smem), real kernel work with no
-guarantee, no config flag. So DSA-sparse (and therefore NEXTN/MTP, which needs the indexer) is blocked on
-GB10/SM121 until either upstream adds consumer-Blackwell kernels or someone does the tilelang tuning.
-Prod stays on `attention_backend="flashinfer"` (dense MLA). The torch indexer fallback + the wiring
-(`--dsa-paged-mqa-logits-backend`) stay committed for when the attention side is unblocked.
+**Verdict: the torch indexer fix was necessary but NOT sufficient, and every attention-decode path is now
+exhausted.** The MLA decode attention has the same datacenter-vs-consumer gap, and unlike the indexer there
+is NO ready merged torch reference in the image to port.
+
+The tilelang lead (the only backend that even compiles on SM121) was GPU-tested against the smem budget and
+is **proven dead**, not merely uncertain. `sparse_attention_fwd_kernel_v2` smem =
+`1160*H + 2306*block_I + 2*H*block_I` (H=64 for GLM-5.2), dominated by the 4x KV double-buffer (2-stage
+pipeline), linear in block_I. There is a hard contradiction:
+
+| block_I | smem | compiles? | launches (< 101376 B)? |
+|---|---|---|---|
+| 64 (default) | 231680 B | yes | NO |
+| 16 | 114944 B | yes | NO (~13.5 KB over) |
+| 8 | ~93712 B (fits) | **NO** ("Layout infer conflict m_i/alpha_local") | - |
+| 4 | ~83976 B | **NO** ("N must be divisible by 8") | - |
+
+The smallest COMPILABLE block_I (16) needs 114944 B (over budget); the smallest smem-FITTING block_I (8)
+does not compile (the warp-specialized GEMM/layout choreography breaks at tiny tiles). No block_I satisfies
+both. Shrinking below the budget would need a kernel REWRITE (single- instead of double-buffering, redoing
+the 3-warpgroup barrier choreography), not a parameter change.
+
+So DSA-sparse (and therefore NEXTN/MTP, which needs the indexer) is blocked on GB10/SM121 with NO config or
+tuning path. The only two real options, both a project with no guarantee: (1) upstream adds consumer-Blackwell
+kernels (trtllm-gen FMHA / flashmla / DeepGEMM for sm120/121), or (2) from-scratch kernel authoring on the
+attention decode (a single-buffered tilelang rewrite, or a torch MLA-attention fallback like the indexer one).
+Prod stays on `attention_backend="flashinfer"` (dense MLA, known-working). The torch indexer fallback + the
+`--dsa-paged-mqa-logits-backend` wiring stay committed for when the attention side is unblocked upstream.
 
 ## Symptom (measured)
 
