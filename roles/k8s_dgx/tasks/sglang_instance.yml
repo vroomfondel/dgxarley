@@ -488,15 +488,16 @@
                       # itself at all (only download/presence-check), so its shard reads
                       # went to the HDD-backed JuiceFS backend on cold local cache.
                       # Markers are written BEFORE this so the workers warm in parallel.
-                      # timeout is non-fatal: on a truly cold cache we degrade to the old
-                      # behaviour (sglang reads slower) instead of blocking the boot.
+                      # On timeout/failure the init FAILS (exit 1): kubelet restarts it
+                      # with backoff and juicefs warmup RESUMES (cached blocks are
+                      # skipped), so each retry makes progress under a bounded timeout.
                       if [ -x /usr/local/bin/juicefs ]; then
                         for m in $(printf '%s' "$HF_PRELOAD_MODELS" | tr ',' ' '); do
                           d="/root/.cache/huggingface/hub/models--$(printf '%s' "$m" | sed 's#/#--#g')"
                           [ -d "$d" ] || continue
                           echo "[preload] blocking warmup: $d"
                           timeout 5400 /usr/local/bin/juicefs warmup --threads 1 "$d" \
-                            || echo "[preload] WARN: warmup incomplete for $m (timeout/error; non-fatal)"
+                            || { echo "[preload] ERROR: warmup timeout/failure for $m -> failing init (kubelet retries; warmup resumes where it stopped)"; exit 1; }
                           /usr/local/bin/juicefs warmup --check "$d" 2>&1 | tail -1
                         done
                       fi
@@ -540,14 +541,14 @@
                       # the warmup still running detached in the background (markers
                       # persist across deployments, so the wait was often 0s and the
                       # "warmup" a pure fire-and-forget) -- the warm guarantee is the
-                      # whole point of this initContainer. Non-fatal timeout as above.
+                      # whole point of this initContainer. Timeout -> fail + retry, as above.
                       if [ "$HAVE_JFS" = yes ]; then
                         for m in $MODELS; do
                           d="/root/.cache/huggingface/hub/models--$(printf '%s' "$m" | sed 's#/#--#g')"
                           [ -d "$d" ] || continue
                           echo "[preload-wait] blocking warmup: $d"
                           timeout 5400 /usr/local/bin/juicefs warmup --threads 1 "$d" \
-                            || echo "[preload-wait] WARN: warmup incomplete for $m (timeout/error; non-fatal)"
+                            || { echo "[preload-wait] ERROR: warmup timeout/failure for $m -> failing init (kubelet retries; warmup resumes where it stopped)"; exit 1; }
                           /usr/local/bin/juicefs warmup --check "$d" 2>&1 | tail -1
                         done
                       fi
@@ -844,15 +845,16 @@
                       # itself at all (only download/presence-check), so its shard reads
                       # went to the HDD-backed JuiceFS backend on cold local cache.
                       # Markers are written BEFORE this so the workers warm in parallel.
-                      # timeout is non-fatal: on a truly cold cache we degrade to the old
-                      # behaviour (sglang reads slower) instead of blocking the boot.
+                      # On timeout/failure the init FAILS (exit 1): kubelet restarts it
+                      # with backoff and juicefs warmup RESUMES (cached blocks are
+                      # skipped), so each retry makes progress under a bounded timeout.
                       if [ -x /usr/local/bin/juicefs ]; then
                         for m in $(printf '%s' "$HF_PRELOAD_MODELS" | tr ',' ' '); do
                           d="/root/.cache/huggingface/hub/models--$(printf '%s' "$m" | sed 's#/#--#g')"
                           [ -d "$d" ] || continue
                           echo "[preload] blocking warmup: $d"
                           timeout 5400 /usr/local/bin/juicefs warmup --threads 1 "$d" \
-                            || echo "[preload] WARN: warmup incomplete for $m (timeout/error; non-fatal)"
+                            || { echo "[preload] ERROR: warmup timeout/failure for $m -> failing init (kubelet retries; warmup resumes where it stopped)"; exit 1; }
                           /usr/local/bin/juicefs warmup --check "$d" 2>&1 | tail -1
                         done
                       fi
@@ -896,14 +898,14 @@
                       # the warmup still running detached in the background (markers
                       # persist across deployments, so the wait was often 0s and the
                       # "warmup" a pure fire-and-forget) -- the warm guarantee is the
-                      # whole point of this initContainer. Non-fatal timeout as above.
+                      # whole point of this initContainer. Timeout -> fail + retry, as above.
                       if [ "$HAVE_JFS" = yes ]; then
                         for m in $MODELS; do
                           d="/root/.cache/huggingface/hub/models--$(printf '%s' "$m" | sed 's#/#--#g')"
                           [ -d "$d" ] || continue
                           echo "[preload-wait] blocking warmup: $d"
                           timeout 5400 /usr/local/bin/juicefs warmup --threads 1 "$d" \
-                            || echo "[preload-wait] WARN: warmup incomplete for $m (timeout/error; non-fatal)"
+                            || { echo "[preload-wait] ERROR: warmup timeout/failure for $m -> failing init (kubelet retries; warmup resumes where it stopped)"; exit 1; }
                           /usr/local/bin/juicefs warmup --check "$d" 2>&1 | tail -1
                         done
                       fi
