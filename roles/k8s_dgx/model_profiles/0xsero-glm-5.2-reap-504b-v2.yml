@@ -181,6 +181,10 @@ _model_profile:
     # draft loaded (DeepseekV3ForCausalLMNextN, NVFP4, 2.47 GB), no w13 crash. The old
     # follow-up crash (flashinfer forward_decode lacks topk_indices) is MOOT under the
     # dsa backend.
+    # LIVE-VALIDATED 2026-07-16 (second deploy; the first crashed on a Phase-2
+    # dispatch bug, see dsalogitrework.md MTP LIVE RESULT): all three spec graphs
+    # captured, accept len ~2.1, decode 11.7-12.4 tok/s (+45% vs 8.4), GSM8K 85%
+    # at HALF the wall time (179.5 s vs 342/421 s), 0 errors/restarts.
     # RE-ENABLED 2026-07-16: all preconditions met — dsa backend live-proven (p34
     # native sparse: verify/target-verify runs through the SAME sparse kernel via the
     # decode impl), and the indexer torch/triton path now handles next_n>=2 (Phase 2:

@@ -111,7 +111,14 @@ Aktives Profil: `roles/k8s_dgx/model_profiles/0xsero-glm-5.2-reap-504b-v2.yml`
   (~4.7 MB/Query-Token → GSM8K conc-8 killte worker-2/-3; bs=1-Smoke bestand,
   darum überlebte es bis live). p31-p33 bleiben als Decode-Fallback, p32 gilt
   weiter als unsicher.
-* Der torch-Indexer (p30) bleibt zwingend und ist jetzt der alleinige Perf-Boden.
+* Der torch-Indexer (p30, seit p35 Triton-beschleunigt) bleibt zwingend.
+* **MTP/NEXTN: LIVE-VALIDIERT 2026-07-16** (`speculative_enabled: true`, NEXTN,
+  3 Steps / 4 Draft-Tokens): accept len ~2.1, Decode 11.7-12.4 tok/s (+45%),
+  GSM8K 85% bei halber Wall-Time (179.5 s), 0 Fehler/Restarts. Kette: p42
+  (NVFP4-NextN-Load) + p34 (Verify durch den nativen Sparse-Kernel) + p30
+  Phase 2 (Indexer next_n>=2, reines Pass-Through - Upstream expandiert die
+  page_table selbst; der erste Fix-Versuch mit eigenem repeat_interleave
+  DOPPELT-expandierte und crashte den Warmup). `dsalogitrework.md` MTP LIVE RESULT.
 * Volltext: `dsalogitrework.md` (PART 4 zuerst), `dsa_cuda_graph_plan.md` (§8),
   `DSA_speedup.md` (FINAL-Box oben). Das Profil trägt den aktualisierten
   "PATCH-ACTIVATION CONTRACT" ab Zeile ~73 — lies den, bevor du Keys änderst.

@@ -779,3 +779,24 @@ preconditions are now met: p42 (NVFP4 NextN weight load, live-validated), p34
 (indexer next_n>=2). Rationale: the profiled decode floor is bf16-projection
 weight BANDWIDTH -> MTP multiplies tokens per weight read (GLM-4.7 reference:
 +68% single-stream). NOT yet deployed.
+
+## MTP LIVE RESULT 2026-07-16 (second deploy, with the pass-through fix): VALIDATED
+
+Boot clean (0 restarts): base load 994 s, draft (DeepseekV3ForCausalLMNextN,
+NVFP4 via p42) 408 s, both KV pools (7.51 + 0.10 GB), and ALL THREE speculative
+graph captures passed -- target verify 25.4 s (deploy-1's crash point), draft
+decode 18.7 s, draft extend 2.0 s; 9.76 GB avail after capture (the draft-memory
+watch item resolved: plenty).
+
+| metric | base (p34/p35) | MTP |
+|---|---|---|
+| decode single-stream | 8.4 tok/s | **11.7-12.4 tok/s (+45%)** |
+| accept len / rate | - | ~2.1 tokens/step / 0.29-0.45 |
+| GSM8K 2-shot n=20 conc 8 | 85% / 90%, 421 s / 342 s | **85%, 179.5 s (~2x end-to-end)** |
+| errors / restarts | 0/0 | 0/0 |
+
+The full stack for this: p42 (NVFP4 NextN load) + p34 (verify through the native
+sparse kernel via the decode impl) + p30 Phase 2 (indexer next_n>=2 pass-through)
++ p35 (Triton logits, per-token by construction). Decode is now bounded by the
+bf16-projection weight bandwidth as profiled -- next lever: reap_requant.md
+(selective attention W4A16, expected ~1.5x multiplicative).
