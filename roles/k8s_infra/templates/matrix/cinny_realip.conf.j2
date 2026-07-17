@@ -1,0 +1,36 @@
+{#
+  nginx realip snippet for the cinny pod, mounted (subPath) into conf.d/ and thus
+  included inside the image's http{} block. The stock nginx.conf and default.conf
+  stay untouched.
+
+  Why: without realip, $remote_addr is the Traefik POD ip, so every access-log line
+  reads 10.68.x.y and the real client only appears in the trailing
+  $http_x_forwarded_for field of the default "main" log_format. realip rewrites
+  $remote_addr itself, so ALL log lines become correct.
+
+  Why BOTH hops are trusted: nginx walks the XFF chain right-to-left
+  (real_ip_recursive) and stops at the first UNtrusted entry. Trusting only the pod
+  CIDR would stop at the edge ip and report that. Trusting the edge too lets it walk
+  one more step, to the actual client.
+  Chain: <client> -> nginx edge -> HAProxy -> Traefik pod -> cinny.
+
+  This lives in a .j2 rather than inline in the task: a column-0 {% %} tag inside a
+  ConfigMap data block breaks the YAML parse, and the inline join workarounds hit
+  Jinja/YAML escaping (a '\n' separator rendered as a literal backslash-n, and a
+  regex_replace '\1' backreference rendered literally). In a template file neither
+  problem exists.
+
+  cluster_cidr leads the list so it is never empty: a bare "set_real_ip_from ;" is a
+  config error, and that is what a clone without the vault (dummy = []) would render.
+
+  NOTE: real client ips only appear once Traefik forwards them, i.e. with
+  traefik_forwarded_trusted_ips live on the websecure entrypoint. Without it Traefik
+  overwrites XFF with the edge ip and the walk ends there: same output as before,
+  never worse.
+#}
+# First entry = Traefik pods (this nginx's direct peer), rest = upstream proxies.
+{% for ip in [cluster_cidr] + (traefik_forwarded_trusted_ips | default([])) %}
+set_real_ip_from {{ ip }};
+{% endfor %}
+real_ip_header X-Forwarded-For;
+real_ip_recursive on;

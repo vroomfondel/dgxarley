@@ -308,6 +308,17 @@
     # Cinny web client — static SPA, config points straight at matrix.<base>.
     # =======================================================================
 
+    # Rendered once into a fact so the ConfigMap and the Deployment's rollout
+    # checksum are driven by the exact same string. Hashing the INPUTS instead
+    # (cluster_cidr + the ip list) looks equivalent but is not: a fix to the
+    # rendering itself leaves the inputs untouched, so the hash would not move,
+    # no new pod template would be produced, and the ConfigMap edit would sit
+    # there unused behind a subPath mount that never refreshes.
+    # Rationale for the file's contents is in the template's header.
+    - name: Render cinny nginx realip snippet
+      ansible.builtin.set_fact:
+        _cinny_realip_conf: "{{ lookup('template', 'matrix/cinny_realip.conf.j2') }}"
+
     - name: Create cinny-config ConfigMap
       kubernetes.core.k8s:
         state: present
@@ -325,32 +336,7 @@
                   "https://matrix.{{ matrix.base_domain }}"
                 ]
               }
-            # Mounted into conf.d/ (included inside the image's http{} block), so the
-            # stock nginx.conf and its default.conf server block stay untouched.
-            # Without this, $remote_addr is the Traefik POD ip and every access-log
-            # line reads 10.68.x.y — the real client only appears in the trailing
-            # $http_x_forwarded_for field of the default "main" log_format.
-            # realip rewrites $remote_addr itself, so ALL log lines become correct.
-            #
-            # Both hops must be listed. nginx walks the XFF chain right-to-left
-            # (real_ip_recursive) and stops at the first UNtrusted entry. Trusting
-            # only the pod CIDR would stop at the edge ip and report that; trusting
-            # the edge too lets it walk one more step to the actual client.
-            # Chain: <client> -> edge -> HAProxy -> Traefik pod -> cinny.
-            #
-            # NOTE: this only yields real client ips once Traefik actually forwards
-            # them, i.e. after traefik_forwarded_trusted_ips is live on the websecure
-            # entrypoint. Until then Traefik overwrites XFF with the edge ip and the
-            # chain simply terminates there — same output as before, never worse.
-            # The upstream list is rendered as ONE inline expression: a {% %} block
-            # would have to start at column 0 to avoid injecting indentation, and a
-            # column-0 tag inside a ConfigMap data block breaks the YAML parse.
-            realip.conf: |
-              # Traefik pods (the direct peer of this nginx)
-              set_real_ip_from {{ cluster_cidr }};
-              {{ traefik_forwarded_trusted_ips | default([]) | map('regex_replace', '^(.+)$', 'set_real_ip_from \\1;') | join('\n              ') }}
-              real_ip_header X-Forwarded-For;
-              real_ip_recursive on;
+            realip.conf: "{{ _cinny_realip_conf }}"
 
     - name: Create cinny Service
       kubernetes.core.k8s:
@@ -402,9 +388,9 @@
                   # A subPath mount never refreshes in place, and even a plain mount
                   # would not make nginx re-read its config. Without this hash an edit
                   # to realip.conf would update the ConfigMap and silently do nothing
-                  # until something else happened to roll the pod. Covers both inputs
-                  # the file is rendered from.
-                  checksum/realip-conf: "{{ (cluster_cidr ~ '|' ~ (traefik_forwarded_trusted_ips | default([]) | join(','))) | hash('sha1') }}"
+                  # until something else happened to roll the pod. Hashes the rendered
+                  # content, not its inputs — see the fact above for why.
+                  checksum/realip-conf: "{{ _cinny_realip_conf | hash('sha1') }}"
               spec:
                 restartPolicy: Always
                 enableServiceLinks: false
