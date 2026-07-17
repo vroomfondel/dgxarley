@@ -58,6 +58,14 @@ _model_profile:
     # nvidia/GLM-5-NVFP4 profile + the v1 0xSero/GLM-5.2-504B profile (identical arch).
     nccl_transport: "roce"
     tp_size: 4
+    # torch.distributed rendezvous timeout (--dist-timeout). Raised from the 900s
+    # default: this 274G checkpoint's per-node sglang boot (NCCL rendezvous + 63-shard
+    # weight load + CUDA-graph capture) runs >20min, and on a STAGGERED restart the
+    # TCP store waits for all 4 ranks to (re)join. 900s was too tight -> a straggler
+    # missed the window ("Timed out after 901s waiting for clients, 2/4 joined") and
+    # the desync cascaded (Gloo connectFullMesh: Connection refused). 1800s gives
+    # stragglers room to rejoin; the real fix is a synchronized (all-at-once) restart.
+    dist_timeout: 1800
     context_length: 16384  # conservative; config.json max_position_embeddings=1048576 (1M), but KV headroom on 4 nodes is the real constraint
     quantization: "modelopt_fp4"
     # trust_remote_code: required because the GLM-5 family ships custom model code
