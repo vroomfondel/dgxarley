@@ -628,9 +628,15 @@
                 livenessProbe:
                   exec:
                     command: ["pgrep", "-f", "sglang.launch_server"]
-                  initialDelaySeconds: 900
+                  # Grace must comfortably exceed the FULL sglang-container boot (NCCL
+                  # rendezvous + per-shard weight load + CUDA-graph capture). For the big
+                  # NVFP4 checkpoints (glm-5.2-reap-504B, 63 shards) the head boot alone
+                  # ran >21min, so the old 900+3×30=990s (~16.5min) budget was too tight
+                  # and could kill a worker whose sglang process is legitimately alive but
+                  # blocked at a collective barrier. 1800+5×30=1950s (~32.5min).
+                  initialDelaySeconds: 1800
                   periodSeconds: 30
-                  failureThreshold: 3
+                  failureThreshold: 5
                 volumeMounts:
                   - name: hf-cache
                     mountPath: /root/.cache/huggingface
