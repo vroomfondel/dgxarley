@@ -15,12 +15,12 @@ _model_profile:
     # hf_hub_offline: true   # resolve from the pre-placed JuiceFS cache, no HF pull
     knowledge_cutoff: "2025-12"  # GLM-5.2 base; not in official card. Inherited estimate from GLM-5 family (apxml lists Dec 2025). Low confidence.
     release_date: "2026-07-05"  # GLM-5.2 base (zai-org/GLM-5.2, ~2026-06-16); this v2 REAP+NVFP4 cut by 0xSero early July 2026 (no explicit date on card — estimate, low confidence).
-    info_url: "https://huggingface.co/vroomfondel/glm-5.2-reap-504B-v2-W4A4"    
+    info_url: "https://huggingface.co/vroomfondel/glm-5.2-reap-504B-v2-W4A4"
+    # BASE: https://huggingface.co/0xSero/glm-5.2-reap-504B-v2
     # README: https://huggingface.co/vroomfondel/glm-5.2-reap-504B-v2-W4A4/blob/main/README.md
     # Full technical report (pruning recipe, n=2000 eval correction, sampler fix,
-    # BASE: https://huggingface.co/0xSero/glm-5.2-reap-504B-v2
     # GGUF DSA-indexer surgery, negative results):
-    #   https://huggingface.co/vroomfondel/glm-5.2-reap-504B-v2-W4A4/blob/main/REPORT.md
+    #   https://huggingface.co/0xSero/glm-5.2-reap-504B-v2/blob/main/REPORT.md
     # ~504B MoE — a 34%-EXPERT-PRUNED GLM-5.2, the "flagship" v2 cut: the largest,
     # highest-fidelity REAP-168 of the series and a strict SUPERSET of the now-retired
     # 481B / 469B cuts. Same recipe as the earlier 0xSero/GLM-5.2-504B (keep-168):
