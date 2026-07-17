@@ -561,6 +561,17 @@
                     valueFrom:
                       fieldRef:
                         fieldPath: "metadata.labels['role']"
+                  # HF_HUB_OFFLINE for the DOWNLOAD initContainer: profile knob
+                  # hf_hub_offline (default off). When on, the head's snapshot_download
+                  # goes straight offline (api.model_info raises OfflineModeIsEnabled ->
+                  # the script's existing offline fallback resolves the model from the
+                  # pre-placed JuiceFS cache, no HF contact, no re-download). Used for
+                  # models we requant locally + rsync into the cache instead of pulling
+                  # from HF (e.g. vroomfondel/glm-5.2-reap-504B-v2-W4A4). "0" = online
+                  # (normal HF download). The MAIN sglang container is always offline
+                  # (HF_HUB_OFFLINE=1 in the config ConfigMap); only the downloader differs.
+                  - name: HF_HUB_OFFLINE
+                    value: "{{ '1' if (sglang_hf_hub_offline | default(false) | bool) else '0' }}"
                   - name: HF_PRELOAD_MODELS
                     value: "{{ _sglang_active_model }}{{ ',' + sglang_speculative_draft_model_path if (sglang_speculative_enabled | bool) and sglang_speculative_draft_model_path else '' }}"
                   - name: HF_TOKEN
@@ -918,6 +929,17 @@
                     valueFrom:
                       fieldRef:
                         fieldPath: "metadata.labels['role']"
+                  # HF_HUB_OFFLINE for the DOWNLOAD initContainer: profile knob
+                  # hf_hub_offline (default off). When on, the head's snapshot_download
+                  # goes straight offline (api.model_info raises OfflineModeIsEnabled ->
+                  # the script's existing offline fallback resolves the model from the
+                  # pre-placed JuiceFS cache, no HF contact, no re-download). Used for
+                  # models we requant locally + rsync into the cache instead of pulling
+                  # from HF (e.g. vroomfondel/glm-5.2-reap-504B-v2-W4A4). "0" = online
+                  # (normal HF download). The MAIN sglang container is always offline
+                  # (HF_HUB_OFFLINE=1 in the config ConfigMap); only the downloader differs.
+                  - name: HF_HUB_OFFLINE
+                    value: "{{ '1' if (sglang_hf_hub_offline | default(false) | bool) else '0' }}"
                   - name: HF_PRELOAD_MODELS
                     value: "{{ _sglang_active_model }}{{ ',' + sglang_speculative_draft_model_path if (sglang_speculative_enabled | bool) and sglang_speculative_draft_model_path else '' }}"
                   - name: HF_TOKEN

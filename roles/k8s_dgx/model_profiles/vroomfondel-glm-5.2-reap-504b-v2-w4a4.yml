@@ -1,0 +1,211 @@
+# Model profile: vroomfondel/glm-5.2-reap-504B-v2-W4A4
+# EXPERIMENTAL derivative of 0xSero/glm-5.2-reap-504B-v2 (this repo's own surgical
+# NVFP4 W4A4 requant of the MLA attention projections o_proj + q_b_proj; kikube/
+# quantizer/surgical_attn_nvfp4.py, reap_requant.md). Architecture, DSA/MTP config
+# and every other key are IDENTICAL to the base profile -- only the two attention
+# projections are now W4A4 instead of BF16. Differences vs the base profile:
+#   * key/sglang_model -> vroomfondel/glm-5.2-reap-504B-v2-W4A4
+#   * hf_hub_offline: true  (NOT on HF for the pod to pull -- it was rsynced into
+#     the JuiceFS hf-cache out-of-band; the download initContainer resolves it
+#     offline from the cache. There IS a PRIVATE HF mirror but the pods load local.)
+# The heuristic input_scale (no calibration) is UNVALIDATED -> GSM8K gate before use.
+# Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
+_model_profile:
+  "vroomfondel/glm-5.2-reap-504B-v2-W4A4":
+    hf_hub_offline: true   # resolve from the pre-placed JuiceFS cache, no HF pull
+    knowledge_cutoff: "2025-12"  # GLM-5.2 base; not in official card. Inherited estimate from GLM-5 family (apxml lists Dec 2025). Low confidence.
+    release_date: "2026-07-05"  # GLM-5.2 base (zai-org/GLM-5.2, ~2026-06-16); this v2 REAP+NVFP4 cut by 0xSero early July 2026 (no explicit date on card — estimate, low confidence).
+    info_url: "https://huggingface.co/0xSero/glm-5.2-reap-504B-v2"
+    # README: https://huggingface.co/0xSero/glm-5.2-reap-504B-v2/blob/main/README.md
+    # Full technical report (pruning recipe, n=2000 eval correction, sampler fix,
+    # GGUF DSA-indexer surgery, negative results):
+    #   https://huggingface.co/0xSero/glm-5.2-reap-504B-v2/blob/main/REPORT.md
+    # ~504B MoE — a 34%-EXPERT-PRUNED GLM-5.2, the "flagship" v2 cut: the largest,
+    # highest-fidelity REAP-168 of the series and a strict SUPERSET of the now-retired
+    # 481B / 469B cuts. Same recipe as the earlier 0xSero/GLM-5.2-504B (keep-168):
+    # REAP saliency = gate_weight × ‖expert_output‖, top-168 experts kept per layer
+    # (down from the base's 256), Router-KD recovered (gate-only KD to the unpruned
+    # teacher, ~0.016% of params trained), then NVFP4 quantized (modelopt). Base is
+    # zai-org/GLM-5.2. Card is honest about the cost: at n=2000 held-out agent prompts
+    # the loop/attractor rate is 7.2% vs the teacher's 3.6% (Router-KD recovers routing
+    # but not termination); the sampler guardrail below recovers it for free.
+    # Architecture: GlmMoeDsa — MLA (Multi-head Latent Attention) with DSA
+    # (DeepSeek Sparse Attention). Geometry VERIFIED against config.json:
+    # num_hidden_layers=78, first_k_dense_replace=3 (dense layers 0-2), rest MoE,
+    # n_shared_experts=1 + n_routed_experts=168 (num_experts_per_tok=8) per MoE
+    # layer — consistently pruned across every MoE layer AND the MTP layer, so it
+    # loads/serves cleanly on stock SGLang (UNIFORM expert count, unlike the sibling
+    # non-uniform 0xSero/GLM-5.2-REAP-NU176-526B which needs a forked engine).
+    # num_nextn_predict_layers=1 → MTP head for speculative decoding (NEXTN).
+    # num_attention_heads=64, num_key_value_heads=64 (full MHA via MLA), head_dim=192.
+    # hidden_size=6144, moe_intermediate_size=2048, vocab_size=154880.
+    # n_group=1, topk_group=1, routed_scaling_factor=2.5.
+    # TP must divide 64 → valid TP ∈ {1,2,4,8,…}; TP=6 is INVALID (64 ∤ 6).
+    # 78 layers divide cleanly by PP=6 (13/node) and PP=3 (26/stage).
+    # NVFP4 quantization VERIFIED against config.json quantization_config
+    # (producer modelopt 0.39.0.dev, quant_method=modelopt, quant_algo=NVFP4,
+    # group_size=16): config_groups.group_0 quantizes BOTH weights AND
+    # input_activations to FP4 (num_bits 4, type float, group_size 16, targets
+    # Linear) → it is W4A4, not weight-only W4A16. Applied to the routed-expert
+    # MLPs; router gates, attention projections (q/k/v/o), DSA indexer, dense MLPs
+    # (layers 0-2), shared experts, lm_head, and the MTP layer all remain BF16
+    # (quantization_config.ignore). No kv_cache_quant_algo in the checkpoint —
+    # kv_cache_dtype below is a pure serving choice, independent of the W4A4 quant.
+    # 504B is ~2/3 the base 744B weight, so PP=4/TP=1 leaves MORE KV headroom than
+    # the full GLM-5.2. Card serving cmd (8×B200-class): vllm serve --tensor-parallel-size 8
+    # --quantization modelopt_fp4 --kv-cache-dtype fp8 --trust-remote-code --max-model-len 262144.
+    # No official DGX Spark / SGLang launch command; args below mirror the validated
+    # nvidia/GLM-5-NVFP4 profile + the v1 0xSero/GLM-5.2-504B profile (identical arch).
+    nccl_transport: "roce"
+    tp_size: 4
+    context_length: 16384  # conservative; config.json max_position_embeddings=1048576 (1M), but KV headroom on 4 nodes is the real constraint
+    quantization: "modelopt_fp4"
+    # trust_remote_code: required because the GLM-5 family ships custom model code
+    # (GlmMoeDsaForCausalLM, custom tokenizer) in the HF repo that SGLang must
+    # execute. Without it, transformers refuses to load the model class.
+    trust_remote_code: true
+    # Untested on DGX Spark — values below are initial defaults inherited from
+    # nvidia/GLM-5.2-NVFP4 / the v1 0xSero/GLM-5.2-504B profile, pending a test
+    # matrix for this checkpoint.
+    moe_runner_backend: "flashinfer_cutlass"
+    kv_cache_dtype: "fp8_e4m3"
+    mem_fraction_static: "0.99"  # 2026-07-15 MTP config: 0.99 (tiny post-weight reserve) makes the
+                                 # memory-derived KV capacity large so the max_total_tokens cap BINDS and
+                                 # KV is deterministic. Base-only needed >=0.847 (ValueError floor). mem_fraction
+                                 # is a POST-WEIGHT reserve (higher = smaller reserve = more KV), NOT
+                                 # fraction-of-total. Paired with max_total_tokens below: KV pool fixed ~13 GB,
+                                 # the rest stays FREE for base+draft CUDA-graph capture.
+    max_total_tokens: "131072"   # 2026-07-16 lowered 256k->128k: measured KV @256k = 15.01 GB with only
+                                 # 26.05 GB avail after weight load (~11 GB rest) -> too tight for the DSA
+                                 # cuda-graph capture step. 128k halves KV to ~7.5 GB, freeing ~7.5 GB headroom.
+                                 # min(memory-derived, this) -> KV pool = 128k tokens (~7.5 GB).
+                                 # UNMEASURED: draft weight size unknown (earlier MTP crashed on the w13 bug pre-
+                                 # alloc) -> watch avail_mem at draft capture + the KV alloc line, adjust if tight.
+    attention_backend: "dsa"     # 2026-07-16 (v2, NATIVE): real DSA sparse attention on GB10/SM121 via
+                                 # flashinfer 0.6.14's PREBUILT SM120/121 sparse-MLA kernels (GLM_NSA
+                                 # model type, decode warp-spec kernels + prefill orchestrator), unlocked
+                                 # by p34_dsa_trtllm_sparse_sm120 (backend="auto" + packed-KV routing:
+                                 # the old "trtllm wall" was ONLY sglang hardcoding backend="trtllm-gen").
+                                 # The indexer still needs the torch fallback (p30). GPU-verified on
+                                 # spark5 vs torch reference: decode bs4 0.072 ms, prefill 2400 tokens
+                                 # 14.4 ms/layer, cuda-graph captures directly. DSA_speedup.md et al.
+    dsa_paged_mqa_logits_backend: "torch"  # SM121 torch indexer fallback (necessary for dsa; p30)
+    dsa_indexer_triton: true     # p35 Triton-fused logits on the torch fallback (61x, bit-exact).
+                                 # false = kill-switch to the pure-torch reference path (one-variable
+                                 # A/B if indexer output is ever suspected). Env: SGLANG_DSA_INDEXER_TRITON.
+    dsa_decode_backend: "trtllm"    # 2026-07-16 switched flashinfer_gather -> trtllm: with p34, SM12x
+    dsa_prefill_backend: "trtllm"   # routes to the NATIVE sparse kernels (decode AND prefill). This
+                                    # REPLACES the gather workaround (p31/p32/p33) which stays available:
+                                    # decode-only fallback combo = dsa_decode_backend: flashinfer_gather.
+                                    # HISTORY: dsa_prefill_backend=flashinfer_gather was a design error
+                                    # (O(tokens x topk) gather = ~4.7 MB/query-token -> GSM8K conc-8
+                                    # killed worker-2/-3 with an illegal memory access at ~11.3 GB, and
+                                    # prefill ran at ~1-5 tok/s; full analysis dsalogitrework.md PART 3 +
+                                    # dsa_cuda_graph_plan.md 7ter). Pre-p34, plain "trtllm" here died at
+                                    # warmup prefill in TllmGenFmhaRunner "Unsupported architecture".
+    # ── PATCH-ACTIVATION CONTRACT (read before changing any of the 4 keys above) ──
+    # The SM121-DSA patch stack lives in roles/k8s_dgx/files/sglang_patches/ and is
+    # INERT unless its backend combo is selected (each patch only adds a dispatch
+    # branch / choice-list entry that is reached ONLY when chosen):
+    #   attention_backend: dsa                 -> without this, NONE of the DSA code runs
+    #   dsa_paged_mqa_logits_backend: torch    -> p30 torch indexer fallback
+    #   dsa_decode/prefill_backend: trtllm     -> p34 native SM120/121 sparse MLA
+    #                                             (also needs SM12x + fp8 KV cache ->
+    #                                             656-byte packed pool, else the call
+    #                                             stays upstream trtllm-gen)
+    #   dsa_decode/prefill_backend: flashinfer_gather -> p31/p32 gather+dense-fa2,
+    #                                             p33 cuda-graph plan/run-split
+    # Other models/profiles that keep upstream defaults are never affected.
+    #
+    # KNOWN GB10/SM121 COMBOS (chronological; pick by need):
+    #   (A) DENSE, stock kernels, no DSA sparsity:
+    #         attention_backend: flashinfer   (drop all dsa_* keys)
+    #       Safe revert if the DSA path regresses. Dense-MLA fa2 decode was measured
+    #       ~3-4 tok/s single-stream (DSA_speedup.md "Symptom").
+    #   (B) DSA-SPARSE via gather (dsa_decode_backend: flashinfer_gather), cuda-graph:
+    #       decode PROVEN live at 8.4 tok/s; its PREFILL variant is UNSAFE (see
+    #       HISTORY above) -- decode-fallback only, pair with prefill: trtllm.
+    #   (C) DSA-SPARSE NATIVE (this combo, dsa_*_backend: trtllm + p34): decode AND
+    #       prefill on flashinfer's SM120/121 sparse kernels. LIVE-PROVEN 2026-07-16:
+    #       decode 8.4 tok/s cuda-graph, prefill 873 tok/s input on the gather-killer
+    #       shape, GSM8K 2-shot n=20 conc8 = 85% with 0 errors / 0 restarts.
+    fp4_gemm_backend: "flashinfer_cutlass"
+    jit_max_jobs: 4
+    disable_piecewise_cuda_graph: true
+    disable_cuda_graph: false  # 2026-07-16 CUDA-GRAPH ON. On the NATIVE trtllm/p34 path the sparse kernel
+                               # captures directly (GPU-verified capture+replay on spark5), no special
+                               # handling needed. (The gather fallback path additionally has the p33
+                               # plan/run-split so _forward_flashinfer_gather's wrapper.plan() stays out
+                               # of the captured region; only relevant with dsa_decode_backend:
+                               # flashinfer_gather. dsa_cuda_graph_plan.md.)
+                               # Validated bit-exact vs eager on synthetic tensors (scratchpad/microtest.py:
+                               # causal=True + short-seq) + full patch-chain py_compile/import in a GB10 debug pod.
+                               # Prefill stays eager (is_decode=False -> inline plan; prefill cuda-graph is
+                               # auto-disabled anyway). REVERT to true (eager, slow but proven) if capture crashes
+                               # -- e.g. an indexer graph-safety issue only reachable at real capture.
+    cuda_graph_max_bs: 32
+    pp_async_batch_depth: 0
+    # DeepGemm is designed for FP8 with ue8m0 scale format. For NVFP4 models
+    # (scale_fmt != ue8m0): (1) the JIT-compiled kernels aren't optimized for
+    # this format and may degrade accuracy, (2) JIT compilation blocks the
+    # scheduler forward loop synchronously, triggering the 300s watchdog kill,
+    # (3) parallel nvcc/cicc processes exhaust system RAM. With DeepGemm
+    # disabled, FP4 GEMM selection falls to fp4_gemm_backend.
+    disable_deep_gemm: true
+    # GLM-5 family reasoning/tool parsers:
+    # "glm45" — GLM-4.5 detector, separates <think>...</think> into reasoning_content.
+    # "glm47" — GLM-4.7 tool call format.
+    reasoning_parser: "glm45"
+    tool_call_parser: "glm47"
+    num_experts: 168
+    # ep_size: with TP=1/PP=4, EP must be 1 (EP requires ep_size <= tp_size).
+    ep_size: 1
+    # REPORT.md "The free fix": REAP pruning ~doubles the loop/runaway rate (teacher
+    # 3.6% → pruned 7.2%, z≈5.0 p<0.0001), and gate-only KD cannot recover it. A
+    # serving-time sampler guardrail fully recovers it for free: min_p=0.05 +
+    # repetition_penalty drops looping to 2.3% (below the teacher's raw 3.6%),
+    # distinct-4 up to 0.95. Card + report recommend min_p=0.05, rep_pen=1.05 by
+    # default, 1.10 if loops appear (1.10 risks over-suppressing legit repetition in
+    # code). NOTE: the guardrail axis is min_p, NOT top_p — top_p is left at the
+    # GLM-5.2 base default (0.95); the report does not tune it.
+    recommended_sampling:
+      temperature: 1.0
+      top_p: 0.95
+      min_p: 0.05             # REPORT.md guardrail — anti-loop floor for the pruned model
+      repetition_penalty: 1.05  # default; raise to 1.10 if loops appear (2.3% loop rate)
+    # MTP / speculative decoding (NEXTN): this checkpoint HAS a trained MTP head —
+    # num_nextn_predict_layers=1, and REAP kept 168 experts on the MTP layer too, so
+    # it "loads and serves cleanly." NEXTN uses the model's own MTP head (no external
+    # draft model). Same GLM family as nvidia/GLM-4.7-NVFP4, where MTP is VALIDATED:
+    # +68% n=1, +35% n=4/n=8. Values mirror that profile.
+    # DISABLED 2026-07-15 (verified crash, user go): the "loads and serves cleanly"
+    # claim is FALSE for this NVFP4 export. The base model loads native+clean
+    # (GlmMoeDsa, modelopt_fp4, Load weight end elapsed=1422s), but the NEXTN head
+    # crash-loops the boot in deepseek_nextn.load_weights → fused_moe _load_w13
+    # expert_data.copy_(loaded_weight): "size of tensor a (6144) must match b (3072)"
+    # — the MTP layer's MoE w13 (2×intermediate) is shape-incompatible with the
+    # main-model config the deepseek_nextn loader assumes (REAP pruned the main MoE
+    # but the MTP head's intermediate does not line up). Base serves fine without it.
+    # PATCHED 2026-07-15: p42 (_sgl_dsnextn_mixed_mtp_) keeps modelopt_fp4 on the NextN
+    # head and aliases the layer-N excludes to model.decoder.* so the MTP experts load
+    # NVFP4 while attn/gate/shared stay BF16. WEIGHT-LOAD LIVE-VALIDATED 2026-07-16:
+    # draft loaded (DeepseekV3ForCausalLMNextN, NVFP4, 2.47 GB), no w13 crash. The old
+    # follow-up crash (flashinfer forward_decode lacks topk_indices) is MOOT under the
+    # dsa backend.
+    # LIVE-VALIDATED 2026-07-16 (second deploy; the first crashed on a Phase-2
+    # dispatch bug, see dsalogitrework.md MTP LIVE RESULT): all three spec graphs
+    # captured, accept len ~2.1, decode 11.7-12.4 tok/s (+45% vs 8.4), GSM8K 85%
+    # at HALF the wall time (179.5 s vs 342/421 s), 0 errors/restarts.
+    # RE-ENABLED 2026-07-16: all preconditions met — dsa backend live-proven (p34
+    # native sparse: verify/target-verify runs through the SAME sparse kernel via the
+    # decode impl), and the indexer torch/triton path now handles next_n>=2 (Phase 2:
+    # the dispatch folds the verify batch per-token, seqlens_expanded is per-token
+    # already, block_tables repeat_interleaved; folded-vs-per-token BIT-EXACT on both
+    # kernels, spark5 2026-07-16). Rationale: profiled decode floor is bf16-projection
+    # weight bandwidth -> MTP multiplies tokens per weight read (GLM-4.7 reference:
+    # +68% n=1). Memory: draft 2.47 GB + draft graphs vs 11.55 GB avail post-capture —
+    # watch the draft capture avail_mem on first boot.
+    speculative_enabled: true
+    speculative_algo: NEXTN
+    speculative_num_steps: 3
+    speculative_num_draft_tokens: 4

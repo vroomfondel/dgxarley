@@ -45,7 +45,8 @@ sglang_port: 8000
 # sglang_model: "nvidia/GLM-5-NVFP4"
 # sglang_model: "nvidia/GLM-5.2-NVFP4"                          # 753B/40B MoE (256 exp/8 active +1 shared), GlmMoeDsa (MLA+DSA), NVFP4 (modelopt, official NVIDIA) → PP=4/TP=1 (EP4/TP4 OOMs); 1M ctx; needs transformers>=5.3.0. UNVALIDATED first-contact
 # sglang_model: "0xSero/GLM-5.2-504B"                           # ~504B GLM-5.2 REAP keep-168 (256→168 exp, 34% pruned) + Router-KD, NVFP4 (modelopt) → PP=4/TP=1; MTP/NEXTN on; min_p=0.05+rep_pen anti-loop guardrail. UNVALIDATED first-contact
-sglang_model: "0xSero/glm-5.2-reap-504B-v2"                   # ~504B GLM-5.2 REAP keep-168 v2 re-cut (256→168 exp, UNIFORM prune), NVFP4 (modelopt) → TP4/EP1, 16K ctx, MTP/NEXTN; glm45/glm47 parsers. UNVALIDATED first-contact
+# sglang_model: "0xSero/glm-5.2-reap-504B-v2"                   # ~504B GLM-5.2 REAP keep-168 v2 re-cut (256→168 exp, UNIFORM prune), NVFP4 (modelopt) → TP4/EP1, 16K ctx, MTP/NEXTN; glm45/glm47 parsers. UNVALIDATED first-contact
+sglang_model: "vroomfondel/glm-5.2-reap-504B-v2-W4A4"        # ⚗️ EXPERIMENTAL: OUR surgical NVFP4 W4A4 requant of the v2 above — o_proj+q_b_proj BF16→W4A4 (data-free, ~80% of attn weight bytes; quantizer/surgical_attn_nvfp4.py), rest byte-identical. hf_hub_offline (rsynced into the JuiceFS cache; PRIVATE HF mirror). Heuristic input_scale (no calib) → MUST pass GSM8K gate vs the base before trusting. Same DSA/MTP config as v2.
 # sglang_model: "0xSero/GLM-5.2-REAP-NU176-526B"               # ⛔ PLACEHOLDER/metadata only — NON-UNIFORM REAP (per-layer expert count, 216 max/~176 mean); stock SGLang+vLLM mis-load the renumbered gate rows, needs author's patched vLLM fork. NOT deployable as-is; prefer the uniform keep-168 v2 above
 #
 # --- Hermes (Nous Research) ---

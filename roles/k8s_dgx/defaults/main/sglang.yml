@@ -381,6 +381,14 @@ sglang_max_total_tokens: "{{ _sglang_active_max_total_tokens if (_sglang_active_
 # fcfs processes requests strictly in arrival order (fairer under heavy load).
 sglang_schedule_policy: "lpm"
 
+# HF_HUB_OFFLINE for the model-download initContainer (default false = normal HF
+# download). Set true in a profile for models that are NOT on HF for the pod to
+# fetch but were placed into the JuiceFS hf-cache out-of-band (e.g. a locally
+# requantized checkpoint rsynced in): the downloader then resolves the model from
+# the cache offline instead of trying (and failing) to pull from HF. The MAIN
+# sglang container is always offline regardless; this only flips the downloader.
+sglang_hf_hub_offline: "{{ sglang_model_profiles[_sglang_active_model].hf_hub_offline | default(false) }}"
+
 # Attention backend: per-model in sglang_model_profiles, defaults to "flashinfer".
 # Set to "triton" for hybrid GDN models (MoE+Mamba) on Blackwell GPUs.
 sglang_attention_backend: "{{ sglang_model_profiles[_sglang_active_model].attention_backend | default('flashinfer') }}"
