@@ -179,6 +179,14 @@
 
               report_stats: false
               enable_registration: {{ matrix.enable_registration | bool | lower }}
+              # Pinned rather than inherited: guest access is a SECOND way to get an
+              # account without enable_registration, so the two gates belong together
+              # and in the file. Synapse defaults it to false today, but this server is
+              # reachable from the internet and we do not want that to rest on an
+              # upstream default surviving every image bump. (The third way is the
+              # token authenticator's jwt.allow_registration, false in the module
+              # config below — it would auto-create users on first token login.)
+              allow_guest_access: false
               suppress_key_server_warning: true
               serve_server_wellknown: true
 
@@ -711,6 +719,12 @@
       ansible.builtin.set_fact:
         matrix_synapse_pod_name: "{{ matrix_synapse_pods.resources[0].metadata.name }}"
 
+    # Idempotency comes from --exists-ok (rc 0 + "User already exists. Skipping."),
+    # NOT from matching on the error text: without the flag an existing user is a
+    # hard `400 User ID already taken.` — which is neither the "User already exists"
+    # the old failed_when looked for, nor was "User registered" ever printed on
+    # success ("Success!" is). Both strings were wrong, so the task could only ever
+    # report ok-but-never-changed, or die on the second run.
     - name: Ensure synapse admin user exists
       kubernetes.core.k8s_exec:
         namespace: "{{ matrix.namespace }}"
@@ -720,13 +734,11 @@
           -c /config/homeserver.yaml
           -u {{ matrix.admin.username | quote }}
           -p {{ matrix.admin.password | quote }}
+          --exists-ok
           -a
           http://localhost:8008
       register: matrix_admin_ensure
-      changed_when: "'User registered' in matrix_admin_ensure.stdout"
-      failed_when:
-        - matrix_admin_ensure.rc != 0
-        - "'User already exists' not in (matrix_admin_ensure.stdout + matrix_admin_ensure.stderr)"
+      changed_when: "'Success!' in matrix_admin_ensure.stdout"
 
     - name: Ensure synapse regular users exist (non-admin)
       kubernetes.core.k8s_exec:
@@ -737,16 +749,14 @@
           -c /config/homeserver.yaml
           -u {{ item.user | quote }}
           -p {{ item.password | quote }}
+          --exists-ok
           --no-admin
           http://localhost:8008
       loop: "{{ matrix.users | default([]) }}"
       loop_control:
         label: "{{ item.user }}"
       register: matrix_user_ensure
-      changed_when: "'User registered' in matrix_user_ensure.stdout"
-      failed_when:
-        - matrix_user_ensure.rc != 0
-        - "'User already exists' not in (matrix_user_ensure.stdout + matrix_user_ensure.stderr)"
+      changed_when: "'Success!' in matrix_user_ensure.stdout"
 
     - name: Ensure synapse bot users exist (non-admin)
       kubernetes.core.k8s_exec:
@@ -757,16 +767,14 @@
           -c /config/homeserver.yaml
           -u {{ item.user | quote }}
           -p {{ item.password | quote }}
+          --exists-ok
           --no-admin
           http://localhost:8008
       loop: "{{ matrix.bot_users | default([]) }}"
       loop_control:
         label: "{{ item.user }}"
       register: matrix_bot_ensure
-      changed_when: "'User registered' in matrix_bot_ensure.stdout"
-      failed_when:
-        - matrix_bot_ensure.rc != 0
-        - "'User already exists' not in (matrix_bot_ensure.stdout + matrix_bot_ensure.stderr)"
+      changed_when: "'Success!' in matrix_bot_ensure.stdout"
 
 # ===========================================================================
 # Teardown (opt-in `-e matrix_teardown=true`). Namespace delete cascades all

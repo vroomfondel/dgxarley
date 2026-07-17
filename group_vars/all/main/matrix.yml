@@ -53,3 +53,6 @@ matrix:
   resources:
     synapse: {cpu_request: "500m", memory_request: "1Gi", cpu_limit: "2000m", memory_limit: "2Gi"}
     cinny: {cpu_request: "50m", memory_request: "64Mi", cpu_limit: "500m", memory_limit: "256Mi"}
+
+
+# matrix_tls_issuer: "letsencrypt-secondary"
