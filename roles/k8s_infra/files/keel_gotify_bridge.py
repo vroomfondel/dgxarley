@@ -57,8 +57,8 @@ class WebhookHandler(BaseHTTPRequestHandler):
         format ``{"name": "...", "message": "...", "createdAt": "..."}``,
         constructs a Gotify message from it, and POSTs it to the Gotify server
         configured via ``GOTIFY_URL`` and ``GOTIFY_TOKEN``. Returns HTTP 200 on
-        success, HTTP 500 if the payload cannot be parsed or forwarded, and
-        HTTP 404 for any other path.
+        success AND on failure (a failed notification is logged and dropped
+        rather than retried by Keel), and HTTP 404 for any other path.
         """
         if self.path == "/webhook":
             content_length = int(self.headers.get("Content-Length", 0))
@@ -75,6 +75,9 @@ class WebhookHandler(BaseHTTPRequestHandler):
                 title = f"⚙️ Keel: {name}"
                 body_text = f"{message}\n{created_at}" if created_at else message
 
+                # Ohne timeout haengt der Handler unbegrenzt, wenn Gotify die
+                # Verbindung annimmt aber nicht antwortet, und da HTTPServer
+                # single-threaded ist, steht damit die ganze Bridge.
                 resp = requests.post(
                     f"{GOTIFY_URL}/message",
                     params={"token": GOTIFY_TOKEN},
@@ -83,6 +86,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
                         "message": body_text,
                         "priority": 5,
                     },
+                    timeout=10,
                 )
 
                 if resp.status_code != 200:
@@ -93,10 +97,15 @@ class WebhookHandler(BaseHTTPRequestHandler):
                 self.wfile.write(b"OK")
 
             except Exception as e:
-                pp(f"Error processing webhook: {e}")
-                self.send_response(500)
+                # Bewusst 200: Keel wiederholt jeden non-2xx zehnmal mit
+                # exponentiellem Backoff (~9 min) und blockiert dabei seine
+                # weiteren Updates. Keiner der Fehler hier wird durch einen
+                # Retry besser, Gotify ist weg oder der Payload ist kaputt.
+                # Also laut loggen und quittieren.
+                pp(f"Error processing webhook, dropping notification: {e}")
+                self.send_response(200)
                 self.end_headers()
-                self.wfile.write(str(e).encode())
+                self.wfile.write(b"ACCEPTED")
         else:
             self.send_response(404)
             self.end_headers()
