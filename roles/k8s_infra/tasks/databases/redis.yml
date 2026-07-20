@@ -134,6 +134,7 @@
             containers:
               - name: redis
                 image: redis:8.6
+                imagePullPolicy: Always
                 command:
                   - redis-server
                   - "/redis/redis.conf"

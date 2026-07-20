@@ -86,7 +86,7 @@
               - name: smarter-device-manager
                 # gh api repos/smarter-project/smarter-device-manager/tags --jq '.[].name' | head -10
                 image: ghcr.io/smarter-project/smarter-device-manager:v1.20.12
-                imagePullPolicy: IfNotPresent
+                imagePullPolicy: Always
                 securityContext:
                   allowPrivilegeEscalation: false
                   capabilities:
@@ -98,7 +98,7 @@
                     memory: 15Mi
                   limits:
                     cpu: 100m
-                    memory: 15Mi
+                    memory: 25Mi
                 volumeMounts:
                   - name: device-plugin
                     mountPath: /var/lib/kubelet/device-plugins

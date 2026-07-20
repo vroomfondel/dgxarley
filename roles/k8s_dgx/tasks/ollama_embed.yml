@@ -201,6 +201,7 @@
                     mountPath: /scripts
               - name: tls-proxy
                 image: haproxy:lts-alpine
+                imagePullPolicy: Always
                 command: ["haproxy", "-f", "/etc/haproxy/haproxy.cfg"]
                 ports:
                   - containerPort: "{{ ollama_tls_port }}"

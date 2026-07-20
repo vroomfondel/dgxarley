@@ -156,6 +156,7 @@
                   value: "1"
             containers:
               - image: docker.io/searxng/searxng:latest
+                imagePullPolicy: Always
                 name: searxng
                 resources:
                   requests:

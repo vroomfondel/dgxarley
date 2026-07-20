@@ -135,6 +135,10 @@
           metadata:
             labels:
               app: keel
+            annotations:
+              # Sonst meldet jedes kubectl logs/exec "Defaulted container ... out
+              # of: keel, volume-mount-hack (init)".
+              kubectl.kubernetes.io/default-container: keel
           spec:
             serviceAccountName: keel
             nodeSelector:

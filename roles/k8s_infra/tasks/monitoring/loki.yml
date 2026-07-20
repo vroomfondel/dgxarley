@@ -141,6 +141,7 @@
             containers:
               - name: loki
                 image: grafana/loki:3.6
+                imagePullPolicy: Always
                 args:
                   - "--config.file=/etc/loki/local-config.yaml"
                 ports:
@@ -319,6 +320,7 @@
             containers:
             - name: promtail-container
               image: grafana/promtail:latest
+              imagePullPolicy: Always
               args:
               - -config.file=/etc/promtail/promtail.yaml
               resources:
