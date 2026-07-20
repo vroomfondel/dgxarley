@@ -26,8 +26,14 @@ import re
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 import serial
+
+from dgxarley import configure_logging, glogger, print_banner
+
+configure_logging()
+glogger.enable("dgxarley")
 
 from dgxarley.tools.kceve_kvm import (
     DEFAULT_NUM_PORTS,
@@ -210,6 +216,8 @@ class KVMHandler(BaseHTTPRequestHandler):
 def main() -> None:
     """Parse CLI arguments, open the serial port, and start the HTTP server."""
     global _ser, _num_ports
+
+    print_banner(module=Path(__file__).stem)
 
     parser = argparse.ArgumentParser(description="KCEVE KVM1001A web control")
     parser.add_argument("-d", "--device", default="/dev/ttyACM0", help="Serial device")

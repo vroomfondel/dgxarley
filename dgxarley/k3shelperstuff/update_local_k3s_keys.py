@@ -30,6 +30,11 @@ from urllib.parse import urlparse
 
 import yaml
 
+from dgxarley import configure_logging, glogger, print_banner
+
+configure_logging()
+glogger.enable("dgxarley")
+
 # A kubeconfig is a dict with string keys; values are strings, lists of dicts, etc.
 # yaml.safe_load returns Any, so we cast at the boundary and use this alias throughout.
 KubeConfig = dict[str, object]
@@ -545,6 +550,7 @@ def main() -> None:
     3. **Error** — context absent and ``--create`` not passed; exits with
        code 1.
     """
+    print_banner(module=Path(__file__).stem)
     args = parse_args()
 
     remote_host = f"{args.user}@{args.host}"

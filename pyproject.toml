@@ -82,6 +82,12 @@ ansible = [
 build = [
     "hatch",
 ]
+# Runtime deps for dgxarley.k3shelperstuff.keel_drift (the Keel drift check).
+# update_local_k3s_keys needs nothing beyond the standard library.
+k3s = [
+    "kubernetes",
+    "typer",
+]
 
 [project.urls]
 Homepage = "https://github.com/vroomfondel/dgxarley"
@@ -139,6 +145,7 @@ module = [
     "cv2", "numpy", "pytesseract",
     "aiohttp", "ascii_magic", "uvicorn", "fastapi", "fastapi.*",
     "sglang.*", "safetensors", "safetensors.*",
+    "kubernetes", "kubernetes.*",
 ]
 ignore_missing_imports = true
 
@@ -153,3 +160,5 @@ comfyui-test = "dgxarley.integration.comfyui_integration_test:main"
 kceve-kvm = "dgxarley.tools.kceve_kvm:main"
 kceve-kvm-web = "dgxarley.tools.kceve_kvm_web:main"
 kceve-kvm-web-plain = "dgxarley.tools.kceve_kvm_web_plain:main"
+keel-drift = "dgxarley.k3shelperstuff.keel_drift:app"
+k3s-keys-sync = "dgxarley.k3shelperstuff.update_local_k3s_keys:main"

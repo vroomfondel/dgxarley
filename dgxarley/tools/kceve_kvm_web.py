@@ -24,11 +24,17 @@ import contextlib
 import logging
 import threading
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
 import serial
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
+
+from dgxarley import configure_logging, glogger, print_banner
+
+configure_logging()
+glogger.enable("dgxarley")
 
 from dgxarley.tools.kceve_kvm import (
     DEFAULT_NUM_PORTS,
@@ -455,6 +461,8 @@ setInterval(poll, 5000);
 def main() -> None:
     """Parse CLI arguments, open serial, and start the FastAPI server."""
     global _num_ports
+
+    print_banner(module=Path(__file__).stem)
     parser = argparse.ArgumentParser(description="KCEVE KVM Web UI")
     parser.add_argument("-d", "--device", default="/dev/ttyACM0", help="Serial device (default: /dev/ttyACM0)")
     parser.add_argument("-t", "--timeout", type=float, default=5.0, help="Serial read timeout in seconds")

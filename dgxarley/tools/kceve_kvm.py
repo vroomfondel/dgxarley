@@ -39,8 +39,14 @@ import os
 import re
 import sys
 import time
+from pathlib import Path
 
 import serial
+
+from dgxarley import configure_logging, glogger, print_banner
+
+configure_logging()
+glogger.enable("dgxarley")
 
 # Default port count and the env var that overrides it. The KCEVE line ships
 # in 4-port and 10-port variants; 10 is the original/default.
@@ -359,6 +365,7 @@ def cmd_sniff(ser: serial.Serial) -> None:
 
 def main() -> None:
     """Parse CLI arguments, open the serial port, and dispatch the command."""
+    print_banner(module=Path(__file__).stem)
     parser = argparse.ArgumentParser(description="MLEEDA / KCEVE KVM1001A RS232 control")
     parser.add_argument("-d", "--device", default="/dev/ttyACM0", help="Serial device")
     parser.add_argument("-t", "--timeout", type=float, default=2.0, help="Read timeout in seconds")

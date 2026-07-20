@@ -40,6 +40,25 @@ Token-level stream inspection with per-chunk breakdown in a structured table. Co
 | `kceve-kvm` | RS232 serial control for KCEVE KVM1001A KVM switches — 4-port and 10-port variants, `--ports`/`KCEVE_KVM_PORTS` (switch ports, query state, sniff) |
 | `kceve-kvm-web` | Web UI for KCEVE KVM control (FastAPI, requires `dgxarley[web]`) |
 | `kceve-kvm-web-plain` | Lightweight web UI for KCEVE KVM control (stdlib `http.server`, no extra dependencies) |
+| `keel-drift` | Finds Keel-tracked K8s workloads whose running image lags behind its tag (requires `dgxarley[k3s]`) |
+| `k3s-keys-sync` | Syncs the local `~/.kube/config` with the kubeconfig of a remote K3s server |
+
+### `keel-drift` — Keel drift check
+
+On every poll, [Keel](https://keel.sh) compares the registry digest of right now against the digest it memorised during the previous poll. That memo lives in memory only and is seeded from the registry at startup, so what actually runs in the cluster never enters Keel's decision: if a tag is moved while Keel restarts, Keel sets its baseline to the new digest without ever touching the Deployment, and the change stays invisible until the next push.
+
+`keel-drift` performs exactly the comparison Keel does not — the digest of the running pod against the digest the tag currently points at — across every Deployment, StatefulSet and DaemonSet carrying an active `keel.sh/policy`. It resolves multi-arch tags on both the index and the per-platform level, authenticates with the workload's `imagePullSecrets` (falling back to the local Docker login so Docker Hub does not count against the anonymous 100/h per-IP limit), and flags containers where `imagePullPolicy != Always`, since a restart cannot renew an unchanged tag there.
+
+```bash
+pip install 'dgxarley[k3s]'
+
+keel-drift                          # every tracked workload
+keel-drift --namespace somestuff    # a single namespace
+keel-drift --drift-only --quiet     # drift only, terse
+keel-drift --fix-command            # print rollout-restart commands
+```
+
+The table goes to stdout and progress to stderr, so the output stays pipe-friendly. The exit code is `1` as soon as at least one workload is stale (`2` if no Kubernetes context could be loaded), which makes it usable as a pipeline gate.
 
 ### `kceve-kvm-web` — KCEVE KVM1001A Web UI
 
