@@ -97,3 +97,10 @@ dgx_swap_foreign_files:
 # on purpose: marking any nvidia/dgx package manual is always safe on a DGX node.
 # Pure utilities (ipcalc, python3-psutil) are deliberately NOT matched.
 dgx_protect_pkg_regex: '^(nvidia-|nv-|nvgpu-|dgx-|hpc-sdk-repo|kdump-tools|kexec-tools|linux-crashdump|makedumpfile|msecli|tpm2-tools|libtss2-)'
+
+# Desktop applications purged by tasks/disable_gui.yml (tag: disable_gui). Entries
+# are dpkg-query patterns (globs allowed); the task resolves them against what is
+# actually installed before calling apt. These are headless compute nodes, nothing
+# here has a runtime consumer. Empty the list to skip the removal entirely.
+dgx_desktop_apps_remove:
+  - "libreoffice*"

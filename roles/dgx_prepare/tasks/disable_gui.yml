@@ -3,6 +3,7 @@
   ansible.builtin.shell: dpkg-query -W -f='${Package}\n' ubuntu-desktop ubuntu-desktop-minimal 2>/dev/null || true
   register: desktop_pkgs_check
   changed_when: false
+  check_mode: false
 
 - name: Remove desktop metapackages (prevents autoremove conflicts)
   ansible.builtin.apt:
@@ -13,10 +14,38 @@
     purge: true
   when: desktop_pkgs_check.stdout | length > 0
 
+# LibreOffice comes in via the ubuntu-desktop metapackage but is NOT pulled out by
+# the autoremove below. Several libreoffice-* packages are marked manually-installed
+# by the DGX-OS image, so they survive as orphan roots (~700 MB plus a Java stack).
+# Enumerate what is actually installed first, because passing a glob straight to the apt
+# module makes it fail on hosts where nothing matches.
+- name: Check which LibreOffice packages are installed
+  ansible.builtin.shell: |
+    set -o pipefail
+    dpkg-query -W -f='${Package} ${Status}\n' '{{ dgx_desktop_apps_remove | join("' '") }}' 2>/dev/null \
+      | awk '$4 == "installed" {print $1}' || true
+  args:
+    executable: /bin/bash
+  register: desktop_apps_check
+  changed_when: false
+  check_mode: false
+  when: dgx_desktop_apps_remove | length > 0
+
+- name: Remove LibreOffice and other desktop applications
+  ansible.builtin.apt:
+    name: "{{ desktop_apps_check.stdout_lines }}"
+    state: absent
+    purge: true
+  when:
+    - dgx_desktop_apps_remove | length > 0
+    - desktop_apps_check.stdout_lines | default([]) | length > 0
+
 - name: Autoremove orphaned desktop dependencies
   ansible.builtin.apt:
     autoremove: true
-  when: desktop_pkgs_check.stdout | length > 0
+  when: >-
+    desktop_pkgs_check.stdout | length > 0
+    or desktop_apps_check.stdout_lines | default([]) | length > 0
 
 - name: Check current default target
   ansible.builtin.command: systemctl get-default
@@ -57,6 +86,10 @@
     - cups
     - cups.socket
     - cups.path
+  # cups is not installed on every node (and gets removed entirely once the
+  # desktop packages are purged), so a missing unit here is the expected state,
+  # not an error. Same treatment as the other systemd tasks in this file.
+  failed_when: false
 
 # nvidia-dgx-sol is NVIDIA's "Sign of Life" telemetry service that phones home
 # every 5 minutes. Since we block events.telemetry.data.nvidia.com via DNS, this
