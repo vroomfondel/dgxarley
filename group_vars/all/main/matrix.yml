@@ -99,3 +99,9 @@ matrix:
 # matrix_cinny_teardown: false
 # matrix_element_enabled: true
 # matrix_element_teardown: false
+#
+# Element's two group-call paths, both on Element-hosted services by default.
+# An unset knob emits no config.json key at all, so upstream's default applies.
+# matrix_element_jitsi_domain: ""          # "" = meet.element.io; else e.g. "jitsi.example.eu"
+# matrix_element_jitsi_skip_welcome: false # true = skip Element's "Join Conference" screen
+# matrix_element_call_enabled: true        # false = element_call.disable, kills native Element Call

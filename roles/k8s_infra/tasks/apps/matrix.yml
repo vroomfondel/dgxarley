@@ -485,30 +485,56 @@
     # here would update the ConfigMap and silently do nothing until the pod
     # happened to roll for some unrelated reason.
     #
-    # Trimmed against the sister repo's config: no logout_redirect_url (that one
-    # ends a Keycloak SSO session, this homeserver has local password auth) and no
-    # jitsi.preferred_domain (no jitsi in this cluster, so Element keeps its
-    # built-in meet.jit.si default for the call widget).
+    # Trimmed against the sister repo's config: no logout_redirect_url — that one
+    # ends a Keycloak SSO session, this homeserver has local password auth.
     # disable_custom_urls pins the client to OUR homeserver, matching cinny's
     # single-entry homeserverList; set it false to let users type another server.
+    #
+    # Built as a dict and serialised with to_nice_json instead of a JSON literal:
+    # the three call-related keys below are OPTIONAL, and stitching optional
+    # members into hand-written JSON means getting the commas right in Jinja. The
+    # dict merge cannot produce invalid JSON. Only the keys we actually want to
+    # deviate on are emitted, so Element keeps its upstream defaults everywhere
+    # else (that is also why an unset knob adds NO key at all).
+    #
+    # Call stack, the two independent halves:
+    #   jitsi.preferred_domain  — which Jitsi the room-widget conferences use.
+    #     Unset => Element's own meet.element.io. NOTE it is ignored if the widget
+    #     came from an integration manager or if the homeserver advertises jitsi in
+    #     /.well-known/matrix/client; ours does neither, so this wins.
+    #   element_call.disable    — kills the NATIVE group-call stack (Element Call),
+    #     which is a separate thing from the Jitsi widget and on by default,
+    #     pointed at Element's hosted instance. Key is `disable`, NOT `disabled`:
+    #     the schema (packages/shared-types/lib/config.json.d.ts) and the reader
+    #     (hooks/room/useRoomCall.ts) both say `disable`, docs/config.md has it
+    #     wrong in one bullet.
     - name: Render element config.json
+      vars:
+        _element_cfg_base:
+          default_server_config:
+            m.homeserver:
+              base_url: "https://matrix.{{ matrix.base_domain }}"
+              server_name: "matrix.{{ matrix.base_domain }}"
+          brand: "Element"
+          default_theme: "dark"
+          disable_custom_urls: true
+          disable_guests: true
+          room_directory:
+            servers: ["matrix.{{ matrix.base_domain }}"]
+        _element_cfg_jitsi: >-
+          {{ {'jitsi': {'preferred_domain': matrix_element_jitsi_domain}}
+             if (matrix_element_jitsi_domain | default('') | length > 0) else {} }}
+        _element_cfg_jitsi_widget: >-
+          {{ {'jitsi_widget': {'skip_built_in_welcome_screen': true}}
+             if (matrix_element_jitsi_skip_welcome | default(false) | bool) else {} }}
+        _element_cfg_call: >-
+          {{ {'element_call': {'disable': true}}
+             if not (matrix_element_call_enabled | default(true) | bool) else {} }}
       ansible.builtin.set_fact:
-        _matrix_element_config_json: |
-          {
-            "default_server_config": {
-              "m.homeserver": {
-                "base_url": "https://matrix.{{ matrix.base_domain }}",
-                "server_name": "matrix.{{ matrix.base_domain }}"
-              }
-            },
-            "brand": "Element",
-            "default_theme": "dark",
-            "disable_custom_urls": true,
-            "disable_guests": true,
-            "room_directory": {
-              "servers": ["matrix.{{ matrix.base_domain }}"]
-            }
-          }
+        _matrix_element_config_json: >-
+          {{ _element_cfg_base
+             | combine(_element_cfg_jitsi, _element_cfg_jitsi_widget, _element_cfg_call)
+             | to_nice_json }}
       when: _matrix_element_install | bool
 
     - name: Create element-config ConfigMap
