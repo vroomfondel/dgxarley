@@ -19,6 +19,16 @@
 > NOTE: unrelated to commit d31d672's W4A16\_NVFP4 path for
 > `nvidia/Qwen3.6-35B-A3B-NVFP4` — that is a separate runtime patch for a different
 > model (mixed-precision quant) and does not affect this FP8 `is_layer_skipped` fix.
+>
+> **2026-07-23 — correction:** the "remains in place / guarded no-op" wording above is
+> stale. The `PATCH_QUANT_UTILS_EOF` block was actually **deleted** from
+> `sglang_launch.sh` on 2026-07-12 in commit `e512f6e` ("Remove outdated quantization,
+> ModelOptModelLoader, and DSV4 indexer patches now present in SGLang v0.5.14+"),
+> replaced by a short comment at `sglang_launch.sh` lines ~227-230 recording that the
+> no-op was verified and removed. Code was already clean; only this doc's status text
+> lagged behind. Current pinned image `xomoxcc/dgx-spark-sglang:0.5.15-sm121` contains
+> the fix (PR #23467, ancestor of v0.5.11+) — no runtime patch exists anymore, and
+> none is needed.
 
 - **`Qwen/Qwen3.6-27B-FP8` — BROKEN** on `scitrera/dgx-spark-sglang:0.5.10`. Model
   loads and decode runs, but every request produces multilingual token salad with
@@ -37,9 +47,11 @@
   - **NOT in** v0.5.10, v0.5.10.post1, or v0.5.10rc0 — those still need the runtime
     patch.
 
-- **Runtime patch in** `roles/k8s_dgx/files/sglang_launch.sh` is left in place as
-  defense-in-depth: it auto-skips on dev1 / v0.5.11 images (sentinel match) and
-  remains active on the older v0.5.10 / v0.5.10.post1 images.
+- **Runtime patch in** `roles/k8s_dgx/files/sglang_launch.sh` was left in place as
+  defense-in-depth through 2026-06-30 (auto-skipping on dev1 / v0.5.11+ images via
+  sentinel match). **Removed 2026-07-12** in commit `e512f6e` after verifying the
+  sentinel had been a permanent no-op since v0.5.14 — see the 2026-07-23 correction
+  note above.
 
 ## Affected models
 
