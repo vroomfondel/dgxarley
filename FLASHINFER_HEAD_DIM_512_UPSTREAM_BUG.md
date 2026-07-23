@@ -1,5 +1,46 @@
 # FlashInfer Upstream Bug: head_dim=512 not supported (Gemma-4 global attention)
 
+## Status 2026-07-23 — flashinfer v0.6.14/v0.6.15/v0.6.15.post1 released; new SM12x NVFP4 MoE GEGLU progress (unvalidated); triton still mandatory
+
+Three flashinfer releases postdate the 2026-06-29 status below: **v0.6.14**
+(2026-07-02), **v0.6.15** (2026-07-17), **v0.6.15.post1** (2026-07-21).
+Neither changes anything about the SGLang allowlist finding below —
+`attention_backend: triton` remains permanently mandatory for all Gemma-4
+profiles regardless of flashinfer version. But v0.6.14/v0.6.15 do contain
+new, previously untracked upstream movement relevant to the **NVFP4** side of
+Gemma-4 (see `SGLANG_GEMMA4_UPSTREAM_BUG.md`, not this doc's head_dim=512
+scope):
+
+- **v0.6.14** highlights "Gemma 4 and W4A16 on Blackwell RTX Pro and DGX
+  Spark", bundling the already-tracked #3576 plus **new** PR #3501 ("Add
+  gated tanh-GELU (GeluTanh) activation to CUTLASS fused MoE (GEMMA 4)",
+  merged 2026-06-11) — validated only on H200/SM90 per the PR body.
+- **v0.6.15** goes further: "Gemma 4 and MiniMax-M3 NVFP4 MoE now run on
+  Blackwell SM12x (consumer / DGX Spark), enabled by two new NVFP4 MoE
+  activation functions — gelu_tanh and swiglu_oai — added to the SM12x MoE
+  path." This is PR [#3744](https://github.com/flashinfer-ai/flashinfer/pull/3744)
+  (merged 2026-07-01, addresses flashinfer issue #3683, also adds
+  zero-padding for non-128-aligned `intermediate_size` — the PR body names
+  "Gemma-4's 704" explicitly) and PR #3737. This is a flashinfer-kernel-level
+  path to the same GEGLU-activation gap that `SGLANG_GEMMA4_UPSTREAM_BUG.md`
+  attributes to stalled SGLang PR #22928, independent of that PR merging.
+  **Unvalidated on our cluster:** the Gemma image we run
+  (`xomoxcc/dgx-spark-sglang:0.5.14-gemmadiffusion-sm121`) still pins
+  flashinfer **0.6.13** (`scripts/patches/sglang-0.5.14-gemma4-diffusion-sm121.recipe:60`),
+  not 0.6.15, and it's unconfirmed whether SGLang's MoE runner actually
+  dispatches Gemma-4 NVFP4 through the flashinfer path that gained this
+  activation. Cross-referenced in `SGLANG_GEMMA4_UPSTREAM_BUG.md`.
+- No change to the head_dim=512/attention-backend finding itself: the SGLang
+  allowlist (`server_args.py`, confirmed unchanged on `main` and tag
+  `v0.5.15`) still hard-rejects `attention_backend=flashinfer` for
+  `Gemma4ForConditionalGeneration` before any weight load. `triton` remains
+  the only correct setting for all four Gemma-4 profiles.
+- **Repo state confirmed 2026-07-23:** both BF16 profiles
+  (`google-gemma-4-26b-a4b-it.yml`, `google-gemma-4-31b-it.yml`) are back on
+  `attention_backend: "triton"` (breadcrumb comment documents the reverted
+  2026-06-24 flashinfer flip) — the outstanding revert noted in the
+  2026-06-29 status below and in `SGLANG_GEMMA4_UPSTREAM_BUG.md` is done.
+
 ## Status 2026-06-29 — SGLang allowlist permanently blocks `attention_backend=flashinfer` for Gemma4; TESTWEISE flip moot
 
 **CRITICAL (cross-ref `FLASHINFER_0.6.12_TODO.local.md` update 2026-06-21):** SGLang's
@@ -513,10 +554,11 @@ Gemma 4 on SM120/121"). PR #3576 ist noch nicht in einem Release enthalten
 
 - `roles/k8s_dgx/model_profiles/google-gemma-4-26b-a4b-it.yml` — **must be on
   `attention_backend: triton` permanently** (SGLang allowlist, see Status 2026-06-29).
-  The 2026-06-24 TESTWEISE flip to `flashinfer` is moot and must be reverted if not
-  already done. The pinned `0.5.14-gemmadiffusion-sm121` / flashinfer 0.6.13rc2 image
-  carries PR #3576, but SGLang blocks `attention_backend=flashinfer` for Gemma4
-  regardless of the flashinfer version.
+  The 2026-06-24 TESTWEISE flip to `flashinfer` was moot and **reverted 2026-07-23**
+  (confirmed live: `attention_backend: "triton"` with a breadcrumb comment). The
+  pinned `0.5.14-gemmadiffusion-sm121` / flashinfer 0.6.13rc2 image carries PR
+  #3576, but SGLang blocks `attention_backend=flashinfer` for Gemma4 regardless
+  of the flashinfer version.
 - `roles/k8s_dgx/model_profiles/google-gemma-4-31b-it.yml` — same.
 - NVFP4 profiles are blocked by other bugs before reaching this one, but
   would also need `attention_backend: triton` once unblocked.
