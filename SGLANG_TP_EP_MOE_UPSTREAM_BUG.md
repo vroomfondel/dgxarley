@@ -66,6 +66,25 @@ contain no `moe_wna16`/qzeros/`expert_parallel` fix; PR #35598 is still OPEN,
 no activity since 2026-05-23 (stalled). Bug (a) remains unpatched through
 vLLM v0.24.0.
 
+**Re-verified 2026-07-23:** SGLang **v0.5.15 released 2026-07-10**, **v0.5.15.post1
+released 2026-07-14** — source-confirmed on the v0.5.15.post1 tag: `modelopt_quant.py`'s
+`else` branch still reads `layer.w13_input_scale.max(dim=-1).values.to(torch.float32)`
+with no EP slicing, byte-identical to the bug described here; the fix tracked by PR
+#23531 is not in either release. vLLM **v0.25.0 released 2026-07-11**, **v0.25.1
+released 2026-07-14** — neither contains a `moe_wna16`/qzeros/`expert_parallel` fix; PR
+#35598 is still OPEN, no activity since 2026-05-23. **Forward-looking note:** SGLang PR
+[#30448](https://github.com/sgl-project/sglang/pull/30448) ("Refactor FP4 quantization
+and remove deprecated JIT kernels"), merged to `main` 2026-07-14 but **NOT in any
+release yet** (the file is still present, unchanged, in v0.5.15.post1), deletes
+`python/sglang/jit_kernel/nvfp4.py` and strips `cutlass_moe_fp4` out of
+`cutlass_moe.py` entirely; `ModelOptNvFp4FusedMoEMethod.create_moe_runner` now raises
+`NotImplementedError` for `moe_runner_backend=cutlass` instead of constructing
+`CutlassMoEParams`. Once a release ships this, the "CutlassMoEParams uses global
+num_experts with EP" bug below becomes moot (the code path is gone, not fixed in
+place) and our documented `cutlass`-backend fallback will hard-error — `triton` and
+`flashinfer_cutlass` are unaffected, and the `else`-branch input-scale bug (PR #23531)
+is untouched by #30448 and remains required.
+
 - vLLM: [PR #35598](https://github.com/vllm-project/vllm/pull/35598) — open since 2026-02-28, not merged. Author rebased onto `main` on 2026-04-13 (commit `c56eae0e`, merge-from-main only, no code changes); prior rebase 2026-03-05. Still only the initial Gemini bot review from 2026-02-28 — no human reviewer has engaged (mergify[bot] flagged a merge conflict 2026-05-23; 5 reviewers requested, none engaged; re-verified 2026-06-11)
 - vLLM: [PR #36026](https://github.com/vllm-project/vllm/pull/36026) — fix wrong num_experts in moe_wna16 kernel dispatch. **Closed without merge 2026-04-25** by author (`weiguangli-io`) citing 8+ weeks with no maintainer review; offered to reopen if it becomes relevant. The sub-bug it fixed (kernel dispatch num_experts) remains unaddressed in vLLM `main`
 - SGLang: no upstream issue or PR filed
