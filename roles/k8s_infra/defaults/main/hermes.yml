@@ -42,7 +42,15 @@ hermes:
   # (upstream diff v2026.7.1→v2026.7.7.2 = 3 robustness fixes: IMAP-fetch guard,
   # _message_id_domain() @-less-address fallback, 3 msg_id call-sites; folded in,
   # no [PATCH-N] change — our PRs #28697/#28699/#28702 still OPEN at this tag).
-  image_tag: "v2026.7.7.2"           # agent image (nousresearch/hermes-agent)
+  # Bumped v2026.7.7.2 → v2026.7.20 (v0.19.0 "Quicksilver") 2026-07-23: upstream
+  # plugins/platforms/email/adapter.py is BYTE-IDENTICAL at v2026.7.20 (same md5
+  # 39ed5d135762806451a944a9b279b8ad, 50848 bytes), so no [PATCH-N] re-sync. The
+  # health-patch anchor (gateway.platforms.api_server:APIServerAdapter._check_auth)
+  # + the GATEWAY_HEALTH_URL/_probe_gateway_health mismatch both still present →
+  # hermes_health_patch.py still required. BASIC_AUTH/TERMINAL_CWD/API_SERVER_KEY/
+  # EMAIL_*/MATRIX_* env + gateway.lock/gateway_state.json all unchanged (verified).
+  # v0.19.0 adds only optional extras (BASIC_AUTH_PASSWORD_HASH, durable state.db).
+  image_tag: "v2026.7.20"            # agent image (nousresearch/hermes-agent)
   # NOTE: the venv site-packages dir (mount point for the hermes_health_patch
   # .py/.pth) is NOT configured here — it carries a pythonX.Y segment that bumps
   # with the base image. hermes.yml probes the actual image ONCE at deploy time

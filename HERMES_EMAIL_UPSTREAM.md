@@ -324,7 +324,7 @@ The `env -u VIRTUAL_ENV` prefix is required because the parent shell's
 > **2026-07-23 check — ✅ RE-SYNC ALREADY DONE (visible in patch header, not yet logged here);
 > new security fix folded in; tag bumped past v2026.7.1:**
 > - `hermes.image_tag` is now pinned to **v2026.7.7.2** (two releases past v2026.7.1). The
->   header of `roles/k8s_dgx/files/hermes_email_gateway_patched.py` shows the re-sync
+>   header of `roles/k8s_infra/files/hermes_email_gateway_patched.py` shows the re-sync
 >   anticipated by the 2026-07-06 entry has already been carried out: the adapter is synced
 >   to upstream tag **v2026.7.7.2** (`plugins/platforms/email/adapter.py`, md5
 >   `39ed5d135762806451a944a9b279b8ad`, 50848 bytes), superseding the v2026.7.1 baseline. The
@@ -340,7 +340,9 @@ The `env -u VIRTUAL_ENV` prefix is required because the parent shell's
 > - **No further re-sync needed for the newer release:** `plugins/platforms/email/adapter.py`
 >   is byte-identical between `v2026.7.7.2` and the newer `v2026.7.20` (2026-07-20) — same
 >   blob SHA `572b5c11455d396e3d23d44b7bf724130ebce385`, 50848 bytes. The pinned patch stays
->   clean at the current tag.
+>   clean at the current tag. **`hermes.image_tag` was subsequently bumped to v2026.7.20 on
+>   2026-07-23** (adapter re-fetched at that ref, verified byte-identical to the v2026.7.7.2
+>   base); the patch-file header now records v2026.7.20 as the checked tag.
 > - **PRs #28697 / #28699 / #28702** remain open/unmerged; all three show `updated_at:
 >   2026-07-13` — later than the 2026-06-29 activity previously logged, but no merge/close.
 

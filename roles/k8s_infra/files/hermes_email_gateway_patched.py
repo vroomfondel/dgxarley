@@ -17,7 +17,10 @@ Environment variables:
 ------------------------------------------------------------------------------
 LOCAL PATCH (dgxarley) — synced to upstream tag v2026.7.7.2
 (plugins/platforms/email/adapter.py, md5 39ed5d135762806451a944a9b279b8ad,
-50848 bytes). Current for the pinned image (hermes.image_tag v2026.7.7.2).
+50848 bytes). Current for the pinned image (hermes.image_tag v2026.7.20;
+adapter.py re-fetched at ref v2026.7.20 on 2026-07-23 and verified BYTE-IDENTICAL
+to this v2026.7.7.2 base — same md5/size — so this patch applies unchanged, no
+[PATCH-N] re-sync needed for the v2026.7.7.2 → v2026.7.20 bump).
 
 FILE MOVED at this bump: upstream #41112/#3823 landed the plugin refactor that
 the v2026.6.19 patch header warned about — the adapter moved from

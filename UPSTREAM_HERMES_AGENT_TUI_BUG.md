@@ -339,8 +339,12 @@ small (~50 MB) and the node has fast local storage.
   **v2026.7.7.2 / v0.18.2** (2026-07-08, WhatsApp Baileys dependency fix,
   PR #60643), and **v2026.7.20 / v0.19.0** ("The Quicksilver Release",
   2026-07-20, large perf/feature release). None of the three touch the TUI
-  npm/lockfile bug. `hermes.image_tag` in this repo is now pinned to
-  **v2026.7.7.2**. Issue **#45657 is still OPEN**, unchanged since 2026-06-23
+  npm/lockfile bug. `hermes.image_tag` was bumped the same day (2026-07-23)
+  from v2026.7.7.2 to **v2026.7.20** after a patch-fit check — email adapter
+  byte-identical, health-patch anchor (`APIServerAdapter._check_auth`) intact,
+  all BASIC_AUTH/TERMINAL_CWD/API_SERVER_KEY/EMAIL_*/MATRIX_* env + gateway.lock
+  unchanged; v0.19.0 adds only optional extras. Issue **#45657 is still OPEN**,
+  unchanged since 2026-06-23
   (no new comments). All previously-tracked merges/closures still hold.
   **Action Items reconciliation:** the wording above ("Action Items §1–5
   remain pending/unexecuted") is inconsistent with the repo's actual state —
