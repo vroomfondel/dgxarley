@@ -1,0 +1,109 @@
+#!/bin/sh
+# Managed by Ansible
+#
+# Release the clevis/tang boot-time DHCP lease before switch_root, so the
+# upstream DHCP server drops it and stops answering for the boot-time IP.
+#
+# Why this exists
+# ---------------
+# During the clevis/tang unlock the initramfs brings up the boot NIC via
+# initramfs-tools configure_networking() == klibc `ipconfig`, which obtains a
+# DHCP lease but NEVER releases it (ipconfig has no release path). In userspace
+# that NIC becomes an unmanaged OVS bridge port with no DHCP, but the server
+# still holds the lease for its full (often multi-day) lease time and keeps
+# reflecting the host under the boot-time IP:
+#   - a Fritzbox answers mDNS `<host>.local` AND `<host>.fritz.box` with the
+#     stale boot IP, shadowing the host's real authoritative mDNS answer on its
+#     operational interface (see scripts/debughelper/mdns_who.py).
+# Releasing the lease at the end of initramfs removes the active lease, so the
+# server has no IP left to reflect. The server may keep the (MAC-keyed) device
+# NAME, but without an active IP it is harmless.
+#
+# Mechanism / caveat
+# ------------------
+# klibc ipconfig cannot release, so we use `dhcpcd` (already shipped in the
+# initramfs) to briefly RE-acquire the lease on the same NIC and then send a
+# proper DHCPRELEASE. The re-acquire is nameless (`-C 30-hostname`, so no
+# hostname option is re-sent) and stays inside the existing boot window; the
+# net end state is: no active lease. This runs in init-bottom (AFTER
+# configure_networking and AFTER the clevis local-bottom brought the NIC down),
+# so we re-up the NIC, release, then return it to the down state we found it in.
+#
+# Best-effort: this MUST NOT fail the boot. Every step is guarded and time-boxed;
+# a missing dhcpcd, an unreachable server, or a link that never comes up just
+# results in a no-op. `set -e` is deliberately NOT used.
+
+PREREQ=""
+
+prereqs() {
+    echo "$PREREQ"
+}
+
+case "$1" in
+    prereqs)
+        prereqs
+        exit 0
+    ;;
+esac
+
+# dhcpcd is the only release-capable DHCP client in the initramfs. Without it
+# there is nothing to do (klibc ipconfig cannot send DHCPRELEASE).
+if ! command -v dhcpcd >/dev/null 2>&1; then
+    echo "dhcp-release: dhcpcd not present in initramfs, skipping" >&2
+    exit 0
+fi
+
+release_lease() {
+    dev="$1"
+    [ -n "$dev" ] || return 0
+    [ -e "/sys/class/net/$dev" ] || return 0
+
+    # Re-up the NIC (clevis local-bottom flushed + downed it) so dhcpcd can talk.
+    ip link set dev "$dev" up 2>/dev/null || return 0
+
+    # Re-acquire in the background, nameless, without touching resolv.conf or the
+    # system hostname. -t 8 bounds the attempt; -L disables IPv4LL fallback.
+    dhcpcd -4 -q -b -t 8 -L -C resolv.conf -C 30-hostname "$dev" 2>/dev/null || true
+
+    # Wait (max ~8s) for a lease to actually land before releasing it.
+    i=0
+    while [ "$i" -lt 8 ]; do
+        if ip -4 addr show dev "$dev" 2>/dev/null | grep -q "inet "; then
+            break
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+
+    # Send DHCPRELEASE and stop the dhcpcd instance for this NIC.
+    dhcpcd -q -k "$dev" 2>/dev/null || true
+
+    # Return the NIC to the down/clean state clevis local-bottom left it in, so
+    # userspace (netplan/OVS) reconfigures it from scratch.
+    ip addr flush dev "$dev" 2>/dev/null || true
+    ip link set dev "$dev" down 2>/dev/null || true
+
+    echo "dhcp-release: released boot DHCP lease on $dev" >&2
+}
+
+# configure_networking() records each configured interface in /run/net-<dev>.conf
+# (DEVICE=, IPV4ADDR=, IPV4GATEWAY=, ...). Release every one it brought up.
+released_any=0
+for conf in /run/net-*.conf; do
+    [ -e "$conf" ] || continue
+    DEVICE=""
+    # shellcheck disable=SC1090
+    . "$conf"
+    if [ -n "$DEVICE" ]; then
+        release_lease "$DEVICE"
+        released_any=1
+    fi
+done
+
+# Fallback: no /run/net-*.conf (e.g. a differently-named artifact) but the init
+# environment still exports DEVICE from initramfs.conf.
+if [ "$released_any" -eq 0 ] && [ -n "${DEVICE:-}" ]; then
+    release_lease "$DEVICE"
+fi
+
+exit 0

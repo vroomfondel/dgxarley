@@ -274,6 +274,57 @@
     - clevis_has_luks | bool
     - wantsclevis_initramfs | default(true)
 
+# --- Release the boot-time DHCP lease before switch_root ---
+# klibc ipconfig obtains but never releases the clevis/tang lease, so the
+# upstream DHCP server keeps reflecting the host under the stale boot IP via
+# mDNS (<host>.local / <host>.fritz.box). This init-bottom script uses the
+# initramfs' dhcpcd to send a proper DHCPRELEASE. Gate: clevis_dhcp_release_enabled.
+
+- name: deploy initramfs init-bottom dhcp-release script
+  copy:
+    src: initramfs_init-bottom_dhcp-release
+    dest: /etc/initramfs-tools/scripts/init-bottom/dhcp-release
+    owner: root
+    group: root
+    mode: '0755'
+  register: clevis_dhcp_release_changed
+  when:
+    - clevis_has_luks | bool
+    - wantsclevis_initramfs | default(true)
+    - clevis_dhcp_release_enabled | default(true) | bool
+
+- name: remove initramfs init-bottom dhcp-release script (disabled)
+  file:
+    path: /etc/initramfs-tools/scripts/init-bottom/dhcp-release
+    state: absent
+  register: clevis_dhcp_release_removed
+  when:
+    - clevis_has_luks | bool
+    - wantsclevis_initramfs | default(true)
+    - not (clevis_dhcp_release_enabled | default(true) | bool)
+
+- name: verify dhcpcd is present in initramfs (required for dhcp-release)
+  shell: lsinitramfs /boot/initrd.img-$(uname -r) 2>/dev/null | grep -cE 'sbin/dhcpcd$' || echo "0"
+  register: clevis_dhcpcd_check
+  changed_when: false
+  check_mode: false
+  when:
+    - clevis_has_luks | bool
+    - wantsclevis_initramfs | default(true)
+    - clevis_dhcp_release_enabled | default(true) | bool
+
+- name: warn if dhcpcd missing from initramfs (dhcp-release will no-op)
+  debug:
+    msg: >-
+      WARNING — dhcpcd not found in the initramfs. The dhcp-release script needs
+      it to send a DHCPRELEASE (klibc ipconfig cannot); the release will silently
+      no-op. Ensure dhcpcd is installed so update-initramfs bundles it.
+  when:
+    - clevis_has_luks | bool
+    - wantsclevis_initramfs | default(true)
+    - clevis_dhcp_release_enabled | default(true) | bool
+    - (clevis_dhcpcd_check.stdout | default('0') | trim | int) == 0
+
 # --- Rebuild initramfs ---
 
 - name: rebuild initramfs for all kernels
@@ -287,7 +338,9 @@
       (clevis_initramfs_device_changed is changed) or
       (clevis_initramfs_ip_changed is changed) or
       (clevis_cleanup_netplan_changed is changed) or
-      (clevis_cleanup_old_removed is changed)
+      (clevis_cleanup_old_removed is changed) or
+      (clevis_dhcp_release_changed is changed) or
+      (clevis_dhcp_release_removed is changed)
 
 # --- Deploy scripts ---
 
