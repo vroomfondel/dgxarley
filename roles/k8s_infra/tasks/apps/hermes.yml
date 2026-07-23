@@ -521,6 +521,28 @@
         # (same value the retired Caddy users.json used). Consumed by the
         # dashboard container as HERMES_DASHBOARD_BASIC_AUTH_PASSWORD.
         DASHBOARD_BASIC_AUTH_PASSWORD: "{{ item.basicauth_password | default(item.litellm_token) }}"
+        # ── OPTIONAL (hermes v0.19.0+): hash-based dashboard auth — no plaintext at rest ──
+        # v0.19.0 added HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH: a precomputed scrypt
+        # hash, so the login secret never sits in this Secret in the clear. NOT wired
+        # by default — it's a deliberate flip, not a drop-in add, for two reasons:
+        #   1. PRECEDENCE GOTCHA (upstream plugins/dashboard_auth/basic/__init__.py,
+        #      v2026.7.20 L450-461): a non-empty HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
+        #      *unconditionally wins* — it re-hashes the plaintext in memory and
+        #      OVERWRITES any password_hash. So *_HASH is a SILENT NO-OP unless you
+        #      ALSO stop emitting DASHBOARD_BASIC_AUTH_PASSWORD above AND drop its env
+        #      mapping in hermes_agent_deployment.yaml.j2 (a matching commented-out
+        #      mapping sits right next to it there).
+        #   2. Can't be validated offline; flipping needs a redeploy + a real login test.
+        # Format is self-describing: scrypt$N$r$p$<salt_b64>$<dk_b64> (fixed N=16384 r=8
+        # p=1 dklen=32, standard base64; N/r/p are read back from the string, dklen is
+        # inferred). Store the hash statically in vault (idempotent — a random salt is
+        # fine since it's persisted once) as e.g. `basicauth_password_hash` per user,
+        # then uncomment the line below and delete the PASSWORD line above.
+        # Generate (stdlib only, runs anywhere — replace PW with the user's basicauth_password):
+        #   python3 -c "import base64,hashlib,secrets as s; pw='PW'; salt=s.token_bytes(16); dk=hashlib.scrypt(pw.encode(),salt=salt,n=16384,r=8,p=1,dklen=32,maxmem=0); print('scrypt$16384$8$1$'+base64.b64encode(salt).decode()+'$'+base64.b64encode(dk).decode())"
+        #   (or, inside the image/venv, the upstream-documented helper:
+        #    python -c "from plugins.dashboard_auth.basic import hash_password; print(hash_password('PW'))")
+        # DASHBOARD_BASIC_AUTH_PASSWORD_HASH: "{{ item.basicauth_password_hash }}"
         # Token-signing secret for the stateless HMAC session tokens. Derived
         # deterministically from username+password so it stays stable across
         # playbook runs AND pod restarts (sessions survive restart — the whole

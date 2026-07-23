@@ -428,6 +428,16 @@ spec:
                 secretKeyRef:
                   name: "hermes-env-{{ item.username }}"
                   key: DASHBOARD_BASIC_AUTH_PASSWORD
+            # OPTIONAL (hermes v0.19.0+): hash-based auth, no plaintext at rest. To
+            # enable, COMMENT OUT the PASSWORD block above (a non-empty PASSWORD wins
+            # and makes the hash a silent no-op) and uncomment this — pairs with the
+            # DASHBOARD_BASIC_AUTH_PASSWORD_HASH key in the hermes-env Secret (see the
+            # breadcrumb in the Render hermes Secret task). Flip needs a login re-test.
+            # - name: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: "hermes-env-{{ item.username }}"
+            #       key: DASHBOARD_BASIC_AUTH_PASSWORD_HASH
             # Stable token-signing key → sessions survive pod restarts.
             - name: HERMES_DASHBOARD_BASIC_AUTH_SECRET
               valueFrom:
