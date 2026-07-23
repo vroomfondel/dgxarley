@@ -26,6 +26,18 @@
 > release). Release notes contain no `kv_lora_rank` / DSV4-Flash config-parse
 > fix; issues #25165 / #23743 still OPEN; `kv_lora_rank: int = 512` unchanged
 > in transformers main. Monkey-patch still required.
+>
+> **Re-verified 2026-07-23:** v0.5.15 (released 2026-07-10) and v0.5.15.post1
+> (released 2026-07-14, now the latest release) checked — release notes
+> contain no `kv_lora_rank` / DSV4-Flash config-parse fix; `transformers` main
+> still declares `kv_lora_rank: int = 512` in `configuration_deepseek_v3.py`.
+> Issues #25165 / #23743 are now **CLOSED (auto stale-bot 2026-07-13 /
+> 2026-07-14, NOT resolved** — both closed by the `github-actions` inactivity
+> bot with no fix landed, not by upstream action). Monkey-patch still
+> required. **Location update:** the workaround was relocated on 2026-07-16
+> (commit `a760767`, SGLang patches Phase 2) from `sglang_launch.sh`
+> (`PATCH_DSV4_KVLORA_EOF`) to its own gated file
+> `roles/k8s_dgx/files/sglang_patches/p56_deepseek_v3_kv_lora.py`.
 
 
 ## Summary
