@@ -79,7 +79,13 @@ release_lease() {
     done
 
     # Send DHCPRELEASE and stop the dhcpcd instance for this NIC.
-    dhcpcd -q -k "$dev" 2>/dev/null || true
+    # The -4 MUST match the acquire above: `dhcpcd -4 ...` registers its control
+    # socket as <dev>-4.sock, and `dhcpcd -k <dev>` (without -4) looks for the
+    # <dev>.sock manager socket, fails to find the daemon ("dhcpcd is not running")
+    # and sends NO release. Matching -4 lets -k reach the daemon so the DHCPRELEASE
+    # is actually emitted (verified on-wire). -k is synchronous (waits for the
+    # daemon to release + exit), so the packet is sent before we flush the NIC below.
+    dhcpcd -4 -q -k "$dev" 2>/dev/null || true
 
     # Return the NIC to the down/clean state clevis local-bottom left it in, so
     # userspace (netplan/OVS) reconfigures it from scratch.
