@@ -53,14 +53,16 @@ _model_profile:
     # - speculative_algo: NEXTN is auto-promoted to FROZEN_KV_MTP at runtime.
     # - enable_spec_v2 is auto-disabled by FROZEN_KV_MTP at runtime.
     # - num_draft_tokens MUST equal num_steps + 1 (autoadjust does not fire).
-    # - attention_backend: flashinfer (TESTWEISE, 2026-06-24, geflippt von triton).
-    #   triton handles Gemma-4's global_head_dim=512 correctly and was the
-    #   mandatory default while flashinfer crashed on head_dim=512 up to 0.6.12;
-    #   THIS image (0.5.14-gemmadiffusion-sm121, flashinfer 0.6.13rc2) ships the
-    #   fa2 head_dim=512 fix (PR #3576), so we now run flashinfer to validate it
-    #   (both crash paths + flashinfer-vs-triton benchmark). Revert to "triton"
-    #   if either crash path fires or flashinfer isn't faster. See
-    #   FLASHINFER_HEAD_DIM_512_UPSTREAM_BUG.md + FLASHINFER_0.6.12_TODO.local.md §7.
+    # - attention_backend: triton (per SGLang-Allowlist DAUERHAFT Pflicht).
+    #   REVERTED 2026-07-23: der TESTWEISE-Flip auf flashinfer (2026-06-24, zum
+    #   Validieren des fa2 head_dim=512-Fix PR #3576) war moot — SGLangs
+    #   _handle_model_specific_adjustments lehnt attention_backend=flashinfer für
+    #   Gemma4ForConditionalGeneration VOR dem Weight-Load per Allowlist hart ab
+    #   (AssertionError "Gemma4 only supports trtllm_mha, triton, or intel_xpu").
+    #   triton handhabt Gemma-4's global_head_dim=512 korrekt. Der Revert-Commit
+    #   f77a355 (2026-06-30) hat nur den Doc-Text zurückgesetzt, die YAML nicht —
+    #   das wird hier nachgeholt. See FLASHINFER_HEAD_DIM_512_UPSTREAM_BUG.md +
+    #   FLASHINFER_0.6.12_TODO.local.md §7.
     # - Drafter google/gemma-4-31B-it-assistant: per-pod model-download
     #   initContainer auto-appends speculative_draft_model_path to
     #   HF_PRELOAD_MODELS when speculative_enabled=true (tasks/sglang.yml).
@@ -69,7 +71,7 @@ _model_profile:
     kv_cache_dtype: "fp8_e4m3"
     # mem_fraction_static: "0.85"
     mem_fraction_static: "0.6"
-    attention_backend: "flashinfer"
+    attention_backend: "triton"  # SGLang allowlist: flashinfer rejected for Gemma4
     jit_max_jobs: 4
     disable_piecewise_cuda_graph: false
     disable_cuda_graph: false
