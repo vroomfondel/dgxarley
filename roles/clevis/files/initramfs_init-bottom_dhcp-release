@@ -62,11 +62,15 @@ release_lease() {
     ip link set dev "$dev" up 2>/dev/null || return 0
 
     # Re-acquire in the background, nameless. -t 8 bounds the attempt; -L disables
-    # IPv4LL fallback; -C 30-hostname skips dhcpcd's hostname hook so no option-12
-    # is (re-)sent. NOTE: the resolv.conf hook (-C resolv.conf) was dropped — this
-    # initramfs ships no 20-resolv.conf hook (only 10-mtu/30-hostname/70-net-conf),
-    # so it matched nothing. Re-add "-C resolv.conf" if a future image bundles it.
-    dhcpcd -4 -q -b -t 8 -L -C 30-hostname "$dev" 2>/dev/null || true
+    # IPv4LL fallback; -G installs NO default route (defense-in-depth: should this
+    # daemon ever survive switch_root, it must NOT hijack userspace routing via the
+    # boot DHCP server — the release below only needs the on-link route to the
+    # server, not a gateway); -C 30-hostname skips dhcpcd's hostname hook so no
+    # option-12 is (re-)sent. NOTE: the resolv.conf hook (-C resolv.conf) was dropped
+    # — this initramfs ships no 20-resolv.conf hook (only 10-mtu/30-hostname/
+    # 70-net-conf), so it matched nothing. Re-add "-C resolv.conf" if a future image
+    # bundles it.
+    dhcpcd -4 -q -b -t 8 -L -G -C 30-hostname "$dev" 2>/dev/null || true
 
     # Wait (max ~8s) for a lease to actually land before releasing it.
     i=0
@@ -86,6 +90,23 @@ release_lease() {
     # is actually emitted (verified on-wire). -k is synchronous (waits for the
     # daemon to release + exit), so the packet is sent before we flush the NIC below.
     dhcpcd -4 -q -k "$dev" 2>/dev/null || true
+
+    # SAFETY NET — a `-b` daemon MUST NOT survive switch_root into userspace. If it
+    # does it keeps a live lease and (without -G) installs a default route via the
+    # boot DHCP server, hijacking userspace routing (observed 2026-07-23: the old
+    # release without -4 left a rogue dhcpcd + Fritzbox default route on the booted
+    # host). -k/-x can time out waiting for exit, so ALSO hard-kill via the pidfile,
+    # sweep any stragglers, and remove the control sockets (/run persists across
+    # switch_root) before handing the NIC back.
+    dhcpcd -4 -x "$dev" 2>/dev/null || true
+    [ -f "/run/dhcpcd/${dev}-4.pid" ] && kill "$(cat "/run/dhcpcd/${dev}-4.pid" 2>/dev/null)" 2>/dev/null
+    # busybox ships no pkill/pgrep; scan /proc and SIGTERM every dhcpcd (main AND its
+    # privsep helpers — only ours runs in the initramfs) so none survive switch_root.
+    for _pd in /proc/[0-9]*; do
+        _cl=$(tr '\0' ' ' < "$_pd/cmdline" 2>/dev/null) || continue
+        case "$_cl" in *dhcpcd*) kill "${_pd#/proc/}" 2>/dev/null ;; esac
+    done
+    rm -f "/run/dhcpcd/${dev}"* 2>/dev/null
 
     # Return the NIC to the down/clean state clevis local-bottom left it in, so
     # userspace (netplan/OVS) reconfigures it from scratch.
