@@ -63,6 +63,15 @@ a GB10-specific FP8 fused MoE Triton config (PR #25665), which tunes the
 Triton workaround path on our hardware but does not fix the underlying dispatch
 bug in `Fp8MoEMethod.create_moe_runner`.
 
+**Re-verified 2026-07-23:** SGLang **v0.5.15 released 2026-07-10**, **v0.5.15.post1
+released 2026-07-14** — no `Fp8MoEMethod`/`flashinfer_cutlass` fix in either release;
+source-confirmed on current `main` that `create_moe_runner` still ends in the
+`# TODO(cwan): refactor other backends` branch (vanilla `Fp8MoEMethod` never sets
+`self.runner` for `flashinfer_cutlass`/`flashinfer_cutedsl`). PR #27968 still OPEN, no
+activity since 2026-06-11; Issue #27951 still OPEN, no activity since 2026-06-19; PR
+#21872 still OPEN, stagnant since 2026-04-01. Workaround (`moe_runner_backend: triton`)
+unchanged.
+
 Adjacent open work:
 
 - [PR #21872](https://github.com/sgl-project/sglang/pull/21872)
@@ -79,9 +88,11 @@ Adjacent open work:
   `Fp8MoEMethod`; the bug documented here is unaffected.
 - [Issue #20719](https://github.com/sgl-project/sglang/issues/20719)
   ("CompressedTensorsW4A4Nvfp4MoE bypasses MoeRunner, hardcodes kernel
-  dispatch in apply_weights") — open since 2026-03-16. Diagnostic write-up
-  of the same anti-pattern (quant method bypassing `MoeRunner`); names
-  `Fp8MoEMethod` as the *correct* reference path, not as bug. No fix.
+  dispatch in apply_weights") — open since 2026-03-16, **auto-closed by the
+  stale bot 2026-07-16 (not resolved — no fix merged, routine bot housekeeping)**.
+  Diagnostic write-up of the same anti-pattern (quant method bypassing
+  `MoeRunner`); names `Fp8MoEMethod` as the *correct* reference path, not as
+  bug. No fix.
 
 None of these touch `quantization/fp8.py::Fp8MoEMethod`, which is the path
 Qwen3.6-35B-A3B-FP8 (and every plain `--quantization fp8` MoE model) takes.
