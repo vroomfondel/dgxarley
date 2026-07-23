@@ -48,7 +48,9 @@ RuntimeError: Task error: Unable to parse string as hex hash value
 |---|---|---|
 | `hf_xet` | `1.5.1` | image `xomoxcc/dgx-spark-sglang:0.5.14-sm121` — **broken** |
 | `hf_xet` | `1.5.2rc0` | image `xomoxcc/dgx-spark-sglang:0.5.15-sm121` — **broken** |
+| `hf_xet` | `1.5.2` (stable, released 2026-07-16) | **confirmed still broken** — reported on `xet-core#895` 2026-07-23 (not yet tested in-cluster) |
 | `huggingface_hub` | `1.23.0` | both images |
+| `huggingface_hub` | `1.24.0` (released 2026-07-17) | **confirmed still broken** alongside `hf_xet 1.5.2` — same `xet-core#895` report, 2026-07-23 |
 
 Neither `hf_xet` nor `huggingface_hub` is pinned in the SGLang build recipes
 (`scripts/patches/sglang-0.5.1{4,5}-sm121.recipe`), so a rebuild pulls whatever pip
@@ -127,17 +129,34 @@ are apples-to-oranges (they take the `hf_hub_download` path, which works).
 
 ## Upstream tracking
 
-- Exact-string issue: **not yet filed publicly** (searched xet-core + huggingface_hub;
-  no match for "Unable to parse string as hex hash value"). **TODO:** file a minimal
-  repro issue against `huggingface/xet-core` (needs owner sign-off before posting).
-- Related open reports (symptom cluster, same 1.5.x era):
-  - huggingface/xet-core #358 — "errors became very common" with snapshot_download
-  - huggingface/xet-core #399 — "Cannot Download XET Files"
-  - huggingface/xet-core #483 — "Still can't download models"
-  - huggingface/huggingface_hub #3960 — "Downloading not working with hf_xet"
-  - huggingface/huggingface_hub #3643 — snapshot_download blob checksum mismatch (XET)
-- Watch: <https://github.com/huggingface/xet-core/releases> and the
-  `huggingface_hub` changelog.
+- **Exact-string issue is now filed:** **[`huggingface/xet-core#895`](https://github.com/huggingface/xet-core/issues/895)**
+  ("Download fails with 'Task error: Unable to parse string as hex hash
+  value' (hf-xet 1.5.1)"), filed **2026-07-11** — it existed before this
+  doc's original 2026-07-13 write-up, our search just missed it. **Still
+  OPEN as of 2026-07-23.** Collaborator @seanses acknowledged on
+  2026-07-16 that "huggingface_hub is passing incorrect file hash to
+  hf-xet leading to this error", asking for the affected repo id.
+  Maintainer @Wauplin followed up on **2026-07-23** (today) asking that
+  the failing hash value be surfaced in the error message itself
+  (`Task error: ... (got '<hash>')`) so the report can be narrowed down —
+  no root cause identified, no fix merged. **TODO superseded:** no longer
+  need to file our own issue; instead consider adding our reproduction
+  details (faithful `snapshot_download` vs `hf_hub_download` split, see
+  above) as a comment on #895 if it stays unresolved.
+- Related closed reports (symptom cluster, same 1.5.x era, resolved
+  independently of this bug):
+  - huggingface/xet-core #358 — "errors became very common" with snapshot_download (closed)
+  - huggingface/xet-core #399 — "Cannot Download XET Files" (closed)
+  - huggingface/xet-core #483 — "Still can't download models" (closed)
+  - huggingface/huggingface_hub #3960 — "Downloading not working with hf_xet" (still open, unconfirmed relation)
+  - huggingface/huggingface_hub #3643 — snapshot_download blob checksum mismatch (XET) (closed)
+- Watch: <https://github.com/huggingface/xet-core/issues/895> directly
+  (now the actionable tracking issue), plus
+  <https://github.com/huggingface/xet-core/releases> and the
+  `huggingface_hub` changelog. `hf_xet 1.5.2` (2026-07-16) and
+  `huggingface_hub 1.24.0` (2026-07-17) have both shipped since the
+  original diagnosis — neither fixes this (see Affected versions table
+  and Changelog below).
 
 ## How to know when to drop the workaround
 
@@ -156,3 +175,11 @@ download-group fix) is out:
   `session.new_file_download_group` path (hf_xet ≥ 1.5.0). Confirmed rebuild won't
   fix (1.5.1 / 1.5.2rc0 both broken; 1.4.3 blocked by hub 1.23.0). Workaround
   `HF_HUB_DISABLE_XET=1` wired as `hf_hub_disable_xet` across all download containers.
+- **2026-07-23** — The bug is tracked upstream after all:
+  `huggingface/xet-core#895` was filed 2026-07-11 (before this doc's first
+  write-up) and remains **OPEN** — maintainer @Wauplin engaged today
+  (2026-07-23) requesting more diagnostic detail, no fix yet. A commenter
+  on the issue confirmed the identical failure on **hf_xet 1.5.2**
+  (2026-07-16 stable) and **huggingface_hub 1.24.0** (2026-07-17) on
+  2026-07-23, so the newer stable releases do not fix it either.
+  `HF_HUB_DISABLE_XET=1` workaround unchanged and still required.
