@@ -423,6 +423,22 @@ dynamo tracing.
   (`get_cuda_version` subprocess bypass, `PATCH_FI_CUDA_VER_EOF`) is
   independent and should be evaluated separately against the v0.6.12 sources.
 
+**Status 2026-07-23:** Re-checked against flashinfer's current source on
+GitHub (latest stable release **v0.6.15.post1**, 2026-07-21; also
+**v0.6.15** 2026-07-17 and **v0.6.14** 2026-07-02 have shipped since the
+2026-06-26 check above). `flashinfer/jit/cpp_ext.py:get_cuda_version()`
+**still** calls `subprocess.check_output([nvcc, "--version"])`
+unconditionally on the happy path — byte-identical in structure to what
+was verified on 0.6.12/0.6.13. **Patch 1 remains mandatory; no upstream
+fix exists.** Separately, the "current cluster image" references above
+are one bump stale: production has moved to
+`xomoxcc/dgx-spark-sglang:0.5.15-sm121` (recipe
+`scripts/patches/sglang-0.5.15-sm121.recipe`, confirmed via
+`roles/k8s_dgx/defaults/main/sglang.yml:10`), which pins
+`FLASHINFER_VERSION=0.6.14`, not `0.5.14-sm121` / 0.6.13 as described in
+the 2026-06-26 entry. Upstream SGLang itself is now at release
+`v0.5.15.post1` (2026-07-14).
+
 Background:
 
 - **flashinfer `get_cuda_version` history**: the subprocess-based implementation
