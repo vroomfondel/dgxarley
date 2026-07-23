@@ -96,6 +96,25 @@ cohere, sagemaker, watsonx, caching) do not touch ollama or SSL.
 - The TODO comment `[TODO]: migrate embeddings to a base handler as well.` is still present at the top of `handler.py`.
 - PR [#24704](https://github.com/BerriAI/litellm/pull/24704) — adjacent embedding bug (model name prefix stripping). **CLOSED unmerged 2026-07-05** (auto-closed after stale-bot inactivity, never merged) — the outcome this doc predicted after the 2026-06-27 stale flag. Never addressed SSL/TLS, so no loss to the ollama/ssl bug tracked here. **2026-07-06 note:** no upstream fix is in flight; the HAProxy TLS sidecar workaround below remains required.
 
+**2026-07-23 re-verify — still broken at v1.93.0; more precise tracking issue found:**
+LiteLLM has advanced from v1.91.0 to **v1.93.0** (stable, published 2026-07-19; intermediate
+v1.90.6 / v1.91.4 / v1.92.1 also released 2026-07-19, plus in-progress v1.94.0-rc.x /
+v1.95.0-dev.1 as of 2026-07-22). **The bug is confirmed still present at v1.93.0**:
+`litellm/llms/ollama/completion/handler.py` still calls
+`litellm.module_level_aclient.post(url=api_base, json=data)` with no `ssl_verify` argument
+(same call site, ~line 82), and the `[TODO]: migrate embeddings to a base handler as well.`
+comment is unchanged at the top of the file. A more precise upstream tracking issue has
+surfaced: [#30778](https://github.com/BerriAI/litellm/issues/30778) ("`ssl_verify` not
+propagated in `BaseLLMAIOHTTPHandler`"), filed 2026-06-18 by an unrelated third party, open
+and un-triaged (0 comments). It documents the exact mechanism tracked in this doc — `ollama/`
+embeddings route through `BaseLLMAIOHTTPHandler`, which never receives `ssl_verify` — plus a
+second, related bug (the `AsyncHTTPHandler` retry path on `ConnectError`/`RemoteProtocolError`
+also drops `ssl_verify`), and cross-references #6499, #17636, #9340, #26053, #21947. This
+issue is now a better upstream reference than the closed #6499 for tracking a fix. Related
+issue [#26053](https://github.com/BerriAI/litellm/issues/26053) (ssl_verify=false ignored for
+streaming text completions) remains open (last updated 2026-07-19). No fix has landed for any
+of these paths — the HAProxy TLS sidecar workaround remains required.
+
 **Partial mitigation**: Setting `litellm.ssl_verify = False` **globally before the first embedding call** may work, because the singleton `HTTPHandler` picks up `litellm.ssl_verify` at creation time via `get_ssl_configuration()`. However, this is fragile — it depends on initialization order, and per-request `ssl_verify=false` (as used in our model config) is still silently dropped for the ollama embedding path.
 
 ## Upstream Fix
