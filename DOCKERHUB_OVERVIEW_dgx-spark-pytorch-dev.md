@@ -1,4 +1,7 @@
-<!-- short: PyTorch 2.12 + CUDA 13.2.1 + NCCL 2.30 base image for DGX Spark / GB10 (SM121), arm64, from source. -->
+<!-- short: PyTorch 2.13 + CUDA 13.2.1 + NCCL 2.30 base image for DGX Spark / GB10 (SM121), arm64, from source. -->
+<!-- NOTE: 2.13.0-v1-cu132 is described here but NOT YET BUILT/PUSHED (recipe added 2026-08-28).
+     Build+push it (scripts/build_pytorch_base_image.sh) BEFORE updating this text on Docker Hub,
+     otherwise the tag table advertises a tag that does not exist. -->
 
 # dgx-spark-pytorch-dev
 
@@ -10,24 +13,25 @@ This is the base layer used by
 It exists because the upstream
 [`scitrera/dgx-spark-pytorch-dev:2.10.0-v2-cu131`](https://hub.docker.com/r/scitrera/dgx-spark-pytorch-dev)
 fallback (PyTorch 2.10 / CUDA 13.1) is **~45 % slower end-to-end on GB10**
-than a 2.12 / CUDA 13.2.1 build, due to nvcc codegen + cuBLAS/cuDNN
+than a 2.12+ / CUDA 13.2.1 build, due to nvcc codegen + cuBLAS/cuDNN
 regressions across that toolchain delta.
 
 - **Source / build script**: [github.com/vroomfondel/dgxarley](https://github.com/vroomfondel/dgxarley)
   (see [`scripts/build_pytorch_base_image.sh`](https://github.com/vroomfondel/dgxarley/blob/main/scripts/build_pytorch_base_image.sh) and
-  [`scripts/patches/pytorch-2.12.0-dev-v1.recipe`](https://github.com/vroomfondel/dgxarley/blob/main/scripts/patches/pytorch-2.12.0-dev-v1.recipe))
+  [`scripts/patches/pytorch-2.13.0-dev-v1.recipe`](https://github.com/vroomfondel/dgxarley/blob/main/scripts/patches/pytorch-2.13.0-dev-v1.recipe))
 - **Hardware target**: NVIDIA GB10 / SM121 (DGX Spark, ASUS Ascent GX10) — arm64 only
 - **License**: same upstream licenses as PyTorch / NCCL / CUDA components
 
 ## What's inside
 
-- **PyTorch 2.12.0** — built from source for `sm_120` + `sm_121`. The 2.12 bump
-  brings cuBLAS Blackwell 32-MiB workspaces ([PyTorch PR #175344](https://github.com/pytorch/pytorch/pull/175344)),
+- **PyTorch 2.13.0** — built from source for `sm_120` + `sm_121`. This is the
+  version SGLang v0.5.18 pins upstream. The lineage also carries the 2.12 bump's
+  cuBLAS Blackwell 32-MiB workspaces ([PyTorch PR #175344](https://github.com/pytorch/pytorch/pull/175344)),
   a direct GB10 win
-- **torchvision 0.27.0** — lockstep with torch 2.12.0 (PyPI strict-requires it)
-- **torchaudio 2.11.0** — not bumped to 2.12 (pytorch/audio hadn't tagged 2.12
-  at build time); the ABI lag is harmless for SGLang text-only inference, where
-  the audio module is never imported
+- **torchvision 0.28.0** — lockstep with torch 2.13.0 (PyPI strict-requires it)
+- **torchaudio 2.11.0** — not bumped (pytorch/audio has tagged nothing past
+  2.11.0, so it skipped the whole 2.12 cycle too); the ABI lag is harmless for
+  SGLang text-only inference, where the audio module is never imported
 - **NCCL 2.30.7** — built from upstream
   [`NVIDIA/nccl`](https://github.com/NVIDIA/nccl) at `v2.30.7-1`. (Earlier builds
   pinned the `zyang-dev/nccl` `dgxspark-3node-ring` fork at `2.29.7-1`; reviewing
@@ -43,10 +47,11 @@ regressions across that toolchain delta.
 
 ## Tags
 
-| Tag               | Notes                                                                            |
-|-------------------|----------------------------------------------------------------------------------|
-| `2.12.0-v1-cu132` | PyTorch 2.12.0 + CUDA 13.2.1 + torchvision 0.27.0 + NCCL 2.30.7, arm64 (current) |
-| `2.11.0-v1-cu132` | PyTorch 2.11.0 + CUDA 13.2.0 + NCCL 2.30.4, arm64 (previous, rollback)           |
+| Tag               | Notes                                                                             |
+|-------------------|-----------------------------------------------------------------------------------|
+| `2.13.0-v1-cu132` | PyTorch 2.13.0 + CUDA 13.2.1 + torchvision 0.28.0 + NCCL 2.30.7, arm64 (current)  |
+| `2.12.0-v1-cu132` | PyTorch 2.12.0 + CUDA 13.2.1 + torchvision 0.27.0 + NCCL 2.30.7, arm64 (previous) |
+| `2.11.0-v1-cu132` | PyTorch 2.11.0 + CUDA 13.2.0 + NCCL 2.30.4, arm64 (older, rollback)               |
 
 `linux/arm64` only — there is no x86_64 variant and the kernels are not useful
 on non-GB10 hardware.
