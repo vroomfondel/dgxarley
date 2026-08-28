@@ -568,7 +568,7 @@ recipe_sgl_kernel_dir() {
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [--base xomoxcc|scitrera|<image>]
+Usage: $(basename "$0") [--base xomoxcc|scitrera|recipe|<image>]
                         [--remote-host user@host] [--podman-connection NAME]
                         [--no-arch-prune] [--keep-fa3] [--keep-sm90-target]
                         [--keep-flashmla] [--sm121-debug] [--no-sm121-core]
