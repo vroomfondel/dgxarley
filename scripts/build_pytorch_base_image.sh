@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# build_pytorch_base_image.sh — Build xomoxcc/dgx-spark-pytorch-dev:2.11.0-v1-cu132.
+# build_pytorch_base_image.sh — Build xomoxcc/dgx-spark-pytorch-dev:2.13.0-v1-cu132.
 #
-# Produces the PyTorch 2.11.0 + CUDA 13.2 + NCCL 2.29.7 base image that our
+# Produces the PyTorch 2.13.0 + CUDA 13.2.1 + NCCL 2.30.7 base image that our
 # custom sgl-kernel sm121 sglang image builds on top of. This replaces the
 # scitrera/dgx-spark-pytorch-dev:2.10.0-v2-cu131 fallback we've been using
 # (see reference_sm121_build_base_regression memory for context on why the
@@ -43,8 +43,8 @@
 # Cold build on a GB10 Spark node: approximately 3-5 hours. Breakdown:
 #   - NCCL from source:                    ~5-10 min
 #   - NCCL tests:                          ~5 min
-#   - PyTorch 2.11 from source:            ~120-180 min  (the bulk)
-#   - torchvision 0.26 from source:        ~15-25 min
+#   - PyTorch 2.13 from source:            ~120-180 min  (the bulk)
+#   - torchvision 0.28 from source:        ~15-25 min
 #   - torchaudio 2.11 from source:         ~15-25 min
 # With warm ccache from a previous run: expect 30-60 min for rebuilds of
 # the same commits (most TUs hit cache).
@@ -90,16 +90,19 @@ CUDA_CONTAINERS_DIR="${BUILD_PYTORCH_CC_DIR:-${HOME}/pythondev_workspace/cuda-co
 
 # Same scratch branch name as build_sm121_image.sh (intentionally shared).
 BRANCH_NAME="sm121"
-# Last verified vs scitrera/cuda-containers main on 2026-04-26: this is still
-# the most recent dev recipe upstream (no 2.12 / cu13.3 / newer; only an
-# `experimental/pytorch-2.11.0-runtime.recipe` exists alongside, which is the
-# runtime-only variant of the same source line). When updating, re-run:
+# The active recipe is OUR own (scripts/patches/), not an upstream file:
+# scitrera/cuda-containers main only carries pytorch-2.11.0 / 2.12.0 recipes,
+# so 2.13.0 has no upstream counterpart and install_recipe() simply drops ours
+# into the clone. When updating, re-check what upstream has:
 #   git -C ~/pythondev_workspace/cuda-containers fetch origin
 #   ls ~/pythondev_workspace/cuda-containers/container-recipes/*pytorch*
+# Previous generations (kept as breadcrumbs, recipes still in scripts/patches/):
 #RECIPE_NAME="pytorch-2.11.0-dev-v1"
 #IMAGE_TAG="xomoxcc/dgx-spark-pytorch-dev:2.11.0-v1-cu132"
-RECIPE_NAME="pytorch-2.12.0-dev-v1"
-IMAGE_TAG="xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132"
+#RECIPE_NAME="pytorch-2.12.0-dev-v1"
+#IMAGE_TAG="xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132"
+RECIPE_NAME="pytorch-2.13.0-dev-v1"
+IMAGE_TAG="xomoxcc/dgx-spark-pytorch-dev:2.13.0-v1-cu132"
 
 # Remote build host. Defaults match build_sm121_image.sh so the same
 # registered podman connection can be reused.
@@ -511,8 +514,9 @@ Verify on the build host:
 
 Next steps:
 
-1. Verify that scripts/patches/sglang-{,gemma4-}sm121-dev1.recipe reference
-   this image as BASE_IMAGE:
+1. Verify that the sglang sm121 recipes reference this image as BASE_IMAGE
+   (they are still pinned to :2.12.0-v1-cu132):
+     grep -l '^BASE_IMAGE=' scripts/patches/sglang-*-sm121*.recipe
      BASE_IMAGE=${IMAGE_TAG}
 
 2. Run the sgl-kernel sm121 build on top of this base:
