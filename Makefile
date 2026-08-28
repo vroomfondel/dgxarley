@@ -1,4 +1,4 @@
-.PHONY: tests help install lint isort tcheck commit-checks prepare gitleaks pypibuild pypipush update-dockerhub-readmes
+.PHONY: tests help install lint isort tcheck commit-checks prepare gitleaks distcheck pypibuild pypipush update-dockerhub-readmes
 SHELL := /usr/bin/bash
 .ONESHELL:
 
@@ -13,6 +13,7 @@ help:
 	@printf "\nprepare\n\tLaunch tests and commit-checks\n"
 	@printf "\ncommit-checks\n\trun pre-commit checks on all files\n"
 	@printf "\ngitleaks\n\tscan repo for leaked secrets\n"
+	@printf "\ndistcheck\n\tverify dist artifacts carry no vault/secret files\n"
 	@printf "\npypibuild\n\tbuild package for pypi\n"
 	@printf "\npypipush\n\tpush package to pypi\n"
 	@printf "\nupdate-dockerhub-readmes\n\tpush DOCKERHUB_OVERVIEW_*.md to the matching Docker Hub repo descriptions\n"
@@ -66,10 +67,20 @@ dist/dgxarley-$(VERSION).tar.gz dist/dgxarley-$(VERSION)-py3-none-any.whl dist/.
 	hatch build --clean
 	@touch dist/.touchfile
 
-pypibuild: dist/dgxarley-$(VERSION).tar.gz dist/dgxarley-$(VERSION)-py3-none-any.whl
+# Refuses to let a build artifact leave the machine if it contains git-crypt
+# protected paths or any file outside the published allowlist.
+# Gates both `pypibuild` and `pypipush`.
+distcheck: dist/dgxarley-$(VERSION).tar.gz dist/dgxarley-$(VERSION)-py3-none-any.whl
+	@$(venv_activated)
+	python repo_scripts/check_dist_secrets.py \
+	  dist/dgxarley-$(VERSION).tar.gz \
+	  dist/dgxarley-$(VERSION)-py3-none-any.whl
+
+pypibuild: distcheck
 
 dist/.touchfile_push: dist/dgxarley-$(VERSION).tar.gz dist/dgxarley-$(VERSION)-py3-none-any.whl
 	@$(venv_activated)
+	$(MAKE) distcheck
 	hatch publish -r main
 	@touch dist/.touchfile_push
 

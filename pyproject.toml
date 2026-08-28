@@ -104,6 +104,30 @@ Issues = "https://github.com/vroomfondel/dgxarley/issues"
 [tool.hatch.version]
 path = "dgxarley/__init__.py"
 
+# ---------------------------------------------------------------------------
+# Build file selection: EXPLICIT ALLOWLIST, do not switch back to defaults.
+#
+# This repo is an Ansible repo *and* a Python package: most of the working tree
+# is deployment config that has no business in a published artifact, and the
+# default "ship everything not gitignored" behaviour does not know that.
+#
+# Keep these lists as an allowlist (`include`), never as a denylist (`exclude`):
+# a new path must not be able to ship just because nobody remembered to exclude
+# it. repo_scripts/check_dist_secrets.py enforces this on the built artifacts
+# and is wired into `make pypibuild` / `make pypipush`.
+# ---------------------------------------------------------------------------
+[tool.hatch.build.targets.sdist]
+include = [
+  "/dgxarley",
+  "/tests",
+  "/pyproject.toml",
+  "/README_pypi.md",
+  "/LICENSE.md",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["dgxarley"]
+
 [tool.isort]
 profile = "black"
 line_length = 120
@@ -143,6 +167,9 @@ exclude = '''(?x)(
     | ^roles/k8s_infra/files/hermes_email_gateway_patched\.py$
     | ^roles/k8s_infra/files/hindsight_tenant_keymap\.py$
     | ^roles/k8s_infra/files/hermes_image_gen_comfyui/
+    # Unpacked distribution artifacts kept for local inspection. They contain a
+    # second copy of this package, which mypy reports as a duplicate module.
+    | \.local/
     )'''
 
 [[tool.mypy.overrides]]
