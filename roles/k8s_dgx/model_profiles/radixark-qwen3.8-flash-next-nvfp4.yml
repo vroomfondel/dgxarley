@@ -2,81 +2,104 @@
 # Model profile: RadixArk/Qwen3.8-Flash-Next-NVFP4
 # Loaded by include_vars in the k8s_dgx role, merged into sglang_model_profiles.
 #
-# ############################################################################
-# >>> STATUS 2026-08-27: NOT SERVABLE ON THIS CLUSTER YET. DO NOT DEPLOY. <<<
-# ############################################################################
-# Two independent blockers, both upstream, both tracked below:
-#   1. NO SGLANG RELEASE SUPPORTS THIS ARCHITECTURE. `Qwen4ExpForCausalLM`
-#      /`Qwen4ExpForConditionalGeneration` (model_type qwen4_exp) exists in
-#      neither v0.5.18 nor main; it lives only on the sgl-project branch
-#      `qwen4-main-squashed` = open PR #36497 ("Introduce Qwen 3.8 Flash Next",
-#      opened 2026-08-26, base main, NOT merged, CI not even labelled yet).
-#      The cookbook page (docs/cookbook/autoregressive/Qwen/Qwen3.8-Flash-Next
-#      .mdx) says so itself and ships day-0 images `lmsysorg/sglang:
-#      qwen38flashnext` (CUDA) instead of a release. A second, independent
-#      implementation is in flight as PR #36585 ("Add native Qwen4-Exp
-#      support"). Our pinned default image (0.5.17-sm121) will refuse the
-#      checkpoint at load with "has no SGLang implementation".
-#   2. QSA DECODE HAS NO WORKING KERNEL PATH ON SM121 (GB10 / DGX SPARK).
-#      Upstream issue #36558 is literally this hardware with this checkpoint
-#      (2x Spark, TP=2): QwenSparseAttnBackend._resolve_trtllm_sparse_decode()
-#      is gated on is_sm100_supported(), so SM121 falls through to the pip
-#      flash-attn-4 CuTe interface, which fails to compile for GB10:
-#        cutlass MLIRError: expects `coord` and shape of view are weakly
-#        congruent, got '!cute.layout<"(?,?):(?{i64 div=8},1)">'
-#      It hits from three call sites (decode CUDA-graph capture, the MTP draft
-#      via qwen4_exp_mtp, and eager decode via hybrid_linear_attn_backend), so
-#      NO launch flag avoids it. `--attention-backend triton` does not help:
-#      QSA calls flash_attn directly, bypassing the backend selection. The fix
-#      is PR #36556 ("fix(qsa): support SM120/SM121 sparse decode paths",
-#      stacked on #36497, still open) which lets SM120/SM121 take the
-#      flashinfer TRTLLM sparse-decode path. The kernel itself is fine on GB10
-#      (validated against a torch reference at max_abs_diff 4.70e-04, CUDA
-#      Graph replay passed).
+# STATUS 2026-08-28: BUILDABLE, NOT YET BUILT, NEVER RUN HERE.
+#   The architecture support and both GB10 fixes are now wired in this repo, so
+#   there is no longer an upstream blocker. What is missing is the image itself
+#   and a first serving run. Nothing below has been measured on THIS cluster.
 #
-# WHAT HAS TO HAPPEN BEFORE THIS PROFILE CAN BE DEPLOYED
-#   a) Build an sm121 image from PR #36497 + PR #36556 (see sglang_image
-#      below, which points at a tag that DOES NOT EXIST YET, so an accidental
-#      deploy dies at ImagePullBackOff instead of after a 15-minute weight
-#      load). New recipe under scripts/patches/, built on spark5 as usual.
-#   b) Re-check both PRs first: if #36497 has landed in a tagged release by
-#      then, build the release instead and drop the branch pin.
-#   c) Only then run a first-contact boot. Everything below is DERIVED, not
-#      measured on this cluster.
+# HOW IT GETS SERVED HERE (two halves, deliberately split)
+#   BUILD half: scripts/patches/sglang-0.5.18-sm121.recipe now sets
+#     APPLY_QWEN4EXP_PR36497=1, which applies scripts/patches/sglang-qwen4exp-
+#     pr36497.patch (upstream PR #36497, still OPEN, captured from the
+#     upstream-owned branch qwen4-main-squashed @ 99c9362e; 94 files,
+#     +18415/-86). That PR is the ONLY implementation of
+#     Qwen4ExpForConditionalGeneration / model_type qwen4_exp: it is not in
+#     v0.5.18 and not in main. Both `git apply --check` and `patch --dry-run`
+#     are clean against raw v0.5.18. So the STANDARD 0.5.18-sm121 tag carries
+#     the model; there is no variant image.
+#   RUNTIME half: roles/k8s_dgx/files/sglang_patches/p65_qsa_sm121_sparse_
+#     decode.py. Two edits, and they are NOT symmetric (read that file before
+#     touching either): a repair that makes QSA resolve a decode kernel on GB10
+#     at all, and a DEFENSIVE veto that keeps it off a path which is silently
+#     wrong here. The veto lives at runtime precisely so it survives image
+#     re-bumps.
+#   The image must be built first (spark5, as usual); it does not exist yet.
+#   Accept it with:
+#     EXPECT_QWEN4EXP=1 scripts/verify_sglang_image.sh \
+#         xomoxcc/dgx-spark-sglang:0.5.18-sm121 spark5
+#   which fails unless qwen4_exp imports AND the SM121 veto is live.
+#
+# ############################################################################
+# >>> THE ONE THING TO UNDERSTAND BEFORE SERVING THIS MODEL <<<
+# ############################################################################
+# QSA decode on GB10 has two upstream defects that pull in OPPOSITE directions,
+# and the appealing fix for the first one causes the second:
+#   (1) Without the flashinfer trtllm sparse-decode path, QSA falls through to
+#       the pip flash_attn.cute interface, which does not compile on GB10:
+#       "cutlass MLIRError: expects `coord` and shape of view are weakly
+#       congruent". Backend init dies. Upstream #36558 (our exact hardware and
+#       checkpoint) and #36531; root cause is the stock flash_attn_4-4.0.0b19
+#       wheel shipping with the TMA-O varlen guard commented out (#36716 bug 3).
+#   (2) But trtllm-gen attention kernels are SM100-only. On sm_121 they RUN and
+#       emit NaN logits, which surfaces as long runs of token id 0 ("!") once
+#       the context passes the sparse-selection boundary. Measured upstream on
+#       2x DGX Spark TP=2 with REAL weights and THIS checkpoint, single-shot
+#       cold prefill, greedy, thinking off, verdict = >=50 consecutive token-0:
+#
+#           prompt tokens   trtllm on        trtllm off + repaired fallback
+#                120k       1/4 corrupt      6/6 clean
+#                160k       1/4 corrupt      -
+#                190k       2/4 corrupt      6/6 clean
+#                210k       4/4 corrupt      6/6 clean
+#                240k       -                6/6 clean (chunk 1024, mem 0.82)
+#
+#       It is SILENT (well-formed response, finish_reason length, nothing
+#       logged), STOCHASTIC (about half the time at 190k, so any n=1 check
+#       reads as a pass), and the engine does NOT recover: later requests fail
+#       at any depth, /flush_cache does not clear it, only a restart does. A
+#       three-prompt liveness canary passed 3/3 while the same server corrupted
+#       100% of 210k requests.
+#   SM120 (RTX Blackwell, cc 12.0) is the exact opposite case: there trtllm is
+#   REQUIRED for correctness. This is per-SKU, not per-family, which is why the
+#   upstream gate expression has been respelled three times in three days and
+#   why p65 carries a spelling-independent veto rather than trusting it.
+#
+#   ACCEPTANCE FOR THE FIRST RUN IS THEREFORE NOT A SMOKE TEST. Prompt at
+#   >= 190k tokens, several times, and grep the completions for runs of "!".
+#   A short "does it answer" check cannot see this failure.
 #
 # WHAT THE CHECKPOINT IS (verified against HF 2026-08-27)
-#   RadixArk's NVIDIA-ModelOpt 0.46.0 NVFP4 export of Qwen/Qwen3.8-Flash-Next
+#   RadixArk NVIDIA-ModelOpt 0.46.0 NVFP4 export of Qwen/Qwen3.8-Flash-Next
 #   (base repo created 2026-08-24, this quant 2026-08-25). 135.3 GB over 419
-#   files, down from 360 GB BF16 (~2.7x). quant_method "modelopt",
-#   quant_algo NVFP4 (NOT MIXED_PRECISION, NOT compressed-tensors), so the
-#   loader must be told `quantization: modelopt_fp4` explicitly.
+#   files, down from 360 GB BF16 (~2.7x). quant_method "modelopt", quant_algo
+#   NVFP4 (NOT MIXED_PRECISION, NOT compressed-tensors), so the loader must be
+#   told `quantization: modelopt_fp4` explicitly.
 #   The quant is deliberately NARROW: only the routed experts of the 48 MoE
-#   layers are FP4 (fused gate_up_proj / down_proj, 294,912 tensors, W4A4
-#   E2M1, group 16, FP8 E4M3 block scales, dynamic activations). The config
-#   ignore list keeps attention, QSA, the GDN linear_attn, the mHC hyper-
-#   connections, shared experts, routers, embeddings, lm_head, the vision
-#   tower AND all 31 MTP tensors in BF16, byte-identical to the source (the
-#   card ships an unchanged-content byte-equality audit over 1,562 tensors /
-#   118.4 GB). The PLE n-gram tables come from the FP8 revision of the base
-#   (128 shards F8_E4M3 + a per-table scalar scale). NO KV-cache quant
-#   metadata is baked in, which matters (see kv_cache_dtype).
+#   layers are FP4 (fused gate_up_proj / down_proj, 294,912 tensors, W4A4 E2M1,
+#   group 16, FP8 E4M3 block scales, dynamic activations). The ignore list
+#   keeps attention, QSA, the GDN linear_attn, the mHC hyperconnections, shared
+#   experts, routers, embeddings, lm_head, the vision tower AND all 31 MTP
+#   tensors in BF16, byte-identical to the source (the card ships an
+#   unchanged-content byte-equality audit over 1,562 tensors / 118.4 GB). The
+#   PLE n-gram tables come from the FP8 revision of the base (128 shards
+#   F8_E4M3 + a per-table scalar scale). NO KV-cache quant metadata is baked
+#   in, which matters (see kv_cache_dtype).
 #   Card evals on this exact checkpoint: GSM8K 97.27 (full 1319, 0 errors),
-#   AIME26 98.75 pass@1. Behavioural note from the card: long agentic
-#   generations run longer than BF16.
+#   AIME26 98.75 pass@1. Card note: long agentic generations run longer than
+#   BF16.
 #
 # ARCHITECTURE (config.json, 2026-08-27)
 #   Qwen4ExpForConditionalGeneration, the preview of the Qwen4 architecture.
 #   176B total / 6B active, of which 51B is the n-gram embedding table.
-#   Multimodal (text + image + video in, text out), 27-layer SigLIP-style
-#   vision tower, hidden 1152, out_hidden 2560.
+#   Multimodal (text + image + video in, text out), 27-layer vision tower.
 #   48 decoder layers, full_attention_interval 4, so layer_types is
 #   36x linear_attention (Gated DeltaNet: 48 V heads / 16 QK heads, head_dim
-#   128) + 12x full_attention running Qwen Sparse Attention (24 Q / 2 KV
-#   heads, head_dim 256, partial_rotary_factor 0.25, mrope sections
-#   [11,11,10], rope_theta 1e7). QSA indexer: MQA, 4 query heads / 1 shared
-#   key head, indexer_head_dim 128, indexer_budget 2048 tokens,
-#   indexer_compress_ratio 4 (block level, not token level: this is what
-#   pins page_size, and what caps the draft depth).
+#   128) + 12x full_attention running Qwen Sparse Attention (24 Q / 2 KV heads,
+#   head_dim 256, partial_rotary_factor 0.25, mrope sections [11,11,10],
+#   rope_theta 1e7). QSA indexer: MQA, 4 query heads / 1 shared key head,
+#   indexer_head_dim 128, indexer_budget 2048 tokens, indexer_compress_ratio 4
+#   (block level, not token level: this is what pins page_size, what caps the
+#   draft depth, and what defines the "sparse-selection boundary" above).
 #   MoE: 512 experts, top-10 routed + 1 shared, moe_intermediate_size 640.
 #   Gated Residual: hc_count 4 branches, hc_lowrank 320.
 #   PLE: ngram_size 3, ngram_vocab_size_base 20,000,000 at layer 2,
@@ -84,104 +107,104 @@
 #   MTP: 1 layer, hybrid, its own full-attention layer is QSA as well.
 #   max_position_embeddings 262144 (card: extensible to 1M via YaRN).
 #
-# SIZING ON 4x GB10 (128 GB unified each), TP=4
-#   135.3 GB checkpoint = 51.2 GB PLE (fp8) + 84.1 GB everything else.
-#   The PLE table is a VocabParallelEmbedding, so it IS TP-sharded
-#   (shard_indices.org_vocab_start/end_index in qwen4_exp.py), giving
-#   ~12.8 GB/rank; the routed experts and attention shard the same way for
-#   ~21 GB/rank. So roughly 34 GB/rank of weights against 128 GB, which is
-#   comfortable, and KV is cheap because only 12 of 48 layers hold a KV cache
-#   (2 KV heads x 256 head_dim) and QSA caps the attended window at 2048
-#   tokens anyway. The model does NOT fit one Spark, so TP=4 is not optional.
-#   PLE OFFLOAD: `--ple-offload-embedding` moves that per-rank PLE shard into
-#   pinned HOST memory and prefetches it on a side CUDA stream. The override
-#   registry (arg_groups/overrides.py::_qwen4_exp_overrides) auto-enables it
-#   when is_cuda() AND model dtype is bfloat16, and the text config here does
-#   say dtype bfloat16 even though the experts are FP4, so expect it ON by
-#   default. On GB10 host and device memory are the SAME pool, so this buys
-#   nothing and costs a gather hop. THIS REPO HAS NO KNOB FOR IT; if the
-#   first boot shows a PLE prefetch stall in the profile, adding a
-#   `--no-ple-offload-embedding` knob is the lever. Also note it is mutually
-#   exclusive with --cpu-offload-gb / --offload-group-size (hard ValueError).
+# SIZING: TP=4 IS MANDATORY, TP=1 IS IMPOSSIBLE
+#   135.3 GB checkpoint = 51.2 GB PLE (fp8) + 84.1 GB everything else. That is
+#   125.9 GiB of safetensors against a Spark's ~121.7 GiB usable unified pool,
+#   so the weights alone do NOT fit one node, full stop. `--ple-offload-
+#   embedding` does not rescue a single node either: on unified memory the
+#   pinned host allocation draws from the same pool.
+#   Across ranks it is fine, and this is measured, not inferred: the upstream
+#   long-context runs above were 2x Spark at TP=2 with real weights. The PLE
+#   table is a VocabParallelEmbedding (shard_indices.org_vocab_start/end_index
+#   in qwen4_exp.py), so it TP-shards like everything else. At TP=4 that is
+#   ~12.8 GB/rank PLE plus ~21 GB/rank for the experts and attention, roughly
+#   34 GB/rank against 128 GB. KV is cheap on top: only 12 of 48 layers hold a
+#   KV cache (2 KV heads x 256 head_dim) and QSA attends a 2048-token window.
+#   The real long-context pressure is elsewhere, see chunked_prefill_size.
 #
 # FLAGS THE UPSTREAM RECIPES USE THAT THIS REPO CANNOT EMIT
 #   Documented so the first-contact log is read with the right expectations,
 #   NOT as silent omissions:
-#     * --linear-attn-prefill-backend flashinfer / --linear-attn-decode-backend
-#       flashinfer. Every cookbook NVFP4 cell (B200 / B300 / GB300) pins both.
-#       We have no knob, so linear_attn_backend stays its default "triton" for
-#       both phases. That is FUNCTIONALLY fine and is in fact REQUIRED for
-#       extra_buffer (supports_mamba_cache_extra_buffer() only returns true
-#       while linear_attn_backend == "triton"), but the cookbook's own comment
-#       says the explicit prefill pin is what keeps GDN prefill off Triton at
-#       large chunk sizes, so expect slower prefill than the published
-#       numbers.
+#     * --linear-attn-prefill-backend / --linear-attn-decode-backend. Every
+#       cookbook NVFP4 cell pins both to flashinfer. We have no knob, so
+#       linear_attn_backend stays its default "triton" for both phases. That is
+#       functionally fine and is in fact REQUIRED for extra_buffer
+#       (supports_mamba_cache_extra_buffer() only returns true while
+#       linear_attn_backend == "triton"), but expect slower prefill than the
+#       published numbers.
 #     * --mamba-ssm-dtype bfloat16. Every cookbook cell pins it; the config
-#       ships mamba_ssm_dtype float32. Note PR #36611 / #36627 go the OTHER
-#       way (float32 SSM state for the H200 speculative cells), so this is
-#       still moving upstream. No knob here, so the config value (float32)
-#       applies: more scratch memory, and the safer side of that argument.
+#       ships float32. Upstream PRs #36611 / #36627 push the other way
+#       (float32 SSM state for the H200 speculative cells), so this is still
+#       moving. Without a knob the config value (float32) applies: more
+#       scratch, and the safer side of that argument.
+#     * --ple-offload-embedding. Auto-enabled by _qwen4_exp_overrides when
+#       is_cuda() and the model dtype is bfloat16, which is true here even
+#       though the experts are FP4. On GB10 it buys nothing (same pool) and
+#       costs a gather hop. If the first profile shows a PLE prefetch stall,
+#       adding a --no-ple-offload-embedding knob is the lever.
 #     * --mamba-track-interval. Default 256 already satisfies both asserts
-#       (256 % page_size 64 == 0, and 256 >= speculative_num_draft_tokens 4),
-#       so the card's suggested 64 is not needed.
+#       (256 % page_size 64 == 0, 256 >= speculative_num_draft_tokens 4).
 #     * --reasoning-parser auto. We pin the resolved name instead (qwen3).
 #
-# RISKS, ordered by how likely they are to bite on the first boot
-#   A. Blocker 2 above. Until PR #36556 (or an equivalent) is in the image,
-#      every launch config crashes at the first decode or during decode
-#      CUDA-graph capture. This is not a tuning problem.
-#   B. TOOL CALLING IS BROKEN FOR THIS MODEL ON SGLANG TODAY, and this model
+# RISKS, ordered by how likely they are to bite
+#   A. THE CORRUPTION ABOVE. p65's veto is the guard, the verify gate is the
+#      check that it is live, and a >=190k prompt is the only acceptance test
+#      that can see it. Re-run all three on every image bump.
+#   B. p65 edit 2 is validated for BOOT on GB10, not for long-context OUTPUT.
+#      The clean 120k-240k column above was produced with a DIFFERENT varlen
+#      fallback (a Triton one from MiaAI-Lab/Qwen3.8-Flash-Next-Dual-DGX-
+#      Sparks), not with sglang.kernels.ops.attention.flash_attention_v4 which
+#      p65 routes to. The evidence supports the direction, not that exact
+#      kernel. This is the single biggest unknown in this profile.
+#   C. TOOL CALLING IS BROKEN FOR THIS MODEL ON SGLANG TODAY, and the model
 #      ALWAYS reasons (thinking cannot be turned off, per the cookbook).
 #      Upstream #36537: thinking + tools + `--tool-call-parser qwen3_coder`
-#      makes the model emit token ID 0 (`!`) forever until max_tokens. Without
-#      the parser, thinking works and a correct native
-#      <tool_call><function=...> block comes back, but as plain content, not
-#      as message.tool_calls. So tool_call_parser is deliberately LEFT UNSET
-#      below. Consequence: this model is NOT a candidate for hermes-default
-#      (Honcho and Hindsight both hard-require working function calling) until
-#      #36537 is fixed. Re-test both halves on any image bump.
-#   C. FP8 KV CRASHES QSA (#36545): the FA4 decode call gets BF16 queries and
-#      FP8 K/V and asserts q.dtype != k.dtype during warmup. BF16 KV serves
-#      fine with the same config. kv_cache_dtype is therefore "auto" and must
-#      stay that way, which also matches the checkpoint carrying no KV quant
-#      metadata. This is the single most tempting wrong edit in this file.
+#      makes it emit token ID 0 forever until max_tokens. Without the parser,
+#      thinking works and a correct native <tool_call><function=...> block
+#      comes back, but as plain content, not message.tool_calls. So
+#      tool_call_parser is deliberately LEFT UNSET below, and this model is NOT
+#      a candidate for hermes-default (Honcho and Hindsight both hard-require
+#      working function calling) until #36537 is fixed. NOTE the token-0
+#      signature is shared with risk A but the cause is different: this one
+#      reproduces at any context length and disappears with thinking off.
 #   D. MoE runner on a 640-wide gated MoE. moe_runner_backend below is the
-#      cluster's SM121 NVFP4 default (flashinfer_cutlass), NOT something the
-#      cookbook states (its NVFP4 cells pin no MoE runner at all). If the boot
-#      dies on the NVFP4 gated-MoE "intermediate size required padding"
-#      assert, flashinfer_trtllm is the known escape on this cluster; triton
-#      and cutlass hit the same assert.
+#      cluster's SM121 NVFP4 default, NOT something the cookbook states (its
+#      NVFP4 cells pin no MoE runner). If the boot dies on the NVFP4 gated-MoE
+#      "intermediate size required padding" assert, flashinfer_trtllm is the
+#      known escape on this cluster; triton and cutlass hit the same assert.
 #   E. Vision path unvalidated. The tower is BF16 and untouched by the quant,
-#      but PR #36585 explicitly describes text-only routing when multimodal
-#      serving is disabled, and no QSA + vision run exists on SM121. Treat
-#      images as unsupported until measured.
+#      but no QSA + vision run exists on SM121. Treat images as unsupported
+#      until measured. (Related, and in our favour: the checkpoint registers as
+#      multimodal, so SGLang auto-disables prefill CUDA graphs, which sidesteps
+#      a known host-sync crash in the QSA indexer prefill path.)
 #   F. Draft depth is capped by the architecture, not by taste:
 #      QwenSparseAttnBackend raises when speculative_num_draft_tokens exceeds
 #      the QSA compress ratio (4). Do not raise the 4 below.
-#   G. Throughput expectation, from the #36558 author's own GB10 run with an
-#      interim decode kernel (llama-benchy, pp2048/tg128, TP=2): 24.6 tok/s
+#   G. Throughput expectation, from the #36558 author's GB10 run with an
+#      interim decode kernel (llama-benchy pp2048/tg128, TP=2): 24.6 tok/s
 #      single-stream without speculation, 37.6 with NEXTN 3/1/4, 49.2 at
-#      concurrency 2, and flat in context depth out to 16384. That run also
-#      profiled GB10 decode as memory-bandwidth bound (52% of GPU time in
-#      cuBLAS bf16 gemv on the non-expert weights), so a faster QSA kernel did
-#      not move single-stream throughput at all. Do not expect the kernel fix
-#      to buy speed; it buys the ability to run.
+#      concurrency 2, flat in context depth to 16384. That run profiled GB10
+#      decode as memory-bandwidth bound (52% of GPU time in cuBLAS bf16 gemv on
+#      the non-expert weights), so a faster QSA kernel did not move
+#      single-stream throughput at all. The kernel work buys the ability to
+#      run, not speed.
 _model_profile:
   "RadixArk/Qwen3.8-Flash-Next-NVFP4":
     knowledge_cutoff: null  # not disclosed for the Qwen3.8-Flash-Next base
     release_date: "2026-08-24"  # Qwen/Qwen3.8-Flash-Next base (HF createdAt). This NVFP4 export 2026-08-25.
     info_url: "https://huggingface.co/RadixArk/Qwen3.8-Flash-Next-NVFP4"
-    # >>> THIS TAG DOES NOT EXIST YET. <<< Deliberate: our released images
-    # (0.5.17-sm121 and everything older) have no qwen4_exp model class at
-    # all, so inheriting default_sglang_image would waste a full weight load
-    # before failing. An ImagePullBackOff is the cheaper, louder failure.
-    # Build it from PR #36497 (model support, branch qwen4-main-squashed)
-    # PLUS PR #36556 (SM120/SM121 QSA sparse decode), following the
-    # scripts/patches/sglang-0.5.17-sm121.recipe pattern, on spark5.
-    # Naming mirrors the existing branch build 0.5.13-dev-nemotronh-mtp-sm121.
-    # If #36497 has landed in a tagged release by the time this is built,
-    # build the release and rename the tag accordingly.
-    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.18-dev-qwen4exp-sm121"
+    # The STANDARD 0.5.18-sm121 tag, not a variant: its recipe now sets
+    # APPLY_QWEN4EXP_PR36497=1, so the architecture is in the normal image.
+    # THE TAG DOES NOT EXIST YET (the recipe is written, the build has not
+    # run), so an accidental deploy dies at ImagePullBackOff rather than after
+    # a weight load. Pinned rather than inherited from default_sglang_image on
+    # purpose: 0.5.17-sm121 and everything older have no qwen4_exp at all, and
+    # a bare `git checkout` of an older default must not silently point this
+    # profile at an image that cannot load the checkpoint.
+    # Build on spark5, then gate with:
+    #   EXPECT_QWEN4EXP=1 scripts/verify_sglang_image.sh \
+    #       xomoxcc/dgx-spark-sglang:0.5.18-sm121 spark5
+    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.18-sm121"
     nccl_transport: "roce"
     # 135 GB does not fit one 128 GB Spark, so TP=4 (head + 3 workers) is the
     # only topology. The cookbook's NVFP4 cells all run TP=1 on a single
@@ -221,12 +244,14 @@ _model_profile:
     # NVFP4 scale_fmt is not ue8m0, so the DeepGemm JIT kernels are not
     # optimized for it. Standard for every NVFP4 profile here.
     disable_deep_gemm: true
-    # ~34 GB/rank of weights against 128 GB unified leaves a lot of room, and
-    # this is the POST-WEIGHT KV reserve, not a fraction of total. The card
-    # uses 0.80 on a single B200; 0.70 is the conservative first-contact value.
-    # On this hybrid the mamba pool usually clamps concurrency before KV does,
-    # so if max_running_requests gets clamped low, raise max_mamba_cache_size
-    # rather than this.
+    # POST-WEIGHT KV reserve, not a fraction of total. ~34 GB/rank of weights
+    # against 128 GB unified leaves room, but do not read that as licence to
+    # raise this: the upstream 2x-Spark runs used 0.90 and had to drop to 0.82
+    # to stay clean at 240k, because the QSA indexer prefill workspace (see
+    # chunked_prefill_size) competes for exactly this headroom. 0.70 is the
+    # conservative first-contact value at TP=4. On this hybrid the mamba pool
+    # usually clamps concurrency before KV does, so if max_running_requests
+    # gets clamped low, raise max_mamba_cache_size rather than this.
     mem_fraction_static: "0.70"
     # Pinned to 64 to match what SGLang itself forces. _qwen4_exp_overrides
     # sets page_size 64 UNCONDITIONALLY for the compressed QSA variant: the
@@ -236,10 +261,15 @@ _model_profile:
     # command honest and keeps the mamba_track_interval % page_size assert
     # visible.
     page_size: 64
-    # The value both the model card and the SM120 repro in #36531 use. Also
-    # keeps prefill chunks well under the 16384 default that the cookbook flags
-    # as outside the flashinfer GDN prefill window (we are on triton GDN
-    # anyway, see the flag notes in the header).
+    # The value the model card, the SM120 repro (#36531) and the upstream
+    # long-context runs all use. It is ALSO a memory knob at depth, which is
+    # easy to miss: the QSA indexer allocates an fp32 [chunk x history]
+    # workspace per sparse layer per chunk, roughly 8-10 GB at chunk 4096 with
+    # 240k of history. The upstream 2x-Spark run corrupted 2/6 at 240k with
+    # chunk 4096 / mem_fraction 0.90 purely from that, and went 6/6 clean at
+    # chunk 1024 / 0.82. So if long-context output degrades, drop this to 1024
+    # BEFORE concluding the decode kernel is at fault (risk A vs a resource
+    # failure look identical in the output).
     chunked_prefill_size: 4096
     # First-contact concurrency cap, deliberately below the card's 36: that
     # number is a single-B200 measurement and GB10 decode is bandwidth bound
@@ -265,8 +295,10 @@ _model_profile:
       top_p: 0.95
       top_k: 20
     # MTP / NEXTN speculative decoding, matching the cookbook's low-latency
-    # NVFP4 cells exactly (NEXTN 3/1/4) and the config that #36558 measured on
-    # GB10 (24.6 -> 37.6 tok/s single-stream once decode had a kernel).
+    # NVFP4 cells exactly (NEXTN 3/1/4), the config that #36558 measured on
+    # GB10 (24.6 -> 37.6 tok/s single-stream once decode had a kernel), and the
+    # config the upstream 2x-Spark long-context A/B ran with, so the clean
+    # 6/6 column in the header was produced WITH speculation on.
     # The MTP head is present and BF16 in this checkpoint (31 tensors, in the
     # modelopt ignore list as mtp.* / model.mtp.*), so no external draft repo
     # and no speculative_draft_model_path are needed.

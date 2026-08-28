@@ -1,0 +1,54 @@
+Qwen3.8-Flash-Next / Qwen4-Exp architecture (PR #36497) patch-application step
+for container-build/Dockerfile.sglang-nightly.
+
+Adds one COPY+RUN step that applies sglang-qwen4exp-pr36497.patch (upstream
+PR #36497 — the ONLY implementation of Qwen4ExpForConditionalGeneration /
+model_type qwen4_exp, which exists in no tagged release and not in main) to the
+sglang Python source AFTER the SM121 sgl-kernel patches but BEFORE
+`uv pip install ./python`, so the installed package picks up the new model.
+Same pattern as dockerfile-qwen36-mixed-nvfp4.patch.
+
+Apply to: container-build/Dockerfile.sglang-nightly AFTER dockerfile-sm121.patch
+has been applied. Application is gated by build_sm121_image.sh on the recipe
+variable APPLY_QWEN4EXP_PR36497=1 (set in sglang-0.5.18-sm121.recipe; remove the
+variable / set 0 once PR #36497 is merged into the pinned SGLANG_REF —
+re-applying a merged patch fails the in-container dry-run and aborts the build).
+
+STACKABLE: like dockerfile-qwen36-mixed-nvfp4.patch this hunk uses ONLY trailing
+context (the `# Install sglang package` comment block) with no leading context,
+so it inserts immediately before that comment regardless of whether another
+model patch (dsv4, qwen36) already inserted its COPY+RUN block there first.
+build_sm121_image.sh applies this as step 2h, after 2c (dsv4) and 2f (qwen36),
+so on a recipe with several of them enabled this block ends up last, directly
+before `# Install sglang`. Works standalone too.
+
+NOTE the runtime half: this build step does NOT carry the SM121 QSA decode
+fixes. Those live in roles/k8s_dgx/files/sglang_patches/p65_qsa_sm121_sparse_
+decode.py and are applied at container start, deliberately — one of the two is
+a DEFENSIVE veto that must survive image re-bumps, see that file's docstring.
+An image built from this step alone crashes at backend init on GB10.
+
+--- a/container-build/Dockerfile.sglang-nightly
++++ b/container-build/Dockerfile.sglang-nightly
+@@ -293,3 +293,19 @@
++# Qwen3.8-Flash-Next / Qwen4-Exp architecture (upstream PR #36497, not yet
++# merged; captured from the upstream-owned branch qwen4-main-squashed @
++# 99c9362e). 94 files, 52 of them new: the qwen4_exp model + its MTP head +
++# config classes, the Qwen Sparse Attention (QSA) backend and kernel package,
++# the arch registrations in arg_groups/overrides.py, and small hooks into the
++# hybrid linear-attn / speculative / memory-pool machinery. Applied to the
++# sglang Python source before pip install so the installed dist-packages picks
++# up the changes. This COPY+RUN step only exists in builds whose recipe sets
++# APPLY_QWEN4EXP_PR36497=1 (the dockerfile patch adding this step is gated by
++# build_sm121_image.sh).
++COPY patches/sglang-qwen4exp-pr36497.patch /tmp/sglang-qwen4exp-pr36497.patch
++RUN set -e; cd /data/sglang && \
++    echo "=== Applying sglang-qwen4exp-pr36497.patch (PR #36497) ===" && \
++    patch --dry-run -p1 < /tmp/sglang-qwen4exp-pr36497.patch && \
++    patch -p1 < /tmp/sglang-qwen4exp-pr36497.patch && \
++    grep -q 'class Qwen4ExpForConditionalGeneration' python/sglang/srt/models/qwen4_exp.py && \
++    echo 'Qwen4-Exp PR #36497 patch applied successfully'
++
+ # Install sglang package (no deps, no build isolation since base has torch).
+ # Moved here from its original early-stage location so the installed
+ # dist-packages picks up the patched nvfp4_blockwise_moe.cuh above.

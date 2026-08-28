@@ -30,6 +30,13 @@ the probe IS excluded) keeps the original behaviour, so this is INERT for every
 existing checkpoint. No model-name gate: qwen3_5_mtp.py is imported only for the
 Qwen3.5 MTP arch. Deletable once SGLang upstream honours a quantized MTP for
 modelopt_fp4 (track alongside sgl-project/sglang MTP-quant support).
+
+RE-ANCHORED 2026-08-28 for v0.5.18: upstream moved the decision out of
+Qwen3_5ForCausalLMMTP.__init__ into the module-level helper
+_mtp_quant_config(), which RETURNS None instead of assigning (4-space body),
+and narrowed the modelopt_fp4 arm to is_checkpoint_nvfp4_serialized. Same
+intent, so the probe is unchanged and both spellings are kept (replace_any):
+one ConfigMap serves instances pinned to pre- and post-0.5.18 images.
 """
 
 from _patchlib import Patch
@@ -39,25 +46,51 @@ patch = Patch(
     target="sglang/srt/models/qwen3_5_mtp.py",
 )
 
-OLD = """        if quant_config and quant_config.get_name() in (
-            "modelopt_fp4",
-            "modelopt_mixed",
-        ):
-            quant_config = None"""
-
-NEW = """        if quant_config and quant_config.get_name() in (
-            "modelopt_fp4",
-            "modelopt_mixed",
-        ):
-            # [patch dgxarley] keep quant_config when THIS checkpoint's MTP is
+# The MTP quantization decision was extracted into the module-level helper
+# _mtp_quant_config() in v0.5.18 (same intent, but it RETURNS None instead of
+# assigning, sits at 4-space indent, and the modelopt_fp4 arm now additionally
+# requires is_checkpoint_nvfp4_serialized). One ConfigMap feeds instances pinned
+# to different images, so both spellings must keep working: the probe body is
+# shared, only the statement that disables quantization differs.
+_PROBE = """            # [patch dgxarley] keep quant_config when THIS checkpoint's MTP is
             # quantized (kikube surgical requant). Probe the exclude list: a
             # representative MTP expert NOT excluded => MTP is quantized => keep.
             _mtp_probe = "mtp.layers.0.mlp.experts.0.down_proj"
             _mtp_is_quantized = hasattr(quant_config, "is_layer_excluded") and not quant_config.is_layer_excluded(_mtp_probe)
             if not _mtp_is_quantized:
-                quant_config = None"""
+                {disable}"""
+
+# <= v0.5.17: inline in Qwen3_5ForCausalLMMTP.__init__, 8-space body.
+OLD_INLINE = """        if quant_config and quant_config.get_name() in (
+            "modelopt_fp4",
+            "modelopt_mixed",
+        ):
+            quant_config = None"""
+NEW_INLINE = """        if quant_config and quant_config.get_name() in (
+            "modelopt_fp4",
+            "modelopt_mixed",
+        ):
+""" + _PROBE.format(disable="quant_config = None")
+
+# >= v0.5.18: the free function _mtp_quant_config(), 4-space body, returns None.
+_HELPER_HEAD = """    if quant_config and (
+        quant_config.get_name() == "modelopt_mixed"
+        or (
+            quant_config.get_name() == "modelopt_fp4"
+            and quant_config.is_checkpoint_nvfp4_serialized
+        )
+    ):
+"""
+OLD_HELPER = _HELPER_HEAD + """        return None"""
+NEW_HELPER = _HELPER_HEAD + "\n".join(
+    line[4:] if line.startswith("    ") else line for line in _PROBE.format(disable="return None").split("\n")
+)
 
 
 @patch.run
 def apply(p: Patch) -> None:
-    p.replace(OLD, NEW, marker="_mtp_is_quantized", what="mtp quant-keep")
+    p.replace_any(
+        [(OLD_INLINE, NEW_INLINE), (OLD_HELPER, NEW_HELPER)],
+        marker="_mtp_is_quantized",
+        what="mtp quant-keep",
+    )

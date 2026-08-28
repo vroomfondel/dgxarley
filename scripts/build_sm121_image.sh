@@ -102,20 +102,23 @@ BRANCH_NAME="sm121"
 #                                        now exactly upstream's own pin);
 #                                        transformers 5.12.1 / kernels 0.14.1
 #                                        unchanged.
-#                                        Upstream's torch pin jumps 2.11 -> 2.13
-#                                        while we stay on the 2.12/cu132 base,
-#                                        so for the first time we are BELOW it
-#                                        (no base rebuild available: scitrera
-#                                        published nothing past 2.12.0-v1-cu132).
+#                                        Upstream's torch pin jumps 2.11 -> 2.13.
+#                                        Followed 2026-08-28 with our own
+#                                        2.13.0-v1-cu132 base recipe (scitrera
+#                                        published nothing past 2.12.0-v1-cu132);
+#                                        that base still has to be BUILT before
+#                                        this image can be.
 #                                        marlin + tilelang-v0.5.16 patches and
 #                                        the whole Dockerfile chain re-verified
 #                                        against v0.5.18 (2026-08-28).
-#                                        READ OPEN RISK A in the recipe header
-#                                        BEFORE building: three RUNTIME patch
-#                                        targets moved (p34's
-#                                        model_runner_kv_cache_mixin.py, p30/p35's
-#                                        {triton,torch}_paged_mqa_logits.py), and
-#                                        the acceptance gate exits 1 on drift.
+#                                        RUNTIME patches re-anchored for this
+#                                        ref (p37 kernel-call kwarg, p43 MTP
+#                                        quant helper, p57 gguf sidecar); offline
+#                                        replay over all 44 patches x 3 gate
+#                                        scenarios is 0 drift on v0.5.18 AND
+#                                        v0.5.17. p30/p34/p35 needed nothing.
+#                                        Still run the acceptance gate: only it
+#                                        proves the generated modules IMPORT.
 #                                        Tag: xomoxcc/dgx-spark-sglang:0.5.18-sm121
 #
 # Previous line (v0.5.17 - current production default_sglang_image):
@@ -286,9 +289,10 @@ BRANCH_NAME="sm121"
 # new pin) and a reshaped Blackwell gencode block in the sgl-kernel CMakeLists
 # that needs the new SGL_KERNEL_PATCH_VARIANT="-v0.5.18". flashinfer stays at
 # 0.6.17 (newest stable, and now upstream's own pin); SGL_KERNEL_DIR is
-# unchanged. Full delta and open risks in the recipe header. NOTE: three runtime
-# patch targets moved in this ref (p34, p30/p35), so the acceptance gate will
-# report ANCHOR-DRIFT and refuse the push until they are re-targeted.
+# unchanged. Full delta and open risks in the recipe header. The runtime patch
+# set was re-anchored for this ref (p37 / p43 / p57) and replays clean offline
+# against both v0.5.18 and v0.5.17; the acceptance gate still has to run, since
+# it is the only thing that proves the generated modules import.
 RECIPE_NAME="sglang-0.5.18-sm121"
 IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.18-sm121"
 
@@ -418,28 +422,31 @@ SGLANG_PATCHES_DIR="${SCRIPT_DIR}/../roles/k8s_dgx/files/sglang_patches"
 NO_LOCAL_COPY=0
 
 # Base image selection. The recipe ships with a default BASE_IMAGE
-# (currently our custom xomoxcc 2.12/cu132 build); --base lets you swap
+# (currently our custom xomoxcc 2.13/cu132 build); --base lets you swap
 # it at build time without editing the recipe. Supported aliases:
 #
-#   xomoxcc   xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132
-#             Our locally-built 2.12/cu132 base (scripts/build_pytorch_base_image.sh).
+#   xomoxcc   xomoxcc/dgx-spark-pytorch-dev:2.13.0-v1-cu132
+#             Our locally-built 2.13/cu132 base (scripts/build_pytorch_base_image.sh).
+#             Bumped 2026-08-28 from 2.12.0-v1-cu132 to match upstream SGLang
+#             v0.5.18's torch 2.13.0 pin (see OPEN RISK D in that recipe).
 #             Only present on spark5's podman store — never published.
 #             This is the recipe default and what you want for performance.
 #
 #   scitrera  scitrera/dgx-spark-pytorch-dev:2.12.0-v1-cu132
 #             scitrera's published upstream base. Pulled from Docker Hub.
 #             Bumped 2026-06-19 from 2.10.0-v2-cu131 → 2.12.0-v1-cu132
-#             (scitrera shipped 2.12/cu132 on 2026-06-09). Now the SAME
-#             torch/cuda as our xomoxcc base, so the old ~45% codegen
-#             regression (torch 2.10/cu131 vs 2.12/cu132,
-#             reference_sm121_build_base_regression memory) NO LONGER applies.
+#             (scitrera shipped 2.12/cu132 on 2026-06-09) and NOT bumped since —
+#             they have published nothing past it, so as of the 2.13 xomoxcc
+#             base this alias is one torch minor BEHIND the recipe default.
+#             The old ~45% codegen regression (torch 2.10/cu131 vs 2.12/cu132,
+#             reference_sm121_build_base_regression memory) still does not apply.
 #             Any residual delta vs xomoxcc would come from our custom build
 #             tuning (cuBLAS-Blackwell workspaces, SVE/CMake), NOT measured —
 #             xomoxcc stays the tested default; use scitrera for A/B only.
 #
 # Any other --base VALUE is passed through verbatim as the BASE_IMAGE.
 # BUILD_SM121_BASE_IMAGE env var overrides --base for scripting.
-BASE_XOMOXCC_IMAGE="xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132"
+BASE_XOMOXCC_IMAGE="xomoxcc/dgx-spark-pytorch-dev:2.13.0-v1-cu132"
 BASE_SCITRERA_IMAGE="scitrera/dgx-spark-pytorch-dev:2.12.0-v1-cu132"
 BASE_IMAGE_ALIAS=""
 BASE_IMAGE_OVERRIDE="${BUILD_SM121_BASE_IMAGE:-}"
@@ -840,6 +847,15 @@ preflight() {
             sglang-qwen36-mixed-nvfp4-pr27906.patch
         )
     fi
+    # Qwen4-Exp / Qwen3.8-Flash-Next patches (PR #36497) are only required when
+    # the recipe opts in via APPLY_QWEN4EXP_PR36497=1. See apply_patches().
+    if [[ -f "${PATCHES_DIR}/${RECIPE_NAME}.recipe" ]] \
+        && grep -qE '^APPLY_QWEN4EXP_PR36497=1' "${PATCHES_DIR}/${RECIPE_NAME}.recipe"; then
+        required_files+=(
+            dockerfile-qwen4exp.patch
+            sglang-qwen4exp-pr36497.patch
+        )
+    fi
 
     local missing=0
     for f in "${required_files[@]}"; do
@@ -948,7 +964,7 @@ EOF
 # ============================================================================
 #
 # The recipes default to a locally-built xomoxcc base, e.g.
-#   BASE_IMAGE=xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132
+#   BASE_IMAGE=xomoxcc/dgx-spark-pytorch-dev:2.13.0-v1-cu132
 # which is NOT on Docker Hub — it's built locally via
 # scripts/build_pytorch_base_image.sh and kept in the build host's podman store.
 # If the sglang build runs before the base image exists, podman will try
@@ -1041,7 +1057,7 @@ If the image has not been pushed to Docker Hub, build it first:
   bash ${SCRIPT_DIR}/build_pytorch_base_image.sh
 
 That build takes approximately 3-5 hours (cold) or 30-60 min (with warm
-ccache from a prior run). It produces the CUDA 13.2 + PyTorch 2.11 base
+ccache from a prior run). It produces the CUDA 13.2 + PyTorch 2.13 base
 that this sglang build depends on.
 EOF
             exit 1
@@ -1179,6 +1195,21 @@ apply_patches() {
         apply_qwen36_mixed_nvfp4_patch=1
     fi
 
+    # Qwen4-Exp / Qwen3.8-Flash-Next (PR #36497) — gated by an explicit recipe
+    # variable, same as the others. This one is NOT an optimization: it is the
+    # only implementation of the qwen4_exp architecture in existence, so
+    # without it the built image refuses RadixArk/Qwen3.8-Flash-Next-NVFP4 at
+    # load ("has no SGLang implementation"). Drop APPLY_QWEN4EXP_PR36497 the
+    # moment the PR lands in the pinned SGLANG_REF (re-applying a merged patch
+    # fails the in-container dry-run and aborts the build). Like the qwen36
+    # dockerfile patch this one is trailing-context-only and therefore STACKS
+    # after the dsv4 (2c) and qwen36 (2f) steps.
+    local apply_qwen4exp_patch=0
+    if [[ -f "${PATCHES_DIR}/${RECIPE_NAME}.recipe" ]] \
+        && grep -qE '^APPLY_QWEN4EXP_PR36497=1' "${PATCHES_DIR}/${RECIPE_NAME}.recipe"; then
+        apply_qwen4exp_patch=1
+    fi
+
     # 1. Drop sgl-kernel source patches into the build context.
     # The Dockerfile COPY steps read from container-build/patches/ and the
     # in-container `patch` invocations are conditionally gated by the
@@ -1250,6 +1281,12 @@ apply_patches() {
     local qwen36_mixed_nvfp4_source_patches=(
         sglang-qwen36-mixed-nvfp4-pr27906.patch
     )
+    # Qwen4-Exp source patch (PR #36497) — copied only when the recipe opts in,
+    # same rationale as the dsv4/nemotronh/qwen36 patches. ~20k lines, by far
+    # the largest source patch here; it is a whole model implementation.
+    local qwen4exp_source_patches=(
+        sglang-qwen4exp-pr36497.patch
+    )
     local patches_to_copy=( "${always_source_patches[@]}" )
     if (( apply_gemma4_mtp_patch )); then
         patches_to_copy+=( "${mtp_source_patches[@]}" )
@@ -1271,6 +1308,9 @@ apply_patches() {
     fi
     if (( apply_qwen36_mixed_nvfp4_patch )); then
         patches_to_copy+=( "${qwen36_mixed_nvfp4_source_patches[@]}" )
+    fi
+    if (( apply_qwen4exp_patch )); then
+        patches_to_copy+=( "${qwen4exp_source_patches[@]}" )
     fi
     # sgl-kernel patch variant: a main-ahead SGLANG_REF (post-v0.5.13) can drift
     # the sgl-kernel CMakeLists out from under the SM121 sgl-kernel patches (e.g.
@@ -1554,6 +1594,28 @@ apply_patches() {
         echo "Qwen3.6 mixed NVFP4 Dockerfile patched"
     else
         echo "Skipping dockerfile-qwen36-mixed-nvfp4.patch (recipe does not set APPLY_QWEN36_MIXED_NVFP4_PR27906=1)"
+    fi
+
+    # 2h. Qwen4-Exp / Qwen3.8-Flash-Next (PR #36497) Dockerfile patch — recipe-
+    #     gated (see the apply_qwen4exp_patch determination above). Adds the
+    #     COPY + RUN step that applies sglang-qwen4exp-pr36497.patch to the
+    #     sglang source before `uv pip install ./python`. Trailing-context-only,
+    #     so it STACKS after 2c (dsv4) and 2f (qwen36) and must run AFTER both.
+    #     This patch is what makes the qwen4_exp architecture exist at all; the
+    #     GB10-specific QSA decode fixes are a RUNTIME patch instead
+    #     (roles/k8s_dgx/files/sglang_patches/p65_qsa_sm121_sparse_decode.py),
+    #     so an image from this step alone still crashes at backend init on a
+    #     Spark. Verify the pair with scripts/verify_sglang_image.sh.
+    if (( apply_qwen4exp_patch )); then
+        echo "Applying dockerfile-qwen4exp.patch..."
+        patch --dry-run -p1 < "${PATCHES_DIR}/dockerfile-qwen4exp.patch" \
+            || die "Qwen4-Exp Dockerfile patch dry-run failed — regenerate dockerfile-qwen4exp.patch"
+        patch -p1 < "${PATCHES_DIR}/dockerfile-qwen4exp.patch"
+        grep -q 'sglang-qwen4exp-pr36497.patch' container-build/Dockerfile.sglang-nightly \
+            || die "Qwen4-Exp Dockerfile patch verification failed"
+        echo "Qwen4-Exp Dockerfile patched"
+    else
+        echo "Skipping dockerfile-qwen4exp.patch (recipe does not set APPLY_QWEN4EXP_PR36497=1)"
     fi
 
     # 2g. Floor-pin huggingface_hub (ARG HF_HUB_MIN_VERSION + gated uv pip

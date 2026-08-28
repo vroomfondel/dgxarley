@@ -17,6 +17,19 @@
 #         kimi_*, mistral_large_3, pixtral, ... Nothing crashed, nothing warned
 #         at the top level, and the models simply were not there any more.
 #
+#   3. (qwen4_exp images only) Does the Qwen3.8-Flash-Next architecture import,
+#      AND is the SM121 trtllm veto from p65 actually live?
+#      -> the veto is the one check here that guards CORRECTNESS rather than
+#         availability. With it missing, a GB10 pod serves fine on short
+#         prompts and returns runs of "!" past roughly 120k tokens of context,
+#         silently and stochastically (upstream #36716 / #36558; measured 4/4
+#         corrupt at 210k on 2x Spark with real weights). Nothing in the patch
+#         log or the model registry can see that, which is why it is its own
+#         check. Set EXPECT_QWEN4EXP=1 to make the ABSENCE of qwen4_exp a
+#         failure too (use it for the 0.5.18-sm121 image, whose recipe sets
+#         APPLY_QWEN4EXP_PR36497=1); left unset, the section self-skips on
+#         images that were never meant to carry the architecture.
+#
 # "Applies cleanly" is not "works". Run this before promoting any image, and
 # after every change under sglang_patches/.
 #
@@ -27,6 +40,8 @@
 #
 #   scripts/verify_sglang_image.sh xomoxcc/dgx-spark-sglang:0.5.16-sm121
 #   scripts/verify_sglang_image.sh xomoxcc/dgx-spark-sglang:0.5.16-sm121 spark5
+#   EXPECT_QWEN4EXP=1 scripts/verify_sglang_image.sh \
+#       xomoxcc/dgx-spark-sglang:0.5.18-sm121 spark5
 #
 # With a connection name the checks run on that remote podman host (the images
 # live in spark5's store), otherwise locally.
@@ -135,6 +150,143 @@ for scenario in "${SCENARIOS[@]}"; do
         echo "  ok    model registry: no regression vs the unpatched image"
     fi
 done
+
+# ---------------------------------------------------------------------------
+# qwen4_exp / Qwen3.8-Flash-Next gate.
+#
+# Two questions the loop above structurally cannot answer. The registry check
+# only reports modules that FAIL to import, so an architecture that was never
+# built into the image looks exactly like one that is fine. And ANCHOR-DRIFT
+# says an anchor matched, not that the resulting code does the right thing —
+# p65's SM121 veto is a correctness guard whose absence is invisible until a
+# real 190k-token request comes back as exclamation marks.
+#
+# Runs the patch set once more with the model gate set to the Flash-Next
+# checkpoint, then probes the PATCHED module in-process. The trtllm probe
+# stubs flashinfer and monkeypatches the capability helpers, so it needs no GPU
+# and no flashinfer install: it asserts the resolver returns None on cc (12,1)
+# and a callable on cc (12,0), which is exactly the split upstream #36806 and
+# our veto encode.
+echo
+echo "--- qwen4_exp / Qwen3.8-Flash-Next"
+qwen4_out="$(run_podman run --rm \
+    -e SGLANG_MODEL=RadixArk/Qwen3.8-Flash-Next-NVFP4 \
+    -v "${PATCH_MOUNT}:/patches:ro" "${IMAGE}" bash -c '
+    for p in /patches/p[0-9][0-9]_*.py; do python3 "$p" 2>&1; done
+    echo "###PROBE###"
+    python3 - <<"PY" 2>&1
+import importlib, sys, types
+
+def emit(tag, ok, detail=""):
+    print(f"{tag}={'1' if ok else '0'} {detail}")
+
+try:
+    importlib.import_module("sglang.srt.models.qwen4_exp")
+    from sglang.srt.models.qwen4_exp import Qwen4ExpForConditionalGeneration  # noqa
+    emit("ARCH", True)
+except Exception as exc:  # noqa: BLE001
+    emit("ARCH", False, f"{type(exc).__name__}: {exc}")
+    sys.exit(0)
+
+try:
+    from sglang.srt.models.registry import ModelRegistry
+    names = set(getattr(ModelRegistry, "models", {}) or {})
+    emit("REGISTRY", "Qwen4ExpForConditionalGeneration" in names,
+         "" if "Qwen4ExpForConditionalGeneration" in names else "not in ModelRegistry.models")
+except Exception as exc:  # noqa: BLE001
+    emit("REGISTRY", False, f"{type(exc).__name__}: {exc}")
+
+# Functional probe of the decode resolver: no GPU, no flashinfer needed.
+try:
+    sentinel = object()
+    fi = types.ModuleType("flashinfer")
+    fid = types.ModuleType("flashinfer.decode")
+    fid.trtllm_batch_decode_with_kv_cache = sentinel
+    fi.decode = fid
+    sys.modules.setdefault("flashinfer", fi)
+    sys.modules["flashinfer.decode"] = fid
+
+    qsa = importlib.import_module(
+        "sglang.srt.layers.attention.qwen_sparse_attn_backend")
+    import sglang.srt.utils as U
+    import sglang.srt.utils.common as C
+
+    def force(cap):
+        for mod in (U, C):
+            for name, val in (
+                ("is_sm100_supported", lambda: False),
+                ("is_sm120_supported", lambda: cap[0] == 12),
+                ("is_sm120", lambda: cap == (12, 0)),
+                ("is_sm121", lambda: cap == (12, 1)),
+            ):
+                if hasattr(mod, name):
+                    setattr(mod, name, val)
+        qsa._resolve_trtllm_sparse_decode.cache_clear()
+        return qsa._resolve_trtllm_sparse_decode()
+
+    on_121 = force((12, 1))
+    on_120 = force((12, 0))
+    emit("VETO_SM121", on_121 is None,
+         "" if on_121 is None else "resolver returned a kernel on cc (12,1)")
+    emit("SM120_KEPT", on_120 is sentinel,
+         "" if on_120 is sentinel else f"resolver returned {on_120!r} on cc (12,0)")
+except Exception as exc:  # noqa: BLE001
+    emit("VETO_SM121", False, f"{type(exc).__name__}: {exc}")
+PY
+' 2>/dev/null)" || true
+
+qwen4_patch_phase="${qwen4_out%%###PROBE###*}"
+qwen4_probe="${qwen4_out#*###PROBE###}"
+probe_val() { grep -oP "(?<=^$1=)[01]" <<< "${qwen4_probe}" | head -1; }
+
+if [[ "$(probe_val ARCH)" != "1" ]]; then
+    if [[ "${EXPECT_QWEN4EXP:-0}" == "1" ]]; then
+        echo "  FAIL  qwen4_exp is NOT in this image, but EXPECT_QWEN4EXP=1"
+        grep -E "^ARCH=" <<< "${qwen4_probe}" | sed 's/^/        /'
+        echo "        (recipe must set APPLY_QWEN4EXP_PR36497=1 — see"
+        echo "         scripts/patches/sglang-qwen4exp-pr36497.patch)"
+        failures=$((failures + 1))
+    else
+        echo "  skip  no qwen4_exp in this image (set EXPECT_QWEN4EXP=1 to require it)"
+    fi
+else
+    echo "  ok    qwen4_exp imports"
+
+    if [[ "$(probe_val REGISTRY)" == "1" ]]; then
+        echo "  ok    Qwen4ExpForConditionalGeneration is in the model registry"
+    else
+        echo "  FAIL  Qwen4ExpForConditionalGeneration missing from the model registry"
+        grep -E "^REGISTRY=" <<< "${qwen4_probe}" | sed 's/^/        /'
+        failures=$((failures + 1))
+    fi
+
+    # p65 must have RUN, not been gated out: the file exists in this image, so
+    # "gate not matched" here means target_contains failed, i.e. the resolver
+    # was renamed and the veto is silently absent.
+    if grep -qE "gate not matched" <<< "$(grep -i "qsa" <<< "${qwen4_patch_phase}")"; then
+        echo "  FAIL  p65 reported 'gate not matched' on an image that HAS qwen4_exp"
+        failures=$((failures + 1))
+    fi
+
+    if [[ "$(probe_val VETO_SM121)" == "1" ]]; then
+        echo "  ok    trtllm sparse decode is vetoed on cc (12,1) / GB10"
+    else
+        echo "  FAIL  trtllm sparse decode is REACHABLE on cc (12,1) — silent"
+        echo "        long-context corruption (token-0 runs) on every Spark."
+        grep -E "^VETO_SM121=" <<< "${qwen4_probe}" | sed 's/^/        /'
+        echo "        (p65_qsa_sm121_sparse_decode.py edit 1 did not take effect)"
+        failures=$((failures + 1))
+    fi
+
+    if [[ "$(probe_val SM120_KEPT)" == "1" ]]; then
+        echo "  ok    cc (12,0) still reaches the trtllm kernel (veto is not too wide)"
+    else
+        echo "  warn  cc (12,0) no longer reaches the trtllm kernel"
+        grep -E "^SM120_KEPT=" <<< "${qwen4_probe}" | sed 's/^/        /'
+        echo "        (not fatal on this cluster — no SM120 part here — but it"
+        echo "         means the shipped gate changed shape; re-read p65)"
+    fi
+fi
 
 echo
 if [[ "${failures}" -eq 0 ]]; then

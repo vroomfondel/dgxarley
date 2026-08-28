@@ -90,6 +90,15 @@ configurations the patch is a no-op even when applied.
 DELETABLE as soon as upstream fills the workspace under speculation OR computes
 verify/draft-extend natively. Upstream issue planned (silent corruption +
 eager TypeError, minimal repro: Llama-8B-NVFP4 + NEXTN on SM120).
+
+
+RE-ANCHORED 2026-08-28 for v0.5.18: upstream added a trailing
+`multi_ctas_kv_counter_buffer=self._multi_ctas_kv_counter_buffer` kwarg to the
+trtllm_batch_decode_with_kv_cache call this patch rewrites, which broke the
+kernel-call anchor (and only that one). Both spellings are kept (replace_any,
+built from one shared body) for instances pinned to older images. The rest of
+the patch, incl. the decode path upstream already handles natively
+(kv_cache_sf + out-dtype convert), is unchanged between v0.5.17 and v0.5.18.
 """
 
 from _patchlib import Patch, target_contains
@@ -231,7 +240,12 @@ NEW_SCALES = """        # sink: additional value per head in the denominator of 
         else:
             bmm1_scale, bmm2_scale = self._get_bmm_scales(layer, q_scale)"""
 
-OLD_CALL = """                o = flashinfer.decode.trtllm_batch_decode_with_kv_cache(
+# The upstream call gained a trailing kwarg in v0.5.18
+# (multi_ctas_kv_counter_buffer, the shared multi-CTA KV counter), so the
+# anchor has two spellings. One ConfigMap feeds instances pinned to different
+# images, so both must keep working: build them from one body via _call_variant
+# and let replace_any() pick whichever the image ships.
+_CALL_HEAD = """                o = flashinfer.decode.trtllm_batch_decode_with_kv_cache(
                     query=q,
                     kv_cache=kv_cache,
                     workspace_buffer=self.workspace_buffer,
@@ -244,25 +258,9 @@ OLD_CALL = """                o = flashinfer.decode.trtllm_batch_decode_with_kv_
                     sinks=attention_sink,
                     skip_softmax_threshold_scale_factor=envs.SGLANG_SKIP_SOFTMAX_DECODE_THRESHOLD_SCALE_FACTOR.get(),
                     out_dtype=self.q_data_type,
-                    q_len_per_req=self.forward_metadata.max_seq_len_q,
-                )"""
-
-NEW_CALL = """                _q_len = int(self.forward_metadata.max_seq_len_q)
-                o = flashinfer.decode.trtllm_batch_decode_with_kv_cache(
-                    query=q,
-                    kv_cache=kv_cache,
-                    workspace_buffer=self.workspace_buffer,
-                    block_tables=page_table,
-                    seq_lens=self.forward_metadata.cache_seqlens_int32,
-                    max_seq_len=self.max_context_len,
-                    bmm1_scale=bmm1_scale,
-                    bmm2_scale=bmm2_scale,
-                    window_left=layer.sliding_window_size,
-                    sinks=attention_sink,
-                    skip_softmax_threshold_scale_factor=envs.SGLANG_SKIP_SOFTMAX_DECODE_THRESHOLD_SCALE_FACTOR.get(),
-                    out_dtype=self.q_data_type,
-                    q_len_per_req=_q_len,
-                    # [dgxarley-nvfp4-call] from q_len>1 on, XQA requires the
+"""
+# What this patch injects, appended after the (version-dependent) tail kwargs.
+_CALL_INJECT = """                    # [dgxarley-nvfp4-call] from q_len>1 on, XQA requires the
                     # bit-packed draft block mask; without FP4 both stay None
                     # (behaviour unchanged).
                     kv_cache_sf=kv_cache_sf,
@@ -274,6 +272,27 @@ NEW_CALL = """                _q_len = int(self.forward_metadata.max_seq_len_q)
                 )
                 if self.is_nvfp4_kvcache and o.dtype != self.q_data_type:
                     o = o.to(self.q_data_type)"""
+
+
+def _call_variant(extra_kwargs: str) -> tuple[str, str]:
+    """(old, new) for one spelling of the trailing kwargs of the kernel call."""
+    tail = "                    q_len_per_req=self.forward_metadata.max_seq_len_q,\n" + extra_kwargs
+    old = _CALL_HEAD + tail + "                )"
+    new = (
+        "                _q_len = int(self.forward_metadata.max_seq_len_q)\n"
+        + _CALL_HEAD
+        + "                    q_len_per_req=_q_len,\n"
+        + extra_kwargs
+        + _CALL_INJECT
+    )
+    return old, new
+
+
+CALL_VARIANTS = [
+    _call_variant(""),  # <= v0.5.17
+    # >= v0.5.18
+    _call_variant("                    multi_ctas_kv_counter_buffer=self._multi_ctas_kv_counter_buffer,\n"),
+]
 
 OLD_HELPER = """    def _get_nvfp4_bmm_scales(self, layer: RadixAttention) -> tuple[float, float]:
         assert self.is_nvfp4_kvcache
@@ -310,7 +329,7 @@ def apply_trtllm(p: Patch) -> None:
     p.replace(OLD_WRITE, NEW_WRITE, marker="[dgxarley-nvfp4-write]", what="kv write")
     p.replace(OLD_READ, NEW_READ, marker="[dgxarley-nvfp4-read]", what="kv read")
     p.replace(OLD_SCALES, NEW_SCALES, marker="[dgxarley-nvfp4-scales]", what="scales")
-    p.replace(OLD_CALL, NEW_CALL, marker="[dgxarley-nvfp4-call]", what="kernel call")
+    p.replace_any(CALL_VARIANTS, marker="[dgxarley-nvfp4-call]", what="kernel call")
     p.replace(OLD_HELPER, NEW_HELPER, marker="[dgxarley-nvfp4-mask]", what="mask helper")
 
 
