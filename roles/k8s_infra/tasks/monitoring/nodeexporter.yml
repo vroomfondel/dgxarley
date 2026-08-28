@@ -59,7 +59,7 @@
                   cpu: 15m
                   memory: 32Mi
                 limits:
-                  cpu: 50m
+                  cpu: 700m
                   memory: 50Mi
             volumes:
             - name: proc
