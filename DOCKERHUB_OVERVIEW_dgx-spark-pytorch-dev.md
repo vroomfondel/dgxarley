@@ -1,7 +1,4 @@
 <!-- short: PyTorch 2.13 + CUDA 13.2.1 + NCCL 2.30 base image for DGX Spark / GB10 (SM121), arm64, from source. -->
-<!-- NOTE: 2.13.0-v1-cu132 is described here but NOT YET BUILT/PUSHED (recipe added 2026-08-28).
-     Build+push it (scripts/build_pytorch_base_image.sh) BEFORE updating this text on Docker Hub,
-     otherwise the tag table advertises a tag that does not exist. -->
 
 # dgx-spark-pytorch-dev
 

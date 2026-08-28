@@ -7,7 +7,8 @@
 # openwebui_namespace moved to roles/k8s_infra/defaults (openwebui → k8s_infra).
 # curl -s 'https://hub.docker.com/v2/repositories/scitrera/dgx-spark-sglang/tags/?page_size=20&ordering=last_updated' | jq '.results[] | {name, last_updated}'
 
-default_sglang_image: "xomoxcc/dgx-spark-sglang:0.5.17-sm121"
+default_sglang_image: "xomoxcc/dgx-spark-sglang:0.5.18-sm121"
+# default_sglang_image: "xomoxcc/dgx-spark-sglang:0.5.17-sm121"
 # default_sglang_image: "xomoxcc/dgx-spark-sglang:0.5.16-sm121"
 # default_sglang_image: "xomoxcc/dgx-spark-sglang:0.5.15.post1-sm121"
 #default_sglang_image: "xomoxcc/dgx-spark-sglang:0.5.15-sm121"

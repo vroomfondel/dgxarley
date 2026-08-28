@@ -36,12 +36,17 @@ ecosystem is only slowly shipping kernels for.
 
 ## What's inside
 
-- **SGLang** built from upstream tags (currently `v0.5.17`)
+- **SGLang** built from upstream tags (currently `v0.5.18`)
 - **sgl-kernel** with SM121 build patches: arch-prune to `sm_121` only, FA3 /
-  sm90 targets / FlashMLA stripped (the bundled FlashMLA is Hopper-only). On
-  `0.5.17-sm121` all four are repathed, because SGLang RFC #29630 relocated the
-  whole top-level `sgl-kernel/` tree to `python/sglang/kernels/aot/`. The
-  CUTLASS NVFP4 blockwise-MoE patch (`StageCount<1>` +
+  sm90 targets / FlashMLA stripped (the bundled FlashMLA is Hopper-only). From
+  `0.5.17-sm121` on all four are repathed, because SGLang RFC #29630 relocated
+  the whole top-level `sgl-kernel/` tree to `python/sglang/kernels/aot/`, and
+  `0.5.18-sm121` carries its own patch variant again: upstream reshaped the
+  Blackwell gencode block in `aot/CMakeLists.txt` (the explicit `sm_103a`
+  gencode is gone, replaced by `sm_100f` on CUDA 12.9+ with `sm_100a` as the
+  pre-12.9 fallback), so the v0.5.17 arch-prune hunk no longer applies. The
+  pruned result is unchanged: `sm_121a` on aarch64 plus `--compress-mode=size`.
+  The CUTLASS NVFP4 blockwise-MoE patch (`StageCount<1>` +
   `KernelPtrArrayTmaWarpSpecialized`) is present only on `0.5.15.post1-sm121`
   and below, see above.
 - **DeepSeek-V4 EAGLE-MTP marlin + TileLang indexer compat**, still patched on
@@ -66,9 +71,13 @@ ecosystem is only slowly shipping kernels for.
   (`SGLANG_OPT_FP8_WO_A_GEMM=0`), `mem_fraction_static`, node swap for the load
   peak — in
   [`UPSTREAM_DSV4_BUGS.md`](https://github.com/vroomfondel/dgxarley/blob/main/UPSTREAM_DSV4_BUGS.md).
-- **flashinfer bumped to `0.6.17`** (over the v0.5.17 tag's own pin of
-  `0.6.15.post1`; SGLang `main` has meanwhile moved to `==0.6.17` too),
-  deliberately paired with **nvidia-cutlass-dsl `4.6.1`**. flashinfer only
+- **flashinfer pinned to `0.6.17`** (as of `0.5.18-sm121` this is exactly
+  upstream's own pyproject pin, so for the first time in this line the two
+  agree; it was a deliberate bump over the v0.5.17 tag's `0.6.15.post1`, and
+  `0.6.18` still only exists as an rc), deliberately paired with
+  **nvidia-cutlass-dsl `4.6.2`** (`4.6.1` up to `0.5.17-sm121`; the bump follows
+  upstream and its release notes credit it with fixing an FA4 startup
+  regression on Blackwell). flashinfer only
   constrains cutlass-dsl `>=4.5.0` (open-ended), and NVIDIA has shipped
   internally-inconsistent `4.5.2`/`4.5.3` wheels that ICE on every fresh
   CuTe-DSL JIT compile at CUDA-graph warmup, so the explicit cutlass pin is not
@@ -158,7 +167,32 @@ ecosystem is only slowly shipping kernels for.
   and uses the `-mainahead` sgl-kernel patch variants (one day of main drift
   shifted the mscclpp link lines). **First-contact / main-ahead, not a
   tagged release.**
-- Built on a CUDA 13.2 + PyTorch 2.12 + NCCL 2.30.7 base for the GB10 codegen
+- **Qwen4-Exp / Qwen3.8-Flash-Next (`0.5.18-sm121`)**: upstream
+  [PR #36497](https://github.com/sgl-project/sglang/pull/36497) (still open,
+  not in v0.5.18 and not in `main`) applied to the source before install. It is
+  the only implementation of `Qwen4ExpForConditionalGeneration` / `model_type
+  qwen4_exp` anywhere; without it the image refuses
+  `RadixArk/Qwen3.8-Flash-Next-NVFP4` at load with *"has no SGLang
+  implementation"*. The build is only half of it: the two GB10/SM121 QSA
+  decode fixes are deliberately **runtime** patches in the Ansible role, one of
+  them a defensive veto against an upstream gate expression that was respelled
+  three times in three days, one spelling of which silently corrupts
+  long-context output on GB10. An image built from the source patch alone
+  crashes at backend init on a Spark.
+- **Nemotron-3.5-Lightning speculative decoding (`0.5.18-sm121`)**: upstream
+  [PR #36186](https://github.com/sgl-project/sglang/pull/36186) (merged
+  2026-08-25, three days after the v0.5.18 tag) backported together with its
+  two DFlash2 prerequisites,
+  [#35371](https://github.com/sgl-project/sglang/pull/35371) and
+  [#35496](https://github.com/sgl-project/sglang/pull/35496). Enables all three
+  published drafters for `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4`
+  (in-checkpoint MTP plus the external `-DFlash` / `-DSpark` drafts, the latter
+  being NVIDIA's own DGX Spark recommendation). Stock v0.5.18 aborts DSPARK /
+  DFLASH at backend setup with *"implements neither
+  set_dspark_layers_to_capture nor set_dflash_layers_to_capture"*. Serving the
+  target **unspeculated** does not need this patch. It expires on the next
+  SGLang tag, which will contain the merged code.
+- Built on a CUDA 13.2 + PyTorch 2.13 + NCCL 2.30.7 base for the GB10 codegen
   path (CUDA 13.1 / PyTorch 2.10 fallback is ~45 % slower end-to-end). **Known
   issue:** the NCCL 2.30.x NVLS path has a regression that can silently hang
   high-expert-count MoE weight loads (≥256 experts) on GB10/RoCE
@@ -170,7 +204,8 @@ ecosystem is only slowly shipping kernels for.
 
 | Tag                                 | Notes                                                                       |
 |-------------------------------------|------------------------------------------------------------------------------|
-| `0.5.17-sm121`                      | SGLang v0.5.17 + SM121 patches, repathed for the RFC #29630 `sgl-kernel` → `python/sglang/kernels/aot` relocation; CUTLASS NVFP4 SM121 patch gated off (PR #30448); DSV4 EAGLE-MTP marlin + TileLang remainder still patched; flashinfer 0.6.17 + cutlass-dsl 4.6.1 + transformers 5.12.1. **(current)** |
+| `0.5.18-sm121`                      | SGLang v0.5.18 + SM121 patches (own arch-prune variant: upstream reshaped the Blackwell gencode block); adds two source backports absent from the tag: Qwen4-Exp / `qwen4_exp` (open PR #36497, the only implementation of that architecture) and Nemotron-3.5-Lightning speculative decoding (merged PR #36186 + DFlash2 prerequisites #35371/#35496); DSV4 EAGLE-MTP marlin + TileLang remainder still patched; PyTorch 2.13 base, flashinfer 0.6.17 + cutlass-dsl 4.6.2 + transformers 5.12.1. **(current)** |
+| `0.5.17-sm121`                      | SGLang v0.5.17 + SM121 patches, repathed for the RFC #29630 `sgl-kernel` → `python/sglang/kernels/aot` relocation; CUTLASS NVFP4 SM121 patch gated off (PR #30448); DSV4 EAGLE-MTP marlin + TileLang remainder still patched; PyTorch 2.12 base, flashinfer 0.6.17 + cutlass-dsl 4.6.1 + transformers 5.12.1. Rollback / A/B |
 | `0.5.16-sm121`                      | SGLang v0.5.16 + SM121 patches; first tag where the CUTLASS NVFP4 SM121 patch is gated off (PR #30448 deleted its target); flashinfer 0.6.16 + cutlass-dsl 4.6.1. Rollback / A/B |
 | `0.5.16-dev-sm121`                  | Same recipe line as `0.5.16-sm121` but built with flashinfer **0.6.16rc3**. Kept frozen as the measurement basis cited by the NVFP4-KV / uniform-q-len findings in the repo, do not expect it to be rebuilt |
 | `0.5.15.post1-sm121`                | SGLang v0.5.15.post1 (source-only bugfix release, "mostly for GLM 5.2"); last tag that still carries the CUTLASS NVFP4 SM121 kernel patch; flashinfer 0.6.15.post1 + cutlass-dsl 4.6.1 |
@@ -203,7 +238,7 @@ Relevant entry points:
 
 - [`scripts/build_sm121_image.sh`](https://github.com/vroomfondel/dgxarley/blob/main/scripts/build_sm121_image.sh)
   — remote-podman build driver (x86 control host → arm64 build runner)
-- [`scripts/patches/sglang-0.5.17-sm121.recipe`](https://github.com/vroomfondel/dgxarley/blob/main/scripts/patches/sglang-0.5.17-sm121.recipe)
+- [`scripts/patches/sglang-0.5.18-sm121.recipe`](https://github.com/vroomfondel/dgxarley/blob/main/scripts/patches/sglang-0.5.18-sm121.recipe)
   — recipe pinned by the build (SGLang + flashinfer + cutlass-dsl + transformers
   pins, plus the per-release patch gates). One recipe per tag, they are kept
   rather than edited in place
@@ -211,7 +246,8 @@ Relevant entry points:
   — the core CUTLASS NVFP4 SM121 fix, applied up to `0.5.15.post1-sm121` and
   gated off since (`APPLY_SGL_KERNEL_SM121=0`)
 - [`scripts/verify_sglang_image.sh`](https://github.com/vroomfondel/dgxarley/blob/main/scripts/verify_sglang_image.sh)
-  — acceptance gate run against a built image before it is deployed
+  — patch-set acceptance gate; the build driver runs it against the built image
+  automatically (opt out with `--no-verify`), and no tag is pushed without it
 - [`scripts/patches/sglang-dsv4-nvfp4-pr25820.patch`](https://github.com/vroomfondel/dgxarley/blob/main/scripts/patches/sglang-dsv4-nvfp4-pr25820.patch)
   — DeepSeek-V4 NVFP4 MoE support (upstream PR #25820, rebased onto v0.5.13)
 - `CUTLASS_NVFP4_SM121_PRD.md` — NVFP4 root cause + fix rationale (in repo)

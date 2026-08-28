@@ -79,7 +79,8 @@ BRANCH_NAME="sm121"
 # source patches (PRs #22929/#22928) are also applied — the underlying
 # build steps and SM121 sgl-kernel patches are identical.
 #
-# Next line (v0.5.18 - NOT BUILT yet, needs GPU validation):
+# Current line (v0.5.18 - BUILT + PUSHED 2026-08-28, acceptance gate PASSED;
+#                        not yet GPU/serving-validated on the cluster):
 #   sglang-0.5.18-sm121.recipe         - SGLang v0.5.18 (released 2026-08-22,
 #                                        710 PRs). Nothing relocated this time
 #                                        (the sgl-kernel tree stays at
@@ -106,8 +107,8 @@ BRANCH_NAME="sm121"
 #                                        Followed 2026-08-28 with our own
 #                                        2.13.0-v1-cu132 base recipe (scitrera
 #                                        published nothing past 2.12.0-v1-cu132);
-#                                        that base still has to be BUILT before
-#                                        this image can be.
+#                                        that base was built and pushed
+#                                        2026-08-28, ahead of this image.
 #                                        marlin + tilelang-v0.5.16 patches and
 #                                        the whole Dockerfile chain re-verified
 #                                        against v0.5.18 (2026-08-28).
@@ -117,11 +118,18 @@ BRANCH_NAME="sm121"
 #                                        replay over all 44 patches x 3 gate
 #                                        scenarios is 0 drift on v0.5.18 AND
 #                                        v0.5.17. p30/p34/p35 needed nothing.
-#                                        Still run the acceptance gate: only it
-#                                        proves the generated modules IMPORT.
+#                                        Acceptance gate PASSED on the built
+#                                        image (it runs inside this driver
+#                                        before the push, and is the only thing
+#                                        that proves the generated modules
+#                                        IMPORT). default_sglang_image was moved
+#                                        to this tag 2026-08-28. What is still
+#                                        OPEN is the GPU/serving validation on
+#                                        the cluster.
 #                                        Tag: xomoxcc/dgx-spark-sglang:0.5.18-sm121
 #
-# Previous line (v0.5.17 - current production default_sglang_image):
+# Previous line (v0.5.17 - rollback target; it was default_sglang_image until
+#                          0.5.18-sm121 replaced it on 2026-08-28):
 #   sglang-0.5.17-sm121.recipe         - SGLang v0.5.17 (released 2026-08-08,
 #                                        582 PRs). THE structural change: RFC
 #                                        #29630 finished and MOVED the whole
@@ -284,22 +292,25 @@ BRANCH_NAME="sm121"
 #RECIPE_NAME="sglang-0.5.15.post1-sm121"
 #IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.15.post1-sm121"
 
-# v0.5.18 (2026-08-28): next line, NOT YET BUILT and NOT GPU-validated. Three
-# drivers: SGLang v0.5.18 (2026-08-22), cutlass-dsl 4.6.1 -> 4.6.2 (upstream's
-# new pin) and a reshaped Blackwell gencode block in the sgl-kernel CMakeLists
+# v0.5.18 (2026-08-28): ACTIVE. Built and pushed 2026-08-28, acceptance gate
+# PASSED, and default_sglang_image points here; GPU/serving validation on the
+# cluster is still pending. Three drivers: SGLang v0.5.18 (2026-08-22),
+# cutlass-dsl 4.6.1 -> 4.6.2 (upstream's new pin) and a reshaped Blackwell
+# gencode block in the sgl-kernel CMakeLists
 # that needs the new SGL_KERNEL_PATCH_VARIANT="-v0.5.18". flashinfer stays at
 # 0.6.17 (newest stable, and now upstream's own pin); SGL_KERNEL_DIR is
 # unchanged. Full delta and open risks in the recipe header. The runtime patch
 # set was re-anchored for this ref (p37 / p43 / p57) and replays clean offline
-# against both v0.5.18 and v0.5.17; the acceptance gate still has to run, since
-# it is the only thing that proves the generated modules import.
+# against both v0.5.18 and v0.5.17; the in-driver acceptance gate then confirmed
+# on the built image that the generated modules import.
 RECIPE_NAME="sglang-0.5.18-sm121"
 IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.18-sm121"
 
-# Rollback: current production line (v0.5.17, default_sglang_image). The running
-# artefact was gate-cleared on flashinfer 0.6.16.post3; the recipe on disk now
-# says 0.6.17, so re-selecting this pin REBUILDS the tag with different content
-# than what is deployed. Scale the pods down or use a distinct tag.
+# Rollback: previous production line (v0.5.17, default_sglang_image until
+# 2026-08-28). The artefact that ran until then was gate-cleared on flashinfer
+# 0.6.16.post3; the recipe on disk now says 0.6.17, so re-selecting this pin
+# REBUILDS the tag with different content than the image that was deployed.
+# Scale the pods down or use a distinct tag.
 #RECIPE_NAME="sglang-0.5.17-sm121"
 #IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.17-sm121"
 

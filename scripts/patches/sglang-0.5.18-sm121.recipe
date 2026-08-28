@@ -1,19 +1,21 @@
 #
 # SGLang v0.5.18 + our SM121 build patches. Created 2026-08-28 to track the
-# v0.5.18 line (released 2026-08-22, 710 PRs / 212 contributors). NOT BUILT and
-# NOT GPU-VALIDATED yet: rebuild, acceptance gate and a real serving run before
-# it goes in front of anything. Read OPEN RISK A first, it currently blocks the
-# gate.
+# v0.5.18 line (released 2026-08-22, 710 PRs / 212 contributors). BUILT and
+# PUSHED 2026-08-28 as xomoxcc/dgx-spark-sglang:0.5.18-sm121, acceptance gate
+# PASSED (0 ANCHOR-DRIFT, no model-registry regression, see OPEN RISK A). STILL
+# NOT GPU-VALIDATED: no serving run on the cluster yet, so treat every profile
+# on this image as first-contact.
 #
 # THE HEADLINE: nothing moved the way v0.5.17 moved (the sgl-kernel tree stays
 # at python/sglang/kernels/aot/, so SGL_KERNEL_DIR is unchanged), but three
 # things changed underneath us:
 #   1. Upstream's torch pin jumps 2.11.0 to 2.13.0 (triton 3.7.1, torchvision
-#      0.28.0, torchcodec 0.15.0; torchaudio stays 2.11.0). We keep building on
-#      the 2.12/cu132 base, which for the first time puts us BELOW the upstream
-#      pin instead of above it. The Dockerfile pins torch/vision/audio/codec out
-#      of the resolution (PIP_CONSTRAINT + missing_deps --ignore), so the build
-#      itself is unaffected, but see OPEN RISK D.
+#      0.28.0, torchcodec 0.15.0; torchaudio stays 2.11.0). We follow with our
+#      own 2.13.0-v1-cu132 base (built 2026-08-28) rather than staying on
+#      2.12/cu132, which would have put us BELOW the upstream pin for the first
+#      time. The Dockerfile pins torch/vision/audio/codec out of the resolution
+#      (PIP_CONSTRAINT + missing_deps --ignore), so the build itself was never
+#      blocked either way, see OPEN RISK D.
 #   2. nvidia-cutlass-dsl moves 4.6.0 to 4.6.2 upstream, and the release notes
 #      credit it with fixing an FA4 startup regression on Blackwell. We follow:
 #      CUTLASS_DSL_VERSION 4.6.1 to 4.6.2.
@@ -42,8 +44,8 @@
 #      move again; the kernel package is still "sglang-kernel", now version
 #      0.4.6.post1 (was 0.4.5), same CMakeLists / Makefile / csrc layout.
 #   6. BASE_IMAGE 2.12.0-v1-cu132 -> 2.13.0-v1-cu132, our own build, to meet
-#      v0.5.18's torch==2.13.0 pin (see OPEN RISK D; the tag has to be BUILT
-#      first). TRANSFORMERS / KERNELS / HF_HUB / AUDIO / ACCELERATE: UNCHANGED.
+#      v0.5.18's torch==2.13.0 pin (see OPEN RISK D; that base was built and
+#      pushed 2026-08-28, ahead of this image). TRANSFORMERS / KERNELS / HF_HUB / AUDIO / ACCELERATE: UNCHANGED.
 #      v0.5.18 still pins transformers==5.12.1 and kernels>=0.14.1,<0.15. PyPI-latest for the record, all deliberately NOT taken:
 #      transformers 5.16.1, kernels 0.16.1 (violates the upstream constraint),
 #      nvidia-cutlass-dsl 4.6.3 / 4.7.1 (past the upstream pin and, for 4.7,
@@ -166,19 +168,19 @@
 #      Carried over from v0.5.17 and still true: the SM120 FP8 per-tensor GEMM
 #      backend is cuBLAS (#31961), and AOT bmm_fp8 / router GEMM / fused A GEMM
 #      are gone from the kernel wheel in favour of flashinfer.
-#   D. TORCH GAP INVERTED — ADDRESSED 2026-08-28, but UNBUILT. Upstream wants
+#   D. TORCH GAP INVERTED, ADDRESSED 2026-08-28 and BUILT. Upstream wants
 #      torch 2.13.0 (triton 3.7.1), so SGLang code written against a 2.13 API
 #      would fail at import or first use rather than being harmlessly newer than
 #      the pin. Nothing in the build enforces the pin (constraints file plus
 #      missing_deps --ignore torch/torchaudio/torchvision/torchcodec), and the
 #      unpinned `uv pip install triton` step resolves against whatever is
 #      current. scitrera still publishes nothing past 2.12.0-v1-cu132
-#      (2026-06-09), so we now build our own 2.13 base:
+#      (2026-06-09), so we build our own 2.13 base:
 #      scripts/patches/pytorch-2.13.0-dev-v1.recipe, and BASE_IMAGE below points
-#      at it. That image DOES NOT EXIST YET — run
-#      `bash scripts/build_pytorch_base_image.sh` (3-5 h) first, or this build
-#      fails fast in ensure_base_image_present. Smoke-test imports on the built
-#      image before trusting it.
+#      at it. That image was built and pushed 2026-08-28
+#      (xomoxcc/dgx-spark-pytorch-dev:2.13.0-v1-cu132), so
+#      ensure_base_image_present is satisfied. Still smoke-test imports on a
+#      serving run before trusting the stack end to end.
 #   E. NEW dependency shapes that the missing_deps step will try to install:
 #      * cuda-tile==1.6.0rc5 has NO wheel on PyPI for that version, only a
 #        wheel-stub sdist that redirects the build backend to pypi.nvidia.com
@@ -464,7 +466,8 @@ APPLY_QWEN4EXP_PR36497=1
 # VERIFIED 2026-08-28 (host-side, pre-build): both `git apply --check -p1`
 # (strict, fuzz 0) and `patch --dry-run -p1` are clean against a pristine v0.5.18
 # worktree, and pyflakes reports no undefined names across the 16 changed files.
-# NOT GPU-validated — no image carrying it has been built or served yet.
+# NOT GPU-validated: the 0.5.18-sm121 image carrying it was built and gate-
+# cleared 2026-08-28, but it has never served a drafter run.
 # Consumer: roles/k8s_dgx/model_profiles/nvidia-nvidia-nemotron-3.5-lightning-30b-a3b-nvfp4.yml
 APPLY_NEMOTRON35_SPEC_PR36186=1
 
