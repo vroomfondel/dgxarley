@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
-# Downloads the upstream Multus thick DaemonSet manifest and applies 5 K3s-specific
+# Downloads the upstream Multus thick DaemonSet manifest and applies 6 K3s-specific
 # patches. Stores the SHA256 of the unpatched upstream in the output header so that
 # subsequent runs can detect whether the upstream actually changed.
 #
+# The manifest is pulled from a RELEASE TAG, not master. It used to track
+# master, which meant the image tag stayed at the rolling `snapshot-thick` and
+# every pod restart could pull a different master build of the CNI daemon while
+# the 5 K3s patches below were maintained against a moving target.
+#
 # Usage:  bash roles/k8s_dgx/files/update_multus_manifest.sh
+#         MULTUS_REF=v4.4.0 bash roles/k8s_dgx/files/update_multus_manifest.sh
+#
+# Newest release: gh api repos/k8snetworkplumbingwg/multus-cni/releases/latest --jq '.tag_name'
 set -euo pipefail
 
-UPSTREAM_URL="https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/master/deployments/multus-daemonset-thick.yml"
+MULTUS_REF="${MULTUS_REF:-v4.3.0}"
+UPSTREAM_URL="https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/${MULTUS_REF}/deployments/multus-daemonset-thick.yml"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEST="${SCRIPT_DIR}/multus-daemonset-thick.yml"
 TMP="$(mktemp)"
@@ -159,11 +168,27 @@ grep -q 'memory: "512Mi"' "$TMP" \
 echo "  Patch 5 applied: kube-multus memory headroom"
 
 # ============================================================================
+# Patch 6: pin the container image tag
+#   Upstream hardcodes the rolling `snapshot-thick` tag (a build off master) in
+#   EVERY manifest, release tags included — checking out v4.3.0 does not pin the
+#   image. Without this patch any pod restart can pull a different master build.
+# ============================================================================
+sed -i "s|multus-cni:snapshot-thick|multus-cni:${MULTUS_REF}-thick|g" "$TMP"
+if grep -q 'multus-cni:snapshot-thick' "$TMP"; then
+    echo "PATCH 6 FAILED: snapshot-thick still present" >&2
+    exit 1
+fi
+grep -q "multus-cni:${MULTUS_REF}-thick" "$TMP" \
+    || { echo "PATCH 6 FAILED: pinned tag not in result" >&2; exit 1; }
+echo "  Patch 6 applied: image tag pinned to ${MULTUS_REF}-thick"
+
+# ============================================================================
 # Prepend header with upstream SHA256 and patch documentation
 # ============================================================================
 cat > "$DEST" <<EOF
 # Downloaded from:
 #   ${UPSTREAM_URL}
+# Upstream release: ${MULTUS_REF}
 # Upstream SHA256: ${UPSTREAM_HASH}
 # Patched by: roles/k8s_dgx/files/update_multus_manifest.sh
 #
@@ -202,6 +227,11 @@ cat > "$DEST" <<EOF
 #    all ADDs fail, pods stay Unknown, multus CrashLoopBackOffs and meets the same
 #    herd again — a deadlock that does not clear by itself (seen 2026-07-28 on
 #    elite800 after a reboot). CPU stays at 100m.
+#
+# 6. image tag: snapshot-thick → ${MULTUS_REF}-thick.
+#    Upstream hardcodes the rolling snapshot-thick tag in every manifest, release
+#    tags included, so the release checkout alone does not pin the image. Without
+#    this any pod restart could pull a different master build of the daemon.
 #
 # Extra CNI plugins (host-device, static) not bundled with K3s are installed by the
 # dgx_prepare role (tag: cni) — see roles/dgx_prepare/tasks/cni_plugins.yml.
