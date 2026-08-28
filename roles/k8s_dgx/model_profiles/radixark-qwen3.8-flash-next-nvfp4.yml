@@ -156,17 +156,27 @@
 #      Sparks), not with sglang.kernels.ops.attention.flash_attention_v4 which
 #      p65 routes to. The evidence supports the direction, not that exact
 #      kernel. This is the single biggest unknown in this profile.
-#   C. TOOL CALLING IS BROKEN FOR THIS MODEL ON SGLANG TODAY, and the model
-#      ALWAYS reasons (thinking cannot be turned off, per the cookbook).
-#      Upstream #36537: thinking + tools + `--tool-call-parser qwen3_coder`
-#      makes it emit token ID 0 forever until max_tokens. Without the parser,
-#      thinking works and a correct native <tool_call><function=...> block
-#      comes back, but as plain content, not message.tool_calls. So
-#      tool_call_parser is deliberately LEFT UNSET below, and this model is NOT
-#      a candidate for hermes-default (Honcho and Hindsight both hard-require
-#      working function calling) until #36537 is fixed. NOTE the token-0
-#      signature is shared with risk A but the cause is different: this one
-#      reproduces at any context length and disappears with thinking off.
+#   C. TOOL CALLING IS BROKEN FOR THIS MODEL ON SGLANG TODAY, and thinking is
+#      ON BY DEFAULT (it is NOT unconditional: the chat template carries the
+#      standard Qwen3 `enable_thinking` toggle, default true, and
+#      chat_template_kwargs.enable_thinking=false renders an empty
+#      <think></think> block. Verified against the checkpoint's own
+#      chat_template.jinja, 2026-08-28. An earlier revision of this profile
+#      claimed thinking could not be turned off; that was wrong).
+#      Upstream #36537: thinking + >=1 tool + `--tool-call-parser qwen3_coder`
+#      makes it emit token ID 0 forever until max_tokens, no tool call
+#      returned. The issue names exactly two escapes, and we take the first:
+#        (a) drop the tool-call parser. Thinking keeps working and a correct
+#            native <tool_call><function=...> block comes back, but as plain
+#            content, not message.tool_calls.
+#        (b) send chat_template_kwargs.enable_thinking=false per request.
+#            Works per the issue, but it is a per-CALLER opt-in that nothing in
+#            this cluster sets, so it cannot be relied on here.
+#      So tool_call_parser is deliberately LEFT UNSET below, and this model is
+#      NOT a candidate for hermes-default (Honcho and Hindsight both
+#      hard-require working function calling) until #36537 is fixed. NOTE the
+#      token-0 signature is shared with risk A but the cause is different: this
+#      one reproduces at any context length and disappears with thinking off.
 #   D. MoE runner on a 640-wide gated MoE. moe_runner_backend below is the
 #      cluster's SM121 NVFP4 default, NOT something the cookbook states (its
 #      NVFP4 cells pin no MoE runner). If the boot dies on the NVFP4 gated-MoE
@@ -276,16 +286,27 @@ _model_profile:
     # here. Raise once a clean boot and a mamba-pool headroom reading exist.
     max_running_requests: 16
     cuda_graph_max_bs: 32
-    # Thinking cannot be disabled on this model, so the reasoning parser is not
-    # optional. `--reasoning-parser auto` resolves to qwen3 from the chat
-    # template (confirmed in the #36537 server log); pinned here.
+    # Thinking is ON BY DEFAULT, so the reasoning parser is not optional. (It
+    # is not unconditional: enable_thinking=false per request renders an empty
+    # <think></think> block. See risk C.)
+    # `--reasoning-parser auto` resolves to qwen3 for this checkpoint. Two
+    # independent confirmations: the #36537 server log says so, and running
+    # v0.5.18's own srt/parser/template_detection.py against the checkpoint's
+    # chat_template.jinja gives reasoning_config=(enable_thinking, default
+    # true) -> rule enable_thinking_default_true -> _is_qwen3 -> "qwen3"
+    # (2026-08-28). Pinned rather than left on auto so a change to upstream's
+    # detection rules cannot silently swap the parser under us.
     reasoning_parser: "qwen3"
-    # tool_call_parser is INTENTIONALLY UNSET. qwen3_coder + thinking + tools
-    # is a deterministic token-ID-0 repetition loop on this model (#36537), and
-    # thinking cannot be turned off. Unset means the model's native
-    # <tool_call><function=...> block arrives as plain content instead of
-    # message.tool_calls, which is degraded but not broken. Do NOT wire this
-    # model behind hermes-default until #36537 is fixed. See risk B.
+    # tool_call_parser is INTENTIONALLY UNSET, and that is a DEVIATION from
+    # auto-detection, not just an omission: the same template_detection run
+    # resolves the TOOL side to qwen3_coder, i.e. `--tool-call-parser auto`
+    # would select exactly the parser that breaks. qwen3_coder + thinking +
+    # tools is a deterministic token-ID-0 repetition loop on this model
+    # (#36537), and thinking is on unless the CALLER opts out per request.
+    # Unset means the model's native <tool_call><function=...> block arrives as
+    # plain content instead of message.tool_calls, which is degraded but not
+    # broken. Do NOT wire this model behind hermes-default until #36537 is
+    # fixed. See risk C (not B).
     # From the checkpoint's generation_config.json (do_sample true). The
     # cookbook notes Qwen published no sampling recommendation for this
     # preview and suggests leaving it to the checkpoint, which is what these
