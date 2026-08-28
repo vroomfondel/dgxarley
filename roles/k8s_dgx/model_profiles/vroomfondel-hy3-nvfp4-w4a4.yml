@@ -70,6 +70,17 @@ _model_profile:
     # Parsers per the card (verbatim SGLang registry names):
     tool_call_parser: "hunyuan"     # needed by honcho/hindsight tool-calling paths
     reasoning_parser: "hunyuan"     # Hy3 is a hybrid fast/slow-thinking model
+    # Values this model's OWN chat template accepts for reasoning_effort,
+    # read from the checkpoint on the cluster 2026-08-28. SGLang's request
+    # schema (ReasoningEffortType) is WIDER than this and family-agnostic,
+    # so a value can pass pydantic and still hit a raise_exception() in the
+    # template = HTTP 400 on every request. sglang-test checks
+    # --reasoning-effort against this list before sending anything.
+    # chat_template.jinja: raise unless reasoning_effort is in
+    # ['high','low','no_think']. Note the OFF value is 'no_think', NOT
+    # 'none', and 'no_think' is outside SGLang's request schema so it can
+    # only travel as a chat_template_kwarg.
+    reasoning_efforts: ["high", "low", "no_think"]
     # ⚠ TOKEN-SUFFIX: this checkpoint's tokenizer suffixes EVERY structural token
     # (tokenizer_config.json token_suffix ":opensource" → the model emits single
     # tokens <think:opensource>, <tool_calls:opensource>, <tool_sep:opensource>,

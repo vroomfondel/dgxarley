@@ -128,6 +128,16 @@ _model_profile:
     # reasoning_content when present — harmless when off. Native function calling +
     # JSON output → tool_call_parser "mistral".
     reasoning_parser: "mistral"
+    # Values this model's OWN chat template accepts for reasoning_effort,
+    # read from the checkpoint on the cluster 2026-08-28. SGLang's request
+    # schema (ReasoningEffortType) is WIDER than this and family-agnostic,
+    # so a value can pass pydantic and still hit a raise_exception() in the
+    # template = HTTP 400 on every request. sglang-test checks
+    # --reasoning-effort against this list before sending anything.
+    # chat_template.jinja: raise unless reasoning_effort is in
+    # ['none','high']. Reasoning is OFF by default, so 'high' must be sent
+    # explicitly to turn it on.
+    reasoning_efforts: ["none", "high"]
     tool_call_parser: "mistral"
     recommended_sampling:
       # Mistral card guidance: low temperature for production (non-thinking). Raise from 0.15

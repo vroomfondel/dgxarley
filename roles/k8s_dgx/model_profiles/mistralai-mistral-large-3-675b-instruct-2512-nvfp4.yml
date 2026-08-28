@@ -155,6 +155,17 @@ _model_profile:
     # flag. SGLang's MistralDetector (key "mistral") splits the thinking block into
     # reasoning_content when present — harmless when off.
     reasoning_parser: "mistral"
+    # Values this model's OWN chat template accepts for reasoning_effort,
+    # read from the checkpoint on the cluster 2026-08-28. SGLang's request
+    # schema (ReasoningEffortType) is WIDER than this and family-agnostic,
+    # so a value can pass pydantic and still hit a raise_exception() in the
+    # template = HTTP 400 on every request. sglang-test checks
+    # --reasoning-effort against this list before sending anything.
+    # Same ['none','high'] whitelist as Mistral-Small-4-119B, whose
+    # chat_template.jinja was read on the cluster 2026-08-28. This
+    # checkpoint is not in the local cache, so it is inherited from the
+    # family rather than directly verified. Reasoning is OFF by default.
+    reasoning_efforts: ["none", "high"]
     tool_call_parser: "mistral"    # needed by honcho/hindsight tool-calling paths
     recommended_sampling:
       # Model card: temperature < 0.1 for production (non-thinking). Raise toward

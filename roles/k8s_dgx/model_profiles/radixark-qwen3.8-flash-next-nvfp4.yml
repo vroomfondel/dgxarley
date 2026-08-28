@@ -296,7 +296,41 @@ _model_profile:
     # true) -> rule enable_thinking_default_true -> _is_qwen3 -> "qwen3"
     # (2026-08-28). Pinned rather than left on auto so a change to upstream's
     # detection rules cannot silently swap the parser under us.
+    #
+    # THIS TEMPLATE ALSO READS reasoning_effort, and its accepted set is NOT the
+    # OpenAI one (verified against the checkpoint's own chat_template.jinja on
+    # the cluster, 2026-08-28):
+    #     {%- set resolved_reasoning_effort = reasoning_effort|default('xhigh') %}
+    #     {%- if resolved_reasoning_effort not in ('xhigh','medium','low') %}
+    #         {{- raise_exception('Unexpected reasoning effort ...') }}
+    # So xhigh (the DEFAULT, i.e. thinking is not merely on, it is on at max) /
+    # medium / low are the only legal levels, and the obvious-looking
+    # `--reasoning-effort high` (or max, or minimal) is a chat-template
+    # exception, i.e. HTTP 400 on EVERY request. Thinking is turned OFF with
+    # enable_thinking=false, never with a level.
+    # 'none' is the one exception that does NOT raise: SGLang derives
+    # chat_template_kwargs.enable_thinking=false from it
+    # (v0.5.18 protocol.py normalize_reasoning_inputs), so this template skips
+    # its effort check entirely. It is still not in reasoning_efforts below,
+    # because --no-think is the direct way to say that.
+    # xhigh IS inside SGLang's own request schema
+    # (ReasoningEffortTier = none/minimal/low/medium/high/xhigh/max in v0.5.18),
+    # so it travels as the normal top-level field and needs no
+    # chat_template_kwargs smuggling.
     reasoning_parser: "qwen3"
+    # Values this model's OWN chat template accepts for reasoning_effort,
+    # read from the checkpoint on the cluster 2026-08-28. SGLang's request
+    # schema (ReasoningEffortType) is WIDER than this and family-agnostic,
+    # so a value can pass pydantic and still hit a raise_exception() in the
+    # template = HTTP 400 on every request. sglang-test checks
+    # --reasoning-effort against this list before sending anything.
+    # chat_template.jinja: reasoning_effort|default('xhigh'), then
+    # raise_exception() unless it is in ('xhigh','medium','low'). 'xhigh' is
+    # also the DEFAULT, so an unset level means maximum thinking, and 'high' /
+    # 'max' / 'minimal' are an HTTP 400 here despite being legal in SGLang's
+    # own schema. Thinking is turned OFF with enable_thinking=false
+    # (sglang-test --no-think), never with a level.
+    reasoning_efforts: ["xhigh", "medium", "low"]
     # tool_call_parser is INTENTIONALLY UNSET, and that is a DEVIATION from
     # auto-detection, not just an omission: the same template_detection run
     # resolves the TOOL side to qwen3_coder, i.e. `--tool-call-parser auto`
