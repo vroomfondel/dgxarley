@@ -133,7 +133,7 @@
                   value: "1"
             containers:
               - name: redis
-                image: redis:8.6
+                image: redis:8.10
                 imagePullPolicy: Always
                 command:
                   - redis-server
