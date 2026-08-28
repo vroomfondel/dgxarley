@@ -1,5 +1,31 @@
 # FlashInfer Upstream Bug: head_dim=512 not supported (Gemma-4 global attention)
 
+## Status 2026-08-28 (re-verify; SGLang v0.5.18 released, ships the intel_amx allowlist content flagged unreleased on 2026-08-21)
+
+SGLang released **v0.5.18** on 2026-08-22T00:09:15Z, superseding v0.5.17 (2026-08-08) as
+GitHub "Latest." This ships the `accepted_backends` content flagged as "changed on main,
+not yet released" in the 2026-08-21 entry below: source-verified at the v0.5.18 tag,
+`server_args.py:5672-5677` now reads `("trtllm_mha", "triton", "ascend", "intel_xpu",
+"intel_amx")`, assert message at line 5683. `flashinfer` remains excluded;
+`attention_backend: triton` remains permanently mandatory for all four Gemma-4 profiles on
+our GPU cluster. This is additive CPU/Xeon-path housekeeping only, consistent with the
+analysis already in this document.
+
+SGLang `main` HEAD is now `d5670645` (2026-08-28T09:41:49Z, up from `dad6fd0f` on
+2026-08-21); `_handle_model_specific_adjustments` is now at line 5764 on `main` (was 5268),
+allowlist/assert block now at approximately lines 6210-6221 (was 5697-5711), pure line drift
+from unrelated refactor work elsewhere in the file (710 PRs landed in v0.5.18 per its release
+notes). The Gemma4 allowlist content itself is unchanged from the tag.
+
+flashinfer still **v0.6.17 stable** (2026-08-11) as latest, no new stable release; latest
+pre-release is **v0.6.18rc10** (2026-08-28, today), SM107/Rubin fixes only (PRs
+#4786/#4789/#4790/#4792), nothing touching `prefill.cuh`/`persistent.cuh`/the head_dim=512
+dispatch. PR #3684 (NVFP4 asymmetric qk=512/vo=256, merged 2026-08-13) remains merged and
+remains out of any stable release, still nightly-only. No commit has touched `prefill.cuh` or
+`persistent.cuh` since PR #4401 (2026-08-20, masked-softmax NaN fix, already noted as out of
+scope in the 2026-08-21 entry below). Issue #3297 and PR #3576 unchanged (closed / merged).
+No action needed.
+
 ## Status 2026-08-15 (re-verify, one new cross-reference)
 
 SGLang still **v0.5.17** (released 2026-08-08, still GitHub "Latest"); main

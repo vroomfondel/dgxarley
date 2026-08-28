@@ -494,6 +494,8 @@ from the 2026-08-15 check). No new stable flashinfer release since v0.6.17
 (2026-08-11, still latest); nightlies have advanced to
 `nightly-v0.6.18-20260819`. Patch 1 remains mandatory; no upstream fix exists.
 
+**Re-verified 2026-08-28:** `flashinfer/jit/cpp_ext.py:get_cuda_version()` still calls `subprocess.check_output([nvcc, "--version"])` unconditionally on the happy path, verified against `main` HEAD `93f4f264` (2026-08-28T09:53:19Z). No commits to the file since 2026-07-30. No new stable flashinfer release since v0.6.17 (2026-08-11, still latest); a new pre-release, v0.6.18rc10 (2026-08-28), ships today but only contains SM107/Rubin fixes, nothing touching subprocess handling. SGLang released v0.5.18 (2026-08-22), superseding v0.5.17; its release notes pin flashinfer 0.6.17, no change relevant to this bug. Patch 1 remains mandatory; no upstream fix exists.
+
 **File locations updated (repo housekeeping, not an upstream change):** the
 runtime patches described throughout this document as living inside
 `sglang_launch.sh` (heredoc blocks `PATCH_FI_CUDA_VER_EOF` and
