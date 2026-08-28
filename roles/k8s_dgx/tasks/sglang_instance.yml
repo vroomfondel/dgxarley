@@ -385,19 +385,65 @@
       {{ (_sglang_patch_data | combine({'_patchlib.py': lookup('file', role_path ~ '/files/sglang_patches/_patchlib.py')}))
          | dict2items | sort(attribute='key') | to_json }}
 
+# The ConfigMap below used to be created with client-side `apply: true`, which
+# mirrors the whole object into the `last-applied-configuration` annotation.
+# The patch set has outgrown the 262144-byte annotation cap, so it moved to
+# server-side apply (see the next task). The leftover annotation is dead weight
+# from then on (~230 KB) and re-arms the same failure for anyone doing a plain
+# `kubectl apply` later, so drop it once. Guarded by a lookup because a JSON
+# `remove` op on a missing path is a 422.
+- name: Look up SGLang patch-scripts ConfigMap ({{ inst.prefix }})
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: ConfigMap
+    name: "{{ inst.prefix }}-patch-scripts"
+    namespace: "{{ sglang_namespace }}"
+  register: _sglang_patch_cm
+
+- name: Drop legacy client-side-apply annotation from patch-scripts ConfigMap ({{ inst.prefix }})
+  kubernetes.core.k8s_json_patch:
+    # k8s_json_patch is NOT a member of the `kubernetes.core.k8s` action group
+    # (see the collection's meta/runtime.yml: only k8s, k8s_exec, k8s_info,
+    # k8s_log, k8s_scale, k8s_service, k8s_cp, k8s_drain), so the play-level
+    # module_defaults `group/kubernetes.core.k8s` does NOT reach it. Without
+    # this explicit context it talks to the shell's current kube-context, i.e.
+    # the wrong cluster, and 404s.
+    context: "{{ kubeconfig_context_name }}"
+    api_version: v1
+    kind: ConfigMap
+    name: "{{ inst.prefix }}-patch-scripts"
+    namespace: "{{ sglang_namespace }}"
+    patch:
+      # '/' in a JSON-pointer path segment is escaped as '~1'.
+      - op: remove
+        path: /metadata/annotations/kubectl.kubernetes.io~1last-applied-configuration
+  when: >-
+    (_sglang_patch_cm.resources | default([]) | length) > 0
+    and 'kubectl.kubernetes.io/last-applied-configuration'
+        in (_sglang_patch_cm.resources[0].metadata.annotations | default({}))
+
 - name: Create SGLang patch-scripts ConfigMap ({{ inst.prefix }})
   kubernetes.core.k8s:
     state: present
-    apply: true
+    # SERVER-side apply, not client-side `apply: true`: both prune a DELETED
+    # patch file from the mount (a stale patch would otherwise linger and keep
+    # being executed by the runner's glob), but client-side apply stores the
+    # whole object in the `kubectl.kubernetes.io/last-applied-configuration`
+    # annotation, and the patch set has outgrown the 262144-byte annotation
+    # limit ("metadata.annotations: Too long"). SSA tracks ownership in
+    # metadata.managedFields instead, which is not subject to that cap.
+    server_side_apply:
+      field_manager: ansible-sglang-patches
+      # The ConfigMap predates the switch, so its fields are still owned by the
+      # legacy `before-first-apply` manager, so the first SSA run conflicts on
+      # every key without this.
+      force_conflicts: true
     definition:
       apiVersion: v1
       kind: ConfigMap
       metadata:
         name: "{{ inst.prefix }}-patch-scripts"
         namespace: "{{ sglang_namespace }}"
-      # apply: true — a full replace, so a DELETED patch file actually vanishes
-      # from the mount instead of lingering via strategic merge (a stale patch
-      # would keep being executed by the runner's glob).
       data: "{{ _sglang_patch_data | combine({'_patchlib.py': lookup('file', role_path ~ '/files/sglang_patches/_patchlib.py')}) }}"
 
 - name: Create SGLang launch script ConfigMap ({{ inst.prefix }})
