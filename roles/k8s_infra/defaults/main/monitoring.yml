@@ -69,7 +69,7 @@ fluentbit_teardown: false
 # Caveat to re-check on the next bump: the 4.2 line was AHEAD on patches at the
 # time of the switch (4.2.7 from 2026-07-09 vs 5.0.9 from 2026-07-04).
 # Multi-arch (amd64/arm64/arm), so the same tag runs on k3smaster and spark1-4.
-fluentbit_image: "fluent/fluent-bit:5.0"
+fluentbit_image: "fluent/fluent-bit:5.1"
 # Canary rollout: pin the fluent-bit DaemonSet to a node subset while comparing
 # its labels against promtail's in Grafana. Empty = all nodes (normal state).
 # e.g. {"kubernetes.io/hostname": "elite800"}
@@ -178,7 +178,7 @@ grafanalogs_teardown: false
 # Same pin as the Prometheus Grafana. The sister repo runs `:latest`; keel
 # (force + match-tag + poll) then walks majors unattended, which for Grafana
 # means unannounced schema migrations of grafana.db.
-grafanalogs_image: "grafana/grafana:12.4-ubuntu"
+grafanalogs_image: "grafana/grafana:13.2.0-ubuntu"
 grafanalogs_tls_issuer: "letsencrypt-production"
 # Set false to manage the grafanalogs A record outside this repo.
 grafanalogs_manage_dns: true

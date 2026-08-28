@@ -200,7 +200,7 @@
                 mountPath: /etc/alertmanager
             containers:
             - name: alertmanager
-              image: prom/alertmanager:v0.31.1
+              image: prom/alertmanager:v0.34.0
               args:
                 - "--config.file=/etc/alertmanager/alertmanager.yml"
                 - "--storage.path=/alertmanager"

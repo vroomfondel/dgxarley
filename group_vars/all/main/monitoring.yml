@@ -38,7 +38,7 @@ fluentbit_enabled: true
 promtail_enabled: false
 fluentbit_teardown: false
 promtail_teardown: false
-fluentbit_image: "fluent/fluent-bit:5.0"
+fluentbit_image: "fluent/fluent-bit:5.1"
 fluentbit_node_selector: {}
 fluentbit_pod_labels:
   - app

@@ -157,7 +157,7 @@
                     mountPath: /mnt
             containers:
               - name: loki
-                image: grafana/loki:3.6
+                image: grafana/loki:3.7
                 imagePullPolicy: Always
                 args:
                   - "--config.file=/etc/loki/local-config.yaml"
