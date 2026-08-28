@@ -714,6 +714,30 @@ SM120/SM121 mention, still informational only. #32750 idle since 2026-08-06.
 DeepSeek-V4-Pro-0813 (#34809), a Pro-variant refresh, not re-evaluated for
 capacity here.
 
+**Follow-up same day (2026-08-28, approved): Wall 7 plumbing migrated in-repo;
+the replacement is semantically BROADER than the old env.** Repo changes
+(uncommitted): the pod env `SGLANG_TOPK_TRANSFORM_512_TORCH` was removed from
+`roles/k8s_dgx/tasks/sglang_instance.yml` (breadcrumb comment left); the same
+profile key `topk_transform_512_torch` now renders `SGLANG_DSA_TOPK_BACKEND=torch`
+into the shared instance ConfigMap, and `sglang_launch.sh` translates that into
+`--dsa-topk-backend torch` plus `export SGLANG_DSA_FUSE_TOPK=0`. Source-verified
+semantics on both tags: on v0.5.17 the old env and `dsa_topk_backend.is_torch()`
+are ORed at the SAME dispatch site (`dsv4/indexer.py:808-809`), so the arg covers
+the old behavior on the current image; on v0.5.18 the env is gone and
+`is_torch()` (`indexer.py:811`) is the only path. Two caveats discovered during
+verification: (1) the `torch` choice of `--dsa-topk-backend` requires unfused
+top-k, `SGLANG_DSA_FUSE_TOPK=0` (default is 1; the fused dispatch ends in
+`raise RuntimeError("Unsupported ... for SGLANG_DSA_FUSE_TOPK")` for torch,
+`dsa/dsa_topk_backend.py:91/:199`), which launch.sh now sets automatically;
+(2) unlike the old env, which surgically flipped only the 512-transform site
+while the rest of the indexer stayed on `sgl-kernel` fused kernels, the arg
+switches the WHOLE indexer top-k backend to torch (slower). v0.5.18+ offers no
+narrow equivalent of the old env anymore. Operationally dormant either way: all
+three DSV4 profiles set `topk_transform_512_torch: false` (JIT `topk_v1.cuh`
+validated bit-identical on GB10 2026-06-20), so nothing is emitted today; the
+knob is only a re-armable escape hatch, now with a perf cost attached if ever
+re-enabled.
+
 ---
 
 ## Upstream references
