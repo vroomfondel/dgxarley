@@ -175,3 +175,14 @@ anchors, and update the two heredoc blocks in `sglang_launch.sh`. Verify with th
   `reviewDecision` REVIEW_REQUIRED, no review comments yet. Not merged, so
   our 5 local runtime patches in `sglang_launch.sh` remain required and
   unaffected.
+- **2026-08-28** - SGLang v0.5.18 released 2026-08-22, now the latest release.
+  `mllama4.py`/`llama4.py` are byte-identical across v0.5.17, v0.5.18, and
+  upstream `main` (commit `d56706459`, 2026-08-28); all five patched anchors
+  unchanged at the same lines already logged (`mllama4.py:859/618/736`,
+  `llama4.py:304`). PR #35032: still OPEN, no commits, reviews, or comments
+  since 2026-08-16 (`updatedAt` unchanged); `mergeable: MERGEABLE` but
+  `mergeStateStatus: BLOCKED` on failing non-CUDA CI (AMD ROCm-extra, ROCm
+  7.2, MLX, MUSA finish jobs), still unrelated to our GB10/SM121 CUDA target.
+  Not merged. Issue #34192 unchanged, still OPEN with 0 comments since
+  2026-08-09. No new SM12x-related Llama4-NVFP4 issue or PR found. All five
+  local patches in `sglang_launch.sh` remain required.

@@ -207,6 +207,81 @@ No upstream change alters the standing 08-15 verdict (stock v0.5.17
 auto-selects and runs flashinfer_sparse_mla; p34 redundancy supported at
 TP1/dummy-weight level only).
 
+Re-checked 2026-08-28: PR #31481 head unchanged (`0864022c3d`), `updated_at`
+unchanged (2026-08-03T13:03:37Z), no new comments (still 2) or reviews,
+only the `deepseek` label, `reviewDecision: REVIEW_REQUIRED`. REST now
+reports `mergeable: true` / `mergeable_state: "unstable"` (was `"blocked"`
+on 08-21), a status-check-noise flip, not a content change (no `run-ci`
+label, so checks stay skipped/pending). `dsa_backend.py::_forward_trtllm`
+on `upstream/main` re-fetched: still hardcodes `backend="trtllm-gen"`, now
+line 3269 (drifted 1 line from 3268, unrelated commits); `_forward_
+flashinfer_sparse_mla` still present separately at line 2766.
+`overrides.py::_dsa_split_backend_resolution` diffed directly between the
+08-21-era commit (`af39ad9349`) and current `upstream/main`: zero lines of
+the function changed (confirmed via `git diff` on `overrides.py` showing 0
+hits on `_dsa_split_backend_resolution`/`is_glm_sm12_fp8`/
+`flashinfer_sparse_mla`), despite 18 other commits touching the file in
+this window (ongoing ServerArgs config-declaration refactor plus new model
+support, e.g. MiniCPM-SALA, Ling-3.0-flash, DeepEPv2). The `is_glm_sm12_fp8`
+auto-selection (GlmMoeDsaForCausalLM + SM12x + fp8_e4m3 KV, non-ROCm) still
+unconditionally sets both prefill/decode to `flashinfer_sparse_mla` unless
+the user overrides. `flash_mla_sm120.py::_validate_flashinfer_sparse_mla_
+backend` still present (now line 572). One functional (non-validator)
+change landed in that file: PR #35116 "allocate the page-split buffer
+outside inference mode" (merged 2026-08-25) fixes a CUDA-graph-capture
+mutation bug in `_split_kv_pages_to_64`; does not touch the validator or
+auto-selection dispatch.
+
+PR #32779 has real forward progress since 08-21. A second commit,
+`2a625a4396` "Shrink the DSA prefill dispatch surface for
+triton_sparse_mla", was pushed to the branch 2026-08-16T15:49:51Z,
+delivering the refactor the author promised in the 08-17 comment:
+`triton_sparse_mla` folds into the existing `flashmla_sparse` family
+instead of a sibling branch, and `--dsa-triton-dense-prefix` was dropped.
+Confirmed via the PR's current diff on `flash_mla_sm120.py`:
+`_validate_flashinfer_sparse_mla_backend`'s is_glm_sm12_fp8 arm is now
+`selected - {"flashinfer_sparse_mla", "triton_sparse_mla"}` (was
+`{"flashinfer_sparse_mla"}`), with an added comment stating
+`flashinfer_sparse_mla` stays the auto-selected default and
+`triton_sparse_mla` is only a validated opt-in alternative, same
+substantive change already recorded 08-21, now confirmed present on the
+pushed commit too. REST now reports `mergeable: true` / `mergeable_state:
+"unstable"` (was `false`/`"dirty"` on 08-21), 9 files changed, +1365/-8.
+Labels unchanged (performance, run-ci, jit-kernel, GLM). New maintainer
+activity, most recent first: nvpohanh `/rerun-failed-ci`
+(2026-08-27T15:13:28Z, most recent event); nvpohanh "@yunyang1999 could you
+fix the conflicts?" (2026-08-27T12:29:08Z and again 2026-08-24T03:50:41Z);
+nvpohanh asked b8zhong to check yunyang1999's response (2026-08-24T03:50:27Z).
+These "fix the conflicts" requests directly conflict with the API's
+`mergeable: true` reading as of this check, flagging as an open discrepancy
+(stale cache vs. a real, more-recent conflict) rather than asserting
+either. Not merged, `reviewDecision: REVIEW_REQUIRED`, one empty-body
+`COMMENTED` review from b8zhong (2026-08-12) is the only review on record.
+
+flashinfer stable still v0.6.17 (2026-08-11); zero commits to
+`flashinfer/mla/_sparse_mla_sm120.py` since then (checked via the commits
+API). A new release channel tag `v0.6.18rc10` was published today
+(2026-08-28T06:15:01Z, flagged non-prerelease in metadata) but its
+changelog is SM107 (Rubin) fixes only, unrelated to SM120/121
+GLM_NSA/DSv3.2 dispatch. flashinfer PR #4551 still open (`updated_at`
+2026-08-25), not merged, still scoped to DSV4 decode-dispatch diagnostics
+only, still explicitly not touching the DSv3.2/GLM_NSA path this PR needs,
+prior "ruled irrelevant" conclusion unchanged.
+
+SGLang v0.5.18 (2026-08-22, 710 PRs) reviewed for DSA/GLM-5.2 entries:
+#33436/#33945 (FA4 GLM4.7-flash), #33474 (DeepGEMM layout selection),
+#30531/#33857 (indexer/DSV4 logits skip optimizations), #33793 (GLM-5.2 PP
+MoE weight restriction), all either unrelated model work or DSV4-specific;
+none touch the GLM_NSA/DSv3.2 SM12x auto-selection or the `_forward_trtllm`
+hardcode.
+
+p34 retirement decision remains pending: no TP4/real-weight confirmation
+run since 08-15 (approval-gated, not requested this cycle). New unmerged
+draft-scale PR #36507 "GLM-5.3-Flash support" (opened 08-26, updated 08-28)
+touches `dsa_backend.py`/`overrides.py`/`environ.py` among ~50+ files but
+not `flash_mla_sm120.py` or the sparse-MLA dispatch; flagged as activity to
+watch only.
+
 ## Proposed PR title
 
 > [DSA] Enable sparse MLA decode+prefill on SM120/SM121 (consumer Blackwell) via

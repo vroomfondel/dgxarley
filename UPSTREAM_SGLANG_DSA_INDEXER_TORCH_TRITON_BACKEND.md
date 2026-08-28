@@ -171,6 +171,95 @@ backend.
 Conclusion unchanged: p30/p35 remain necessary on stock v0.5.17/current
 main; no upstream fix has landed or is imminent.
 
+Re-checked 2026-08-28: PR #31480 head unchanged (`68cf312934`), `updated_at`
+unchanged (2026-08-15T10:12:46Z), no new comments (still 3: the bot quota
+warning, the companion link, the 08-03 rebase note) or reviews, no `run-ci`
+label, `reviewDecision: REVIEW_REQUIRED`. Mergeable state flipped again: REST
+API now reports `mergeable: false` / `mergeable_state: "dirty"` (was `true` /
+`"blocked"` on 08-21), i.e. main has drifted since the 08-15 rebase and
+#31480 needs another rebase (not done, pending approval, same pattern as the
+08-15-morning entry). `DSAPagedMQALogitsBackend`
+(`python/sglang/srt/layers/attention/dsa/paged_mqa_logits_backend.py`) on
+`upstream/main` re-fetched via `git show`: zero commits touch this file
+since baseline `dad6fd0f04`; still only DEEPGEMM/CUTEDSL/AITER, `resolve()`
+still maps auto/deepgemm to DEEPGEMM unconditionally on non-ROCm, no `torch`
+value. `server_args.py`'s `dsa_paged_mqa_logits_backend` CLI choices
+confirmed still exactly `["auto", "deepgemm", "cutedsl", "aiter"]` on
+upstream/main, so stock still rejects `torch` (p30 not redundant, unchanged
+conclusion).
+
+SGLang released v0.5.18 (2026-08-22, 710 PRs). Confirmed it contains #34926
+("Clean deprecated DeepSeek V4 Environs", commit `bc312d185d`, removes
+`SGLANG_TOPK_TRANSFORM_512_TORCH`) via `git log v0.5.17..v0.5.18
+--grep=34926`. Release changelog DSA entries reviewed: nothing new beyond
+already-tracked #33006/#34167; no arch-independent paged-MQA-logits backend
+added.
+
+`sgl-deep-gemm` pin in `python/pyproject.toml` on `upstream/main` unchanged
+at `0.1.5.post3`; PyPI latest also still `0.1.5.post3` (full version list
+checked, no `post4`). Both `deepseek-ai/DeepGEMM` PRs remain unmerged: #379
+(`OPEN`, `updated_at` 2026-08-13) and #406 (`OPEN`, `updated_at`
+2026-08-22, still just the calibration harness).
+
+Six commits touched `python/sglang/srt/layers/attention/dsa/` since
+baseline, none touching `paged_mqa_logits_backend.py` and none adding an
+arch-independent backend: `7fd5454335` ([DSA] Route ragged prefill top-k to
+v2 kernel, #35175, merged 08-21), `af39ad9349` (dots.note.omni model
+support, unrelated), `3c9febc68b` ([Spec][DSA] Add
+`--speculative-dsa-topk-backend`, #36313, merged 08-25, a separate,
+pre-existing `DSATopKBackend` enum that already had a `torch` value before
+this baseline, not the paged-MQA-logits backend this doc tracks), and three
+mechanical "config:" ServerArgs-declaration-refactor commits (`8005df61d3`,
+`ca1d7ed8e6`, `fd40a331bf`). No new sglang issue or PR found searching
+"dsa_paged_mqa_logits_backend torch".
+
+New (immature) activity to watch, not conclusion-changing: PR #36507
+"GLM-5.3-Flash support" (opened 2026-08-26, updated 2026-08-28, no `run-ci`
+label, unreviewed) adds new `dsa_indexer_kpool.py` / `kpool_fp8_index.py` /
+`kpool_plan.py` infrastructure but does not touch `paged_mqa_logits_backend.py`
+or `flash_mla_sm120.py`.
+
+Conclusion unchanged: p30/p35 remain necessary on stock v0.5.18/current main.
+
+Follow-up same day (2026-08-28, approved): #31480 rebased onto current main
+`d56706459c` (2026-08-28, this same rebase's upstream/main HEAD). Old head
+`68cf312934` -> new head `6b2e62e259`, pushed `--force-with-lease` to the
+vroomfondel fork. Two conflicting files, both from the ongoing declarative
+ServerArgs refactor (the "config bags" work, `A[..., Arg(...), NS(...)]`
+field annotations replacing the old argparse style, and per-arg `choices`
+now written inline instead of via a shared module-level constant list):
+- `python/sglang/srt/layers/attention/dsa_backend.py`: our added
+  `self.paged_mqa_logits_backend = DSAPagedMQALogitsBackend.resolve(...)`
+  line collided with upstream moving the neighboring `dsa_prefill_impl` /
+  `dsa_decode_impl` / `dsa_topk_backend` reads from `model_runner.server_args.*`
+  to `get_exec().kernel.*`. Resolved by keeping upstream's new accessor style
+  for those three lines and rewriting our own line to match the same
+  pattern (`get_exec().kernel.dsa_paged_mqa_logits_backend` instead of
+  `model_runner.server_args.dsa_paged_mqa_logits_backend`), matching the
+  pre-existing analogous resolve call already present in
+  `dsa/dsa_indexer.py` (which merged clean, since we never touched that
+  line).
+- `python/sglang/srt/server_args.py`: our `DSA_PAGED_MQA_LOGITS_BACKEND_CHOICES`
+  module constant (with `torch` added) collided with upstream deleting the
+  whole block of similar constants (`LORA_BACKEND_CHOICES`, `DSA_CHOICES`,
+  `DSA_TOPK_BACKEND_CHOICES`, `MAMBA_BACKEND_CHOICES`, etc.) in favor of
+  inline `choices=[...]` lists at each field. Resolved by dropping our
+  constant and instead adding `"torch"` directly to the inline
+  `choices=["auto", "deepgemm", "cutedsl", "aiter"]` list on the
+  `dsa_paged_mqa_logits_backend` field, keeping our extended help text
+  describing the `torch` option.
+All other 6 touched files (`environ.py`, `dsa/dsa_indexer.py`,
+`dsa/paged_mqa_logits_backend.py`, `dsa/torch_paged_mqa_logits.py`,
+`dsa/triton_paged_mqa_logits.py`, `test/registered/kernels/test_dsa_paged_mqa_logits.py`)
+auto-merged clean, no manual changes needed. Verified: no leftover conflict
+markers repo-wide, `ast.parse` clean on all 8 touched files,
+`git range-diff 0c072235f..68cf312934 upstream/main..HEAD` shows only the
+two resolutions above as content drift (rest is pure context shift), own
+diffstat unchanged at 8 files, +1022/-12 (identical to the 08-15 baseline).
+REST/GraphQL now report `mergeable: MERGEABLE` / `mergeStateStatus: BLOCKED`
+(checks/review gating only, no conflict), `headRefOid` confirmed
+`6b2e62e259398b8e34b8eac5d92f6d6a7c9448ff` live on the PR.
+
 > [DSA] Add an arch-independent `torch` paged-MQA-logits backend with a fused
 > Triton fast path (unblocks DSA models on SM120/SM121)
 
