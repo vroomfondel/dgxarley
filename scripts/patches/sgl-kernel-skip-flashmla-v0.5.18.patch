@@ -1,0 +1,123 @@
+Skip the flashmla_ops target in sgl-kernel for DGX Spark GB10.
+
+Problem:
+  sgl-kernel/CMakeLists.txt includes `cmake/flashmla.cmake` which
+  declares a separate `flashmla_ops` Python extension module built from
+  sgl-project/FlashMLA — NVIDIA's Multi-Latent-Attention kernel library
+  (originally from DeepSeek-AI, forked into the sglang org). The target
+  has roughly 25 translation units split across:
+
+    csrc/sm90/decode/{dense,sparse_fp8}/instantiations/*.cu
+    csrc/sm90/prefill/sparse/instantiations/*.cu
+    csrc/sm100/prefill/{dense,sparse}/*.cu
+    csrc/sm100/decode/head{64,128}/instantiations/*.cu
+    csrc/extension/sm90/dense_fp8/*.cu
+
+  EVERY source file is either sm_90a (Hopper H100/H200) or sm_100a
+  (Blackwell B200). There is no sm_121a dispatch path in FlashMLA at
+  all — verified against the sglang v0.5.10 flashmla.cmake source file,
+  which only APPENDs `-gencode=arch=compute_90a,code=sm_90a` and
+  `-gencode=arch=compute_100a,code=sm_100a` to the FLASHMLA_CUDA_FLAGS.
+
+  On GB10 (compute capability 12.1) neither of these binary variants
+  is selected by the CUDA loader, and FlashMLA has no cooperative
+  fallback. The entire `flashmla_ops` Python extension builds to
+  binary that cannot be loaded on this fleet → pure dead code burning
+  ~25 TUs of build time and increasing wheel size.
+
+  FlashMLA's primary use case is MLA-style attention (DeepSeek, Kimi
+  K2, etc.) on Hopper/B200. Our target models — Qwen3-235B-A22B-NVFP4,
+  Qwen3.5-397B-A17B-NVFP4, GLM-4.7-NVFP4, Gemma4 — all use standard
+  attention (MHA/GQA), not MLA, so even if the kernel magically worked
+  on GB10 we would not call it.
+
+Fix:
+  Wrap the `include(${CMAKE_CURRENT_LIST_DIR}/cmake/flashmla.cmake)`
+  call in sgl-kernel/CMakeLists.txt in `if (FALSE) ... endif()`. This
+  prevents the cmake file from being loaded at all, so the
+  `Python_add_library(flashmla_ops ...)` target, its sources, its
+  link/include/install commands, and its cuda flags are never
+  processed. Downstream code in CMakeLists.txt does NOT reference the
+  `flashmla_ops` target — verified via grep — so skipping the include
+  is a clean surgical removal.
+
+  Using if(FALSE) instead of outright deletion preserves the upstream
+  structure so future CMake drift is visible in plain diffs; it is
+  semantically equivalent to removing the include line.
+
+Runtime safety:
+  On GB10 nothing changes. sgl-kernel's Python bindings do not
+  unconditionally import `flashmla_ops`; the import is gated by a
+  `try/except` similar to the flash_ops/FA3 pattern, and MLA-backed
+  models are detected at model-load time. On a fleet that never
+  dispatches to MLA attention, the absence of `flashmla_ops` has
+  zero observable effect.
+
+  This patch is UNSAFE to apply on a build that will run on Hopper
+  GPUs AND serve an MLA-based model (DeepSeek-V2, DeepSeek-V3, Kimi
+  K2, etc.). Those need FlashMLA's sm90 kernels. Our fleet neither
+  has Hopper silicon nor serves MLA models, so the patch is safe
+  here. Do not deploy the resulting wheel to H100/H200 for
+  DeepSeek-style MLA inference.
+
+Expected impact:
+  - Cuts ~20-25 TUs of sm90/sm100 flashmla compile from the sgl-kernel
+    wheel build. On a warm ccache this is a single-digit-minutes save,
+    on cold it is more like ~5-10 min.
+  - Wheel shrinks by the size of `sgl_kernel/flashmla_ops.*.so` (≥
+    100 MiB compiled sm90/sm100 sass).
+  - Orthogonal to all four previous cuts (arch-prune, disable-fa3,
+    skip-sm90-target, sm121-debug) — stacks cleanly on top of each.
+
+Apply to: sgl-kernel/CMakeLists.txt, inside the Dockerfile builder
+stage, BEFORE the sgl-kernel `uv build --wheel` step.
+
+Upstream source: sgl-project/sglang tag v0.5.10.
+Context regenerated 2026-06-12 against v0.5.13: the section FOLLOWING the
+flashmla include is now "triton kernels" (was "DeepGEMM (JIT)" in v0.5.10)
+— the old trailing context only applied via patch's fuzz-2 limit, on
+v0.5.12.post1 already. Verified to apply cleanly (no fuzz) on BOTH
+v0.5.12.post1 and v0.5.13; the patched region itself is identical in both.
+
+── v0.5.18 VARIANT ─────────────────────────────────────────────────────────
+Regenerated 2026-08-28 against SGLang tag v0.5.18, from the -v0.5.17 variant
+(same edits, same path). Sequentially re-diffed with ZERO fuzz and ZERO offset
+in build order (arch-prune -> disable-fa3 -> skip-sm90-target -> skip-flashmla),
+so this is not just the v0.5.17 file with a rewritten header.
+
+The sgl-kernel tree did NOT move again in v0.5.18: it is still at
+python/sglang/kernels/aot/ (package "sglang-kernel", now version 0.4.6.post1,
+same CMakeLists.txt / Makefile / csrc layout), so SGL_KERNEL_DIR is unchanged.
+
+Selected by build_sm121_image.sh when the recipe sets
+SGL_KERNEL_PATCH_VARIANT="-v0.5.18"; installed into the build context under
+the canonical name, so the Dockerfile step is unchanged. The matching
+Dockerfile side is the recipe's SGL_KERNEL_DIR=python/sglang/kernels/aot,
+which re-points the post-apply grep verification and the wheel build's cd.
+
+Content unchanged vs the -v0.5.17 variant; the hunk moved by +1 line on v0.5.18
+and is re-anchored here at zero offset.
+
+Upstream source: sgl-project/sglang tag v0.5.18
+
+--- a/python/sglang/kernels/aot/CMakeLists.txt
++++ b/python/sglang/kernels/aot/CMakeLists.txt
+@@ -566,7 +566,18 @@
+ install(TARGETS spatial_ops LIBRARY DESTINATION sgl_kernel)
+ 
+ # ============================ Extra Install: FLashMLA ============================= #
++# dgxarley sgl-kernel-skip-flashmla.patch: flashmla.cmake builds a separate
++# `flashmla_ops` Python extension from sgl-project/FlashMLA with ~25 TUs
++# targeting sm_90a (Hopper H100) and sm_100a (B200). NONE of these run on
++# GB10 (SM121) — FlashMLA has no sm_121a dispatch path, and the runtime
++# loader would select neither sm90 nor sm100 binaries for compute capability
++# 12.1. The entire flashmla_ops target is dead code on this fleet.
++#
++# Wrapped in `if (FALSE)` instead of removed so upstream drift stays visible
++# in plain diffs; semantically equivalent to deleting the include.
++if (FALSE)
+ include(${CMAKE_CURRENT_LIST_DIR}/cmake/flashmla.cmake)
++endif()
+ 
+ # ============================ Extra Install: triton kernels ============================= #
+ install(DIRECTORY "${repo-triton_SOURCE_DIR}/python/triton_kernels/triton_kernels/"

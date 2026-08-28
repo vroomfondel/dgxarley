@@ -79,8 +79,47 @@ BRANCH_NAME="sm121"
 # source patches (PRs #22929/#22928) are also applied — the underlying
 # build steps and SM121 sgl-kernel patches are identical.
 #
-# Next line (v0.5.17 — NOT BUILT yet, needs GPU validation):
-#   sglang-0.5.17-sm121.recipe         — SGLang v0.5.17 (released 2026-08-08,
+# Next line (v0.5.18 - NOT BUILT yet, needs GPU validation):
+#   sglang-0.5.18-sm121.recipe         - SGLang v0.5.18 (released 2026-08-22,
+#                                        710 PRs). Nothing relocated this time
+#                                        (the sgl-kernel tree stays at
+#                                        python/sglang/kernels/aot, so
+#                                        SGL_KERNEL_DIR is unchanged), but the
+#                                        Blackwell gencode block in that
+#                                        CMakeLists was reshaped: sm_103a is
+#                                        gone, replaced by sm_100f on CUDA 12.9+
+#                                        with sm_100a below. That breaks
+#                                        arch-prune hunk 2, hence the new
+#                                        SGL_KERNEL_PATCH_VARIANT="-v0.5.18"
+#                                        (four regenerated, zero-fuzz CMakeLists
+#                                        patches; only arch-prune changed
+#                                        content).
+#                                        SECOND driver: cutlass-dsl 4.6.1 ->
+#                                        4.6.2, upstream's new pin, credited
+#                                        with fixing an FA4 startup regression
+#                                        on Blackwell. flashinfer STAYS at
+#                                        0.6.17 (still the newest stable, and
+#                                        now exactly upstream's own pin);
+#                                        transformers 5.12.1 / kernels 0.14.1
+#                                        unchanged.
+#                                        Upstream's torch pin jumps 2.11 -> 2.13
+#                                        while we stay on the 2.12/cu132 base,
+#                                        so for the first time we are BELOW it
+#                                        (no base rebuild available: scitrera
+#                                        published nothing past 2.12.0-v1-cu132).
+#                                        marlin + tilelang-v0.5.16 patches and
+#                                        the whole Dockerfile chain re-verified
+#                                        against v0.5.18 (2026-08-28).
+#                                        READ OPEN RISK A in the recipe header
+#                                        BEFORE building: three RUNTIME patch
+#                                        targets moved (p34's
+#                                        model_runner_kv_cache_mixin.py, p30/p35's
+#                                        {triton,torch}_paged_mqa_logits.py), and
+#                                        the acceptance gate exits 1 on drift.
+#                                        Tag: xomoxcc/dgx-spark-sglang:0.5.18-sm121
+#
+# Previous line (v0.5.17 - current production default_sglang_image):
+#   sglang-0.5.17-sm121.recipe         - SGLang v0.5.17 (released 2026-08-08,
 #                                        582 PRs). THE structural change: RFC
 #                                        #29630 finished and MOVED the whole
 #                                        sgl-kernel/ tree to python/sglang/
@@ -92,19 +131,22 @@ BRANCH_NAME="sm121"
 #                                        "-v0.5.17" (four repathed, zero-fuzz
 #                                        CMakeLists patches). Without both the
 #                                        build dies at `cd sgl-kernel`.
-#                                        SECOND driver: flashinfer 0.6.16 →
-#                                        0.6.16.post3 (post2 = tvm-ffi v0.1.13-
-#                                        post2 ABI hotfix, upstream-recommended;
-#                                        post3 = SM90-only revert, inert here).
+#                                        SECOND driver: flashinfer 0.6.16 ->
+#                                        0.6.16.post3, later bumped to 0.6.17.
+#                                        The image that default_sglang_image
+#                                        points at was gate-cleared on
+#                                        0.6.16.post3; the recipe on disk now
+#                                        says 0.6.17, so a REBUILD of that tag
+#                                        would not be the running artefact.
 #                                        Deps otherwise identical to v0.5.16
 #                                        (transformers 5.12.1 / kernels 0.14.1 /
 #                                        cutlass-dsl 4.6.1 / torch 2.11 upstream
-#                                        → no base-image rebuild). marlin +
+#                                        -> no base-image rebuild). marlin +
 #                                        tilelang-v0.5.16 patches re-verified
 #                                        against v0.5.17 (2026-08-09).
 #                                        Tag: xomoxcc/dgx-spark-sglang:0.5.17-sm121
 #
-# Previous line (v0.5.16 — current production default_sglang_image):
+# Previous line (v0.5.16):
 #   sglang-0.5.16-sm121.recipe         — SGLang v0.5.16 (released 2026-07-25).
 #                                        Renamed 2026-08-02 from
 #                                        sglang-0.5.16-dev-sm121; the `-dev` tag
@@ -239,18 +281,27 @@ BRANCH_NAME="sm121"
 #RECIPE_NAME="sglang-0.5.15.post1-sm121"
 #IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.15.post1-sm121"
 
-# v0.5.17 (2026-08-09): next line, NOT YET BUILT and NOT GPU-validated. Two
-# drivers: SGLang v0.5.17 (2026-08-08) and flashinfer 0.6.16 → 0.6.16.post3
-# (tvm-ffi ABI hotfix). THE structural change is RFC #29630 finishing: the
-# sgl-kernel/ tree MOVED to python/sglang/kernels/aot/, so this recipe is the
-# first to set SGL_KERNEL_DIR + SGL_KERNEL_PATCH_VARIANT="-v0.5.17". Full delta
-# and open risks in the recipe header.
-RECIPE_NAME="sglang-0.5.17-sm121"
-IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.17-sm121"
+# v0.5.18 (2026-08-28): next line, NOT YET BUILT and NOT GPU-validated. Three
+# drivers: SGLang v0.5.18 (2026-08-22), cutlass-dsl 4.6.1 -> 4.6.2 (upstream's
+# new pin) and a reshaped Blackwell gencode block in the sgl-kernel CMakeLists
+# that needs the new SGL_KERNEL_PATCH_VARIANT="-v0.5.18". flashinfer stays at
+# 0.6.17 (newest stable, and now upstream's own pin); SGL_KERNEL_DIR is
+# unchanged. Full delta and open risks in the recipe header. NOTE: three runtime
+# patch targets moved in this ref (p34, p30/p35), so the acceptance gate will
+# report ANCHOR-DRIFT and refuse the push until they are re-targeted.
+RECIPE_NAME="sglang-0.5.18-sm121"
+IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.18-sm121"
 
-# v0.5.16 (2026-07-28, renamed off `-dev` 2026-08-02): CURRENT production line
-# (default_sglang_image). The ref removes the NVFP4 cutlass/triton MoE runners
-# and moves three runtime-patch targets. Full delta + open risks in the recipe
+# Rollback: current production line (v0.5.17, default_sglang_image). The running
+# artefact was gate-cleared on flashinfer 0.6.16.post3; the recipe on disk now
+# says 0.6.17, so re-selecting this pin REBUILDS the tag with different content
+# than what is deployed. Scale the pods down or use a distinct tag.
+#RECIPE_NAME="sglang-0.5.17-sm121"
+#IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.17-sm121"
+
+# Rollback: v0.5.16 (2026-07-28, renamed off `-dev` 2026-08-02). The ref
+# removes the NVFP4 cutlass/triton MoE runners and moves three runtime-patch
+# targets. Full delta + open risks in the recipe
 # header. The `-dev` Docker Hub tag is the older flashinfer-0.6.16rc3 artefact
 # and must NOT be overwritten; this pin builds :0.5.16-sm121 with 0.6.16 final.
 #RECIPE_NAME="sglang-0.5.16-sm121"

@@ -1,0 +1,107 @@
+Skip the common_ops_sm90_build target in sgl-kernel for DGX Spark GB10 (SM121).
+MAINAHEAD VARIANT — regenerated against SGLang tag v0.5.14.
+
+This is the SGL_KERNEL_MAINAHEAD=1 variant of sgl-kernel-skip-sm90-target.patch,
+selected automatically by build_sm121_image.sh (copied into the build context
+UNDER the canonical name sgl-kernel-skip-sm90-target.patch). The v0.5.13 recipes
+keep the original.
+
+Why a separate file: the mscclpp link refactor (DROPPED `mscclpp_static` from the
+common_ops_sm90/sm100 target_link_libraries lines + removed the preceding
+`${CMAKE_CURRENT_BINARY_DIR}/mscclpp-build` dependency block) landed between the
+v0.5.13 tag and commit 3a1417a and persists in v0.5.14, so the original
+(v0.5.10/v0.5.13) patch fails to apply:
+  Hunk #3 FAILED at 398
+This file was first cut against commit 3a1417a; it is now REGENERATED against the
+v0.5.14 tag so it applies with zero fuzz (the 3a1417a version applied only with
+fuzz 1-2 on v0.5.14). Applied AFTER sgl-kernel-arch-prune.patch and
+sgl-kernel-disable-fa3.patch in the build (those edit lines above this region).
+
+Semantics identical to the original: wrap all four common_ops_sm90_build
+references (the Python_add_library target + its set_target_properties, the
+target_link_libraries, the target_compile_definitions, and the install) in
+if(FALSE) so GB10 — which only ever loads sgl_kernel/sm100 — skips the dead sm90
+compile. See the original sgl-kernel-skip-sm90-target.patch header for the full
+rationale, runtime-safety notes (do NOT deploy to Hopper), and impact.
+
+Upstream source: sgl-project/sglang tag v0.5.14
+
+── v0.5.18 VARIANT ─────────────────────────────────────────────────────────
+Regenerated 2026-08-28 against SGLang tag v0.5.18, from the -v0.5.17 variant
+(same edits, same path). Sequentially re-diffed with ZERO fuzz and ZERO offset
+in build order (arch-prune -> disable-fa3 -> skip-sm90-target -> skip-flashmla),
+so this is not just the v0.5.17 file with a rewritten header.
+
+The sgl-kernel tree did NOT move again in v0.5.18: it is still at
+python/sglang/kernels/aot/ (package "sglang-kernel", now version 0.4.6.post1,
+same CMakeLists.txt / Makefile / csrc layout), so SGL_KERNEL_DIR is unchanged.
+
+Selected by build_sm121_image.sh when the recipe sets
+SGL_KERNEL_PATCH_VARIANT="-v0.5.18"; installed into the build context under
+the canonical name, so the Dockerfile step is unchanged. The matching
+Dockerfile side is the recipe's SGL_KERNEL_DIR=python/sglang/kernels/aot,
+which re-points the post-apply grep verification and the wheel build's cd.
+
+Content unchanged vs the -v0.5.17 variant; the four hunks moved by +1 line on
+v0.5.18 and are re-anchored here at zero offset.
+
+Upstream source: sgl-project/sglang tag v0.5.18
+
+--- a/python/sglang/kernels/aot/CMakeLists.txt
++++ b/python/sglang/kernels/aot/CMakeLists.txt
+@@ -317,6 +317,14 @@
+ 
+ # =========================== Common SM90 Build ============================= #
+ # Build SM90 library with fast math optimization (same namespace, different directory)
++# dgxarley sgl-kernel-skip-sm90-target.patch: the common_ops_sm90_build target
++# produces sgl_kernel/sm90/common_ops.*.so, which is ONLY loaded by sgl-kernel's
++# load_utils._load_architecture_specific_ops() when compute_capability == 90
++# (Hopper H100). On DGX Spark GB10 (compute_capability 121) the runtime always
++# loads sgl_kernel/sm100/common_ops.*.so instead, so this whole target compiles
++# dead code. Wrapped in if(FALSE) to preserve upstream structure for future
++# drift diffing while skipping the compile entirely.
++if (FALSE)
+ Python_add_library(common_ops_sm90_build MODULE USE_SABI ${SKBUILD_SABI_VERSION} WITH_SOABI ${SOURCES})
+ 
+ target_compile_options(common_ops_sm90_build PRIVATE
+@@ -328,6 +336,7 @@
+     OUTPUT_NAME "common_ops"
+     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/sm90"
+ )
++endif()
+ 
+ # =========================== Common SM100+ Build ============================= #
+ # Build SM100+ library with precise math (same namespace, different directory)
+@@ -359,15 +368,21 @@
+     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=1")
+ endif()
+ 
++# dgxarley sgl-kernel-skip-sm90-target.patch: target deleted above, ref skipped
++if (FALSE)
+ target_link_libraries(common_ops_sm90_build PRIVATE ${TORCH_LIBRARIES} c10 cuda cublas cublasLt)
++endif()
+ target_link_libraries(common_ops_sm100_build PRIVATE ${TORCH_LIBRARIES} c10 cuda cublas cublasLt)
+ 
+ # sparse flash attention
++# dgxarley sgl-kernel-skip-sm90-target.patch: target deleted above, ref skipped
++if (FALSE)
+ target_compile_definitions(common_ops_sm90_build PRIVATE
+     FLASHATTENTION_DISABLE_BACKWARD
+     FLASHATTENTION_DISABLE_DROPOUT
+     FLASHATTENTION_DISABLE_UNEVEN_K
+ )
++endif()
+ target_compile_definitions(common_ops_sm100_build PRIVATE
+     FLASHATTENTION_DISABLE_BACKWARD
+     FLASHATTENTION_DISABLE_DROPOUT
+@@ -377,7 +392,10 @@
+ # Install to different subdirectories
+ # CMake will find the built libraries in their respective LIBRARY_OUTPUT_DIRECTORY locations
+ # and install them to the specified destinations
++# dgxarley sgl-kernel-skip-sm90-target.patch: target deleted above, install skipped
++if (FALSE)
+ install(TARGETS common_ops_sm90_build LIBRARY DESTINATION sgl_kernel/sm90)
++endif()
+ install(TARGETS common_ops_sm100_build LIBRARY DESTINATION sgl_kernel/sm100)
+ 
+ # ============================ Optional Install: FA3 ============================= #
