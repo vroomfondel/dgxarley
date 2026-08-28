@@ -421,23 +421,32 @@ SGLANG_PATCHES_DIR="${SCRIPT_DIR}/../roles/k8s_dgx/files/sglang_patches"
 # build host's podman store directly via a throwaway registry:2.
 NO_LOCAL_COPY=0
 
-# Base image selection. The recipe ships with a default BASE_IMAGE
-# (currently our custom xomoxcc 2.13/cu132 build); --base lets you swap
-# it at build time without editing the recipe. Supported aliases:
+# Base image selection. The SCRIPT DEFAULT is the xomoxcc alias below, i.e. a
+# build without --base uses our current 2.13/cu132 base NO MATTER WHICH RECIPE is
+# selected. That is deliberate (changed 2026-08-28): the base moves forward for
+# the whole fleet at once, while the older recipes keep their historical
+# BASE_IMAGE line as the record of what they were built on, instead of being
+# rewritten every time we cut a new base. Use `--base recipe` to build an old
+# line on exactly the base its recipe names. Supported aliases:
 #
 #   xomoxcc   xomoxcc/dgx-spark-pytorch-dev:2.13.0-v1-cu132
 #             Our locally-built 2.13/cu132 base (scripts/build_pytorch_base_image.sh).
 #             Bumped 2026-08-28 from 2.12.0-v1-cu132 to match upstream SGLang
 #             v0.5.18's torch 2.13.0 pin (see OPEN RISK D in that recipe).
 #             Only present on spark5's podman store — never published.
-#             This is the recipe default and what you want for performance.
+#             THIS IS THE DEFAULT (no --base needed) and what you want for
+#             performance.
+#
+#   recipe    Whatever BASE_IMAGE the selected recipe names. Use this to
+#             reproduce an older line on its original base (0.5.16 / 0.5.17 are
+#             recorded at 2.12.0-v1-cu132 and were deliberately NOT bumped).
 #
 #   scitrera  scitrera/dgx-spark-pytorch-dev:2.12.0-v1-cu132
 #             scitrera's published upstream base. Pulled from Docker Hub.
 #             Bumped 2026-06-19 from 2.10.0-v2-cu131 → 2.12.0-v1-cu132
 #             (scitrera shipped 2.12/cu132 on 2026-06-09) and NOT bumped since —
 #             they have published nothing past it, so as of the 2.13 xomoxcc
-#             base this alias is one torch minor BEHIND the recipe default.
+#             base this alias is one torch minor BEHIND the default.
 #             The old ~45% codegen regression (torch 2.10/cu131 vs 2.12/cu132,
 #             reference_sm121_build_base_regression memory) still does not apply.
 #             Any residual delta vs xomoxcc would come from our custom build
@@ -575,11 +584,13 @@ image never leaves the build host.
 Options:
   --base VALUE Select the PyTorch dev base image this build sits on:
                  xomoxcc   ${BASE_XOMOXCC_IMAGE}
-                           (recipe default; locally-built 2.11/cu132; fast path)
+                           (THE DEFAULT; locally-built 2.13/cu132; fast path)
                  scitrera  ${BASE_SCITRERA_IMAGE}
-                           (upstream published; 2.10/cu131; ~45% slower)
+                           (upstream published; one torch minor behind)
+                 recipe    whatever BASE_IMAGE the selected recipe names
+                           (use this to rebuild an older line on its own base)
                  <image>   arbitrary image reference, passed verbatim.
-               Omitted → recipe default is used.
+               Omitted → xomoxcc, regardless of what the recipe says.
   --remote-host user@host
                Remote arm64 build host reachable via SSH + podman socket.
                Default: ${REMOTE_HOST}
@@ -663,7 +674,7 @@ Environment overrides:
                                  memory headroom is available.
                                  Default: ${BUILD_JOBS}
   BUILD_SM121_BASE_IMAGE         Direct BASE_IMAGE override. Wins over --base
-                                 and over the recipe default. Use for
+                                 and over the script default. Use for
                                  scripting when --base aliases are too coarse.
 
 The entire script runs on the x86 control host. spark5 is used purely as
@@ -963,8 +974,8 @@ EOF
 # Verify the pytorch dev base image is present in the remote podman store
 # ============================================================================
 #
-# The recipes default to a locally-built xomoxcc base, e.g.
-#   BASE_IMAGE=xomoxcc/dgx-spark-pytorch-dev:2.13.0-v1-cu132
+# The default base is a locally-built xomoxcc image,
+#   ${BASE_XOMOXCC_IMAGE} = xomoxcc/dgx-spark-pytorch-dev:2.13.0-v1-cu132
 # which is NOT on Docker Hub — it's built locally via
 # scripts/build_pytorch_base_image.sh and kept in the build host's podman store.
 # If the sglang build runs before the base image exists, podman will try
@@ -974,8 +985,11 @@ EOF
 resolve_base_image() {
     # Resolves the effective BASE_IMAGE. Order of precedence:
     #   1. BUILD_SM121_BASE_IMAGE env var (highest — scripting override)
-    #   2. --base <value> CLI flag (xomoxcc/scitrera alias or verbatim image)
-    #   3. Recipe default (lowest)
+    #   2. --base <value> CLI flag (xomoxcc/scitrera/recipe alias or verbatim)
+    #   3. Script default: BASE_XOMOXCC_IMAGE (lowest)
+    # The recipe's own BASE_IMAGE is NOT the fall-through any more (changed
+    # 2026-08-28); it is reachable via `--base recipe` and stays in the recipe as
+    # the record of the base that line was built on.
     # Fills the globals EFFECTIVE_BASE_IMAGE and BASE_IMAGE_SOURCE.
     if [[ -n "${EFFECTIVE_BASE_IMAGE}" ]]; then
         return 0   # already resolved
@@ -998,8 +1012,14 @@ resolve_base_image() {
             BASE_IMAGE_SOURCE="--base scitrera"
             return 0
             ;;
+        recipe)
+            _base_from_recipe "--base recipe"
+            [[ -n "${EFFECTIVE_BASE_IMAGE}" ]] \
+                || die "--base recipe: recipe '${RECIPE_NAME}' declares no BASE_IMAGE"
+            return 0
+            ;;
         "")
-            ;;   # fall through to recipe default
+            ;;   # fall through to the script default below
         *)
             EFFECTIVE_BASE_IMAGE="${BASE_IMAGE_ALIAS}"
             BASE_IMAGE_SOURCE="--base (verbatim)"
@@ -1007,12 +1027,20 @@ resolve_base_image() {
             ;;
     esac
 
-    # Fall-through: no override, use recipe default.
+    # Fall-through: no override given -> the script default, NOT the recipe.
+    EFFECTIVE_BASE_IMAGE="${BASE_XOMOXCC_IMAGE}"
+    BASE_IMAGE_SOURCE="script default (xomoxcc)"
+}
+
+_base_from_recipe() {
+    # Reads BASE_IMAGE out of the selected recipe. Only used by `--base recipe`;
+    # leaves the globals empty when the recipe has no such line, so the caller
+    # can fail loudly rather than build on an empty FROM.
     local recipe_file="${PATCHES_DIR}/${RECIPE_NAME}.recipe"
-    if [[ -f "${recipe_file}" ]]; then
-        EFFECTIVE_BASE_IMAGE="$(grep -E '^BASE_IMAGE=' "${recipe_file}" | head -1 | cut -d= -f2-)"
-        BASE_IMAGE_SOURCE="recipe default"
-    fi
+    [[ -f "${recipe_file}" ]] || return 0
+    EFFECTIVE_BASE_IMAGE="$(grep -E '^BASE_IMAGE=' "${recipe_file}" | head -1 | cut -d= -f2-)"
+    [[ -n "${EFFECTIVE_BASE_IMAGE}" ]] && BASE_IMAGE_SOURCE="${1:-recipe}"
+    return 0
 }
 
 ensure_base_image_present() {
@@ -1729,7 +1757,7 @@ run_build() {
     # to the recipe's BASE_IMAGE value so the --build-arg is always set.
     resolve_base_image
     local effective_base_image="${EFFECTIVE_BASE_IMAGE:-${R_BASE_IMAGE}}"
-    local effective_base_source="${BASE_IMAGE_SOURCE:-recipe default}"
+    local effective_base_source="${BASE_IMAGE_SOURCE:-script default (xomoxcc)}"
 
     # Where the sgl-kernel tree sits inside the checkout. Recipe knob with a
     # default that reproduces the pre-v0.5.17 layout, so this is a no-op for
