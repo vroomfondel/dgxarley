@@ -603,6 +603,11 @@ The `env -u VIRTUAL_ENV` prefix is required because the parent shell's
 > **2026-08-21 check — no change, two new rollup releases confirmed clean, PR rebase cause clarified:**
 > Latest releases **v2026.8.16.2** (2026-08-17) and **v2026.8.18** (2026-08-18) are both changelog-deferred rollups; `plugins/platforms/email/adapter.py` is byte-identical to our pinned `v2026.8.16` baseline (blob `704524e4`, 62120 bytes) across both tags and current `main`, so no re-sync is needed. `main`'s adapter path was last touched by `480342232a` (2026-08-15, already folded in). PRs #28697/#28699/#28702 remain `OPEN`/`MERGEABLE`/`BLOCKED`, heads unchanged since 2026-08-17 (`75775e5e91`/`16f1753624`/`aecb6942a5`), no activity since. Clarification: the 2026-08-16/17 rebase that produced those heads was in response to an automated `Enough1122` AI-review pass posted 2026-08-15T18:47 on all three PRs (author addressed the points in the same rebase), not solely the `main` divergence past `480342232a` as the prior entry implied. Conclusions unchanged.
 
+> **2026-08-28 check — two new releases confirmed clean, main diverged again (unrelated to our patch anchors), PRs unchanged:**
+> - **Latest releases:** v2026.8.19 (2026-08-21) and v2026.8.27 (2026-08-27), both since the 2026-08-21 check's v2026.8.18. `plugins/platforms/email/adapter.py` is byte-identical to the pinned v2026.8.16 baseline (blob 704524e4, 62120 bytes) across both new tags, so the pinned deployment and local patch remain unaffected, no re-sync forced.
+> - **`main` diverged again, not yet in any tag:** current `main` HEAD adapter.py is blob 89ead8a8, 62238 bytes (+118 vs the pinned baseline). The added content is two lines at the very end of `connect()`'s success path, right before `return True`: a comment plus `self._wire_plugin_handlers(None)`, from commit 272f4e4a ("feat(plugins): generalize native platform handler registration to every gateway platform"). This sits after our reweaved [PATCH-4] try/finally block and does not collide with any [PATCH-N] anchor, diff verified line-by-line (2 lines added, nothing else). Not in v2026.8.19 or v2026.8.27 yet. Watch on the next tag bump.
+> - **PRs #28697/#28699/#28702** remain OPEN/MERGEABLE/BLOCKED, heads unchanged since 2026-08-17 (75775e5e91/16f1753624/aecb6942a5), no new comments or reviews.
+
 1. Download the new upstream file:
 
    ```bash

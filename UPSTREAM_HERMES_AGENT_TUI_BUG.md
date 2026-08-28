@@ -434,6 +434,35 @@ small (~50 MB) and the node has fast local storage.
   `/health` fallback probe behavior; `hermes_health_patch.py`'s anchor
   (`APIServerAdapter._check_auth` in `gateway/platforms/api_server.py`, `/health` unauthenticated,
   `/health/detailed` authenticated) confirmed intact and still required.
+- **Re-verified 2026-08-28:** major status change on Trigger 2. Two new releases since v2026.8.18:
+  v2026.8.19 (2026-08-21) and v2026.8.27 (2026-08-27). **v2026.8.27 contains the Trigger 2 fix**:
+  commit 0c47cd5 ("fix(cli): scope TUI npm-install check to the ui-tui workspace closure", closes
+  #66978) and commit 76d8f876f3 ("fix(cli): reconcile scoped-closure and reduced-lockfile
+  freshness checks", 2026-08-25) are both ancestors of v2026.8.27 (git compare confirms both fully
+  contained, 0 commits ahead of the tag). Issue **#66978 is now CLOSED** (2026-08-25, "closed as
+  completed via 0c47cd5"), and independent commenters (JElfferich, mooserini, 47Hunter47) confirm
+  the closure-scoping fix plus the follow-up reconciling the npm-version-field-churn layer (the
+  "second root cause" flagged 2026-08-09) are both live on `main`. Issue **#45657 is still OPEN**
+  (10 comments, latest 2026-08-26) but its last three comments (47Hunter47, mooserini, 08-26)
+  independently confirm `_tui_need_npm_install()` now returns `False` on a clean checkout on
+  Windows, macOS, and Linux against current `main` (76d8f876f3), effectively resolved though not
+  yet closed by a maintainer. **PR #67011 itself is still shown OPEN/unmerged** by the GitHub API
+  (mergedAt: null, head 95c061ff unchanged), the fix landed via a separate maintainer-authored
+  commit (0c47cd5) rather than a formal merge of that PR, so the PR row is stale relative to the
+  actual code state. Confirmed at the code level, not just via comments:
+  `tests/hermes_cli/test_tui_npm_install.py` at `main` now contains dedicated closure-scoping
+  tests (`test_no_install_when_only_other_workspace_deps_missing`,
+  `test_workspace_closure_includes_dev_deps_of_scoped_workspace`,
+  `test_need_install_when_linked_workspace_dep_missing`). **Issue #81620** unchanged since 08-21
+  (still 2 comments, no new activity). Health-patch anchor re-checked on `main`:
+  `_check_auth`/`_handle_health`/`_handle_health_detailed`/`/v1/health` unchanged in shape and
+  position. Our pinned image (`v2026.8.16`) is two releases behind this fix and the
+  `copy-ui-tui` initContainer stays commented out as before (no template change forced by this
+  entry). **This is the first point since this doc's inception where Trigger 2 has a real,
+  landed, release-shipped fix upstream**, the long-standing "Trigger 2 remains unfixed upstream"
+  refrain no longer holds as of v2026.8.27. Action item: on the next `hermes.image_tag` bump to
+  v2026.8.27 or later, re-verify EACCES is actually gone with a non-10000 UID (Action Items 1-4)
+  before treating the workaround as permanently retirable.
 
 ## Action Items
 
