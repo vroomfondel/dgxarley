@@ -131,6 +131,90 @@ _THINKING_BUDGET_PROCESSORS: dict[str, str] = {
     ),
 }
 
+# reasoning_effort values that a chat template understands but SGLang's request
+# schema does NOT, so they are rejected by pydantic with HTTP 422 BEFORE the
+# template ever runs. Such a value is legal only as a chat_template_kwarg, from
+# where serving_chat.py pops it back onto the top-level field AFTER validation
+# (v0.5.18 serving_chat.py:921-932), so it still reaches the template.
+#
+# The schema is ReasoningEffortType (v0.5.18 entrypoints/openai/protocol.py:738)
+#   = Optional[Union[ReasoningEffortTier, float in [0.0, 0.99]]]
+#   ReasoningEffortTier = Literal["none","minimal","low","medium","high",
+#                                 "xhigh","max"]
+# NOTE this is WIDER than the Literal["none","low","medium","high","max"] that
+# an earlier comment here recorded against v0.5.14: "minimal" and "xhigh" were
+# added upstream since, and a float is an sglang extension for Inkling-style
+# fine-grained effort. So 'xhigh' does NOT belong in this set, despite being
+# the level Qwen3.8-Flash-Next wants: it passes validation top-level just fine.
+# Only Hy3/Hunyuan's thinking-OFF value 'no_think' remains outside the schema.
+_TEMPLATE_ONLY_REASONING_EFFORTS: frozenset[str] = frozenset({"no_think"})
+
+# Per-model-family whitelist of reasoning_effort values the model's OWN chat
+# template accepts. This is a SECOND, narrower gate than SGLang's schema above:
+# a value can pass pydantic and still hit a raise_exception() inside the Jinja
+# template, which surfaces as HTTP 400 on every request. Checked client-side so
+# a typo fails instantly and locally instead of after a model load.
+# Sourced from each checkpoint's chat_template.jinja, read on the cluster
+# 2026-08-28, and carried in the model profile's `reasoning_efforts` key.
+# There is deliberately NO universally-safe value to exempt: 'none' looks like
+# one (SGLang turns it into chat_template_kwargs.enable_thinking=false, which
+# makes a Qwen-style template skip its effort check entirely) but Hy3's
+# template gates on reasoning_effort itself and raises on 'none' regardless.
+
+
+def _allowed_reasoning_efforts(model_id: str) -> list[str] | None:
+    """Return the reasoning_effort values ``model_id``'s chat template accepts.
+
+    Args:
+        model_id: Model identifier as used in ``sglang_model_profiles``.
+
+    Returns:
+        The profile's ``reasoning_efforts`` list, or ``None`` when the profile
+        does not declare one (unknown, so the value is passed through unchecked
+        rather than guessed at).
+    """
+    profiles = _dgx_defaults.get("sglang_model_profiles", {})
+    if not isinstance(profiles, dict):
+        return None
+    profile = profiles.get(model_id)
+    if not isinstance(profile, dict):
+        return None
+    allowed = profile.get("reasoning_efforts")
+    if not isinstance(allowed, list) or not allowed:
+        return None
+    return [str(v) for v in allowed]
+
+
+def check_reasoning_effort(effort: str | None, model_id: str) -> None:
+    """Fail fast when ``effort`` is not one this model's chat template accepts.
+
+    SGLang's request schema is family-agnostic, so a value like ``high`` passes
+    pydantic and is then injected verbatim into the chat template
+    (v0.5.18 serving_chat.py:1307). A template that whitelists its own levels
+    answers that with ``raise_exception()``, i.e. HTTP 400 on EVERY request of
+    the run. Catching it here turns a full failed run into an instant message.
+
+    Args:
+        effort: The requested ``--reasoning-effort``, or ``None`` if unset.
+        model_id: Model identifier as used in ``sglang_model_profiles``.
+
+    Raises:
+        SystemExit: If the profile declares a whitelist and ``effort`` is not in
+            it.
+    """
+    if effort is None:
+        return
+    allowed = _allowed_reasoning_efforts(model_id)
+    if allowed is None or effort in allowed:
+        return
+    raise SystemExit(
+        f"--reasoning-effort {effort!r} is not accepted by {model_id}: its chat "
+        f"template allows {', '.join(repr(v) for v in allowed)}. "
+        "Sending it anyway would be a chat-template exception (HTTP 400) on "
+        "every request. Use --no-think to turn reasoning off."
+    )
+
+
 # Default prompts for parallel load testing — varied to avoid prefix cache hits.
 # Each prompt includes a role definition and a multi-part question to increase
 # complexity and input token count.
@@ -1080,12 +1164,13 @@ async def run_parallel_test(
             #   no_think — it raises a Jinja exception → HTTP 400. Only the older
             #   Hy3-preview template silently reset. Valid Hy3 values: high/low/no_think.)
             #
-            # EXCEPTION — 'no_think' (Hy3's thinking-OFF value): it is NOT in SGLang's
-            # request-schema enum (Literal["none","low","medium","high","max"]), so
-            # sending it as the TOP-LEVEL field fails pydantic validation with HTTP 422
-            # BEFORE the template runs. It is valid ONLY as a chat_template_kwarg, so
-            # route it there ONLY — never top-level.
-            if reasoning_effort == "no_think":
+            # EXCEPTION: the values in _TEMPLATE_ONLY_REASONING_EFFORTS ('no_think',
+            # 'xhigh') are NOT in SGLang's request-schema enum
+            # (Literal["none","low","medium","high","max"]), so sending them as the
+            # TOP-LEVEL field fails pydantic validation with HTTP 422 BEFORE the
+            # template runs. They are valid ONLY as a chat_template_kwarg, so route
+            # them there ONLY, never top-level.
+            if reasoning_effort in _TEMPLATE_ONLY_REASONING_EFFORTS:
                 payload.setdefault("chat_template_kwargs", {})["reasoning_effort"] = reasoning_effort  # type: ignore[index]
             else:
                 payload["reasoning_effort"] = reasoning_effort
@@ -1396,14 +1481,16 @@ def main() -> None:
         "--reasoning-effort",
         type=str,
         default=None,
-        choices=["none", "no_think", "low", "medium", "high", "max"],
+        choices=["none", "no_think", "minimal", "low", "medium", "high", "xhigh", "max"],
         help="Enable/level reasoning per request via SGLang's native reasoning_effort field. "
-        "Required to turn ON reasoning for Mistral Large-3 / Medium-3.5 (use 'high'; they "
-        "default to no reasoning and accept only none/high). "
-        "⚠ Valid values are MODEL-FAMILY-SPECIFIC and unvalidated ones raise a chat-template "
-        "error server-side: Hy3/Hunyuan accepts ONLY high/low/no_think (its OFF value is "
-        "'no_think', NOT 'none' — 'none'/'medium'/'max' error); Mistral takes none/high. "
-        "Ignored with --no-think (which sends reasoning_effort=none — wrong for Hy3; use "
+        "The choices above are SGLang's schema (v0.5.18), which is family-agnostic; the "
+        "value a given MODEL accepts is narrower and comes from its own chat template, so "
+        "it is checked against the profile's reasoning_efforts list before anything is sent "
+        "(a wrong level is a chat-template exception, i.e. HTTP 400 on every request). "
+        "Known sets: Qwen3.8-Flash-Next xhigh (default)/medium/low; Hy3/Hunyuan "
+        "high/low/no_think (its OFF value is 'no_think', NOT 'none'); Mistral none/high, "
+        "and Mistral needs 'high' explicitly since it defaults to no reasoning. "
+        "Ignored with --no-think (which sends reasoning_effort=none, wrong for Hy3; use "
         "--reasoning-effort no_think to turn Hy3 thinking OFF).",
     )
     parser.add_argument(
@@ -1442,6 +1529,12 @@ def main() -> None:
         help="Skip confirmation prompt",
     )
     args = parser.parse_args()
+
+    # Reject a level this model's chat template would raise on, before anything
+    # is sent. _CONFIGURED_MODEL (the Ansible-configured model) is used rather
+    # than resolve_model_id() so the check stays offline and runs even when the
+    # server is still coming up.
+    check_reasoning_effort(args.reasoning_effort, _CONFIGURED_MODEL)
 
     verbose: bool = args.verbose
     no_think: bool = args.no_think
