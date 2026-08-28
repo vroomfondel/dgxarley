@@ -28,7 +28,10 @@ honcho_namespace: "honcho"
 # pinned tag avoids surprise schema changes on pull. Bump deliberately; re-check
 # .env.template / config.toml.example for new/renamed keys when you do. No keel
 # auto-update annotations on this deployment by design.
-honcho_image: "ghcr.io/plastic-labs/honcho:v3.0.10"
+# NOTE 2026-08-28: the git tag v3.1.0 exists upstream but NO image has been
+# published for it on ghcr.io yet — v3.0.12 is the newest pullable tag. Check
+# the registry, not just the release list, before bumping past it.
+honcho_image: "ghcr.io/plastic-labs/honcho:v3.0.12"
 honcho_port: 8000
 # Number of deriver worker pods. Safe to scale >1 — derivers coordinate via the
 # Postgres job queue with startup jitter (no external broker).

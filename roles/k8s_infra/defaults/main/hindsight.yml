@@ -33,7 +33,7 @@ hindsight_namespace: "hindsight"
 # PINNED to the helm chart appVersion. Both images share this tag. Bump
 # deliberately — re-check helm/hindsight/values.yaml for new/renamed env keys
 # when you do. No keel auto-update annotations by design.
-hindsight_version: "0.8.3"
+hindsight_version: "0.9.2"
 hindsight_api_image: "ghcr.io/vectorize-io/hindsight-api:{{ hindsight_version }}"
 hindsight_cp_image: "ghcr.io/vectorize-io/hindsight-control-plane:{{ hindsight_version }}"
 hindsight_api_port: 8888
