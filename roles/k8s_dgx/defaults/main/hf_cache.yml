@@ -80,6 +80,11 @@ hf_preload_models:
   - "RedHatAI/Qwen3-Coder-Next-NVFP4"
   - "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4"
   - "Qwen/Qwen3-VL-8B-Instruct-FP8"
+  # 135.3 GB (51.2 GB of that is the fp8 PLE n-gram table). NOT servable yet:
+  # no SGLang release has the qwen4_exp arch, and QSA decode has no SM121
+  # kernel path (upstream #36497 / #36556). Preloaded so the cache is warm
+  # for the first-contact boot once the branch image is built.
+  - "RadixArk/Qwen3.8-Flash-Next-NVFP4"
 #  - "0xSero/GLM-5.2-REAP-NU176-526B"
 #  - "cyankiwi/Hermes-4.3-36B-AWQ-4bit"
 #  - "TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ"
