@@ -57,6 +57,19 @@ while /health and its /v1/health alias never do; hermes_cli/web_server.py::
 _probe_gateway_health still builds a bare urllib.request.Request(path,
 method="GET") with no Authorization header. Both anchors hold, the mismatch is
 still unfixed, so this patch stays required and unchanged.
+
+Re-verified 2026-08-28 at v2026.8.27, the currently pinned tag, by source
+inspection. gateway/platforms/api_server.py DID change between v2026.8.16 and
+v2026.8.27 (md5 ac116ba6 -> b1de168c, 391995 bytes), but every anchor this
+patch depends on is unchanged: APIServerAdapter._check_auth(self, request) has
+the same signature; the router still maps ("GET", "/health") and ("GET",
+"/v1/health") to _handle_health, whose body is a bare web.json_response with no
+_check_auth call, while ("GET", "/health/detailed") -> _handle_health_detailed
+still opens with `auth_err = self._check_auth(request)`. hermes_cli/web_server
+.py::_probe_gateway_health still builds `urllib.request.Request(path,
+method="GET")` with no Authorization header, and GATEWAY_HEALTH_URL is still
+present and still marked DEPRECATED ("scheduled for removal") with no
+replacement config key. Patch stays required and unchanged.
 """
 
 import sys

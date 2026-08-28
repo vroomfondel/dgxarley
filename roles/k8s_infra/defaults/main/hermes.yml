@@ -184,7 +184,32 @@ hermes:
   #    --port/--no-open), HERMES_DASHBOARD_BASIC_AUTH_* env reads (still in
   #    plugins/dashboard_auth/basic/), TERMINAL_CWD/API_SERVER_KEY/EMAIL_*/
   #    MATRIX_* env, gateway.lock/gateway_state.json.
-  image_tag: "v2026.8.16"            # agent image (nousresearch/hermes-agent)
+  # Bumped v2026.8.16 -> v2026.8.27 (2026-08-28). Same keel drift as the 7.30
+  # and 8.3 bumps: keel (policy: minor, 24h poll) had already pulled this tag,
+  # so the pods ran it while these defaults still said v2026.8.16 — without the
+  # bump the next --tags hermes run would roll the image BACK. NOTE the drift
+  # was visible in the cluster as a version SPLIT inside the pod: keel rewrites
+  # only `containers[*].image`, never initContainers, so hermes-agent-<user> ran
+  # the hermes + gateway containers on v2026.8.27 while the merge-config
+  # initContainer was still on v2026.7.1 (the last tag actually applied by
+  # Ansible, 2026-07-07). Re-verified at v2026.8.27:
+  #  * plugins/platforms/email/adapter.py is BYTE-IDENTICAL to the v2026.8.16
+  #    sync base (md5 47f4ab2a5e8ca0758326f57be0629a39, 1510 lines), so NO
+  #    [PATCH-N] re-sync. plugins/platforms/email/{plugin.yaml,__init__.py} are
+  #    byte-identical too, so the ConfigMap subPath mount target is unchanged.
+  #  * hermes_health_patch.py still required AND still applies. api_server.py
+  #    DID change (md5 ac116ba6 -> b1de168c), but every anchor holds:
+  #    APIServerAdapter._check_auth(self, request) keeps its signature, /health
+  #    and /v1/health still route to _handle_health (no _check_auth in its
+  #    body), /health/detailed still opens with the _check_auth call. No file
+  #    change needed; the re-verification is recorded in the patch's own header.
+  #  * GATEWAY_HEALTH_URL / _probe_gateway_health (hermes_cli/web_server.py):
+  #    still present, still marked DEPRECATED ("scheduled for removal"), still
+  #    the only cross-container mechanism, still a bare urllib GET with no
+  #    Authorization header. Re-check on the next bump.
+  #  * plugins/dashboard_auth/basic/__init__.py is BYTE-IDENTICAL to v2026.8.16,
+  #    so the HERMES_DASHBOARD_BASIC_AUTH_* env contract is unchanged.
+  image_tag: "v2026.8.27"            # agent image (nousresearch/hermes-agent)
   # NOTE: the venv site-packages dir (mount point for the hermes_health_patch
   # .py/.pth) is NOT configured here — it carries a pythonX.Y segment that bumps
   # with the base image. hermes.yml probes the actual image ONCE at deploy time
