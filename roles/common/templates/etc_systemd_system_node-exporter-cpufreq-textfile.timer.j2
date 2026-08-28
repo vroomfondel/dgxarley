@@ -1,0 +1,12 @@
+# Managed by Ansible (roles/common/tasks/node_exporter_textfile.yml)
+[Unit]
+Description=Refresh cpufreq metrics for the node_exporter textfile collector
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec={{ node_exporter_cpufreq_textfile_interval }}
+AccuracySec=1s
+Unit=node-exporter-cpufreq-textfile.service
+
+[Install]
+WantedBy=timers.target

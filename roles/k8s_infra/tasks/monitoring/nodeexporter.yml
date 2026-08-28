@@ -48,6 +48,10 @@
                 # different cpufreq driver and is unaffected, but the DaemonSet is
                 # shared, so it loses the CPU-frequency metrics too.
                 - '--no-collector.cpufreq'
+                # Reads the cpufreq stand-in written by the host-side timer
+                # (roles/common/tasks/node_exporter_textfile.yml). Path is shared
+                # via group_vars/all/main/monitoring.yml.
+                - '--collector.textfile.directory=/host/textfile'
               ports:
               - name: metrics
                 containerPort: 9100
@@ -62,6 +66,9 @@
                 mountPath: /host/root
                 readOnly: true
                 mountPropagation: HostToContainer
+              - name: textfile
+                mountPath: /host/textfile
+                readOnly: true
               securityContext:
                 runAsNonRoot: true
                 runAsUser: 65534
@@ -73,6 +80,10 @@
                   cpu: 700m
                   memory: 100Mi
             volumes:
+            - name: textfile
+              hostPath:
+                path: "{{ node_exporter_textfile_dir }}"
+                type: DirectoryOrCreate
             - name: proc
               hostPath:
                 path: /proc

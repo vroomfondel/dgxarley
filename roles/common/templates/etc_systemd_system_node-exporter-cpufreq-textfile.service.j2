@@ -1,0 +1,13 @@
+# Managed by Ansible (roles/common/tasks/node_exporter_textfile.yml)
+[Unit]
+Description=Write cpufreq metrics for the node_exporter textfile collector
+Documentation=https://github.com/prometheus/node_exporter/issues/3791
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/node_exporter_cpufreq_textfile.sh {{ node_exporter_textfile_dir }}
+# The only bound that helps against a sysfs read stuck in the firmware mailbox:
+# kill the pass, keep the previous (stale) .prom. A single pass takes ~0.2s.
+TimeoutStartSec=20
+Nice=10
+IOSchedulingClass=idle

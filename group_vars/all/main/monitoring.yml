@@ -61,3 +61,28 @@ fluentbit_systemd_units:
   - k3s.service
   - k3s-agent.service
 fluentbit_systemd_max_entries: 1000
+
+# ---------------------------------------------------------------------------
+# node_exporter textfile collector — cpufreq replacement
+# ---------------------------------------------------------------------------
+# The built-in cpufreq collector is disabled cluster-wide in
+# roles/k8s_infra/tasks/monitoring/nodeexporter.yml because it wedges the whole
+# scrape on the Grace CPUs (upstream node_exporter#3791 / procfs#861, both still
+# open as of 2026-08-28). These vars drive the stand-in: a host-side script
+# (roles/common/tasks/node_exporter_textfile.yml) writes the same metrics into
+# a .prom file that the node_exporter DaemonSet reads via
+# --collector.textfile.directory.
+#
+# The directory is consumed by BOTH roles (common writes it on every node,
+# k8s_infra mounts it into the DaemonSet), which is why it lives here and not in
+# a role default.
+#
+# RETIREMENT: once a node_exporter release ships the procfs deadline fix, drop
+# --no-collector.cpufreq AND set this to false in the same change. Running both
+# at once double-exports node_cpu_scaling_frequency_hertz and friends, which
+# fails the whole gather, not just this collector.
+node_exporter_textfile_dir: "/var/lib/node_exporter/textfile"
+node_exporter_cpufreq_textfile_enabled: true
+# Matches the Prometheus scrape_interval; a stale .prom is better than a
+# half-written one, so the script writes atomically via rename.
+node_exporter_cpufreq_textfile_interval: "30s"

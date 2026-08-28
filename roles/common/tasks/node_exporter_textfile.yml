@@ -1,0 +1,86 @@
+---
+# file: roles/common/tasks/node_exporter_textfile.yml
+#
+# Host side of the cpufreq stand-in. The built-in cpufreq collector is disabled
+# cluster-wide (see roles/k8s_infra/tasks/monitoring/nodeexporter.yml) because a
+# cpuinfo_avg_freq read wedges the whole scrape on the Grace CPUs; a systemd
+# timer writes the same metrics into a .prom file instead, which the
+# node_exporter DaemonSet mounts read-only via --collector.textfile.directory.
+#
+# Vars live in group_vars/all/main/monitoring.yml because k8s_infra needs the
+# same directory path for the hostPath mount.
+#
+# `<x>_enabled: false` tears the timer down again (unlike the k8s components,
+# where disabling only skips the install) — there is no state here worth
+# preserving, just a script, two units and a generated .prom.
+
+- name: node_exporter cpufreq textfile — install
+  when: node_exporter_cpufreq_textfile_enabled | default(false) | bool
+  block:
+    - name: create node_exporter textfile directory
+      file:
+        path: "{{ node_exporter_textfile_dir }}"
+        state: directory
+        owner: root
+        group: root
+        # world-readable: the DaemonSet container runs as uid 65534 (nobody)
+        mode: '0755'
+
+    - name: install cpufreq textfile script
+      copy:
+        src: node_exporter_cpufreq_textfile.sh
+        dest: /usr/local/bin/node_exporter_cpufreq_textfile.sh
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: install cpufreq textfile systemd units
+      template:
+        src: "etc_systemd_system_node-exporter-cpufreq-textfile.{{ item }}.j2"
+        dest: "/etc/systemd/system/node-exporter-cpufreq-textfile.{{ item }}"
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - service
+        - timer
+      register: _cpufreq_textfile_units
+
+    - name: enable and start cpufreq textfile timer
+      systemd_service:
+        name: node-exporter-cpufreq-textfile.timer
+        state: "{{ 'restarted' if _cpufreq_textfile_units is changed else 'started' }}"
+        enabled: true
+        daemon_reload: true
+
+    # The timer's first run is OnBootSec/OnUnitActiveSec away, so seed the file
+    # once — otherwise a fresh node scrapes without cpufreq metrics until then.
+    - name: run cpufreq textfile script once
+      command: /usr/local/bin/node_exporter_cpufreq_textfile.sh {{ node_exporter_textfile_dir | quote }}
+      changed_when: false
+
+- name: node_exporter cpufreq textfile — teardown
+  when: not (node_exporter_cpufreq_textfile_enabled | default(false) | bool)
+  block:
+    - name: stop and disable cpufreq textfile timer
+      systemd_service:
+        name: "node-exporter-cpufreq-textfile.timer"
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: remove cpufreq textfile units, script and generated metrics
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/node-exporter-cpufreq-textfile.timer
+        - /etc/systemd/system/node-exporter-cpufreq-textfile.service
+        - /usr/local/bin/node_exporter_cpufreq_textfile.sh
+        - "{{ node_exporter_textfile_dir }}/cpufreq.prom"
+      register: _cpufreq_textfile_removed
+
+    - name: reload systemd after unit removal
+      systemd_service:
+        daemon_reload: true
+      when: _cpufreq_textfile_removed is changed

@@ -227,6 +227,11 @@
     - upgradestuff
   import_tasks: upgradeallandautoremove.yml
 
+- name: node_exporter cpufreq textfile collector
+  tags:
+    - cpufreq_textfile
+  import_tasks: node_exporter_textfile.yml
+
 
 
 # - name: Run a script with arguments (free form)
