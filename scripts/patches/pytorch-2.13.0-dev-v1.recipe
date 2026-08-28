@@ -1,0 +1,63 @@
+#
+# Custom pytorch dev base recipe: xomoxcc/dgx-spark-pytorch-dev:2.13.0-v1-cu132
+#
+# Purpose: build the CUDA 13.2.1 + PyTorch 2.13.0 base image. Successor to
+# pytorch-2.12.0-dev-v1.recipe — same overall structure, version bumps only.
+# See that file for the full historical rationale (NCCL fork -> upstream
+# analysis, arch list, BUILD_JOBS ceiling); it is not repeated here.
+#
+# Delta vs pytorch-2.12.0-dev-v1.recipe (checked 2026-08-28):
+#   - TORCH_VERSION 2.12.0 -> 2.13.0
+#       Latest stable on PyPI. Release-note highlights were NOT reviewed for
+#       this bump — if the build fails at the CMake-configure stage, check the
+#       2.13.0 release notes for new toolchain minimums (2.12.0 already
+#       enforced C++20 + CUDA >= 12.6, both satisfied here).
+#   - TORCH_VISION_VERSION 0.27.0 -> 0.28.0  (lockstep, NOT optional:
+#       torchvision 0.28.0's PyPI requires_dist is a hard `torch==2.13.0`)
+#   - TORCH_AUDIO_VERSION 2.11.0 -> 2.11.0   (NO BUMP — pytorch/audio has
+#       still not tagged past v2.11.0; PyPI latest is 2.11.0 as of 2026-08-28,
+#       i.e. audio skipped the whole 2.12 cycle too. ABI mismatch with torch
+#       2.13.0 is harmless for SGLang text-only inference — the audio module is
+#       never imported. Vision is the lockstep canary; audio isn't.)
+#   - IMAGE_TAG :2.12.0-v1-cu132 -> :2.13.0-v1-cu132
+#
+# Deliberately unchanged:
+#   - CUDA_VERSION 13.2.1. nvidia/cuda:13.3.1-devel-ubuntu22.04 exists on
+#     Docker Hub, but bumping the CUDA minor is a separate decision (it also
+#     invalidates the cu132 tag suffix) and is not part of this torch bump.
+#   - NCCL 2.30.7-1. NVIDIA/nccl has tagged v2.31.2-1 since; held back for the
+#     same reason — one variable per rebuild. Bump separately and re-run the
+#     nccl_test framework (k8s_dgx tag nccl_test, roce variant) when you do.
+#   - TORCH_CUDA_ARCH_LIST / NVCC_GENCODE: Spark-target arches (sm_120 + sm_121).
+#   - BUILD_JOBS: 8 is the safe ceiling on GB10 (see feedback_build_jobs_gb10).
+#
+# Follow-up after this image builds successfully:
+#   - The sglang sm121 recipes (scripts/patches/sglang-0.5.1{6,7,8}-sm121.recipe)
+#     pin BASE_IMAGE=xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132 and must be
+#     bumped to :2.13.0-v1-cu132 in lockstep, otherwise the SGLang image keeps
+#     building on the old PyTorch base.
+#
+DOCKERFILE=Dockerfile.base
+TARGET=pytorch_builder
+
+CUDA_VERSION=13.2.1
+CUDA_SHORT=132
+
+NCCL_VERSION=2.30.7-1
+NCCL_REF=v2.30.7-1
+NCCL_REPO=https://github.com/NVIDIA/nccl.git
+
+BUILD_JOBS=8
+
+#TORCH_CUDA_ARCH_LIST=12.1a
+#NVCC_GENCODE=-gencode=arch=compute_121,code=sm_121
+TORCH_CUDA_ARCH_LIST="12.0;12.1"
+NVCC_GENCODE="-gencode=arch=compute_120,code=sm_120 -gencode=arch=compute_121,code=sm_121"
+
+TORCH_VERSION=2.13.0
+# torchaudio 2.13.0 not released (PyPI latest = 2.11.0 as of 2026-08-28).
+# Bump when pytorch/audio tags a matching release. Safe for SGLang text-only.
+TORCH_AUDIO_VERSION=2.11.0
+TORCH_VISION_VERSION=0.28.0
+
+IMAGE_TAG=xomoxcc/dgx-spark-pytorch-dev:2.13.0-v1-cu132
