@@ -36,6 +36,14 @@ flashinfer >= 0.6.16 landet.
 FIX: das fehlende `0,  # uniform_q_len` anhaengen. Der Default ist auch
 flashinfer-seitig 0, das Verhalten bleibt damit unveraendert.
 
+UPSTREAM-FIX seit v0.5.18 (2026-08-28): SGLang hat seinen eigenen flashinfer-Pin
+auf 0.6.17 gezogen und reicht das Argument in fast_prefill_plan jetzt selbst
+durch. Auf so einem Image ist der Anker (args-Literal OHNE uniform_q_len)
+zwangslaeufig weg -- das ist KEIN Drift, sondern erledigt. Das Gate unten prueft
+das explizit, damit der Acceptance-Gate-Report eine Arbeitsliste bleibt und nicht
+in Rauschen untergeht. Der Patch bleibt fuer Instanzen, die noch auf
+<= v0.5.17-Images gepinnt sind; loeschbar, sobald keine mehr laeuft.
+
 GATE: nur anwenden, wenn das INSTALLIERTE flashinfer den Parameter ueberhaupt
 kennt. Auf flashinfer <= 0.6.15.post1 (kein `uniform_q_len` in prefill.py) wuerde
 das 20. Argument den Aufruf spiegelbildlich brechen. Eine ConfigMap bedient
@@ -54,7 +62,15 @@ _TARGET = "sglang/srt/layers/attention/flashinfer_backend.py"
 patch = Patch(
     name="fast_prefill_plan: uniform_q_len fuer flashinfer >= 0.6.16 nachreichen",
     target=_TARGET,
-    when=target_contains("flashinfer/prefill.py", "uniform_q_len"),
+    when=(
+        # (a) kennt das INSTALLIERTE flashinfer den Parameter ueberhaupt?
+        target_contains("flashinfer/prefill.py", "uniform_q_len")
+        # (b) reicht SGLang ihn nicht laengst selbst durch? Ab v0.5.18 steht
+        # "0,  # uniform_q_len" im args-Literal, weil upstream seinen eigenen
+        # flashinfer-Pin auf 0.6.17 gezogen hat. Dann ist hier nichts zu tun,
+        # und das ist eine ENTSCHEIDUNG ("gate not matched"), kein Drift.
+        and not target_contains(_TARGET, "0,  # uniform_q_len")
+    ),
 )
 
 OLD = """        fixed_split_size if fixed_split_size is not None else -1,

@@ -30,7 +30,11 @@ overrides.py: extends the decorator to the wrapper archs AND keeps the llm_confi
 field resolution for mlp_hidden_act. Sub-patches (2)/(3) are unchanged (still apply).
 
 No model gate, no env gate: unconditional, same as the original heredoc (only the
-per-file anchor-drift checks decide whether each sub-patch applies).
+per-file anchor-drift checks decide whether each sub-patch applies) -- with ONE
+exception since 2026-08-28: sub-patch (3) is gated on the server_args.py dispatch
+branch still existing, because the Nemotron-3.5 spec source patch (PR #36186,
+applied by the 0.5.18 recipe) deletes it in favour of the override registry that
+sub-patch (1) already extends. Gate false there = nothing to do, not drift.
 
 Note on the shared MARKER and `Patch.replace`'s already-applied probe: the original
 script checked `marker in s` ONCE, up front, over the whole sub-patch (3), before
@@ -42,7 +46,7 @@ is unique in the file), so a MARKER already present in the file from edit 2 does
 cause edits 1/3 to be misjudged as "already applied" before they've actually run.
 """
 
-from _patchlib import Patch
+from _patchlib import Patch, target_contains
 
 MARKER = "# [patch] _sgl_nemotronh_omni_wrapper_"
 
@@ -121,12 +125,22 @@ def apply_scheduler(p: Patch) -> None:
 
 
 # --- 3) server_args.py: add wrapper archs to the NemotronH dispatch ---
+_SERVER_ARGS = "sglang/srt/server_args.py"
+# The dispatch branch this sub-patch widens. PR #36186 (the Nemotron-3.5 spec
+# source patch this recipe applies, APPLY_NEMOTRON35_SPEC_PR36186) DELETES the
+# whole branch and moves the NemotronH defaults into the override registry --
+# which sub-patch (1) above already covers. So on such an image there is nothing
+# left to widen here: gate on the branch instead of reporting ANCHOR-DRIFT, so
+# the gate report stays a work list. Sub-patches (1)/(2) are unaffected.
+_NEMOTRON_DISPATCH = '        elif model_arch in ["NemotronHForCausalLM", "NemotronHPuzzleForCausalLM"]:\n'
+
 patch_server_args = Patch(
     name="NemotronH VL/Omni wrapper: server_args.py dispatch list",
-    target="sglang/srt/server_args.py",
+    target=_SERVER_ARGS,
+    when=target_contains(_SERVER_ARGS, _NEMOTRON_DISPATCH),
 )
 
-OLD_3 = '        elif model_arch in ["NemotronHForCausalLM", "NemotronHPuzzleForCausalLM"]:\n'
+OLD_3 = _NEMOTRON_DISPATCH
 NEW_3 = (
     "        " + MARKER.lstrip() + " (PR #25024): add VL/Omni wrapper archs\n"
     "        elif model_arch in ["

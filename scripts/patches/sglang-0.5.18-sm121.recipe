@@ -101,34 +101,50 @@
 #      (unchanged since v0.5.16, PR #30448).
 #
 # ── OPEN RISKS, validate before this recipe is promoted ──────────────────────
-#   A. RUNTIME patches (roles/k8s_dgx/files/sglang_patches/): RE-ANCHORED and
-#      dry-run CLEAN against v0.5.18, but NOT yet gate-verified on a built image.
-#      Replayed offline against the raw v0.5.18 sources (all 44 patches, the
-#      gate's three scenarios bare / glm / hy3, then the patched tree parsed with
-#      ast): 0 ANCHOR-DRIFT, 0 syntax errors, every patch idempotent on a second
-#      run. The same replay against v0.5.17 is also clean, so the ConfigMap still
-#      serves instances pinned to older images. Three patches needed a new
-#      spelling, all kept side by side via replace_any:
-#        p37  the trtllm_batch_decode_with_kv_cache call gained a trailing
-#             multi_ctas_kv_counter_buffer kwarg, which broke the kernel-call
-#             anchor (and only that one). THE NVFP4-KV + speculation fix, so this
-#             one is load bearing.
-#        p43  the MTP quant decision moved out of Qwen3_5ForCausalLMMTP.__init__
-#             into the module-level helper _mtp_quant_config(), which RETURNS
-#             None instead of assigning (and narrows the modelopt_fp4 arm to
-#             is_checkpoint_nvfp4_serialized).
-#        p57  the gguf block above get_config()'s return grew sidecar-config.json
-#             support, changing both its condition and its raise message.
+#   A. RUNTIME patches (roles/k8s_dgx/files/sglang_patches/): RE-ANCHORED, and
+#      the acceptance gate's ANCHOR-DRIFT half is CLEAN as of 2026-08-28 (first
+#      gate run on the built image: 2 drifts, both fixed, see below).
+#      Five patches needed work for this ref. Two kinds, and the distinction is
+#      the whole point of the drift report:
+#        RE-TARGETED (patch applies, fix is live on v0.5.18), all via replace_any
+#        so instances pinned to older images keep working:
+#          p37  the trtllm_batch_decode_with_kv_cache call gained a trailing
+#               multi_ctas_kv_counter_buffer kwarg, which broke the kernel-call
+#               anchor (and only that one). THE NVFP4-KV + speculation fix, so
+#               this one is load bearing.
+#          p43  the MTP quant decision moved out of Qwen3_5ForCausalLMMTP.__init__
+#               into the module-level helper _mtp_quant_config(), which RETURNS
+#               None instead of assigning (and narrows the modelopt_fp4 arm to
+#               is_checkpoint_nvfp4_serialized).
+#          p57  the gguf block above get_config()'s return grew sidecar-config.json
+#               support, changing both its condition and its raise message.
+#        SELF-GATED OFF on this image (nothing left to do, logs "gate not
+#        matched" instead of ANCHOR-DRIFT):
+#          p36  v0.5.18 passes uniform_q_len to fast_prefill_plan itself, because
+#               upstream moved its own flashinfer pin to 0.6.17. Gate now also
+#               probes the sglang side, not just flashinfer's.
+#          p59  sub-patch (3) only: the Nemotron-3.5 spec source patch (#36186,
+#               applied by this recipe) DELETES the server_args.py NemotronH
+#               dispatch branch in favour of the override registry, which
+#               sub-patch (1) already extends. Sub-patches (1)/(2) still apply.
 #      p30 / p34 / p35 (the GLM-5.2 DSA path) needed NOTHING: p34's
 #      model_runner_kv_cache_mixin.py is gone, but its alt_targets already point
 #      at mem_cache/kv_cache_configurator.py and the anchor still matches there,
 #      and the paged_mqa_logits modules that "disappeared" from srt/ are the two
 #      files p30/p35 CREATE themselves.
-#      What the offline replay canNOT answer, and the acceptance gate must:
-#      whether the generated modules IMPORT on the real image (the 2026-07-28
-#      p30 fp8_kernel incident: patch reports success, module is unimportable,
-#      31 model classes silently drop out of the registry). Run
-#      scripts/verify_sglang_image.sh before promoting.
+#      HOW THIS WAS CHECKED without a build (see the memory note
+#      reference_offline_runtime_patch_replay): replay the whole set against the
+#      raw v0.5.18 sources WITH this recipe's source patches applied on top
+#      (#36497 / #36186 both touch runtime-patch targets — a replay against the
+#      bare tag misses exactly the p36/p59 drifts) and with a flashinfer/
+#      prefill.py stub, since p36 gates on a dependency file. Clean on v0.5.18
+#      AND on v0.5.17, idempotent, patched tree parses.
+#      What the replay canNOT answer, and only the gate can: whether the modules
+#      p30/p35 GENERATE actually import (the 2026-07-28 p30 fp8_kernel incident:
+#      patch reports success, module is unimportable, 31 model classes silently
+#      drop out of the registry). The 2026-08-28 gate run confirmed no registry
+#      regression, with 3 upstream-only baseline failures (bailing_moe_linear,
+#      bailing_moe_nextn, sarashina2_vision — optional deps).
 #      Still true from the v0.5.17 cycle: p50/p51 are self-gated OFF on
 #      >= v0.5.17 (fix is upstream) and stay only for older pinned images.
 #   B. INHERITED from v0.5.16, still open: moe_runner_backend cutlass / triton
