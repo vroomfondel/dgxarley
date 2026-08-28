@@ -183,7 +183,7 @@ All persistent data uses hostPath volumes under `/var/lib/k8s-data/` on k3smaste
 | Grafana                | monitoring                | Dashboards (local auth, auto-provisioned Kubernetes dashboards from dotdc)                                                                             |
 | Alertmanager           | monitoring                | Alert routing (email + Gotify bridge via external cluster)                                                                                             |
 | Loki + Fluent Bit      | loki                      | Log aggregation (filesystem backend, DaemonSet log collector; `fluentbit_enabled` / `promtail_enabled` gate them independently, promtail EOL since 2026-03-02)              |
-| NUT Exporter           | monitoring                | Prometheus exporter for NUT UPS metrics (`druggeri/nut_exporter:3.2.5`, per-UPS scrape jobs)                                                           |
+| NUT Exporter           | monitoring                | Prometheus exporter for NUT UPS metrics (`druggeri/nut_exporter:3.3.0`, per-UPS scrape jobs)                                                           |
 | Uptime Kuma            | uptimekuma                | Uptime monitoring                                                                                                                                      |
 
 FQDNs follow the pattern `<service>.<domain-suffix>` (configured via `dns_external_domain_suffix` in vault).
@@ -287,7 +287,7 @@ Multi-node pipeline-parallel setup across up to 4 DGX Sparks:
 
 ### NVIDIA Device Plugin
 
-The NVIDIA k8s-device-plugin (v0.18.2) runs as a DaemonSet in `kube-system` on nodes labeled
+The NVIDIA k8s-device-plugin (v0.20.0) runs as a DaemonSet in `kube-system` on nodes labeled
 `nvidia.com/gpu.present=true` (the DGX Sparks). It uses NVML discovery with CDI device injection:
 
 ```
