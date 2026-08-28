@@ -514,9 +514,10 @@ Verify on the build host:
 
 Next steps:
 
-1. Verify that the sglang sm121 recipes reference this image as BASE_IMAGE
-   (they are still pinned to :2.12.0-v1-cu132):
-     grep -l '^BASE_IMAGE=' scripts/patches/sglang-*-sm121*.recipe
+1. Verify that the ACTIVE sglang sm121 recipes reference this image as
+   BASE_IMAGE (0.5.16/0.5.17/0.5.18 were bumped in lockstep; older recipes
+   deliberately keep their historical :2.12.0 / :2.11.0 pin):
+     grep -n '^BASE_IMAGE=' scripts/patches/sglang-*-sm121*.recipe
      BASE_IMAGE=${IMAGE_TAG}
 
 2. Run the sgl-kernel sm121 build on top of this base:
