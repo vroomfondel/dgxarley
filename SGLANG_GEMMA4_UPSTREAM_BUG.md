@@ -284,6 +284,47 @@ remains mandatory. flashinfer's latest stable release also remains v0.6.17
 (no v0.6.18 stable yet, only nightly builds and rc tags up to v0.6.18rc7);
 commit `8f9ad2000d` (#3684) is not in any tagged flashinfer release yet.
 
+**Re-verified 2026-08-28:** SGLang **v0.5.18** released 2026-08-22, now the
+latest release; contains no fix for the tracked SM120/121 blockers (only
+unrelated CPU/Xeon Gemma4 support, PR #22498). A directory refactor moved
+`server_args/arg_groups/overrides.py` to `arg_groups/overrides.py` and
+collapsed `server_args/server_args.py` to a single `server_args.py`, causing
+line drift but no logic change: `_SUPPORTED_ACT_STRS` unchanged
+(`modelopt_quant.py:266`, no `gelu_tanh`); the `is_gated` padding assert
+unchanged in substance (`modelopt_quant.py:2668`, was 2392-2393);
+`_gemma4_overrides` (`arg_groups/overrides.py:1241`, was `overrides.py:710-729`)
+still gates its MoE-runner override on `is_sm100_supported()` only, still
+excluding SM120/121, so the CUTLASS `is_gated` assert remains reachable on
+our hardware exactly as before; the Gemma4 attention-backend allowlist
+(`server_args.py:6210-6223`, was 5601/5606) gained `intel_amx` (CPU-only,
+irrelevant), `triton` still accepted and mandatory; the fp8 KV
+triton-backend dequant gap (`#22615` target) is unchanged at
+`triton_backend.py:1328` (was 1240). **flashinfer published v0.6.18rc10 today
+(2026-08-28T06:15:01Z), flagged by GitHub as the current non-prerelease
+"latest" release** (despite the rc-named tag), it now includes commit
+`8f9ad2000d` (PR #3684, the SM120/121 VO-split NVFP4 KV-cache fix), which the
+2026-08-21 entry noted was "not in any tagged flashinfer release yet."
+SGLang v0.5.18's own bundled flashinfer only moved to v0.6.17 (cut
+2026-08-11, before #3684 merged 2026-08-13), so stock SGLang still does not
+carry it. The SGLang-side adoption PRs #29304/#29305 remain unchanged: both
+OPEN, `mergeStateStatus: DIRTY`, `reviewDecision: REVIEW_REQUIRED`, no update
+since 2026-06-29/2026-06-28, no `vo_split`/`SGLANG_FLASHINFER_VOSPLIT` code
+on `main`. This is still the KV-cache-attention subsystem, not the MoE-GEMM
+blocker tracked here, so no change to the bottom line. #22929/#22928/#22927/
+#22615 remain CLOSED unmerged, unchanged since 2026-08-18/19, no reopen.
+**Additional corroborating cross-reference found, not previously cited in
+this doc:** Issue #30887 ("ModelOpt NVFP4 gated MoE fails to load with TP
+when intermediate padding is required"), filed 2026-07-11 by a third party,
+still OPEN (last activity 2026-07-17, so not new since 08-21 but newly
+surfaced here), reproduces the exact `is_gated` assert on
+`nvidia/Gemma-4-26B-A4B-NVFP4` at TP=2, with a comment reporting the same
+assert on 8x B300 (SM100) for a different model, confirming the
+padding-for-gated-activations gap is a general TP-sharding limitation, not
+SM120/121-specific, and giving this cluster's blocker an existing upstream
+thread (silent since 07-17, no maintainer response) rather than none. Net
+effect: NVFP4 Gemma-4 on SM121 remains exactly as blocked as documented;
+`attention_backend: triton` remains mandatory.
+
 ## Affected models
 
 | Model                                         | Type                               | Quantization | Current status (`0.5.11-gemma4-sm121` image)                                                                                                |

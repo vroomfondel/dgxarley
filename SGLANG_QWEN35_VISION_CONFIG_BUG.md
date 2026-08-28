@@ -97,6 +97,27 @@
 > weeks). PR #22618 still **OPEN**, no activity since 2026-04-14. Root cause
 > unchanged, monkey-patch (`PATCH_GET_CONFIG_EOF`) in `sglang_launch.sh`
 > still required.
+>
+> **Re-verified 2026-08-28:** SGLang **v0.5.18** (released 2026-08-22, now
+> the latest release) checked. `qwen3_5.py` on the v0.5.18 tag and on `main`
+> (HEAD `d5670645`, 2026-08-28) is unchanged since the 2026-08-15 check: last
+> content-changing commit is still the 2026-04-16 transformers-5.5.3 upgrade
+> (`34fef07a`), still six plain `__init__` methods, no `from_dict`/
+> `__post_init__` anywhere. PR **#22839** still **OPEN**, no activity since
+> 2026-06-11 (now 11+ weeks). **PR #22618 status changed: now CLOSED
+> (2026-08-28, today), NOT merged** (`mergedAt`/`mergeCommit` both null).
+> Closed by `github-actions[bot]`, but not by the usual per-issue inactivity
+> timer: the bot's comment cites a new idle-PR-cap policy ("you have 6 PRs
+> open and none updated in 7 days, over our soft cap of 5 for idle PRs"),
+> asking the author to reopen the two or three most wanted. The underlying
+> `linear_attn.in_proj_a.input_scale` quantization-guard gap (same symptom
+> family as #20973, a different bug from the vision_config dict issue this
+> doc describes) remains open and unfixed; treat the "Related issues" entry
+> below as closed unmerged 2026-08-28, unresolved, rather than open. No
+> transformers change to the root cause: v5.16.0/v5.16.1 (2026-08-26)
+> release notes contain no `PretrainedConfig`/`sub_configs`/auto-init
+> changes. Monkey-patch (`PATCH_GET_CONFIG_EOF`) in `sglang_launch.sh` still
+> required.
 
 
 ## Summary

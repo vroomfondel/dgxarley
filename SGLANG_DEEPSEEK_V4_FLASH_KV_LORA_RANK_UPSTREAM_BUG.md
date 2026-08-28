@@ -63,6 +63,17 @@
 > (release notes: DFlash/MTP candidate-generator + image-processing fixes
 > only, nothing DeepSeek-V4-related). SGLang still at v0.5.17 (no new
 > release). Monkey-patch still required.
+>
+> **Re-verified 2026-08-28:** SGLang **v0.5.18** (released 2026-08-22, now
+> the latest release) checked; release notes and diff contain no
+> `kv_lora_rank` / DeepSeek-V4-Flash config-parse fix. `transformers` shipped
+> two more patch releases since the 2026-08-21 check, **v5.16.0** and
+> **v5.16.1** (both 2026-08-26; v5.16.1 adds GLM-5.3-Flash support plus two
+> small fixes) — `kv_lora_rank: int = 512` is still present unchanged at
+> `configuration_deepseek_v3.py:93` on both `main` and the v5.16.1 tag;
+> neither release's changelog mentions DeepSeek-V3/V4 config or
+> `sub_configs`/`PretrainedConfig` auto-init changes (only unrelated
+> DeepSeekV2 test-OOM and vocab-size fixes). Monkey-patch still required.
 
 
 ## Summary

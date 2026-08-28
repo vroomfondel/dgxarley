@@ -110,6 +110,26 @@ since the issue self-closed independently of the PR merging). PR #21872
 remains OPEN, idle since 2026-04-01. Workaround (`moe_runner_backend:
 triton`) unchanged.
 
+**Re-verified 2026-08-28:** SGLang **v0.5.18** was released 2026-08-22 (now
+the latest release, superseding v0.5.17). No `Fp8MoEMethod`/`flashinfer_cutlass`
+fix in it. Source-confirmed on the v0.5.18 tag and on upstream `main` (commit
+`d56706459`, 2026-08-28): `create_moe_runner` in `fp8.py` still ends in the
+`# TODO(cwan): refactor other backends` branch, comment now at line 2347
+(v0.5.18 tag) / line 2360 (current main), up from line 2345/2347 previously
+logged. One commit touched the file since v0.5.17, `27c36368b6` ("fix(moe):
+guard FP8 delegate activation params", PR #36275, merged 2026-08-26): it adds
+an `_owns_moe_runner` flag so the MXFP4 code path's borrowed `Fp8MoEMethod`
+delegate skips a flashinfer_trtllm-only activation-prep call; it does not
+touch the `flashinfer_cutlass`/`flashinfer_cutedsl` allowlist gap and changes
+nothing for this bug. **PR #21872 was closed unmerged on
+2026-08-26T01:32:58Z**, not by a fix but by the `github-actions` stale-PR-cap
+bot ("you have 8 PRs open and none updated in 7 days, over our soft cap of 5"),
+the same kind of administrative closure Issue #27951 got on 2026-08-19.
+`mergedAt` is null; the author could reopen it, but as of today it carries
+zero merged code, same as before. PR #27968 remains OPEN, idle since
+2026-06-11; Issue #27951 remains CLOSED (stale, not fixed), unchanged since
+2026-08-19. Workaround (`moe_runner_backend: triton`) unchanged.
+
 Adjacent open work:
 
 - [PR #21872](https://github.com/sgl-project/sglang/pull/21872)

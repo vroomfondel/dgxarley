@@ -211,6 +211,36 @@ therefore still required on v0.5.11 / v0.5.12 / v0.5.12.post1 / v0.5.13 / dev1 i
 > + `--speculative-draft-model-path` workaround remains required and
 > unchanged.
 
+> **Re-verified 2026-08-28:** SGLang **v0.5.18** released 2026-08-22 (tag
+> commit `71de97b264b04dcd514cf904003028aefe9775c8`, cut 2026-08-20T21:29
+> UTC; ~710 PRs since v0.5.17). The bug ships in it unchanged; "present in
+> every release up to and including v0.5.17" now reads **v0.5.18**.
+> Source-checked the v0.5.18 tag: `ModelRunner.__init__` consumption at
+> line 330, `_load_format_scope()` at line 1289, `_resolve_draft_load_format()`
+> at line 1301 (logic unchanged: still returns `None` unless
+> `speculative_draft_load_format` is explicitly set), `scheduler.py:
+> maybe_init_draft_worker()` at line 923. `draft_worker_common.py` on the
+> v0.5.18 tag still holds only `DraftWorkerBundle` and worker-build helpers,
+> no load-format logic. v0.5.18's Speculative Decoding release-note section
+> (17 PRs) contains no fix touching `speculative_draft_load_format`. Issue
+> #32202 unchanged: still open, 0 comments, idle since 2026-07-23. Line
+> numbers on `main` drifted again (`upstream/main` HEAD now
+> `d56706459c8e52ec3ab1c41dae778e4fe03e0da3`, 2026-08-28):
+> `ModelRunner.__init__` consumption line 330 -> 353; `_load_format_scope()`
+> :1289 -> :1347; `_resolve_draft_load_format()` :1301 -> :1359;
+> `scheduler.py:maybe_init_draft_worker()` line 926 -> 953. Logic
+> byte-for-byte identical on both the v0.5.18 tag and `main`. **Adjacent
+> but distinct, not our bug:** SGLang issue
+> [#34622](https://github.com/sgl-project/sglang/issues/34622) ("Prevent
+> Qwen3.5 MTP draft from inheriting GPTQ quantization", opened 2026-08-12,
+> open) reports the same "draft silently inherits main-model config"
+> failure class, but for `speculative_draft_model_quantization` (GPTQ), not
+> `load_format`/`sharded_state`; even an explicit
+> `--speculative-draft-model-quantization unquant` does not prevent it.
+> Does not affect our tracked bug or workaround. The
+> `--speculative-draft-load-format auto` + `--speculative-draft-model-path`
+> workaround remains required and unchanged.
+
 - File: `sglang/srt/managers/scheduler.py`, method `maybe_init_draft_worker()`
 - Root cause in: `sglang/srt/managers/tp_worker.py`, method `_init_model_config()`
 
