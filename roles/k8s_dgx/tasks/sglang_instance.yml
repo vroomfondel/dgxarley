@@ -152,7 +152,12 @@
         SGLANG_FP8_PAGED_MQA_LOGITS_TORCH: "{{ '1' if sglang_fp8_paged_mqa_logits_torch | bool else '0' }}"
         # C4-indexer top-k transform: TVM jit topk_transform_512_v2 dies on sm_121
         # (topk_v2.cuh:472 CUDA error: invalid argument) at decode → torch fallback.
-        SGLANG_TOPK_TRANSFORM_512_TORCH: "{{ '1' if sglang_topk_transform_512_torch | bool else '0' }}"
+        # [migrated 2026-08-28] Was SGLANG_TOPK_TRANSFORM_512_TORCH (env deleted
+        # upstream in v0.5.18, PR #34926). Same profile key now selects the server
+        # arg `--dsa-topk-backend torch` (+ SGLANG_DSA_FUSE_TOPK=0, both emitted by
+        # launch.sh). Broader than the old env: switches the whole indexer top-k
+        # backend to torch, see the knob comment in defaults/main/sglang.yml.
+        SGLANG_DSA_TOPK_BACKEND: "{{ 'torch' if sglang_topk_transform_512_torch | bool else '' }}"
         # DSV4 DSA indexer via TileLang (8-16x faster than torch, CUDA-graph-capturable;
         # requires the tilelang-0.1.8 indexer compat patch baked into the image).
         SGLANG_OPT_USE_TILELANG_INDEXER: "{{ '1' if sglang_opt_use_tilelang_indexer | bool else '0' }}"

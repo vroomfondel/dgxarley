@@ -250,11 +250,20 @@ sglang_opt_fp8_wo_a_gemm: "{{ sglang_model_profiles[_sglang_active_model].opt_fp
 #  - fp8_paged_mqa_logits_torch=true → SGLANG_FP8_PAGED_MQA_LOGITS_TORCH=1: torch
 #    fallback for the DSA Lightning-Indexer paged_mqa_logits kernel (the next
 #    wall, at decode). Slower than the kernel but correct on SM121.
-#  - topk_transform_512_torch=true → SGLANG_TOPK_TRANSFORM_512_TORCH=1: torch
-#    fallback (topk_transform_512_pytorch_vectorized) for the C4-indexer top-k
-#    transform. The TVM jit kernel topk_transform_512_v2 (SGLANG_OPT_USE_TOPK_V2,
-#    default-on) dies on sm_121 with `topk_v2.cuh:472 CUDA error: invalid
-#    argument` at decode. The torch branch is checked BEFORE the v2 branch.
+#  - topk_transform_512_torch=true: torch fallback (topk_transform_512_pytorch_
+#    vectorized) for the C4-indexer top-k transform. The TVM jit kernel
+#    topk_transform_512_v2 (SGLANG_OPT_USE_TOPK_V2, default-on) dies on sm_121
+#    with `topk_v2.cuh:472 CUDA error: invalid argument` at decode. The torch
+#    branch is checked BEFORE the v2 branch.
+#    [migrated 2026-08-28] Plumbing changed from env SGLANG_TOPK_TRANSFORM_512_TORCH
+#    (deleted upstream in v0.5.18, PR #34926) to the pair `--dsa-topk-backend torch`
+#    + SGLANG_DSA_FUSE_TOPK=0, emitted by launch.sh from SGLANG_DSA_TOPK_BACKEND.
+#    NOTE: semantically BROADER than the old env, which flipped only the
+#    512-transform dispatch site; the arg switches the WHOLE indexer top-k backend
+#    to torch and requires unfused top-k (fused dispatch raises RuntimeError for
+#    torch). v0.5.18+ has no narrow equivalent anymore; on v0.5.17 the arg covers
+#    the old env's site too (ORed at dsv4/indexer.py:808). Currently dormant: all
+#    profiles set false (JIT topk_v1 validated bit-identical on GB10 2026-06-20).
 # Defaults match upstream (hc_prenorm on, the torch fallbacks off); V4-Flash flips them.
 sglang_opt_deepgemm_hc_prenorm: "{{ sglang_model_profiles[_sglang_active_model].opt_deepgemm_hc_prenorm | default(true) }}"
 sglang_fp8_paged_mqa_logits_torch: "{{ sglang_model_profiles[_sglang_active_model].fp8_paged_mqa_logits_torch | default(false) }}"

@@ -608,6 +608,20 @@ fi
 if [ -n "$SGLANG_DSA_PAGED_MQA_LOGITS_BACKEND" ]; then
   args+=(--dsa-paged-mqa-logits-backend "$SGLANG_DSA_PAGED_MQA_LOGITS_BACKEND")
 fi
+# DSA indexer top-k backend. Replaces the retired SGLANG_TOPK_TRANSFORM_512_TORCH
+# env (deleted upstream in v0.5.18, PR #34926; on v0.5.17 the env is ORed with
+# is_torch() at dsv4/indexer.py:808, so the arg covers that site there too).
+# "torch" additionally requires unfused top-k (SGLANG_DSA_FUSE_TOPK=0), otherwise
+# the fused dispatch raises "Unsupported ... for SGLANG_DSA_FUSE_TOPK". NOTE:
+# broader than the old env, which flipped only the 512-transform site; this
+# switches every indexer top-k path to torch. Empty → no flag → SGLang default
+# ("sgl-kernel"). ${:-} guard: key may be absent from a not-yet-rerendered ConfigMap.
+if [ -n "${SGLANG_DSA_TOPK_BACKEND:-}" ]; then
+  args+=(--dsa-topk-backend "$SGLANG_DSA_TOPK_BACKEND")
+  if [ "$SGLANG_DSA_TOPK_BACKEND" = "torch" ]; then
+    export SGLANG_DSA_FUSE_TOPK=0
+  fi
+fi
 # DSA decode attention backend (the MLA attention step over the indexer's top-k KV
 # selection). Empty → no flag → SGLang default ("auto" → trtllm-gen FMHA, dead on
 # SM121). Set "flashinfer_gather" on GB10/SM121 to use the _sgl_ gather+dense-fa2
