@@ -73,7 +73,7 @@ DOCKERFILE="${PATCHES_DIR}/dgx-spark-quant-sm121.Dockerfile"
 # rename off `-dev` (build_sm121_image.sh + sglang-0.5.16-sm121.recipe header). The
 # existing xomoxcc/dgx-spark-quant:0.5.16-dev-sm121 (2026-07-28) layers on the
 # flashinfer-0.6.16rc3 serving image and stays as-is; do not overwrite it.
-TAG="${BUILD_QUANT_TAG:-0.5.17-sm121}"
+TAG="${BUILD_QUANT_TAG:-0.5.18-sm121}"
 
 # Produced image. Overridable wholesale via BUILD_QUANT_IMAGE.
 IMAGE="${BUILD_QUANT_IMAGE:-xomoxcc/dgx-spark-quant:${TAG}}"

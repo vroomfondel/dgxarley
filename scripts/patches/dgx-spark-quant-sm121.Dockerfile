@@ -32,7 +32,7 @@
 # (Nothing here is built/pushed automatically -- this is a reviewable draft.)
 # ============================================================================
 
-ARG BASE_IMAGE=xomoxcc/dgx-spark-sglang:0.5.17-sm121
+ARG BASE_IMAGE=xomoxcc/dgx-spark-sglang:0.5.18-sm121
 FROM ${BASE_IMAGE}
 
 # WHAT THE BASE ALREADY SHIPS (verified on 0.5.14-sm121): nvidia-modelopt 0.45.0,
