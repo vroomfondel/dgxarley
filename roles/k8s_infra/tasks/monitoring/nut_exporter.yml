@@ -60,7 +60,7 @@
                       value: "2"
                 containers:
                 - name: nut-exporter
-                  image: druggeri/nut_exporter:3.2.5
+                  image: druggeri/nut_exporter:3.3.0
                   envFrom:
                   - secretRef:
                       name: nut-exporter-secrets
