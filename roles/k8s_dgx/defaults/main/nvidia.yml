@@ -15,3 +15,13 @@ nvidia_gpu_timeslice_replicas: 5
 # Check newer: curl -sH "Authorization: Bearer $(curl -s 'https://nvcr.io/proxy_auth?scope=repository:nvidia/k8s/dcgm-exporter:pull' | jq -r .token)" \
 #   https://nvcr.io/v2/nvidia/k8s/dcgm-exporter/tags/list | jq '.tags[] | select(test("distroless$"))'
 dcgm_exporter_image: "nvcr.io/nvidia/k8s/dcgm-exporter:4.6.0-4.8.3-distroless"
+
+# NVIDIA device plugin DaemonSet resources. Observed steady state on the sparks
+# is ~1m CPU / ~41Mi RSS (NVML polling only), so the requests are a floor for
+# the scheduler and the limits are pure headroom. Keep the memory limit well
+# above the observed RSS: the container is system-node-critical, an OOMKill
+# takes nvidia.com/gpu off the node and evicts every SGLang pod on it.
+nvidia_device_plugin_cpu_request: "10m"
+nvidia_device_plugin_cpu_limit: "200m"
+nvidia_device_plugin_memory_request: "64Mi"
+nvidia_device_plugin_memory_limit: "256Mi"

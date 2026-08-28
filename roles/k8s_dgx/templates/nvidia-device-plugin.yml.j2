@@ -51,6 +51,13 @@ spec:
             - "--config-file=/config/config.yaml"
           securityContext:
             privileged: true
+          resources:
+            requests:
+              cpu: "{{ nvidia_device_plugin_cpu_request }}"
+              memory: "{{ nvidia_device_plugin_memory_request }}"
+            limits:
+              cpu: "{{ nvidia_device_plugin_cpu_limit }}"
+              memory: "{{ nvidia_device_plugin_memory_limit }}"
           volumeMounts:
             - name: device-plugin
               mountPath: /var/lib/kubelet/device-plugins
