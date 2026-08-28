@@ -1,0 +1,392 @@
+---
+# Model profile: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
+# Loaded by include_vars in the k8s_dgx role, merged into sglang_model_profiles.
+#
+# STATUS 2026-08-28: FIRST CONTACT, NOTHING VALIDATED ON THIS CLUSTER.
+# Every value below is transcribed from the checkpoint's own config.json /
+# hf_quant_config.json and from the OFFICIAL SGLang cookbook cell for
+# "DGX Spark (GB10 / SM121) + NVFP4", not measured here. No TESTLOG yet.
+#
+# WHAT
+# NVIDIA's 30B-total / 3B-active hybrid reasoning MoE, the "Lightning" line of
+# Nemotron 3.5. Same family arch as the Nemotron-3 Super/Nano siblings in this
+# directory (NemotronHForCausalLM, model_type nemotron_h), interleaved Mamba-2 +
+# MoE with a few full-attention layers. config.json facts:
+#   52 layers, layers_block_type = 23x mamba / 23x moe / 6x attention
+#     (attention at indices 5, 12, 19, 26, 33, 42)
+#   hidden_size 2688, 32 attention heads, num_key_value_heads 2 (GQA), head_dim 128
+#   n_routed_experts 128 + 1 shared, num_experts_per_tok 6,
+#     moe_intermediate_size 1856, moe_shared_expert_intermediate_size 3712,
+#     routed_scaling_factor 2.5, n_groups 8, mamba_num_heads 64, ssm_state_size 128
+#   max_position_embeddings 1048576 (1M, natively trained, not a YaRN extension)
+#   vocab_size 131072, mlp_hidden_act relu2, rope_theta 10000
+#   num_nextn_predict_layers 1, mtp_layers_block_type ["attention", "moe"]
+#     -> a built-in 2-block MTP head. NOTE this is the NEW schema; the Nemotron-3
+#     Super sibling uses the legacy mtp_hybrid_override_pattern "*E" string.
+#     SGLang normalizes both (configs/nemotron_h.py::_resolve_mtp_layers_block_type,
+#     merged in v0.5.10 via #19950), so no config surgery is needed.
+#   NO auto_map and no .py files in the repo -> trust_remote_code is NOT required.
+# Release 2026-08-11. Pre-training data cutoff 2025-09, post-training 2026-05.
+# Languages EN + code, ES, FR, DE, IT, JA. Reasoning model (nemotron_3 parser).
+#
+# QUANT SHAPE (read from hf_quant_config.json, modelopt 0.44.0rc5)
+#   quant_algo: MIXED_PRECISION  <- NOT a uniform NVFP4 export, despite the name
+#   5935 layers W4A16_NVFP4 (group_size 16): all routed experts up_proj/down_proj,
+#     the shared expert, AND lm_head
+#   46 layers FP8: mamba mixer in_proj / out_proj
+#   excluded (stay BF16): backbone.embeddings, every mixer.conv1d, every
+#     mixer.gate, and ALL attention projections (q_proj / k_proj / v_proj /
+#     o_proj), plus the whole MTP head via the "mtp*" wildcard
+#   kv_cache_quant_algo: FP8
+# W4A16 means weight-only: activations stay BF16, so this does NOT exercise the
+# W4A4 NVFP4 tensor-core path at all. NVIDIA's own hardware matrix confirms it
+# and lists GB10 as "compute path W4A16, MoE backend marlin, native FP4 path: no".
+# That statement is scoped to their vLLM recipe; SGLang picks its own kernels.
+# This is the SAME checkpoint shape as nvidia/Qwen3.6-35B-A3B-NVFP4 (mixed
+# W4A16_NVFP4 + quantized lm_head), which needed upstream PR #27906. That PR is
+# MERGED and shipped in v0.5.18, so the recipe flag APPLY_QWEN36_MIXED_NVFP4_PR27906
+# is already 0 in scripts/patches/sglang-0.5.18-sm121.recipe. Nothing to backport
+# for the TARGET weights.
+#
+# >>> IMAGE BLOCKER: SPECULATIVE DECODING NEEDS PR #36186, WHICH IS NOT IN v0.5.18 <<<
+# sgl-project/sglang#36186 "[Model] Support Nemotron 3.5 Lightning speculative
+# decoding" was MERGED 2026-08-25. v0.5.18 was tagged 2026-08-22, so it is
+# main-only right now (no v0.5.19 exists yet as of 2026-08-28). It touches 18
+# files; the four that matter here:
+#   models/nemotron_h.py                 +42  the set_dspark_layers_to_capture /
+#                                             residual-layer capture hook
+#   layers/quantization/modelopt_quant.py +13 ModelOpt W4A16 NVFP4 for the
+#                                             DFlash/DSpark DRAFT checkpoints
+#   models/dspark.py / models/dflash.py  +223 Nemotron-3.5 draft layouts
+#                                             (draft embeddings, packed
+#                                             projections, attention sinks,
+#                                             bonus anchor)
+#   arg_groups/overrides.py               +26 the Nemotron-H target/draft
+#                                             attention-backend resolver
+# Without #36186 the DSPARK path below dies at boot in
+# model_runner_components/attention_backend_setup.py with
+#   "Model NemotronHForCausalLM implements neither set_dspark_layers_to_capture
+#    nor set_dflash_layers_to_capture, one of which is required for DFLASH/DSPARK."
+# (verified against the local sglang checkout: nemotron_h.py has no aux-hidden-
+# state capture, and dflash_use_aux_hidden_state is set unconditionally for the
+# dflash family in spec_aux_hidden_state.py::_resolve_dflash_aux_hidden_state).
+# TO DEPLOY WITH SPECULATION, one of:
+#   a) cut a recipe whose SGLANG_REF is >= 41e7612 (the #36186 merge commit), or
+#   b) add an APPLY_NEMOTRON35_SPEC_PR36186 cherry-pick flag to a 0.5.18-based
+#      recipe, same pattern as APPLY_QWEN4EXP_PR36497 in sglang-0.5.18-sm121.recipe.
+# The upstream cookbook itself ships a dedicated dev image for exactly this
+# reason: lmsysorg/sglang:dev-nemotron3-5-lightning (multi-arch, covers GB10).
+# ROLLBACK THAT WORKS TODAY: set speculative_enabled to false. The TARGET alone
+# (NemotronH + mixed W4A16_NVFP4 + quantized lm_head) is fully covered by v0.5.18,
+# so the pinned xomoxcc/dgx-spark-sglang:0.5.18-sm121 should serve it unspeculated.
+#
+# SPECULATIVE OPTIONS THIS MODEL SHIPS (three, all published by NVIDIA)
+#   MTP    built into the target checkpoint (num_nextn_predict_layers 1). SGLang
+#          drives it as EAGLE with the draft path pointed back at the target,
+#          exactly like the Nemotron-3 Super sibling. Cookbook GB10 cell:
+#          --speculative-algorithm EAGLE --speculative-draft-model-path <target>
+#          --speculative-num-steps 5 --speculative-eagle-topk 1
+#          --speculative-num-draft-tokens 6
+#   DFlash separate draft repo ...-NVFP4-DFlash, arch DFlashDraftModel, 6 full-
+#          attention layers, YaRN rope. Cookbook GB10 cell:
+#          --speculative-algorithm DFLASH
+#          --speculative-draft-model-path nvidia/...-NVFP4-DFlash
+#          --speculative-dflash-block-size 4
+#          NOTE: this repo has NO speculative_dflash_block_size knob yet (only the
+#          DSPARK one), so DFlash would need a new key in
+#          defaults/main/sglang.yml + sglang_launch.sh before it can be selected.
+#   DSpark separate draft repo ...-NVFP4-DSpark, arch Qwen3DSparkModel (which is
+#          literally SGLang's EntryClass in models/dspark.py). Semi-autoregressive
+#          block drafter with a Markov fixup head. NVIDIA's own recommendation for
+#          DGX Spark and for low-concurrency serving. <<< THIS IS WHAT IS WIRED UP
+#          BELOW, per explicit request. >>>
+# The DSpark draft repo is small (single model.safetensors) and is downloaded
+# automatically: the pod's model-download initContainer appends
+# speculative_draft_model_path to its fetch list.
+# DSpark draft config facts: block_size 8, markov_rank 512, dspark_markov_rank 512,
+# dspark_fixup_head_type markov, dspark_bonus_anchor true, 6 sliding-attention
+# layers (window 1024), hidden_size 2688, intermediate_size 6144, has_lm_head false
+# (shares the target's), target_layer_ids [1, 5, 19, 29, 41, 51],
+# eagle_aux_hidden_state_layer_ids [2, 6, 20, 30, 42, 52]. Its own
+# hf_quant_config is quant_algo W4A16_NVFP4 group_size 16, kv_cache_quant_algo
+# null, ignore ["*embed_tokens*", "*markov_w1*", "*self_attn*"].
+#
+# OFFICIAL SGLang COOKBOOK, "DGX Spark (GB10 / SM121) + NVFP4 + DSpark" cell
+# (docs/cookbook/autoregressive/NVIDIA/Nemotron3.5-Lightning.mdx, added by
+#  #33481, spec cells rewritten by #36186), verbatim:
+#   sglang serve --model-path nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4 \
+#     --mamba-ssm-dtype float16 \
+#     --mem-fraction-static 0.78 \
+#     --cuda-graph-max-bs-decode 4 \
+#     --speculative-algorithm DSPARK \
+#     --speculative-draft-model-path nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark \
+#     --speculative-dspark-block-size 3 \
+#     --reasoning-parser nemotron_3 \
+#     --tool-call-parser qwen3_coder
+# Note what the cookbook does NOT pass: no --quantization, no --trust-remote-code,
+# no --attention-backend, no --moe-runner-backend, no --kv-cache-dtype, no --tp
+# (it is a single-GPU cell). The keys below follow that, with the two documented
+# deviations called out at their line (kv_cache_dtype and disable_deep_gemm).
+#
+# NEW KNOBS ADDED FOR THIS PROFILE (2026-08-28): the cookbook cell needs two
+# flags this repo could not emit before, so both were wired end to end
+# (defaults/main/sglang.yml -> tasks/sglang_instance.yml env -> sglang_launch.sh):
+#   mamba_ssm_dtype                       -> --mamba-ssm-dtype
+#   speculative_dflash_block_size         -> --speculative-dflash-block-size
+#                                            (makes ALTERNATIVE 2 selectable)
+#   speculative_draft_attention_backend   -> --speculative-draft-attention-backend
+#                                            (load-bearing for DSpark, see below)
+# The DFLASH knob also brought its own render-time assert in sglang_instance.yml,
+# because DFlash couples block size to the verify window differently from DSpark:
+# num_draft_tokens == block_size, NOT block_size + 1.
+_model_profile:
+  "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4":
+    knowledge_cutoff: "2026-05"  # post-training cutoff per the HF card (pre-training 2025-09)
+    release_date: "2026-08-11"
+    info_url: "https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4"
+    # auto, not sharded_state: same rationale as every NVFP4 profile here, the
+    # sharded path double-processes weights in process_weights_after_loading for
+    # no I/O win.
+    load_format: "auto"
+    nccl_transport: "roce"
+    # PARALLELISM. The cluster is fixed at sglang_nnodes 4, and tp_size 4 gives
+    # PP = nnodes / tp = 1. THAT IS LOAD-BEARING HERE, not just a convention:
+    # arg_groups/speculative_hook.py::_handle_dspark raises
+    # "Currently DSpark speculative decoding only supports pp_size == 1", so any
+    # tp_size < 4 (which would introduce pipeline stages) breaks DSpark outright.
+    # With num_key_value_heads 2 and TP=4, SGLang replicates each KV head across
+    # a rank pair (4 % 2 == 0), the same valid GQA behaviour as the Super/Nano
+    # siblings. NVIDIA targets this model at a SINGLE Spark (~17 GB of W4A16
+    # weights fit one GB10 easily), so tp_size 1 as a single-node instance is the
+    # natural alternative if the 4-node group is wanted for something else.
+    tp_size: 4
+    # 262144 as a deliberate starting point, NOT the model's ceiling: native
+    # max_position_embeddings is 1048576 and it was pre-trained at that length,
+    # so raising this needs no rope_scaling and no json_model_override_args
+    # (the value is BELOW the config cap, so SGLang's _derive_context_length is
+    # not fighting anything). KV is cheap on this arch: only 6 of 52 layers are
+    # attention, the other 46 carry constant-size Mamba state, so 1M costs far
+    # less KV than the parameter count suggests. Raise once the thing serves.
+    context_length: 262144
+    # Empty on purpose. hf_quant_config.json declares quant_algo MIXED_PRECISION,
+    # and SGLang's _parse_modelopt_quant_config maps MIXED_PRECISION to
+    # modelopt_mixed for exactly this NemotronH arch. Forcing "modelopt_fp4" (what
+    # the Nemotron-3 Super profile does, because that checkpoint is a plain NVFP4
+    # export) would send a W4A16 checkpoint down the W4A4 path. The cookbook
+    # passes no --quantization either. Leave it to auto-detection.
+    quantization: ""
+    # false: the HF repo ships NO auto_map and NO .py files (verified against the
+    # file listing), unlike the Nemotron-3 Super/Nano siblings which do. The
+    # cookbook passes no --trust-remote-code.
+    trust_remote_code: false
+    # Empty = let SGLang pick. The cookbook's GB10 cell sets no MoE runner. Do NOT
+    # reflexively copy "flashinfer_cutlass" from the Super/Nano siblings: those are
+    # uniform NVFP4 (W4A4) checkpoints whose experts go through cutlass_moe_fp4,
+    # whereas these experts are W4A16 (BF16 activations) and dispatch elsewhere.
+    # NVIDIA's vLLM recipe uses --moe-backend marlin on GB10, which is the vLLM
+    # name for the same weight-only idea. First A/B candidate if the auto choice
+    # underperforms.
+    moe_runner_backend: ""
+    # DEVIATION FROM THE COOKBOOK (which passes no --kv-cache-dtype, i.e. auto).
+    # Set to fp8 because the checkpoint itself declares kv_cache_quant_algo FP8,
+    # so the FP8 KV scales are present in the weights, and because fp8_e4m3
+    # measured ~3% FASTER than bf16 at half the KV footprint on the Nano-Omni
+    # sibling. Flip to "auto" if anything looks off during first boot; that is the
+    # literal cookbook behaviour and the safer bisect point.
+    kv_cache_dtype: "fp8_e4m3"
+    # 0.78 straight from the cookbook cell. That was tuned for a SINGLE 128 GB
+    # Spark holding the whole model; at tp_size 4 the weights are a quarter of
+    # that per GPU, so there is a lot of slack and this could go higher. Leave it
+    # at the published value until there is a measurement.
+    mem_fraction_static: "0.78"
+    # Empty ON PURPOSE, and this is the one key most likely to be "fixed" wrongly
+    # by the next person. PR #36186 added a Nemotron-H backend RESOLVER in
+    # arg_groups/overrides.py that picks Triton for the TARGET plus FlashInfer for
+    # the DRAFT on SM121 when speculation is on, and the PR description is
+    # explicit that it resolves those "without overriding explicit user choices".
+    # Setting attention_backend here therefore SILENCES the resolver and pins both
+    # sides to one backend. sglang_launch.sh omits --attention-backend entirely
+    # when this is empty, which is what we want.
+    # Historical note that no longer applies: the older NemotronH hook
+    # hard-asserted AGAINST triton ("the first layer might not be an attention
+    # layer"). The 3.5 resolver deliberately selects triton for the target, so do
+    # not resurrect attention_backend: "flashinfer" from the Super/Nano profiles.
+    attention_backend: ""
+    jit_max_jobs: 4
+    # DEVIATION FROM THE COOKBOOK (which passes no --disable-deep-gemm). Kept true
+    # for the same reason as every NVFP4 profile in this directory: DeepGemm
+    # targets FP8/ue8m0 scale formats, its JIT is not optimized for anything else,
+    # and on GB10 it has repeatedly blocked the scheduler watchdog and eaten host
+    # RAM. Cheap insurance, no upside to leaving it on.
+    disable_deep_gemm: true
+    disable_cuda_graph: false
+    # 4, from the cookbook cell (--cuda-graph-max-bs-decode 4; sglang_launch.sh
+    # maps cuda_graph_max_bs onto that flag). This is LOW by this cluster's
+    # standards, where 32 is the usual value, and it caps how large a decode batch
+    # still runs in a captured graph. It is a single-GPU low-concurrency tuning
+    # point and it pairs with DSpark, whose whole purpose is low-concurrency
+    # latency. First throughput A/B once it serves: raise to 32 and re-measure at
+    # n=8 / n=16. Note _handle_dspark also resets max_running_requests to 48 when
+    # it is unset, so the graph cap, not the scheduler, is the binding limit here.
+    cuda_graph_max_bs: 4
+    # Not set: the 3.5 cookbook does NOT pass --disable-piecewise-cuda-graph,
+    # unlike the Nemotron-3 Super/Nano model cards (both of which do, and both of
+    # which this repo mirrors). Following the newer published recipe. If capture
+    # misbehaves on the hybrid graph, disable_piecewise_cuda_graph: true is the
+    # first thing to try, since it is the documented family workaround.
+    pp_async_batch_depth: 0
+    num_experts: 128
+    # 1 to start. 128 % 4 == 0 so EP=4 is shardable in principle, and it is the
+    # validated winner on the Nemotron-3 Super. But EP>1 is CONFIRMED-BROKEN on
+    # the Nano-Omni sibling (deterministic illegal memory access in
+    # flashinfer_backend init_cuda_graph_state during capture), and this model is
+    # much closer in size and shape to the Nano than to the Super. Do not enable
+    # EP in the same run as the first DSpark boot; change one axis at a time.
+    ep_size: 1
+    reasoning_parser: "nemotron_3"
+    tool_call_parser: "qwen3_coder"
+    recommended_sampling:
+      temperature: 1.0  # NVIDIA card + generation_config.json
+      top_p: 0.95
+    # Hybrid Mamba model + speculation: the SSM state has to be rolled back per
+    # rejected draft token, which is what extra_buffer's ping-pong slots are for.
+    # Emitted by sglang_launch.sh as --mamba-radix-cache-strategy (the
+    # --mamba-scheduler-strategy spelling is a deprecated alias since 0.5.17).
+    # SGLang's "auto" resolves to extra_buffer for this arch anyway; stating it
+    # keeps the intent visible. Two asserts ride along and both hold at defaults:
+    # mamba_track_interval (256) >= speculative_num_draft_tokens (4), and
+    # mamba_track_interval % page_size == 0.
+    mamba_scheduler_strategy: extra_buffer
+    # float16 straight from the cookbook cell (--mamba-ssm-dtype float16). The
+    # checkpoint's own config declares mamba_ssm_cache_dtype float32, which is
+    # what SGLang would otherwise use, so this HALVES the per-slot SSM state.
+    # That matters more than it looks on a hybrid model: 46 of 52 layers carry
+    # Mamba state, and max_mamba_cache_size // mamba_ratio is what clamps
+    # max_running_requests. Set to "" to fall back to the checkpoint's float32.
+    mamba_ssm_dtype: "float16"
+    # max_mamba_cache_size deliberately UNSET (auto-fit). On hybrid models this
+    # pool, not KV and not the cuda-graph cap, is usually the concurrency ceiling:
+    # SGLang clamps max_running_requests to max_mamba_cache_size // mamba_ratio,
+    # and extra_buffer pushes that ratio to roughly 5. On first boot READ the log
+    # lines "max_mamba_cache_size:" and "max_running_requests=" before tuning
+    # anything else. See the long note in the Nemotron-3 Super profile for the
+    # mechanics and for what setting it explicitly costs.
+    # max_mamba_cache_size: 160
+    #
+    # ---- Speculative decoding: DSPARK with the published external draft ----
+    # WIRED PER EXPLICIT REQUEST. Requires an image carrying PR #36186; see the
+    # IMAGE BLOCKER section in the header. UNVALIDATED on this cluster.
+    #
+    # Parameter shape is fully constrained, there is nothing to tune here:
+    #   num_steps 1  and  eagle_topk 1  are the ONLY values DSpark accepts;
+    #     _handle_dspark warns and overrides anything else back to 1.
+    #   block_size (gamma) 3 comes from the cookbook cell. The DRAFT CHECKPOINT
+    #     declares block_size 8, so this is a deliberate override: the drafter was
+    #     trained to emit blocks of 8 but the published operating point runs it at
+    #     3. NVIDIA's own vLLM recipe agrees (num_speculative_tokens 3). Drop this
+    #     key to let SGLang auto-infer 8 from the checkpoint, but then
+    #     num_draft_tokens MUST become 9.
+    #   num_draft_tokens 4 == gamma + 1. HARD requirement: _handle_dspark raises
+    #     if they disagree, and because sglang_launch.sh always passes
+    #     num_draft_tokens explicitly, a mismatch would only surface as a
+    #     crash-looping head. tasks/sglang_instance.yml asserts the pair at
+    #     render time instead.
+    # speculative_draft_model_quantization is deliberately NOT set: unlike the
+    # BF16 external drafts elsewhere in this directory, THIS draft ships its own
+    # hf_quant_config.json (W4A16_NVFP4, group_size 16), so it must be allowed to
+    # auto-detect. Forcing "unquant" here would be actively wrong.
+    speculative_enabled: true
+    speculative_algo: DSPARK
+    speculative_draft_model_path: "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark"
+    speculative_num_steps: 1
+    speculative_eagle_topk: 1
+    # LOAD-BEARING, and it contradicts the cookbook cell, which passes no draft
+    # backend at all. Traced through the merged sources rather than guessed:
+    #   1. The DSpark draft config declares attention_sink_bias true (the DFlash
+    #      draft declares false, so this applies to DSPARK only).
+    #   2. models/dflash.py, in the #36186 hunk, raises at draft construction:
+    #        "Nemotron 3.5 DSpark attention sinks require
+    #         --speculative-draft-attention-backend trtllm_mha, got <x>"
+    #      whenever a Nemotron-3.5 draft config has that flag and the draft
+    #      backend is anything else.
+    #   3. arg_groups/overrides.py::_nemotron_h_overrides only reaches the branch
+    #      that sets the draft backend to trtllm_mha under is_sm100_supported(),
+    #      and that helper is device_capability_major == 10 EXACTLY. GB10 is
+    #      sm_121 (major 12), so on this cluster the resolver takes the other
+    #      branch: target triton, draft FLASHINFER.
+    # So the resolver's own SM121 default would trip the assert from step 2. The
+    # resolver fills this in only while it is None, so setting it explicitly is
+    # both the fix and, by construction, an override of the resolver.
+    # OPEN RISK, first thing to check on boot: whether trtllm_mha is actually
+    # usable for the draft on SM121. It is an sm100-oriented kernel family and
+    # this repo already carries an SM121 trtllm veto elsewhere (the QSA decode
+    # runtime patch p65). If it turns out unusable, DSpark is off the table on
+    # GB10 until upstream fixes the resolver/assert pair, and the fallbacks are
+    # ALTERNATIVE 1 (MTP) or ALTERNATIVE 2 (DFlash) - neither carries attention
+    # sinks, so both are happy with the resolver's flashinfer draft and neither
+    # needs this key. Report it upstream if confirmed: the published DGX Spark
+    # DSpark cookbook cell cannot boot as printed.
+    speculative_draft_attention_backend: "trtllm_mha"
+    speculative_dspark_block_size: 3
+    speculative_num_draft_tokens: 4  # = gamma (3) + 1. HARD requirement, see above.
+    # speculative_dspark_sps_table_path: left empty. It points at a pre-profiled
+    # DSpark SPS cost table (built offline with
+    # `python -m sglang.benchmark.dspark_sps_profiler`) that feeds the
+    # ragged-verify budget scheduler. Without it that scheduler degenerates to
+    # verify-all, which costs nothing correctness-wise; DSpark itself works fine.
+    #
+    # ---- ALTERNATIVE 1: built-in MTP head (no external draft) ----
+    # The target checkpoint carries its own MTP head (num_nextn_predict_layers 1,
+    # mtp_layers_block_type ["attention", "moe"]), which SGLang drives as EAGLE
+    # with the draft path pointed back at the target. Cookbook GB10 cell:
+    #
+    #   speculative_enabled: true
+    #   speculative_algo: EAGLE
+    #   speculative_draft_model_path: "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4"
+    #   speculative_num_steps: 5
+    #   speculative_eagle_topk: 1
+    #   speculative_num_draft_tokens: 6
+    #   mamba_scheduler_strategy: extra_buffer
+    #
+    # This path needs LESS of PR #36186 than DSpark does (no draft-model layout,
+    # no aux-hidden-state capture hook), so it is the more likely of the two to
+    # come up on a stock v0.5.18 image, and it is the natural fallback if the
+    # DSpark draft turns out to be blocked. One caveat carried over from the
+    # family: the MTP head is EXCLUDED from quantization here (the "mtp*" wildcard
+    # in hf_quant_config exclude_modules), i.e. it is BF16 on a mixed-quant
+    # target. That is the exact configuration behind this repo's documented
+    # BF16-MTP-on-quantized-target failure mode. Check `accept len` in the log
+    # before believing any throughput number.
+    #
+    # ---- ALTERNATIVE 2: DFlash ----
+    # Selectable since the speculative_dflash_block_size knob was added
+    # (2026-08-28). Cookbook GB10 cell, translated:
+    #
+    #   speculative_enabled: true
+    #   speculative_algo: DFLASH
+    #   speculative_draft_model_path: "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DFlash"
+    #   speculative_num_steps: 1
+    #   speculative_eagle_topk: 1
+    #   speculative_dflash_block_size: 4
+    #   speculative_num_draft_tokens: 4   # == block_size, NOT block_size + 1
+    #   mamba_scheduler_strategy: extra_buffer
+    #
+    # Mind the coupling difference: DSpark wants gamma + 1 draft tokens, DFlash
+    # wants exactly block_size. Both are asserted at render time. Like DSpark,
+    # DFlash needs num_steps 1 / eagle_topk 1 (anything else is overridden with a
+    # warning), pp_size == 1, and an image carrying PR #36186. The DFlash draft is
+    # a 6-layer full-attention model with YaRN rope, also W4A16_NVFP4, also
+    # has_lm_head false.
+    #
+    # ---- ROLLBACK to bare serving ----
+    # speculative_enabled: false. Every other key above stays valid, the
+    # speculative_* keys and mamba_scheduler_strategy become inert, and the target
+    # alone should serve on the pinned v0.5.18 image (its mixed W4A16_NVFP4 +
+    # quantized lm_head support is PR #27906, merged and shipped in v0.5.18).
+    # This is the recommended FIRST boot: prove the target serves before adding
+    # a drafter that needs an image nobody has built yet.
+    #
+    # Pinned to the newest SM121 build. Sufficient for the target, NOT sufficient
+    # for the DSPARK block above (needs PR #36186, merged 2026-08-25, after the
+    # v0.5.18 tag of 2026-08-22). Repoint this once a #36186-carrying image exists.
+    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.18-sm121"

@@ -1,0 +1,2366 @@
+Nemotron 3.5 Lightning speculative decoding (MTP / DFlash / DSpark) — upstream
+PR #36186 plus its two DFlash2 prerequisites, rebased onto tag v0.5.18.
+
+Source commits (all MERGED into sgl-project/sglang main):
+  c14312a664  [Spec] DFlash2: local convolution + candidate selector (#35371)
+  1cf2b8c54d  [Spec] Support quantized target lm_head in the DFlash2 selector (#35496)
+  41e7612dee  [Model] Support Nemotron 3.5 Lightning speculative decoding (#36186)
+              merged 2026-08-25T23:43:58Z
+Captured 2026-08-28 by cherry-picking the three commits onto v0.5.18 (71de97b264)
+in that order and resolving the four residual conflicts (see REBASE NOTES).
+
+WHY THE TWO EXTRA COMMITS. v0.5.18 was tagged 2026-08-22, three days before
+#36186 merged, so #36186 alone does NOT apply: it is written against a dflash.py
+that already carries DFlash2 (#35371 introduced DFlashGroupedConv, the candidate
+selector, _radix_topk and the `prefix=`/conv constructor signatures; #35496 added
+is_dense_head_weight and the quantized-lm_head selector path). Applying #36186 by
+itself onto v0.5.18 fails 5 of 18 files. With the two prerequisites first, only
+four small conflicts remain, all of them main-only drift unrelated to Nemotron.
+The two prerequisites are self-contained: they touch dflash.py, dflash_utils.py,
+dflash_worker_v2.py, spec_aux_hidden_state.py and one kernels/ops file, nothing
+in the config-namespace refactor that dominates the rest of the v0.5.18..main gap.
+
+Target model: nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4 (arch
+  NemotronHForCausalLM, hybrid Mamba-2 + MoE + attention, modelopt MIXED_PRECISION
+  with W4A16_NVFP4 experts/lm_head) together with its two published external draft
+  checkpoints, ...-NVFP4-DSpark (arch Qwen3DSparkModel) and ...-NVFP4-DFlash (arch
+  DFlashDraftModel), both W4A16_NVFP4. Serving the TARGET alone needs none of this
+  (v0.5.18 already carries the mixed-NVFP4 support from the merged PR #27906);
+  this patch is required only for the three speculative decoders. Without it the
+  DSPARK/DFLASH paths die at
+    model_runner_components/attention_backend_setup.py
+    "Model NemotronHForCausalLM implements neither set_dspark_layers_to_capture
+     nor set_dflash_layers_to_capture, one of which is required for DFLASH/DSPARK."
+  because dflash_use_aux_hidden_state is set unconditionally for the dflash family
+  in spec_aux_hidden_state.py::_resolve_dflash_aux_hidden_state and nemotron_h.py
+  has no residual-layer capture hook in v0.5.18.
+  See roles/k8s_dgx/model_profiles/nvidia-nvidia-nemotron-3.5-lightning-30b-a3b-nvfp4.yml.
+
+What it does (16 files; the PR's docs page and its three test files are
+intentionally NOT included — everything outside python/sglang/srt and
+python/sglang/kernels was dropped during the rebase):
+  - models/nemotron_h.py: set_dflash_layers_to_capture + the residual/aux hidden
+    state capture the DFlash-family drafts consume. This is THE hook whose absence
+    is the hard blocker above (attention_backend_setup falls back to the dflash
+    spelling when a model has no set_dspark_layers_to_capture, so this one method
+    serves both DSPARK and DFLASH).
+  - models/dflash.py: Nemotron-3.5 draft layout — the draft's own
+    VocabParallelEmbedding (upstream drafts borrow the target's), ReplicatedLinear
+    fc with a packed-weight-aware shape check, weight prefixes, attention sinks
+    (which REQUIRE --speculative-draft-attention-backend trtllm_mha and raise
+    otherwise), plus the DFlash2 conv/selector machinery from the prerequisites.
+  - models/dspark.py: Nemotron-3.5 DSpark Markov fixup head + bonus-anchor
+    handling; quantized-lm_head aware candidate projection.
+  - layers/quantization/modelopt_quant.py: ModelOpt W4A16 NVFP4 for the DRAFT
+    checkpoints (both drafts ship quant_algo W4A16_NVFP4, group_size 16).
+  - arg_groups/overrides.py: the Nemotron-H resolver that picks target/draft
+    attention backends on Blackwell WITHOUT overriding an explicit user choice.
+    This is why the model profile leaves attention_backend empty.
+  - arg_groups/speculative_hook.py, speculative/dspark_components/*: derive the
+    DSpark anchor sampling and the Nemotron Markov layout from the already-loaded
+    draft config; no new ServerArgs knob is added by the PR.
+  - speculative/dflash_utils.py: is_nemotron_35_draft_config + the DFlash2 helpers.
+  - model_executor/model_runner.py, model_runner_components/spec_aux_hidden_state.py,
+    server_args.py: small plumbing for the above.
+  - kernels/ops/speculative/dflash.py: the DFlash2 kernel op (from #35371).
+
+REBASE NOTES (four conflicts, all resolved toward v0.5.18 semantics):
+  1. models/dspark.py — pure import addition (ReplicatedLinear,
+     should_apply_lm_head_quant_method). Both symbols DO exist in v0.5.18
+     (layers/linear.py, layers/logits_processor.py:1035). Took both sides.
+  2. speculative/dflash_worker_v2.py and
+     speculative/dspark_components/dspark_draft.py — upstream wraps the embedding
+     module in unwrap_lora_layer(). That helper (sglang.srt.lora.layers) does NOT
+     exist in v0.5.18 and is NOT part of #36186: it sits on the CONTEXT side of
+     both upstream hunks, i.e. it is unrelated main-only LoRA plumbing. DROPPED
+     the wrapper, kept the PR's actual change (draft-owned embeddings via
+     _resolve_dflash_embedding_module / self.draft_model.embed_tokens).
+  3. speculative/dspark_components/dspark_config.py — upstream renames
+     read_draft_checkpoint_gamma to read_draft_checkpoint_config (the new name IS
+     needed: speculative_hook.py calls it) and switches the four field reads to
+     arg_groups.overrides.resolved_view(). resolved_view exists in v0.5.18 but
+     does not cover these fields there; the plain server_args attributes are the
+     resolving values on this tag. Took the rename, kept the direct reads, and
+     left an in-file NOTE saying to restore resolved_view() on a newer base.
+  Verified: `git apply --check -p1` (strict, no fuzz) and `patch --dry-run -p1`
+  (what the container build runs) are BOTH clean against pristine v0.5.18, and
+  pyflakes reports no undefined names across all 16 changed files.
+
+DROP THIS PATCH (set APPLY_NEMOTRON35_SPEC_PR36186=0 / delete the recipe line) as
+soon as the pinned SGLANG_REF is a ref that already contains 41e7612dee — the
+first release tag after v0.5.18 will. Re-applying merged code fails the
+in-container dry-run and aborts the build, which is the intended loud failure.
+
+diff --git a/python/sglang/kernels/ops/speculative/dflash.py b/python/sglang/kernels/ops/speculative/dflash.py
+index d435ce2828..c86b894c05 100644
+--- a/python/sglang/kernels/ops/speculative/dflash.py
++++ b/python/sglang/kernels/ops/speculative/dflash.py
+@@ -244,3 +244,73 @@ def _prepare_dflash_draft_block_unchecked(
+         BLOCK_SIZE=block,
+         num_warps=num_warps,
+     )
++
++
++@triton.jit
++def _selector_walk_kernel(
++    scores_ptr,
++    candidate_ptr,
++    uniforms_ptr,
++    temperatures_ptr,
++    greedy_ptr,
++    tokens_ptr,
++    q_ptr,
++    slots: tl.constexpr,
++    top_k: tl.constexpr,
++):
++    """One program per request: a slot's K scores stay in registers and the walk is a
++    loop, so the slot-to-slot dependency costs nothing instead of one kernel each."""
++    row = tl.program_id(0)
++    offsets = tl.arange(0, top_k)
++    temperature = tl.load(temperatures_ptr + row)
++    greedy = tl.load(greedy_ptr + row) != 0
++    previous = 0
++    for slot in range(slots):
++        base = (row * slots + slot) * top_k
++        scores = tl.load(scores_ptr + (base + previous) * top_k + offsets).to(
++            tl.float32
++        )
++        if greedy:
++            best = tl.max(scores, axis=0)
++            index = tl.min(tl.where(scores == best, offsets, top_k), axis=0)
++            probabilities = tl.where(offsets == index, 1.0, 0.0)
++        else:
++            scaled = scores / temperature
++            exponentials = tl.exp(scaled - tl.max(scaled, axis=0))
++            probabilities = exponentials / tl.sum(exponentials, axis=0)
++            uniform = tl.load(uniforms_ptr + row * slots + slot)
++            index = tl.sum(
++                tl.where(uniform >= tl.cumsum(probabilities, axis=0), 1, 0), axis=0
++            )
++            index = tl.minimum(index, top_k - 1)
++        tl.store(q_ptr + base + offsets, probabilities)
++        tl.store(tokens_ptr + row * slots + slot, tl.load(candidate_ptr + base + index))
++        previous = index
++
++
++def selector_walk_triton(
++    *,
++    candidate_ids,
++    scores,
++    uniforms,
++    temperatures,
++    greedy_mask,
++):
++    batch, slots, top_k = candidate_ids.shape
++    tokens = torch.empty((batch, slots), dtype=torch.int64, device=scores.device)
++    q_rows = torch.empty(
++        (batch, slots, top_k), dtype=torch.float32, device=scores.device
++    )
++    _selector_walk_kernel[(batch,)](
++        scores.contiguous(),
++        candidate_ids.contiguous(),
++        uniforms.contiguous(),
++        temperatures.contiguous(),
++        greedy_mask.contiguous(),
++        tokens,
++        q_rows,
++        slots=slots,
++        top_k=top_k,
++        num_warps=1,
++    )
++    return tokens, q_rows
+diff --git a/python/sglang/srt/arg_groups/overrides.py b/python/sglang/srt/arg_groups/overrides.py
+index 53898da0c6..72d06f65c5 100644
+--- a/python/sglang/srt/arg_groups/overrides.py
++++ b/python/sglang/srt/arg_groups/overrides.py
+@@ -1304,8 +1304,32 @@ def _nemotron_h_overrides(server_args: Any, hf_config: Any) -> dict:
+         else:
+             overrides["moe_runner_backend"] = "flashinfer_cutlass"
+ 
+-    if is_sm100_supported() and server_args.attention_backend is None:
+-        overrides["attention_backend"] = "flashinfer"
++    if is_blackwell_supported() and server_args.is_attention_backend_not_set():
++        if server_args.speculative_algorithm is not None:
++            speculative_algorithm = server_args.speculative_algorithm.upper()
++            if is_sm100_supported() and server_args.speculative_eagle_topk in (
++                None,
++                1,
++            ):
++                overrides["attention_backend"] = "trtllm_mha"
++                if server_args.page_size is None:
++                    overrides["page_size"] = 64
++                if server_args.mamba_radix_cache_strategy == "auto":
++                    overrides["mamba_radix_cache_strategy"] = "extra_buffer"
++                if (
++                    server_args.speculative_draft_attention_backend is None
++                    and speculative_algorithm in ("EAGLE", "NEXTN", "DSPARK")
++                ):
++                    overrides["speculative_draft_attention_backend"] = "trtllm_mha"
++            else:
++                overrides["attention_backend"] = "triton"
++                if (
++                    server_args.speculative_draft_attention_backend is None
++                    and speculative_algorithm in ("EAGLE", "NEXTN", "DFLASH", "DSPARK")
++                ):
++                    overrides["speculative_draft_attention_backend"] = "flashinfer"
++        elif is_sm100_supported():
++            overrides["attention_backend"] = "trtllm_mha"
+     return overrides
+ 
+ 
+diff --git a/python/sglang/srt/arg_groups/speculative_hook.py b/python/sglang/srt/arg_groups/speculative_hook.py
+index c10348325e..1afbe051cb 100644
+--- a/python/sglang/srt/arg_groups/speculative_hook.py
++++ b/python/sglang/srt/arg_groups/speculative_hook.py
+@@ -358,6 +358,21 @@ def _handle_dspark(server_args: ServerArgs) -> None:
+         )
+         server_args.speculative_eagle_topk = 1
+ 
++    from sglang.srt.speculative.dspark_components.dspark_config import (
++        DEFAULT_DSPARK_GAMMA,
++        read_draft_checkpoint_config,
++    )
++
++    draft_config = None
++    try:
++        draft_config = read_draft_checkpoint_config(server_args=server_args)
++    except Exception as e:
++        logger.warning(
++            "Failed to read DSpark draft config; preserving explicit/default "
++            "gamma resolution. Error: %s",
++            e,
++        )
++
+     gamma: Optional[int] = None
+     if server_args.speculative_dspark_block_size is not None:
+         if int(server_args.speculative_dspark_block_size) <= 0:
+@@ -367,19 +382,8 @@ def _handle_dspark(server_args: ServerArgs) -> None:
+             )
+         gamma = int(server_args.speculative_dspark_block_size)
+     else:
+-        from sglang.srt.speculative.dspark_components.dspark_config import (
+-            DEFAULT_DSPARK_GAMMA,
+-            read_draft_checkpoint_gamma,
+-        )
+-
+-        try:
+-            gamma = read_draft_checkpoint_gamma(server_args=server_args)
+-        except Exception as e:
+-            logger.warning(
+-                "Failed to read DSpark gamma from draft model config; "
+-                "cannot cross-check --speculative-num-draft-tokens. Error: %s",
+-                e,
+-            )
++        if draft_config is not None:
++            gamma = draft_config.resolve_gamma(default=None)
+         if gamma is None and server_args.speculative_num_draft_tokens is None:
+             gamma = DEFAULT_DSPARK_GAMMA
+             logger.warning(
+diff --git a/python/sglang/srt/layers/quantization/modelopt_quant.py b/python/sglang/srt/layers/quantization/modelopt_quant.py
+index 9c14a63833..782efd9e91 100755
+--- a/python/sglang/srt/layers/quantization/modelopt_quant.py
++++ b/python/sglang/srt/layers/quantization/modelopt_quant.py
+@@ -1367,6 +1367,7 @@ class ModelOptFp4Config(ModelOptQuantConfig):
+                 "format is experimental and subject to change."
+             )
+         self.is_awq = is_awq
++        self.is_w4a16 = False
+         self.group_size = group_size
+         if not is_checkpoint_nvfp4_serialized:
+             if use_per_token_activation:
+@@ -1521,9 +1522,10 @@ class ModelOptFp4Config(ModelOptQuantConfig):
+                     "Expected either flat format (config.json) or nested format (hf_quant_config.json)."
+                 )
+ 
+-        if quant_method not in ["FP8", "NVFP4", "NVFP4_AWQ"]:
++        if quant_method not in ["FP8", "NVFP4", "NVFP4_AWQ", "W4A16_NVFP4"]:
+             raise ValueError(
+-                "ModelOpt currently only supports: FP8, NVFP4, NVFP4_AWQ "
++                "ModelOpt currently only supports: FP8, NVFP4, NVFP4_AWQ, "
++                "W4A16_NVFP4 "
+                 "quantizations in sglang. Please check the "
+                 "quantization config for your model's configuration."
+             )
+@@ -1539,14 +1541,17 @@ class ModelOptFp4Config(ModelOptQuantConfig):
+                 "NVFP4 quantization requires group_size and exclude_modules "
+                 "specified in the quantization config"
+             )
+-        return cls(
++        quant_config = cls(
+             is_checkpoint_nvfp4_serialized,
+             kv_cache_quant_algo,
+             group_size,
+             exclude_modules,
+             config.get("packed_modules_mapping"),
+             is_awq="AWQ" in quant_method,
++            use_per_token_activation=(False if quant_method == "W4A16_NVFP4" else None),
+         )
++        quant_config.is_w4a16 = quant_method == "W4A16_NVFP4"
++        return quant_config
+ 
+     def get_quant_method(self, layer: torch.nn.Module, prefix: str):
+         from sglang.srt.layers.linear import LinearBase
+@@ -1566,7 +1571,11 @@ class ModelOptFp4Config(ModelOptQuantConfig):
+         return self._get_quant_method(
+             layer,
+             prefix,
+-            Linear=ModelOptFp4LinearMethod,
++            Linear=(
++                ModelOptNvFp4A16LinearMethod
++                if self.is_w4a16
++                else ModelOptFp4LinearMethod
++            ),
+             Moe=ModelOptNvFp4FusedMoEMethod,
+         )
+ 
+diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
+index 017198c76a..58c45be636 100644
+--- a/python/sglang/srt/model_executor/model_runner.py
++++ b/python/sglang/srt/model_executor/model_runner.py
+@@ -781,6 +781,15 @@ class ModelRunner:
+     ) -> int:
+         """Logits rows per decode batch slot."""
+         if self.spec_algorithm.is_speculative():
++            if self.spec_algorithm.is_dspark() and self.is_draft_worker:
++                from sglang.srt.speculative.dspark_components.dspark_config import (
++                    get_dspark_sample_from_anchor,
++                )
++
++                if not get_dspark_sample_from_anchor(self.model_config.hf_config):
++                    if num_draft_tokens is None:
++                        num_draft_tokens = get_spec().speculative_num_draft_tokens
++                    return int(num_draft_tokens)
+             return resolve_num_tokens_per_req(
+                 phase="target_verify",
+                 spec_algorithm=self.spec_algorithm,
+diff --git a/python/sglang/srt/model_executor/model_runner_components/spec_aux_hidden_state.py b/python/sglang/srt/model_executor/model_runner_components/spec_aux_hidden_state.py
+index f060d0fccf..c3513fd728 100644
+--- a/python/sglang/srt/model_executor/model_runner_components/spec_aux_hidden_state.py
++++ b/python/sglang/srt/model_executor/model_runner_components/spec_aux_hidden_state.py
+@@ -13,6 +13,20 @@ if TYPE_CHECKING:
+ 
+ logger = logging.getLogger(__name__)
+ 
++_MUSE_LAYER_OUTPUT_DRAFT_ARCHITECTURES = frozenset(
++    {"DFlash2DraftModel", "MuseGlimmerAssistantModel"}
++)
++
++
++def _map_muse_target_layer_ids(*, target_hf_config, draft_hf_config, layer_ids):
++    architectures = getattr(draft_hf_config, "architectures", None) or []
++    uses_layer_outputs = getattr(
++        target_hf_config, "model_type", None
++    ) == "muse_glimmer" and bool(
++        _MUSE_LAYER_OUTPUT_DRAFT_ARCHITECTURES.intersection(architectures)
++    )
++    return [i + 1 for i in layer_ids] if uses_layer_outputs else layer_ids
++
+ 
+ class SpecAuxHiddenStateConfig(msgspec.Struct, kw_only=True):
+     eagle_use_aux_hidden_state: bool = False
+@@ -146,12 +160,13 @@ def _resolve_dflash_aux_hidden_state(
+             draft_num_layers=int(draft_num_layers),
+         )
+ 
+-        # Native export uses HF layer-output ids; shift them.
+-        draft_architectures = (
+-            getattr(draft_model_config.hf_config, "architectures", None) or []
++        # These Muse drafts use HF layer-output ids, while the Muse target captures
++        # before each layer. Legacy Muse drafts already store layer-input ids.
++        target_layer_ids = _map_muse_target_layer_ids(
++            target_hf_config=model_config.hf_config,
++            draft_hf_config=draft_model_config.hf_config,
++            layer_ids=target_layer_ids,
+         )
+-        if "MuseGlimmerAssistantModel" in draft_architectures:
+-            target_layer_ids = [i + 1 for i in target_layer_ids]
+ 
+         if spec_algorithm.is_dspark():
+             from sglang.srt.speculative.dspark_components.dspark_config import (
+diff --git a/python/sglang/srt/models/dflash.py b/python/sglang/srt/models/dflash.py
+index 75aaddf4fa..3a88ad392e 100644
+--- a/python/sglang/srt/models/dflash.py
++++ b/python/sglang/srt/models/dflash.py
+@@ -1,7 +1,6 @@
+ # Adapted from the DFlash reference implementation (HF) but implemented with
+-# SGLang primitives (RadixAttention + SGLang KV cache). This model intentionally
+-# does not include token embeddings or an LM head; DFlash uses the target model's
+-# embedding/lm_head.
++# SGLang primitives (RadixAttention + SGLang KV cache). Most drafts borrow the
++# target embedding and LM head; Nemotron 3.5 drafts carry their own embedding.
+ 
+ from __future__ import annotations
+ 
+@@ -12,29 +11,42 @@ import torch
+ import torch.nn.functional as F
+ from torch import nn
+ 
++from sglang.kernels.ops.speculative.dflash import selector_walk_triton
+ from sglang.srt.configs.laguna import normalize_gating
++from sglang.srt.distributed.communication_op import tensor_model_parallel_all_gather
+ from sglang.srt.layers.activation import SiluAndMul
+ from sglang.srt.layers.layernorm import RMSNorm
+ from sglang.srt.layers.linear import (
+     ColumnParallelLinear,
+     MergedColumnParallelLinear,
+     QKVParallelLinear,
++    ReplicatedLinear,
+     RowParallelLinear,
+ )
+-from sglang.srt.layers.logits_processor import LogitsProcessorOutput
++from sglang.srt.layers.logits_processor import (
++    LogitsProcessorOutput,
++    should_apply_lm_head_quant_method,
++)
+ from sglang.srt.layers.radix_attention import AttentionType, RadixAttention
+ from sglang.srt.layers.rotary_embedding import get_rope
++from sglang.srt.layers.vocab_parallel_embedding import VocabParallelEmbedding
+ from sglang.srt.model_executor.forward_batch_info import ForwardBatch
+-from sglang.srt.model_loader.weight_utils import default_weight_loader
++from sglang.srt.model_loader.weight_utils import (
++    default_weight_loader,
++    sharded_weight_loader,
++)
+ from sglang.srt.models.utils import apply_qk_norm
+-from sglang.srt.runtime_context import get_parallel
++from sglang.srt.runtime_context import get_parallel, get_spec
+ from sglang.srt.speculative.dflash_utils import (
+     can_dflash_slice_qkv_weight,
+     get_dflash_attention_sliding_window_size,
+     get_dflash_layer_types,
++    is_dense_head_weight,
++    is_nemotron_35_draft_config,
+     parse_dflash_draft_config,
+ )
+-from sglang.srt.utils import is_npu
++from sglang.srt.utils import is_npu, set_weight_attrs
++from sglang.srt.utils.common import get_compiler_backend
+ from sglang.srt.utils.hf_transformers_utils import get_rope_config
+ 
+ _is_npu = is_npu()
+@@ -42,6 +54,52 @@ if _is_npu:
+     from sgl_kernel_npu.norm.split_qkv_rmsnorm_rope import split_qkv_rmsnorm_rope
+ logger = logging.getLogger(__name__)
+ 
++try:
++    from flashinfer import top_k as _flashinfer_top_k
++except ImportError:
++    _flashinfer_top_k = None
++
++
++def _radix_topk(scores: torch.Tensor, k: int) -> Tuple[torch.Tensor, torch.Tensor]:
++    # The selector's largest single cost: it reads the whole logits tensor.
++    if _flashinfer_top_k is not None:
++        return _flashinfer_top_k(scores, k, sorted=True, deterministic=True)
++    return torch.topk(scores, k, dim=-1)
++
++
++def _logical_linear_weight_shape(
++    param: torch.Tensor,
++    loaded_weight: torch.Tensor,
++    *,
++    output_features: int,
++) -> Tuple[int, ...]:
++    """Return a checkpoint linear weight shape in logical elements."""
++    loaded_shape = tuple(loaded_weight.shape)
++    pack_factor = getattr(param, "pack_factor", None)
++    if pack_factor is None or loaded_shape != tuple(param.shape):
++        return loaded_shape
++
++    logical_numel = int(loaded_weight.numel() * pack_factor)
++    if logical_numel % output_features == 0:
++        return (output_features, logical_numel // output_features)
++    return (logical_numel,)
++
++
++def _project_candidate_logits(
++    hidden: torch.Tensor, lm_head: nn.Module, *, num_org: int, use_quant_head: bool
++) -> torch.Tensor:
++    """Project draft hiddens through the target head, restricted to the org vocab."""
++    if not use_quant_head:
++        weight = lm_head.weight
++        return torch.matmul(hidden.to(weight.dtype), weight[:num_org].T)
++    # A packed weight can't be row-sliced to the org vocab like the dense path,
++    # and flashinfer's radix top-k rejects the crop view (non-contiguous), so
++    # mask the padded tail out of the top-k instead.
++    logits = lm_head.quant_method.apply(lm_head, hidden, None).contiguous()
++    if logits.shape[-1] > num_org:
++        logits[:, num_org:] = float("-inf")
++    return logits
++
+ 
+ def _get_dflash_attention_type(config, *, default: AttentionType) -> AttentionType:
+     """Honor explicit causality while preserving legacy layer defaults."""
+@@ -82,7 +140,9 @@ def _get_dflash_layer_attention_params(
+ 
+ 
+ class DFlashAttention(nn.Module):
+-    def __init__(self, config, layer_id: int, quant_config=None) -> None:
++    def __init__(
++        self, config, layer_id: int, quant_config=None, prefix: str = ""
++    ) -> None:
+         super().__init__()
+         hidden_size = int(config.hidden_size)
+         tp_size = int(get_parallel().tp_size)
+@@ -125,14 +185,14 @@ class DFlashAttention(nn.Module):
+             total_num_kv_heads=self.total_num_kv_heads,
+             bias=attention_bias,
+             quant_config=quant_config,
+-            prefix="qkv_proj",
++            prefix=f"{prefix}.qkv_proj" if prefix else "qkv_proj",
+         )
+         self.o_proj = RowParallelLinear(
+             self.total_num_heads * head_dim,
+             hidden_size,
+             bias=attention_bias,
+             quant_config=quant_config,
+-            prefix="o_proj",
++            prefix=f"{prefix}.o_proj" if prefix else "o_proj",
+         )
+ 
+         # Per-head Q/K RMSNorm, matching HF Qwen3.
+@@ -166,6 +226,24 @@ class DFlashAttention(nn.Module):
+         self.sliding_window_size, self.attn_type = _get_dflash_layer_attention_params(
+             config, layer_id
+         )
++        self.attention_sink_bias = None
++        if is_nemotron_35_draft_config(config) and bool(
++            getattr(config, "attention_sink_bias", False)
++        ):
++            draft_attention_backend = get_spec().speculative_draft_attention_backend
++            if draft_attention_backend != "trtllm_mha":
++                raise ValueError(
++                    "Nemotron 3.5 DSpark attention sinks require "
++                    "--speculative-draft-attention-backend trtllm_mha, "
++                    f"got {draft_attention_backend!r}."
++                )
++            self.attention_sink_bias = nn.Parameter(
++                torch.empty(self.num_heads, dtype=torch.float32), requires_grad=False
++            )
++            set_weight_attrs(
++                self.attention_sink_bias,
++                {"weight_loader": sharded_weight_loader(0)},
++            )
+         self.attn = RadixAttention(
+             num_heads=self.num_heads,
+             head_dim=head_dim,
+@@ -224,7 +302,12 @@ class DFlashAttention(nn.Module):
+             q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+             q, k = apply_qk_norm(q, k, self.q_norm, self.k_norm, self.head_dim)
+             q, k = self.rotary_emb(positions, q, k)
+-        attn_output = self.attn(q, k, v, forward_batch)
++        if self.attention_sink_bias is None:
++            attn_output = self.attn(q, k, v, forward_batch)
++        else:
++            attn_output = self.attn(
++                q, k, v, forward_batch, sinks=self.attention_sink_bias
++            )
+         attn_output = self.apply_attention_output(attn_output, hidden_states)
+         output, _ = self.o_proj(attn_output)
+         return output
+@@ -309,20 +392,112 @@ class DFlashMLP(nn.Module):
+         return x
+ 
+ 
++@torch.compile(dynamic=True, backend=get_compiler_backend(), disable=_is_npu)
++def _grouped_conv(hidden_states, delta, base, block_size, num_groups, group_size, taps):
++    blocks = hidden_states.unflatten(-1, (num_groups, group_size))
++    coefficients = base.view(1, taps, num_groups, group_size) + delta.unsqueeze(-1)
++    out = coefficients[:, 0] * blocks
++    position = torch.arange(hidden_states.shape[0], device=hidden_states.device)
++    if block_size & (block_size - 1) == 0:
++        position = position & (block_size - 1)
++    else:
++        position = position % block_size
++    for tap in range(1, taps):
++        shifted = F.pad(blocks[:-tap], (0, 0, 0, 0, tap, 0))
++        out = out + coefficients[:, tap] * shifted * (position >= tap).view(-1, 1, 1)
++    return out.flatten(-2)
++
++
++class DFlashGroupedConv(nn.Module):
++    """Grouped dynamic depthwise K-tap convolution across one DFlash block.
++
++    Each sublayer is wrapped: `prepare` convolves its input and returns the kernel
++    for `finish` to convolve its output, both from one projection of the input.
++    """
++
++    def __init__(
++        self, hidden_size: int, block_size: int, taps: int, group_size: int
++    ) -> None:
++        super().__init__()
++        if hidden_size % group_size:
++            raise ValueError(
++                f"DFLASH conv_group_size={group_size} must divide "
++                f"hidden_size={hidden_size}."
++            )
++        hidden_size = int(hidden_size)
++        self.block_size = int(block_size)
++        self.taps = int(taps)
++        self.group_size = int(group_size)
++        self.num_groups = hidden_size // self.group_size
++        # [input/output, tap, channel], the layout training exports.
++        base_kernel = torch.zeros(2, self.taps, hidden_size)
++        base_kernel[:, 0] = 1.0
++        self.base_kernel = nn.Parameter(base_kernel)
++        self.kernel_projection = nn.Linear(
++            hidden_size, 2 * self.taps * self.num_groups, bias=False
++        )
++
++    def _convolve(self, hidden_states, delta, side: int) -> torch.Tensor:
++        # Marked here, not inside: by the time the compiled function traces, the dim
++        # is symbolic and the group index costs an integer div and mod per element.
++        torch._dynamo.mark_static(hidden_states, 1)
++        torch._dynamo.mark_static(delta, 1)
++        torch._dynamo.mark_static(delta, 2)
++        return _grouped_conv(
++            hidden_states,
++            delta,
++            self.base_kernel[side],
++            self.block_size,
++            self.num_groups,
++            self.group_size,
++            self.taps,
++        )
++
++    def prepare(self, hidden_states: torch.Tensor):
++        coefficients = self.kernel_projection(hidden_states).reshape(
++            *hidden_states.shape[:-1], 2, self.taps, self.num_groups
++        )
++        return (
++            self._convolve(hidden_states, coefficients[..., 0, :, :], side=0),
++            coefficients[..., 1, :, :],
++        )
++
++    def finish(self, hidden_states: torch.Tensor, coefficients) -> torch.Tensor:
++        return self._convolve(hidden_states, coefficients, side=1)
++
++
+ class DFlashDecoderLayer(nn.Module):
+     attention_cls = DFlashAttention
+ 
+-    def __init__(self, config, layer_id: int, quant_config=None) -> None:
++    def __init__(
++        self,
++        config,
++        layer_id: int,
++        attention_conv: Optional[DFlashGroupedConv] = None,
++        mlp_conv: Optional[DFlashGroupedConv] = None,
++        quant_config=None,
++        prefix: str = "",
++    ) -> None:
+         super().__init__()
+         hidden_size = int(config.hidden_size)
+         rms_norm_eps = float(getattr(config, "rms_norm_eps", 1e-6))
+ 
+         self.input_layernorm = RMSNorm(hidden_size, eps=rms_norm_eps)
++        attention_prefix = f"{prefix}.self_attn" if prefix else ""
+         self.self_attn = self.attention_cls(
+-            config=config, layer_id=layer_id, quant_config=quant_config
++            config=config,
++            layer_id=layer_id,
++            quant_config=quant_config,
++            prefix=attention_prefix,
+         )
+         self.post_attention_layernorm = RMSNorm(hidden_size, eps=rms_norm_eps)
+-        self.mlp = DFlashMLP(config=config, quant_config=quant_config)
++        mlp_prefix = f"{prefix}.mlp" if prefix else ""
++        self.mlp = DFlashMLP(
++            config=config, quant_config=quant_config, prefix=mlp_prefix
++        )
++
++        self.attention_conv = attention_conv
++        self.mlp_conv = mlp_conv
+ 
+     def forward(
+         self,
+@@ -344,18 +519,31 @@ class DFlashDecoderLayer(nn.Module):
+         else:
+             hidden_states, residual = self.input_layernorm(hidden_states, residual)
+ 
++        attention_kernel = None
++        if self.attention_conv is not None:
++            hidden_states, attention_kernel = self.attention_conv.prepare(hidden_states)
++
+         attn_out = self.self_attn(
+             positions=positions,
+             hidden_states=hidden_states,
+             forward_batch=forward_batch,
+         )
++        if attention_kernel is not None:
++            attn_out = self.attention_conv.finish(attn_out, attention_kernel)
++
+         hidden_states, residual = self.post_attention_layernorm(attn_out, residual)
++
++        mlp_kernel = None
++        if self.mlp_conv is not None:
++            hidden_states, mlp_kernel = self.mlp_conv.prepare(hidden_states)
+         hidden_states = self.mlp(hidden_states)
++        if mlp_kernel is not None:
++            hidden_states = self.mlp_conv.finish(hidden_states, mlp_kernel)
+         return hidden_states, residual
+ 
+ 
+ class DFlashDraftModel(nn.Module):
+-    """SGLang DFlash draft model (no embedding / lm_head weights).
++    """SGLang DFlash draft model with an optional Nemotron embedding.
+ 
+     The checkpoint provides:
+       - transformer weights for `layers.*`
+@@ -373,11 +561,45 @@ class DFlashDraftModel(nn.Module):
+         hidden_size = int(config.hidden_size)
+         num_layers = int(config.num_hidden_layers)
+         rms_norm_eps = float(getattr(config, "rms_norm_eps", 1e-6))
++        draft_config = self.draft_config = parse_dflash_draft_config(
++            draft_hf_config=config
++        )
++        self.block_size = draft_config.resolve_block_size(default=16)
++        self.candidate_selector: Optional[nn.Module] = None
++        self.is_nemotron_35_draft = is_nemotron_35_draft_config(config)
++        self.embed_tokens: Optional[VocabParallelEmbedding] = None
++        if self.is_nemotron_35_draft:
++            embed_prefix = f"{prefix}.embed_tokens" if prefix else "embed_tokens"
++            self.embed_tokens = VocabParallelEmbedding(
++                config.vocab_size,
++                hidden_size,
++                quant_config=quant_config,
++                prefix=embed_prefix,
++            )
++
++        def grouped_conv():
++            if not draft_config.conv_kernel_size:
++                return None
++            return DFlashGroupedConv(
++                hidden_size,
++                self.block_size,
++                draft_config.conv_kernel_size,
++                draft_config.conv_group_size,
++            )
+ 
+         self.layers = nn.ModuleList(
+             [
+                 self.decoder_layer_cls(
+-                    config=config, layer_id=i, quant_config=quant_config
++                    config=config,
++                    layer_id=i,
++                    attention_conv=grouped_conv(),
++                    mlp_conv=grouped_conv(),
++                    quant_config=quant_config,
++                    prefix=(
++                        (f"{prefix}.layers.{i}" if prefix else f"layers.{i}")
++                        if self.is_nemotron_35_draft
++                        else ""
++                    ),
+                 )
+                 for i in range(num_layers)
+             ]
+@@ -387,7 +609,6 @@ class DFlashDraftModel(nn.Module):
+         # Project per-token target context features:
+         # concat(K * hidden_size) -> hidden_size, where K is the number of target-layer
+         # feature tensors concatenated per token (not necessarily equal to num_layers).
+-        draft_config = parse_dflash_draft_config(draft_hf_config=config)
+         if draft_config.num_target_layers is not None:
+             target_num_layers = int(draft_config.num_target_layers)
+         elif draft_config.target_layer_ids is not None:
+@@ -400,16 +621,40 @@ class DFlashDraftModel(nn.Module):
+         num_context_features = len(target_layer_ids)
+ 
+         self.num_context_features = int(num_context_features)
+-        self.fc = nn.Linear(
+-            self.num_context_features * hidden_size, hidden_size, bias=False
+-        )
++        if self.is_nemotron_35_draft:
++            fc_prefix = f"{prefix}.fc" if prefix else "fc"
++            self.fc = ReplicatedLinear(
++                self.num_context_features * hidden_size,
++                hidden_size,
++                bias=False,
++                quant_config=quant_config,
++                prefix=fc_prefix,
++            )
++        else:
++            self.fc = nn.Linear(
++                self.num_context_features * hidden_size, hidden_size, bias=False
++            )
+         self.hidden_norm = RMSNorm(hidden_size, eps=rms_norm_eps)
+ 
+-        self.block_size = draft_config.resolve_block_size(default=16)
++    def set_block_size(self, block_size: int) -> None:
++        """Adopt the block size the worker resolved.
++
++        The convolutions are built from the checkpoint's block_size, which
++        --speculative-num-draft-tokens may override; the layout they index
++        depends on it, so the resolved value has to reach them.
++        """
++        self.block_size = int(block_size)
++        for layer in self.layers:
++            for conv in (layer.attention_conv, layer.mlp_conv):
++                if conv is not None:
++                    conv.block_size = self.block_size
+ 
+     def get_attention_sliding_window_size(self) -> Optional[int]:
+         return get_dflash_attention_sliding_window_size(self.config)
+ 
++    def get_input_embeddings(self) -> Optional[VocabParallelEmbedding]:
++        return self.embed_tokens
++
+     def prepare_context_hidden_for_kv(
+         self, layer: DFlashDecoderLayer, ctx_hidden: torch.Tensor
+     ) -> torch.Tensor:
+@@ -417,7 +662,9 @@ class DFlashDraftModel(nn.Module):
+ 
+     def project_target_hidden(self, target_hidden: torch.Tensor) -> torch.Tensor:
+         """Project concatenated target-layer hidden states into draft hidden_size."""
+-        expected = int(self.fc.in_features)
++        expected = int(
++            self.fc.input_size if self.is_nemotron_35_draft else self.fc.in_features
++        )
+         if target_hidden.ndim != 2 or int(target_hidden.shape[-1]) != expected:
+             raise ValueError(
+                 "DFLASH target_hidden feature dim mismatch. "
+@@ -427,7 +674,10 @@ class DFlashDraftModel(nn.Module):
+                 "This usually means the target model is capturing a different number of layer features than "
+                 "the draft checkpoint/config expects."
+             )
+-        return self.hidden_norm(self.fc(target_hidden))
++        projected = self.fc(target_hidden)
++        if self.is_nemotron_35_draft:
++            projected = projected[0]
++        return self.hidden_norm(projected)
+ 
+     @torch.no_grad()
+     def forward(
+@@ -440,7 +690,9 @@ class DFlashDraftModel(nn.Module):
+         pp_proxy_tensors=None,
+     ) -> LogitsProcessorOutput:
+         if input_embeds is None:
+-            if hasattr(self, "forward_embed"):
++            if self.embed_tokens is not None:
++                input_embeds = self.embed_tokens(input_ids)
++            elif hasattr(self, "forward_embed"):
+                 input_embeds = self.forward_embed(input_ids)
+             else:
+                 raise ValueError(
+@@ -518,16 +770,33 @@ class DFlashDraftModel(nn.Module):
+                     # Ignore unexpected weights (e.g., HF rotary caches).
+                     continue
+                 param = params_dict[resolved_name]
+-                if resolved_name.endswith("fc.weight") and tuple(
+-                    loaded_weight.shape
+-                ) != tuple(param.shape):
+-                    raise ValueError(
+-                        "DFLASH fc.weight shape mismatch. This usually means the draft checkpoint's "
+-                        "number of context features (K) does not match this config. "
+-                        f"Expected fc.weight.shape={tuple(param.shape)} "
+-                        f"(num_context_features={self.num_context_features}, hidden_size={int(self.config.hidden_size)}), "
+-                        f"but got {tuple(loaded_weight.shape)} for weight '{name}'."
+-                    )
++                if resolved_name.endswith("fc.weight"):
++                    if self.is_nemotron_35_draft:
++                        expected_shape = (
++                            int(self.config.hidden_size),
++                            int(self.num_context_features * self.config.hidden_size),
++                        )
++                        loaded_shape = _logical_linear_weight_shape(
++                            param,
++                            loaded_weight,
++                            output_features=expected_shape[0],
++                        )
++                        shape_matches = loaded_shape == expected_shape or (
++                            getattr(param, "pack_factor", None) is None
++                            and tuple(loaded_weight.shape) == tuple(param.shape)
++                        )
++                    else:
++                        expected_shape = tuple(param.shape)
++                        loaded_shape = tuple(loaded_weight.shape)
++                        shape_matches = loaded_shape == expected_shape
++                    if not shape_matches:
++                        raise ValueError(
++                            "DFLASH fc.weight shape mismatch. This usually means the draft checkpoint's "
++                            "number of context features (K) does not match this config. "
++                            f"Expected fc.weight.shape={expected_shape} "
++                            f"(num_context_features={self.num_context_features}, hidden_size={int(self.config.hidden_size)}), "
++                            f"but got {loaded_shape} for weight '{name}'."
++                        )
+                 weight_loader = getattr(param, "weight_loader", default_weight_loader)
+                 weight_loader(param, loaded_weight)
+ 
+@@ -535,8 +804,15 @@ class DFlashDraftModel(nn.Module):
+ class DFlashLagunaAttention(DFlashAttention):
+     """Laguna DFlash attention with the trained Laguna softplus gate."""
+ 
+-    def __init__(self, config, layer_id: int, quant_config=None) -> None:
+-        super().__init__(config=config, layer_id=layer_id, quant_config=quant_config)
++    def __init__(
++        self, config, layer_id: int, quant_config=None, prefix: str = ""
++    ) -> None:
++        super().__init__(
++            config=config,
++            layer_id=layer_id,
++            quant_config=quant_config,
++            prefix=prefix,
++        )
+         hidden_size = int(config.hidden_size)
+         total_num_heads = self.total_num_heads
+         gating = normalize_gating(getattr(config, "gating", True))
+@@ -555,7 +831,7 @@ class DFlashLagunaAttention(DFlashAttention):
+                 g_out,
+                 bias=False,
+                 quant_config=quant_config,
+-                prefix="g_proj",
++                prefix=f"{prefix}.g_proj" if prefix else "g_proj",
+             )
+ 
+     def apply_attention_output(
+@@ -603,7 +879,9 @@ class DFlashLagunaForCausalLM(DFlashDraftModel):
+         return layer.input_layernorm(ctx_hidden)
+ 
+     def project_target_hidden(self, target_hidden: torch.Tensor) -> torch.Tensor:
+-        expected = int(self.fc.in_features)
++        expected = int(
++            self.fc.input_size if self.is_nemotron_35_draft else self.fc.in_features
++        )
+         if target_hidden.ndim != 2 or int(target_hidden.shape[-1]) != expected:
+             raise ValueError(
+                 "Laguna DFLASH target_hidden feature dim mismatch. "
+@@ -622,11 +900,252 @@ class DFlashLagunaForCausalLM(DFlashDraftModel):
+         for i, norm in enumerate(self.aux_hidden_norms):
+             normed[:, i, :] = norm(slices[:, i, :])
+         fused = normed.reshape(target_hidden.shape[0], -1)
+-        return self.hidden_norm(self.fc(fused))
++        projected = self.fc(fused)
++        if self.is_nemotron_35_draft:
++            projected = projected[0]
++        return self.hidden_norm(projected)
++
++
++@torch.compile(dynamic=True, backend=get_compiler_backend(), disable=_is_npu)
++def _score_edges(
++    *,
++    predecessor_table: torch.Tensor,
++    successor_table: torch.Tensor,
++    candidate_ids: torch.Tensor,
++    unary_logits: torch.Tensor,
++    hidden: torch.Tensor,
++    anchor_token_ids: torch.Tensor,
++    top_k: int,
++) -> torch.Tensor:
++    keys = successor_table[candidate_ids]
++    # Concatenate the ids and look them up once. Concatenating the looked-up rows
++    # instead moves a [b, slots, k, rank] float tensor where this moves one id per
++    # candidate, and it costs a second gather for the anchor.
++    predecessor_ids = torch.cat(
++        [anchor_token_ids[:, None, None].expand(-1, 1, top_k), candidate_ids[:, :-1]],
++        dim=1,
++    )
++    predecessors = predecessor_table[predecessor_ids]
++    return unary_logits[:, :, None] + torch.einsum(
++        "blpr,blcr->blpc", predecessors * hidden[:, :, None], keys
++    )
++
++
++@torch.compile(dynamic=True, backend=get_compiler_backend(), disable=_is_npu)
++def _follow_maps(maps, initial_indices, edges: int):
++    index = initial_indices
++    path = [index]
++    for edge in range(edges):
++        index = maps[:, edge].gather(-1, index[:, None])[:, 0]
++        path.append(index)
++    return torch.stack(path, dim=1)
++
++
++class CandidateSelector(nn.Module):
++    """Scores the K x K transitions between adjacent proposal slots, then walks them.
++
++    The [vocab, r] tables are replicated on every TP rank rather than sharded like
++    the LM head: candidate ids are gathered globally, so any rank can need any row.
++    """
++
++    def __init__(
++        self,
++        *,
++        hidden_size: int,
++        vocab_size: int,
++        state_rank: int,
++        top_k: int,
++    ) -> None:
++        super().__init__()
++        if _flashinfer_top_k is None:
++            logger.warning(
++                "flashinfer is unavailable; the DFlash2 selector falls back to "
++                "torch.topk, which roughly halves end-to-end throughput on a large "
++                "vocabulary."
++            )
++        state_rank = int(state_rank)
++        self.top_k = int(top_k)
++        self.predecessor_codebook = nn.Parameter(
++            torch.zeros(int(vocab_size), state_rank), requires_grad=False
++        )
++        self.successor_codebook = nn.Parameter(
++            torch.zeros(int(vocab_size), state_rank), requires_grad=False
++        )
++        self.hidden_projection = nn.Linear(hidden_size, state_rank, bias=False)
++
++    def build_lattice(
++        self,
++        *,
++        candidate_ids: torch.Tensor,
++        unary_logits: torch.Tensor,
++        hidden_states: torch.Tensor,
++        anchor_token_ids: torch.Tensor,
++    ) -> torch.Tensor:
++        """score[b,e,p,c] = unary[b,e,c] + <A[pred[b,e,p]] * project(h[b,e]), B[c]>
++
++        pred is cand[b,e-1], and the verified anchor for slot 0.
++        """
++        # Everything but the batch is a model constant. Left symbolic, inductor
++        # recovers indices with an integer division per element instead of folding.
++        hidden = self.hidden_projection(hidden_states)
++        for tensor in (candidate_ids, unary_logits, hidden):
++            torch._dynamo.mark_static(tensor, 1)
++            torch._dynamo.mark_static(tensor, 2)
++        return _score_edges(
++            predecessor_table=self.predecessor_codebook,
++            successor_table=self.successor_codebook,
++            candidate_ids=candidate_ids,
++            unary_logits=unary_logits,
++            hidden=hidden,
++            anchor_token_ids=anchor_token_ids,
++            top_k=self.top_k,
++        )
++
++    def sample_path(
++        self,
++        *,
++        candidate_ids: torch.Tensor,
++        scores: torch.Tensor,
++        uniforms: torch.Tensor,
++        temperatures: torch.Tensor,
++        greedy_mask: torch.Tensor,
++    ) -> Tuple[torch.Tensor, torch.Tensor]:
++        """Walk one path, with q over the K candidates for the verify. greedy_mask
++        rows take the argmax, selected rather than branched, so one captured graph
++        serves greedy and sampling batches alike."""
++        if scores.is_cuda:
++            return selector_walk_triton(
++                candidate_ids=candidate_ids,
++                scores=scores,
++                uniforms=uniforms,
++                temperatures=temperatures,
++                greedy_mask=greedy_mask,
++            )
++        top_k = self.top_k
++        temps = temperatures.view(-1, 1)
++        initial_probs = torch.softmax(scores[:, 0, 0].float() / temps, dim=-1)
++        initial_indices = (
++            uniforms[:, :1]
++            .ge(initial_probs.cumsum(dim=-1))
++            .sum(dim=-1)
++            .clamp_max(top_k - 1)
++        )
++        transition_probs = torch.softmax(
++            scores[:, 1:].float() / temps[:, :, None, None], dim=-1
++        )
++        local_maps = (
++            uniforms[:, 1:, None, None]
++            .ge(transition_probs.cumsum(dim=-1))
++            .sum(dim=-1)
++            .clamp_max(top_k - 1)
++        )
++        initial_indices = torch.where(
++            greedy_mask, scores[:, 0, 0].argmax(dim=-1), initial_indices
++        )
++        local_maps = torch.where(
++            greedy_mask[:, None, None], scores[:, 1:].argmax(dim=-1), local_maps
++        )
++        torch._dynamo.mark_static(local_maps, 1)
++        torch._dynamo.mark_static(local_maps, 2)
++        path_indices = _follow_maps(
++            local_maps, initial_indices, int(scores.shape[1]) - 1
++        )
++        tokens = candidate_ids.gather(-1, path_indices.unsqueeze(-1))[:, :, 0]
++        realized_rows = transition_probs.gather(
++            2, path_indices[:, :-1, None, None].expand(-1, -1, 1, top_k)
++        )[:, :, 0]
++        q_rows = torch.cat((initial_probs.unsqueeze(1), realized_rows), dim=1)
++        # Greedy rows walk the argmax, so their q is the point mass there, not
++        # the temperature-1 softmax above. The triton walk stores the same.
++        q_rows = torch.where(
++            greedy_mask[:, None, None], F.one_hot(path_indices, top_k).float(), q_rows
++        )
++        return tokens, q_rows
++
++
++class DFlash2DraftModel(DFlashDraftModel):
++    """DFlash backbone + candidate selector. Reuses the DFLASH speculative worker."""
++
++    def __init__(self, config, quant_config=None, prefix: str = "") -> None:
++        super().__init__(config=config, quant_config=quant_config, prefix=prefix)
++        draft_config = self.draft_config
++        if not draft_config.selector_rank:
++            raise ValueError(
++                "DFlash selector draft requires dflash_config.selector_rank."
++            )
++        self.candidate_selector = CandidateSelector(
++            hidden_size=int(config.hidden_size),
++            vocab_size=int(config.vocab_size),
++            state_rank=draft_config.selector_rank,
++            top_k=draft_config.selector_top_k,
++        )
++        # The draft has no head of its own; the worker points this at the target's
++        # before capture.
++        self.lm_head: Optional[nn.Module] = None
++
++    def _transform_unary_logits(self, logits: torch.Tensor) -> torch.Tensor:
++        logits = logits.float()
++        if self.draft_config.output_multiplier != 1.0:
++            logits.mul_(self.draft_config.output_multiplier)
++        softcap = self.draft_config.final_logit_softcapping
++        if softcap is not None:
++            logits.div_(softcap).tanh_().mul_(softcap)
++        return logits
++
++    def compute_candidates(
++        self, hidden: torch.Tensor
++    ) -> Tuple[torch.Tensor, torch.Tensor]:
++        """Top-k base candidates via the target lm_head: hidden [N, H] -> global
++        candidate_ids / unary_logits [N, K]. Under TP (vocab-sharded lm_head): local top-k
++        per shard, all-gather K logits/ids (not the full vocab), then a global top-k --
++        identical candidates at O(tp*K) instead of O(vocab) gather bandwidth."""
++        assert self.lm_head is not None, "draft_model.lm_head unset before capture"
++        k = self.candidate_selector.top_k
++        # The worker screens the head before capture, but its eager fallback
++        # (_propose_selector_block) attaches whatever the target has.
++        weight = getattr(self.lm_head, "weight", None)
++        quant_method = getattr(self.lm_head, "quant_method", None)
++        use_quant_head = should_apply_lm_head_quant_method(self.lm_head, quant_method)
++        if not use_quant_head and not is_dense_head_weight(weight):
++            raise RuntimeError(
++                "DFlash2 selector requires a dense FP16/BF16/FP32 target lm_head "
++                "or a supported lm_head.quant_method."
++            )
++        if get_parallel().tp_size == 1:
++            org = int(self.lm_head.org_vocab_size)
++            vals, ids = _radix_topk(
++                _project_candidate_logits(
++                    hidden, self.lm_head, num_org=org, use_quant_head=use_quant_head
++                ),
++                k,
++            )
++            return ids.long(), self._transform_unary_logits(vals)
++        shard = self.lm_head.shard_indices
++        vals, ids = _radix_topk(
++            _project_candidate_logits(
++                hidden,
++                self.lm_head,
++                num_org=int(shard.num_org_elements),
++                use_quant_head=use_quant_head,
++            ),
++            k,
++        )
++        global_ids = ids.long() + int(shard.org_vocab_start_index)
++        gathered_vals = tensor_model_parallel_all_gather(vals.float(), dim=-1)
++        gathered_ids = tensor_model_parallel_all_gather(global_ids, dim=-1)
++        top_vals, sel = torch.topk(gathered_vals, k, dim=-1)
++        return torch.gather(gathered_ids, -1, sel).long(), self._transform_unary_logits(
++            top_vals
++        )
+ 
+ 
+ class MuseGlimmerAssistantModel(DFlashDraftModel):
+     """Alias for checkpoints declaring architectures=["MuseGlimmerAssistantModel"]."""
+ 
+ 
+-EntryClass = [DFlashDraftModel, DFlashLagunaForCausalLM, MuseGlimmerAssistantModel]
++EntryClass = [
++    DFlashDraftModel,
++    DFlashLagunaForCausalLM,
++    MuseGlimmerAssistantModel,
++    DFlash2DraftModel,
++]
+diff --git a/python/sglang/srt/models/dspark.py b/python/sglang/srt/models/dspark.py
+index 4116f527b8..74e13dedbf 100644
+--- a/python/sglang/srt/models/dspark.py
++++ b/python/sglang/srt/models/dspark.py
+@@ -9,10 +9,13 @@ from torch import nn
+ 
+ from sglang.srt.distributed.communication_op import tensor_model_parallel_all_gather
+ from sglang.srt.environ import envs
++from sglang.srt.layers.linear import ReplicatedLinear
++from sglang.srt.layers.logits_processor import should_apply_lm_head_quant_method
+ from sglang.srt.model_loader.weight_utils import default_weight_loader
+ from sglang.srt.models.dflash import DFlashDraftModel
+ from sglang.srt.speculative.dflash_utils import can_dflash_slice_qkv_weight
+ from sglang.srt.speculative.dspark_components.dspark_config import (
++    get_dspark_sample_from_anchor,
+     parse_dspark_draft_config,
+ )
+ from sglang.srt.speculative.ragged_verify import (
+@@ -131,6 +134,39 @@ class VanillaMarkov(nn.Module):
+         )
+ 
+ 
++class Nemotron35VanillaMarkov(VanillaMarkov):
++    """Checkpoint-quantized Markov head used only by Nemotron 3.5 DSpark."""
++
++    def __init__(
++        self,
++        *,
++        vocab_size: int,
++        markov_rank: int,
++        quant_config,
++        prefix: str,
++    ) -> None:
++        nn.Module.__init__(self)
++        self.vocab_size = int(vocab_size)
++        self.markov_rank = int(markov_rank)
++        if self.markov_rank <= 0:
++            raise ValueError(
++                "Nemotron35VanillaMarkov requires markov_rank > 0, "
++                f"got {self.markov_rank}."
++            )
++        self.markov_w1 = nn.Embedding(self.vocab_size, self.markov_rank)
++        self.markov_w2 = ReplicatedLinear(
++            self.markov_rank,
++            self.vocab_size,
++            bias=False,
++            quant_config=quant_config,
++            prefix=f"{prefix}.markov_w2" if prefix else "markov_w2",
++        )
++
++    def project_bias(self, latent_states: torch.Tensor) -> torch.Tensor:
++        bias, _ = self.markov_w2(latent_states)
++        return bias
++
++
+ class GatedMarkovHead(VanillaMarkov):
+ 
+     markov_head_type = "gated"
+@@ -287,6 +323,22 @@ def build_markov_head(config) -> Optional[nn.Module]:
+     raise ValueError(f"Unsupported DSpark markov_head_type={markov_head_type!r}.")
+ 
+ 
++def build_nemotron_35_markov_head(config, quant_config, prefix: str) -> nn.Module:
++    markov_head_type = str(getattr(config, "markov_head_type", "vanilla")).lower()
++    if markov_head_type != "vanilla":
++        raise ValueError(
++            "Nemotron 3.5 DSpark requires markov_head_type='vanilla', "
++            f"got {markov_head_type!r}."
++        )
++    markov_prefix = f"{prefix}.markov_head" if prefix else "markov_head"
++    return Nemotron35VanillaMarkov(
++        vocab_size=int(config.vocab_size),
++        markov_rank=int(config.markov_rank),
++        quant_config=quant_config,
++        prefix=markov_prefix,
++    )
++
++
+ class DSparkConfidenceHead(nn.Module):
+ 
+     def __init__(
+@@ -354,11 +406,7 @@ def build_confidence_head(config) -> Optional[nn.Module]:
+     )
+ 
+ 
+-_DSPARK_SKIPPED_WEIGHT_PREFIXES = (
+-    "embed_tokens.",
+-    "lm_head.",
+-    "rotary_emb.",
+-)
++_DSPARK_SKIPPED_WEIGHT_PREFIXES = ("lm_head.", "rotary_emb.")
+ 
+ 
+ class DSparkDraftMixin:
+@@ -374,14 +422,21 @@ class DSparkDraftMixin:
+                 f"got markov_rank={dspark_config.markov_rank}."
+             )
+         self.gamma = int(dspark_config.resolve_gamma(default=self.block_size))
+-        self.markov_head = build_markov_head(config)
++        self.sample_from_anchor = get_dspark_sample_from_anchor(config)
++        if self.is_nemotron_35_draft:
++            self.markov_head = build_nemotron_35_markov_head(
++                config, quant_config, prefix
++            )
++        else:
++            self.markov_head = build_markov_head(config)
+         self.confidence_head = build_confidence_head(config)
+         self.lm_head: Optional[nn.Module] = None
+ 
+     def attach_shared_modules(
+         self, *, embed_tokens: nn.Module, lm_head: nn.Module
+     ) -> None:
+-        self.embed_tokens = embed_tokens
++        if not self.is_nemotron_35_draft:
++            self.embed_tokens = embed_tokens
+         self.lm_head = lm_head
+ 
+     def forward_embed(self, input_ids: torch.Tensor) -> torch.Tensor:
+@@ -422,7 +477,14 @@ class DSparkDraftMixin:
+         backbone_weights = []
+         params_dict = dict(self.named_parameters())
+         for name, loaded_weight in weights:
+-            if any(name.startswith(p) for p in _DSPARK_SKIPPED_WEIGHT_PREFIXES):
++            normalized_name = name.removeprefix("model.")
++            if any(
++                normalized_name.startswith(p) for p in _DSPARK_SKIPPED_WEIGHT_PREFIXES
++            ):
++                continue
++            if normalized_name.startswith("embed_tokens.") and not (
++                self.is_nemotron_35_draft
++            ):
+                 continue
+             if name.startswith("confidence_head."):
+                 if self.confidence_head is None:
+diff --git a/python/sglang/srt/models/nemotron_h.py b/python/sglang/srt/models/nemotron_h.py
+index c821474cc5..218deac168 100644
+--- a/python/sglang/srt/models/nemotron_h.py
++++ b/python/sglang/srt/models/nemotron_h.py
+@@ -824,6 +824,7 @@ class NemotronHModel(nn.Module):
+             self.norm_f = RMSNorm(config.hidden_size, eps=config.layer_norm_epsilon)
+         else:
+             self.norm_f = PPMissingLayer(return_tuple=True)
++        self.layers_to_capture: set[int] = set()
+ 
+     def forward(
+         self,
+@@ -844,7 +845,17 @@ class NemotronHModel(nn.Module):
+             hidden_states = pp_proxy_tensors["hidden_states"]
+             residual = pp_proxy_tensors["residual"]
+ 
++        aux_hidden_states = []
+         for i in range(self.start_layer, self.end_layer):
++            if i in self.layers_to_capture:
++                if residual is not None and getattr(
++                    hidden_states, "_sglang_needs_allreduce_fusion", False
++                ):
++                    hidden_states = tensor_model_parallel_all_reduce(hidden_states)
++                    hidden_states._sglang_needs_allreduce_fusion = False
++                aux_hidden_states.append(
++                    hidden_states if residual is None else hidden_states + residual
++                )
+             layer = self.layers[i]
+             if not isinstance(layer, Layers):
+                 raise ValueError(f"Unknown layer type: {type(layer)}")
+@@ -858,7 +869,18 @@ class NemotronHModel(nn.Module):
+             return PPProxyTensors(
+                 {"hidden_states": hidden_states, "residual": residual}
+             )
++        if self.end_layer in self.layers_to_capture:
++            if residual is not None and getattr(
++                hidden_states, "_sglang_needs_allreduce_fusion", False
++            ):
++                hidden_states = tensor_model_parallel_all_reduce(hidden_states)
++                hidden_states._sglang_needs_allreduce_fusion = False
++            aux_hidden_states.append(
++                hidden_states if residual is None else hidden_states + residual
++            )
+         hidden_states, _ = self.norm_f(hidden_states, residual)
++        if aux_hidden_states:
++            return hidden_states, aux_hidden_states
+         return hidden_states
+ 
+ 
+@@ -953,6 +975,7 @@ class NemotronHForCausalLM(nn.Module):
+                 self.lm_head.weight.copy_(emb_token_weight)
+ 
+         self.logits_processor = LogitsProcessor(config)
++        self.capture_aux_hidden_states = False
+ 
+     def _init_model(
+         self,
+@@ -1073,9 +1096,16 @@ class NemotronHForCausalLM(nn.Module):
+         hidden_states = self.model.forward(
+             input_ids, positions, forward_batch, pp_proxy_tensors, input_embeds
+         )
++        aux_hidden_states = None
++        if self.capture_aux_hidden_states:
++            hidden_states, aux_hidden_states = hidden_states
+         if self.pp_group.is_last_rank:
+             return self.logits_processor(
+-                input_ids, hidden_states, self.lm_head, forward_batch
++                input_ids,
++                hidden_states,
++                self.lm_head,
++                forward_batch,
++                aux_hidden_states,
+             )
+         else:
+             return hidden_states
+@@ -1097,6 +1127,17 @@ class NemotronHForCausalLM(nn.Module):
+         torch.cuda.empty_cache()
+         torch.cuda.synchronize()
+ 
++    def set_dflash_layers_to_capture(self, layer_ids: list[int]):
++        if not self.pp_group.is_last_rank:
++            return
++        if layer_ids is None:
++            raise ValueError(
++                "DFLASH requires explicit layer_ids for aux hidden capture."
++            )
++
++        self.capture_aux_hidden_states = True
++        self.model.layers_to_capture = {layer_id + 1 for layer_id in layer_ids}
++
+     def load_weights(
+         self, weights: Iterable[tuple[str, torch.Tensor]], is_mtp: bool = False
+     ) -> None:
+diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
+index 5c4f3ff44a..284c76eb5d 100644
+--- a/python/sglang/srt/server_args.py
++++ b/python/sglang/srt/server_args.py
+@@ -2181,7 +2181,10 @@ class ServerArgs:
+     ] = "prefill"
+     speculative_draft_attention_backend: A[
+         Optional[str],
+-        "Attention backend for speculative decoding drafting.",
++        Arg(
++            help="Attention backend for speculative decoding drafting.",
++            resolvable=True,
++        ),
+         NS("spec"),
+     ] = None
+     speculative_draft_kv_cache_dtype: A[
+@@ -5715,14 +5718,6 @@ class ServerArgs:
+             logger.info(
+                 f"Using {attention_backend} as attention backend for {model_arch}."
+             )
+-        elif model_arch in ["NemotronHForCausalLM", "NemotronHPuzzleForCausalLM"]:
+-            # Quantization / MoE runner / attention backend defaults moved to
+-            # the override registry (arg_groups/overrides.py:
+-            # _nemotron_h_overrides).
+-            assert resolved_view(self).attention_backend != "triton", (
+-                "NemotronHForCausalLM does not support triton attention backend,"
+-                "as the first layer might not be an attention layer"
+-            )
+         elif model_arch in [
+             "Qwen3MoeForCausalLM",
+             "Qwen3VLMoeForConditionalGeneration",
+diff --git a/python/sglang/srt/speculative/dflash_utils.py b/python/sglang/srt/speculative/dflash_utils.py
+index 264b305192..db852e4864 100644
+--- a/python/sglang/srt/speculative/dflash_utils.py
++++ b/python/sglang/srt/speculative/dflash_utils.py
+@@ -413,6 +413,8 @@ def get_dflash_attention_sliding_window_size(config: Any) -> Optional[int]:
+     sliding_window = _cfg_get(
+         text_config, "sliding_window", _cfg_get(config, "sliding_window")
+     )
++    if sliding_window is None and is_nemotron_35_draft_config(config):
++        sliding_window = _get_dflash_config(config).get("swa_window_size")
+     if sliding_window is None:
+         raise ValueError(
+             "DFLASH sliding_attention layers require config.sliding_window."
+@@ -463,6 +465,46 @@ def _get_dflash_config(config: Any) -> dict:
+         return {}
+ 
+ 
++def is_nemotron_35_draft_config(config: Any) -> bool:
++    """Identify the published Nemotron 3.5 DFlash/DSpark draft layout.
++
++    Keep the non-anchor query layout and checkpoint-local vocabulary modules
++    scoped to this structurally distinct family instead of changing every
++    DFlash/DSpark checkpoint that happens to expose one of these fields.
++    """
++    architectures = _cfg_get(config, "architectures", None) or []
++    if not {"DFlashDraftModel", "Qwen3DSparkModel"}.intersection(architectures):
++        return False
++    if not bool(_cfg_get(config, "has_embed_tokens", False)):
++        return False
++    if bool(_cfg_get(config, "has_lm_head", False)):
++        return False
++
++    quant_config = _cfg_get(config, "quantization_config", None) or {}
++    if _cfg_get(quant_config, "quant_algo", None) != "W4A16_NVFP4":
++        return False
++
++    dflash_config = _get_dflash_config(config)
++    target_layer_ids = dflash_config.get(
++        "target_layer_ids", _cfg_get(config, "target_layer_ids", None)
++    )
++    aux_layer_ids = _cfg_get(config, "eagle_aux_hidden_state_layer_ids", None)
++    if not target_layer_ids or not aux_layer_ids:
++        return False
++    if len(target_layer_ids) != len(aux_layer_ids):
++        return False
++    if any(
++        int(target) + 1 != int(aux)
++        for target, aux in zip(target_layer_ids, aux_layer_ids)
++    ):
++        return False
++
++    sample_from_anchor = dflash_config.get(
++        "sample_from_anchor", _cfg_get(config, "sample_from_anchor", True)
++    )
++    return sample_from_anchor is False
++
++
+ def _parse_optional_int(
+     value: Any,
+     *,
+@@ -486,6 +528,12 @@ class DFlashDraftConfig:
+     num_hidden_layers: Optional[int]
+     num_target_layers: Optional[int]
+     block_size: Optional[int]
++    conv_kernel_size: int
++    conv_group_size: int
++    selector_rank: int
++    selector_top_k: int
++    output_multiplier: float
++    final_logit_softcapping: Optional[float]
+     target_layer_ids: Optional[List[int]]
+     mask_token: str
+     mask_token_id: Optional[int]
+@@ -564,6 +612,44 @@ def parse_dflash_draft_config(*, draft_hf_config: Any) -> DFlashDraftConfig:
+         min_value=1,
+     )
+ 
++    conv_kernel_size = _parse_optional_int(
++        dflash_cfg.get("conv_kernel_size", 0),
++        field_name="DFLASH conv_kernel_size",
++        min_value=0,
++    )
++    conv_group_size = _parse_optional_int(
++        dflash_cfg.get("conv_group_size", 0),
++        field_name="DFLASH conv_group_size",
++        min_value=0,
++    )
++    if bool(conv_kernel_size) != bool(conv_group_size):
++        raise ValueError(
++            "DFLASH grouped convolution needs conv_kernel_size and conv_group_size "
++            f"together. Got conv_kernel_size={conv_kernel_size}, "
++            f"conv_group_size={conv_group_size}."
++        )
++    selector_rank = _parse_optional_int(
++        dflash_cfg.get("selector_rank", 0),
++        field_name="DFLASH selector rank",
++        min_value=0,
++    )
++    selector_top_k = _parse_optional_int(
++        dflash_cfg.get("selector_top_k", 0),
++        field_name="DFLASH selector top_k",
++        min_value=0,
++    )
++    if bool(selector_rank) != bool(selector_top_k):
++        raise ValueError(
++            "DFLASH selector needs rank and top_k together. "
++            f"Got rank={selector_rank}, top_k={selector_top_k}."
++        )
++
++    output_multiplier = float(dflash_cfg.get("output_multiplier", 1.0))
++    if output_multiplier <= 0:
++        raise ValueError("DFLASH output_multiplier must be positive.")
++    softcap = float(dflash_cfg.get("final_logit_softcapping") or 0.0)
++    final_logit_softcapping = softcap if softcap > 0 else None
++
+     layer_ids = dflash_cfg.get(
+         "target_layer_ids",
+         _cfg_get(draft_hf_config, "target_layer_ids", None),
+@@ -615,12 +701,29 @@ def parse_dflash_draft_config(*, draft_hf_config: Any) -> DFlashDraftConfig:
+         num_hidden_layers=num_hidden_layers,
+         num_target_layers=num_target_layers,
+         block_size=block_size,
++        conv_kernel_size=conv_kernel_size,
++        conv_group_size=conv_group_size,
++        selector_rank=selector_rank,
++        selector_top_k=selector_top_k,
++        output_multiplier=output_multiplier,
++        final_logit_softcapping=final_logit_softcapping,
+         target_layer_ids=parsed_target_layer_ids,
+         mask_token=mask_token,
+         mask_token_id=mask_token_id,
+     )
+ 
+ 
++# is_floating_point() is True for fp8; list dtypes explicitly.
++_DENSE_HEAD_DTYPES = (torch.float16, torch.bfloat16, torch.float32)
++
++
++def is_dense_head_weight(weight: Any) -> bool:
++    """Whether an lm_head weight can be read as a plain matrix. A quantized head
++    stores packed values, which a dense matmul would read as if they were
++    activations."""
++    return weight is not None and weight.dtype in _DENSE_HEAD_DTYPES
++
++
+ def can_dflash_slice_qkv_weight(qkv_proj: Any) -> Tuple[bool, str]:
+     """Validate whether DFlash can slice KV weights from a fused QKV linear layer."""
+     quant_method = getattr(qkv_proj, "quant_method", None)
+diff --git a/python/sglang/srt/speculative/dflash_worker_v2.py b/python/sglang/srt/speculative/dflash_worker_v2.py
+index e831d14ccb..24986b18a4 100644
+--- a/python/sglang/srt/speculative/dflash_worker_v2.py
++++ b/python/sglang/srt/speculative/dflash_worker_v2.py
+@@ -1,7 +1,7 @@
+ import logging
+ import math
+ from dataclasses import replace
+-from typing import List, Optional
++from typing import List, Optional, Tuple
+ 
+ import torch
+ 
+@@ -13,10 +13,14 @@ from sglang.kernels.ops.speculative.dflash import (
+     _compute_dflash_accept_bonus_triton_unchecked,
+     _prepare_dflash_draft_block_unchecked,
+ )
++from sglang.kernels.ops.speculative.dspark.dspark_accept import (
++    accept_sampling,
++)
+ from sglang.srt.configs.hybrid_arch import mambaish_config
+ from sglang.srt.distributed import get_tp_group
+ from sglang.srt.distributed.parallel_state_wrapper import ParallelState
+ from sglang.srt.environ import envs
++from sglang.srt.layers.logits_processor import should_apply_lm_head_quant_method
+ from sglang.srt.layers.logprob_processor import compute_spec_logprobs
+ from sglang.srt.managers.schedule_batch import ScheduleBatch
+ from sglang.srt.managers.scheduler import GenerationBatchResult
+@@ -39,6 +43,7 @@ from sglang.srt.speculative.dflash_utils import (
+     can_dflash_use_fused_qkv_proj,
+     compute_dflash_correct_drafts_and_bonus,
+     compute_dflash_sampling_correct_drafts_and_bonus,
++    is_dense_head_weight,
+     is_dflash_sampling_verify_available,
+     parse_dflash_draft_config,
+ )
+@@ -49,6 +54,7 @@ from sglang.srt.speculative.draft_worker_common import (
+     make_draft_input_v2,
+     make_draft_sampler_capture_hook,
+ )
++from sglang.srt.speculative.dspark_components.dspark_draft import resolve_greedy_mask
+ from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
+ from sglang.srt.speculative.spec_utils import (
+     SIMULATE_ACC_LEN,
+@@ -79,14 +85,6 @@ def _get_fused_kv_materialize_helper():
+     return _FusedKVMaterializeHelper
+ 
+ 
+-# is_floating_point() is True for fp8; list dtypes explicitly.
+-_DENSE_HEAD_DTYPES = (torch.float16, torch.bfloat16, torch.float32)
+-
+-
+-def _is_dense_head_weight(weight) -> bool:
+-    return weight is not None and weight.dtype in _DENSE_HEAD_DTYPES
+-
+-
+ class _DflashDraftSampler:
+     """Capture-safe greedy argmax over the target LM head, run inside the draft
+     cuda graph so the draft sampling is captured and counted in fwd_occupancy.
+@@ -110,7 +108,6 @@ class _DflashDraftSampler:
+         self.tp_size = int(tp_group.world_size) if tp_group is not None else 1
+         max_tokens = int(max_bs) * (self.block_size - 1)
+         device = weight.device
+-        # Proposed draft tokens: written in-graph, read by the worker after replay.
+         self.out = torch.empty((max_tokens,), dtype=torch.int64, device=device)
+         if self.tp_size > 1:
+             # Static buffers (fixed addresses) keep the in-graph select replay-safe.
+@@ -165,6 +162,107 @@ class _DflashDraftSampler:
+         self.out[:n].copy_(selected.view(-1))
+ 
+ 
++def _commit_accept(candidates, accept_len, bonus_tokens):
++    """The committed block: drafted tokens shifted left, the bonus at the accept
++    boundary. Returns it with the commit lengths."""
++    out_tokens = torch.empty_like(candidates, dtype=torch.int64)
++    out_tokens[:, :-1].copy_(candidates[:, 1:])
++    out_tokens[:, -1].fill_(0)
++    out_tokens.scatter_(1, accept_len.to(torch.int64)[:, None], bonus_tokens[:, None])
++    return out_tokens, accept_len.to(torch.int32) + 1
++
++
++def _resolve_dflash_embedding_module(draft_model, target_model):
++    if getattr(draft_model, "is_nemotron_35_draft", False):
++        embed_module = draft_model.get_input_embeddings()
++        if embed_module is None:
++            raise RuntimeError(
++                "Nemotron 3.5 DFLASH draft requires its checkpoint embedding."
++            )
++        return embed_module
++    return target_model.get_input_embeddings()
++
++
++def _is_all_greedy(sampling_info) -> bool:
++    return sampling_info is None or sampling_info.is_all_greedy
++
++
++def _selector_lattice(draft_model, pred_hidden, anchor_token_ids):
++    # Flattened to [N, H] and viewed back because the radix top-k kernel is 2D.
++    bs, num_pred = pred_hidden.shape[0], pred_hidden.shape[1]
++    candidate_ids, unary_logits = draft_model.compute_candidates(
++        pred_hidden.reshape(-1, pred_hidden.shape[-1])
++    )
++    candidate_ids = candidate_ids.view(bs, num_pred, -1)
++    return candidate_ids, draft_model.candidate_selector.build_lattice(
++        candidate_ids=candidate_ids,
++        unary_logits=unary_logits.view(bs, num_pred, -1),
++        hidden_states=pred_hidden,
++        anchor_token_ids=anchor_token_ids,
++    )
++
++
++class _SelectorDraftSampler:
++    """Selector decode folded into the draft cuda graph, greedy and T>0 alike.
++
++    One captured graph serves both: it always walks the sampling path, and a static
++    greedy_mask selects the argmax per row.
++    """
++
++    def __init__(self, *, draft_model, block_size, max_bs, device):
++        self.draft_model = draft_model
++        self.selector = draft_model.candidate_selector
++        self.block_size = int(block_size)
++        max_bs, gamma, top_k = int(max_bs), self.block_size - 1, self.selector.top_k
++        self.out = torch.empty((max_bs * gamma,), dtype=torch.int64, device=device)
++        # Written by the host before replay, or read after it; the addresses are
++        # baked into the captured graph.
++        self.temperatures = torch.ones((max_bs,), dtype=torch.float32, device=device)
++        self.greedy_mask = torch.ones((max_bs,), dtype=torch.bool, device=device)
++        self.uniforms = torch.empty((max_bs, gamma), dtype=torch.float32, device=device)
++        self.candidate_out = torch.empty(
++            (max_bs, gamma, top_k), dtype=torch.int64, device=device
++        )
++        self.q_out = torch.empty(
++            (max_bs, gamma, top_k), dtype=torch.float32, device=device
++        )
++
++    def stage_sampling_params(self, *, bs: int, sampling_info) -> None:
++        """Host-side refresh of the static sampling params; must run before the draft
++        graph replay that consumes them."""
++        if sampling_info is None:
++            self.temperatures[:bs].fill_(1.0)
++            self.greedy_mask[:bs].fill_(True)
++            return
++        torch.clamp(
++            sampling_info.temperatures.view(-1)[:bs].to(torch.float32),
++            min=1e-5,
++            out=self.temperatures[:bs],
++        )
++        self.greedy_mask[:bs].copy_(
++            resolve_greedy_mask(
++                bs=bs, sampling_info=sampling_info, device=self.greedy_mask.device
++            )
++        )
++
++    def __call__(self, hidden_states, input_ids):
++        bs = hidden_states.shape[0] // self.block_size
++        block_ids = input_ids.view(bs, self.block_size)
++        hs = hidden_states.view(bs, self.block_size, -1)[:, 1:, :]  # pos 0 = anchor
++        candidate_ids, scores = _selector_lattice(self.draft_model, hs, block_ids[:, 0])
++        # In-graph philox draw: each replay advances the generator and redraws.
++        tokens, q_rows = self.selector.sample_path(
++            candidate_ids=candidate_ids,
++            scores=scores,
++            uniforms=self.uniforms[:bs].uniform_(),
++            temperatures=self.temperatures[:bs],
++            greedy_mask=self.greedy_mask[:bs],
++        )
++        self.out[: tokens.numel()].copy_(tokens.reshape(-1))
++        self.candidate_out[:bs].copy_(candidate_ids)
++        self.q_out[:bs].copy_(q_rows)
++
++
+ class DFlashWorkerV2(BaseSpecWorker):
+     """DFLASH speculative decoding worker (spec-v2).
+ 
+@@ -198,6 +296,7 @@ class DFlashWorkerV2(BaseSpecWorker):
+         self.device = target_worker.device
+ 
+         self._warned_sampling_fallback = False
++        self._draft_probs_buf = None
+         self._logged_first_verify = False
+ 
+         bundle = build_draft_tp_worker(
+@@ -212,6 +311,7 @@ class DFlashWorkerV2(BaseSpecWorker):
+         self.draft_model_runner = bundle.draft_model_runner
+         self._draft_sampler = None
+         self.draft_model = bundle.draft_model
++        self.selector = self.draft_model.candidate_selector
+         draft_config = parse_dflash_draft_config(
+             draft_hf_config=self.draft_model_runner.model_config.hf_config
+         )
+@@ -231,6 +331,7 @@ class DFlashWorkerV2(BaseSpecWorker):
+                     self.block_size,
+                     model_block_size,
+                 )
++        self.draft_model.set_block_size(self.block_size)
+         self.speculative_num_draft_tokens = int(self.block_size)
+ 
+         self._mask_token = draft_config.mask_token
+@@ -276,6 +377,7 @@ class DFlashWorkerV2(BaseSpecWorker):
+             None  # [cap_bs, block_size]
+         )
+         self._draft_block_end_buf: Optional[torch.Tensor] = None  # [cap_bs]
++        self._selector_sample: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+         self._draft_seq_lens_cpu_buf: Optional[torch.Tensor] = None  # [cap_bs] on CPU
+         self._draft_block_spec_info = make_draft_block_spec_info(
+             draft_token_num=int(self.block_size), device=self.device
+@@ -392,9 +494,32 @@ class DFlashWorkerV2(BaseSpecWorker):
+         lm_head = getattr(target_model, "lm_head", None)
+         if lm_head is None:
+             return _eager("no target lm_head")
++
++        if self.selector is not None:
++            # compute_candidates needs the target lm_head attached before capture.
++            # A gate-admitted quantized head is capture-safe: the target's own
++            # logits path already runs the same kernel under CUDA graphs.
++            if not is_dense_head_weight(
++                getattr(lm_head, "weight", None)
++            ) and not should_apply_lm_head_quant_method(
++                lm_head, getattr(lm_head, "quant_method", None)
++            ):
++                return _eager("unsupported quantized lm_head")
++            self.draft_model.lm_head = lm_head
++            if self.ps.tp_rank == 0:
++                logger.info(
++                    "DFLASH selector decode (greedy + sampling) folded into the "
++                    "draft cuda graph."
++                )
++            return _SelectorDraftSampler(
++                draft_model=self.draft_model,
++                block_size=self.block_size,
++                max_bs=max(get_exec().graph.cuda_graph_config.decode.bs),
++                device=self.device,
++            )
+         if not hasattr(lm_head, "weight"):
+             return _eager("quantized lm_head has no dense weight")
+-        if not _is_dense_head_weight(lm_head.weight):
++        if not is_dense_head_weight(lm_head.weight):
+             # Quantized lm_head (FP8/INT) would break the static matmul.
+             return _eager("quantized lm_head")
+         tp_group = get_tp_group()
+@@ -822,6 +947,92 @@ class DFlashWorkerV2(BaseSpecWorker):
+ 
+         return int(resolved_id)
+ 
++    def _propose_selector_block(
++        self,
++        *,
++        draft_logits_output,
++        bs: int,
++        lm_head,
++        anchor_token_ids: torch.Tensor,
++        sampling_info,
++    ) -> torch.Tensor:
++        """The eager fallback for batches the draft graph cannot take."""
++        draft_model = self.draft_model
++        if draft_model.lm_head is None:
++            draft_model.lm_head = lm_head
++
++        draft_hidden = draft_logits_output.hidden_states
++        if draft_hidden is None:
++            raise RuntimeError("DFLASH selector draft returned no hidden states.")
++        draft_hidden = draft_hidden.view(bs, int(self.block_size), -1)
++        pred_hidden = draft_hidden[:, 1:, :]  # [bs, block_size-1, H]
++        num_pred = pred_hidden.shape[1]
++
++        candidate_ids, scores = _selector_lattice(
++            draft_model, pred_hidden, anchor_token_ids
++        )
++        device = pred_hidden.device
++        # Clamped like DSpark so greedy rows don't divide by zero.
++        temperatures = (
++            torch.ones(bs, dtype=torch.float32, device=device)
++            if sampling_info is None
++            else sampling_info.temperatures.view(-1).float().clamp_min(1e-5)
++        )
++        tokens, q_rows = self.selector.sample_path(
++            candidate_ids=candidate_ids,
++            scores=scores,
++            uniforms=torch.rand(bs, num_pred, dtype=torch.float32, device=device),
++            temperatures=temperatures,
++            greedy_mask=resolve_greedy_mask(
++                bs=bs, sampling_info=sampling_info, device=device
++            ),
++        )
++        if not _is_all_greedy(sampling_info):
++            self._selector_sample = (candidate_ids, q_rows)
++        return tokens.view(bs, num_pred)
++
++    def _selector_sampling_accept(
++        self,
++        *,
++        candidates: torch.Tensor,
++        next_token_logits: torch.Tensor,
++        candidate_ids: torch.Tensor,
++        q_rows: torch.Tensor,
++        sampling_info,
++        draft_input,
++    ) -> Tuple[torch.Tensor, torch.Tensor]:
++        """Scatter the selector's sparse q into a dense one for DSpark's kernel."""
++        bs, block = candidates.shape
++        gamma = block - 1
++        vocab = int(next_token_logits.shape[-1])
++        # A fresh dense q would zero the whole vocabulary to carry top_k per row.
++        buffer = self._draft_probs_buf
++        if buffer is None or buffer.shape[0] < bs or buffer.shape[1:] != (gamma, vocab):
++            cap = bs if buffer is None else max(bs, buffer.shape[0] * 2)
++            buffer = torch.zeros(
++                (cap, gamma, vocab), dtype=torch.float32, device=candidates.device
++            )
++            self._draft_probs_buf = buffer
++        draft_probs = buffer[:bs]
++        try:
++            draft_probs.scatter_(-1, candidate_ids, q_rows.float())
++            accept_len, bonus, _ = accept_sampling(
++                candidates=candidates,
++                target_logits=next_token_logits,
++                draft_probs=draft_probs,
++                sampling_info=sampling_info,
++                draft_input=draft_input,
++                gamma=gamma,
++                verify_num_draft_tokens=block,
++                cutoff_verify_lens=None,
++            )
++        finally:
++            # Here, not before the next write: candidate_ids may be a view of a
++            # buffer the next draft step overwrites. In finally because the next
++            # call scatters different ids and reads q across the whole vocabulary.
++            draft_probs.scatter_(-1, candidate_ids, 0.0)
++        return accept_len.to(torch.int32), bonus.to(torch.int64)
++
+     def _greedy_sample_from_quantized_head(
+         self,
+         *,
+@@ -875,7 +1086,7 @@ class DFlashWorkerV2(BaseSpecWorker):
+         if hidden_states.numel() == 0:
+             return torch.empty((0,), dtype=torch.long, device=hidden_states.device)
+ 
+-        if not _is_dense_head_weight(getattr(lm_head, "weight", None)):
++        if not is_dense_head_weight(getattr(lm_head, "weight", None)):
+             return self._greedy_sample_from_quantized_head(
+                 hidden_states=hidden_states, lm_head=lm_head, chunk_size=chunk_size
+             )
+@@ -1406,7 +1617,13 @@ class DFlashWorkerV2(BaseSpecWorker):
+ 
+     def _validate_phase1_sampling_support(self, batch: ScheduleBatch) -> None:
+         sampling_info = batch.sampling_info
+-        if sampling_info is None or sampling_info.is_all_greedy:
++        # A selector draft carries its own q and verifies through accept_sampling, so
++        # it never falls back to greedy argmax however this build was compiled.
++        if (
++            sampling_info is None
++            or sampling_info.is_all_greedy
++            or self.selector is not None
++        ):
+             return
+ 
+         if (
+@@ -1543,7 +1760,9 @@ class DFlashWorkerV2(BaseSpecWorker):
+ 
+         # --- 1) Draft a fixed block with the draft model.
+         target_model = self.target_worker.model_runner.model
+-        embed_module = target_model.get_input_embeddings()
++        embed_module = _resolve_dflash_embedding_module(
++            self.draft_model, target_model
++        )
+         lm_head = getattr(target_model, "lm_head", None)
+         if lm_head is None or not (
+             hasattr(lm_head, "weight")
+@@ -1685,14 +1904,36 @@ class DFlashWorkerV2(BaseSpecWorker):
+             capture_hidden_mode=CaptureHiddenMode.NULL,
+         )
+ 
++        if self.selector is not None:
++            self._selector_sample = None
++            if self._draft_sampler is not None:
++                # Consumed by the in-graph sample; must be staged before the replay.
++                self._draft_sampler.stage_sampling_params(
++                    bs=bs, sampling_info=batch.sampling_info
++                )
++
+         with torch.inference_mode():
+             draft_out = self.draft_model_runner.forward(forward_batch)
+         draft_logits_output = draft_out.logits_output
+ 
+-        if self._draft_sampler is not None and draft_out.can_run_graph:
++        folded = self._draft_sampler is not None and draft_out.can_run_graph
++        if folded:
+             draft_next = self._draft_sampler.out[
+                 : bs * (int(self.block_size) - 1)
+             ].view(bs, int(self.block_size) - 1)
++            if self.selector is not None and not _is_all_greedy(batch.sampling_info):
++                self._selector_sample = (
++                    self._draft_sampler.candidate_out[:bs],
++                    self._draft_sampler.q_out[:bs],
++                )
++        elif self.selector is not None:
++            draft_next = self._propose_selector_block(
++                draft_logits_output=draft_logits_output,
++                bs=bs,
++                lm_head=lm_head,
++                anchor_token_ids=block_ids[:, 0],
++                sampling_info=batch.sampling_info,
++            )
+         else:
+             draft_hidden = draft_logits_output.hidden_states
+             if draft_hidden is None:
+@@ -1782,13 +2023,20 @@ class DFlashWorkerV2(BaseSpecWorker):
+ 
+         candidates = draft_tokens
+         new_seq_lens = None
+-        # Only the greedy branch sets target_predict; the simulated-acceptance
+-        # override below checks for it.
+         target_predict = None
+-        if (
+-            sampling_info is not None
+-            and not sampling_info.is_all_greedy
+-            and is_dflash_sampling_verify_available()
++        if self._selector_sample is not None:
++            selector_candidate_ids, selector_q_rows = self._selector_sample
++            accept_len, bonus = self._selector_sampling_accept(
++                candidates=candidates,
++                next_token_logits=logits_output.next_token_logits,
++                candidate_ids=selector_candidate_ids,
++                q_rows=selector_q_rows,
++                sampling_info=sampling_info,
++                draft_input=draft_input,
++            )
++            out_tokens, commit_lens = _commit_accept(candidates, accept_len, bonus)
++        elif (
++            not _is_all_greedy(sampling_info) and is_dflash_sampling_verify_available()
+         ):
+             accept_len, bonus = compute_dflash_sampling_correct_drafts_and_bonus(
+                 candidates=candidates,
+@@ -1797,14 +2045,7 @@ class DFlashWorkerV2(BaseSpecWorker):
+                 max_top_k=draft_input.max_top_k,
+                 uniform_top_k_value=draft_input.uniform_top_k_value,
+             )
+-            commit_lens = accept_len.to(torch.int32) + 1  # [bs]
+-            out_tokens = torch.empty(
+-                (bs, int(self.block_size)), dtype=torch.int64, device=device
+-            )
+-            if int(self.block_size) > 1:
+-                out_tokens[:, : int(self.block_size) - 1].copy_(candidates[:, 1:])
+-            out_tokens[:, int(self.block_size) - 1].fill_(0)
+-            out_tokens.scatter_(1, accept_len.to(torch.int64)[:, None], bonus[:, None])
++            out_tokens, commit_lens = _commit_accept(candidates, accept_len, bonus)
+         else:
+             target_predict = torch.argmax(logits_output.next_token_logits, dim=-1).view(
+                 bs, int(self.block_size)
+@@ -1838,35 +2079,15 @@ class DFlashWorkerV2(BaseSpecWorker):
+                         candidates=candidates,
+                         target_predict=target_predict,
+                     )
+-                    commit_lens = accept_len.to(torch.int32) + 1  # [bs]
+-                    out_tokens = torch.empty(
+-                        (bs, int(self.block_size)),
+-                        dtype=torch.int64,
+-                        device=device,
+-                    )
+-                    if int(self.block_size) > 1:
+-                        out_tokens[:, : int(self.block_size) - 1].copy_(
+-                            candidates[:, 1:]
+-                        )
+-                    out_tokens[:, int(self.block_size) - 1].fill_(0)
+-                    out_tokens.scatter_(
+-                        1, accept_len.to(torch.int64)[:, None], bonus[:, None]
++                    out_tokens, commit_lens = _commit_accept(
++                        candidates, accept_len, bonus
+                     )
+             else:
+                 accept_len, bonus = compute_dflash_correct_drafts_and_bonus(
+                     candidates=candidates,
+                     target_predict=target_predict,
+                 )
+-                commit_lens = accept_len.to(torch.int32) + 1  # [bs]
+-                out_tokens = torch.empty(
+-                    (bs, int(self.block_size)), dtype=torch.int64, device=device
+-                )
+-                if int(self.block_size) > 1:
+-                    out_tokens[:, : int(self.block_size) - 1].copy_(candidates[:, 1:])
+-                out_tokens[:, int(self.block_size) - 1].fill_(0)
+-                out_tokens.scatter_(
+-                    1, accept_len.to(torch.int64)[:, None], bonus[:, None]
+-                )
++                out_tokens, commit_lens = _commit_accept(candidates, accept_len, bonus)
+ 
+         if SIMULATE_ACC_LEN > 0:
+             if SIMULATE_ACC_TOKEN_MODE not in ("fixed", "real-draft-token"):
+diff --git a/python/sglang/srt/speculative/dspark_components/dspark_config.py b/python/sglang/srt/speculative/dspark_components/dspark_config.py
+index 0cac50977e..3c354f6956 100644
+--- a/python/sglang/srt/speculative/dspark_components/dspark_config.py
++++ b/python/sglang/srt/speculative/dspark_components/dspark_config.py
+@@ -21,6 +21,11 @@ SUPPORTED_DSPARK_MARKOV_HEAD_TYPES = ("vanilla", "gated", "rnn")
+ DSV4_DRAFT_ATTENTION_BACKEND = "dsv4"
+ 
+ 
++def get_dspark_sample_from_anchor(draft_hf_config: Any) -> bool:
++    """Return whether a DSpark checkpoint samples the anchor query row."""
++    return bool(_cfg_get(draft_hf_config, "sample_from_anchor", True))
++
++
+ def draft_is_deepseek_v4(*, server_args: ServerArgs) -> bool:
+     from sglang.srt.configs.model_config import is_deepseek_v4
+     from sglang.srt.utils.hf_transformers_utils import get_config
+@@ -124,9 +129,18 @@ def resolve_runtime_config(
+     )
+ 
+ 
+-def read_draft_checkpoint_gamma(*, server_args: ServerArgs) -> Optional[int]:
+-    """Load the draft checkpoint's hf config and read its DSpark gamma
+-    (block_size). Raises on config-load failure; callers pick the fallback."""
++def read_draft_checkpoint_config(*, server_args: ServerArgs) -> DSparkDraftConfig:
++    """Load and normalize the DSpark draft checkpoint configuration.
++
++    Raises on config-load failure; callers pick the fallback.
++
++    NOTE (dgxarley backport onto v0.5.18): upstream reads the four fields below
++    through arg_groups.overrides.resolved_view(), because on main the
++    speculative hook runs before the config bags exist. That indirection belongs
++    to the separate config-namespace refactor and does not cover these fields on
++    v0.5.18, where the plain server_args attributes ARE the resolving values.
++    Restore resolved_view() when rebasing onto a ref that has it.
++    """
+     from sglang.srt.utils.hf_transformers_utils import get_config
+ 
+     draft_hf_config = get_config(
+@@ -135,7 +149,11 @@ def read_draft_checkpoint_gamma(*, server_args: ServerArgs) -> Optional[int]:
+         revision=server_args.speculative_draft_model_revision,
+         model_override_args=json.loads(server_args.json_model_override_args),
+     )
+-    return parse_dspark_draft_config(draft_hf_config=draft_hf_config).resolve_gamma(
++    return parse_dspark_draft_config(draft_hf_config=draft_hf_config)
++
++
++def read_draft_checkpoint_gamma(*, server_args: ServerArgs) -> Optional[int]:
++    return read_draft_checkpoint_config(server_args=server_args).resolve_gamma(
+         default=None
+     )
+ 
+diff --git a/python/sglang/srt/speculative/dspark_components/dspark_draft.py b/python/sglang/srt/speculative/dspark_components/dspark_draft.py
+index 2fd55f221d..29eea9abf4 100644
+--- a/python/sglang/srt/speculative/dspark_components/dspark_draft.py
++++ b/python/sglang/srt/speculative/dspark_components/dspark_draft.py
+@@ -80,6 +80,27 @@ class DraftProposal(msgspec.Struct, frozen=True):
+     folded: bool = False
+ 
+ 
++def select_draft_hidden_without_anchor(
++    hidden_states: torch.Tensor,
++    *,
++    bs: int,
++    gamma: int,
++) -> tuple[torch.Tensor, torch.Tensor]:
++    query_token_num = gamma + 1
++    expected_rows = bs * query_token_num
++    if hidden_states.shape[0] != expected_rows:
++        raise RuntimeError(
++            f"DSpark draft returned {hidden_states.shape[0]} hidden rows, "
++            f"expected {expected_rows}."
++        )
++    hidden_by_query = hidden_states.view(bs, query_token_num, *hidden_states.shape[1:])
++    selected = hidden_by_query[:, 1:].contiguous()
++    return (
++        selected.view(bs * gamma, *hidden_states.shape[1:]),
++        selected.view(bs, gamma, -1),
++    )
++
++
+ def make_next_draft_input(
+     *,
+     bonus_tokens: torch.Tensor,
+@@ -177,6 +198,8 @@ class DraftBlockProposer:
+         self.draft_model = draft_model
+         self.draft_model_runner = draft_model_runner
+         self.gamma = gamma
++        self.sample_from_anchor = bool(draft_model.sample_from_anchor)
++        self.query_token_num = self.gamma if self.sample_from_anchor else self.gamma + 1
+         self._mask_token_id = mask_token_id
+         self._draft_block_spec_info = draft_block_spec_info
+         self._draft_sampler = None
+@@ -201,7 +224,11 @@ class DraftBlockProposer:
+         target_model,
+         sampling_info,
+     ) -> DraftProposal:
+-        embed_module = target_model.get_input_embeddings()
++        embed_module = (
++            self.draft_model.embed_tokens
++            if not self.sample_from_anchor
++            else target_model.get_input_embeddings()
++        )
+         draft_sampler = self._draft_sampler
+         all_greedy = sampling_info is None or sampling_info.is_all_greedy
+         fwd = self._run_forward(
+@@ -275,8 +302,13 @@ class DraftBlockProposer:
+                 markov_head=self.draft_model.markov_head,
+                 device=device,
+             )
++        proposal_block_ids = (
++            draft_block_ids
++            if self.sample_from_anchor
++            else draft_block_ids[:, : self.gamma].contiguous()
++        )
+         return DraftProposal(
+-            draft_block_ids=draft_block_ids,
++            draft_block_ids=proposal_block_ids,
+             draft_block=draft_block,
+             draft_hidden=fwd.draft_hidden_3d,
+             confidence=folded_confidence,
+@@ -320,16 +352,20 @@ class DraftBlockProposer:
+         sampling_info=None,
+     ) -> DraftForwardResult:
+         gamma = self.gamma
++        query_token_num = self.query_token_num
+         prefix_lens = batch.seq_lens
+         positions_2d = verify_window.positions_2d
+         verify_cache_loc_2d = verify_window.verify_cache_loc_2d
+ 
+         draft_block_ids = torch.full(
+-            (bs, gamma), int(self._mask_token_id), dtype=torch.long, device=device
++            (bs, query_token_num),
++            int(self._mask_token_id),
++            dtype=torch.long,
++            device=device,
+         )
+         draft_block_ids[:, 0].copy_(draft_input.bonus_tokens.view(-1))
+-        draft_positions = positions_2d[:, :gamma].reshape(-1)
+-        draft_cache_loc = verify_cache_loc_2d[:, :gamma].reshape(-1)
++        draft_positions = positions_2d[:, :query_token_num].reshape(-1)
++        draft_cache_loc = verify_cache_loc_2d[:, :query_token_num].reshape(-1)
+ 
+         draft_owns_embed = envs.SGLANG_DSPARK_EMBED_IN_GRAPH.get() and hasattr(
+             self.draft_model, "forward_embed"
+@@ -340,7 +376,7 @@ class DraftBlockProposer:
+             draft_input_embeds = noise_embedding.view(-1, noise_embedding.shape[-1])
+ 
+         if batch.seq_lens_cpu is not None:
+-            draft_seq_lens_cpu = batch.seq_lens_cpu + gamma
++            draft_seq_lens_cpu = batch.seq_lens_cpu + query_token_num
+             draft_seq_lens_sum = int(draft_seq_lens_cpu.sum())
+         elif draft_input.reserved_seq_lens_cpu is not None:
+             draft_seq_lens_cpu = draft_input.reserved_seq_lens_cpu
+@@ -348,7 +384,7 @@ class DraftBlockProposer:
+         else:
+             raise RuntimeError("DSpark decode expected batch.seq_lens_cpu, got None")
+ 
+-        draft_num_tokens = bs * gamma
++        draft_num_tokens = bs * query_token_num
+         draft_forward_batch = ForwardBatch(
+             forward_mode=ForwardMode.TARGET_VERIFY,
+             batch_size=bs,
+@@ -380,10 +416,24 @@ class DraftBlockProposer:
+         raw_hidden = logits_output.hidden_states
+         if raw_hidden is None:
+             raise RuntimeError("DSpark draft model returned no hidden states.")
+-        draft_hidden_3d = raw_hidden.view(bs, gamma, -1)
++        if self.sample_from_anchor:
++            expected_rows = bs * gamma
++            if raw_hidden.shape[0] != expected_rows:
++                raise RuntimeError(
++                    f"DSpark draft returned {raw_hidden.shape[0]} hidden rows, "
++                    f"expected {expected_rows}."
++                )
++            model_hidden = raw_hidden
++            draft_hidden_3d = raw_hidden.view(bs, gamma, -1)
++        else:
++            model_hidden, draft_hidden_3d = select_draft_hidden_without_anchor(
++                raw_hidden,
++                bs=bs,
++                gamma=gamma,
++            )
+         return DraftForwardResult(
+             draft_block_ids=draft_block_ids,
+-            raw_hidden=raw_hidden,
++            raw_hidden=model_hidden,
+             draft_hidden_3d=draft_hidden_3d,
+             can_run_graph=draft_out.can_run_graph,
+         )
+diff --git a/python/sglang/srt/speculative/dspark_components/dspark_draft_sampler.py b/python/sglang/srt/speculative/dspark_components/dspark_draft_sampler.py
+index 4ecce20b63..bcbfbb0188 100644
+--- a/python/sglang/srt/speculative/dspark_components/dspark_draft_sampler.py
++++ b/python/sglang/srt/speculative/dspark_components/dspark_draft_sampler.py
+@@ -9,6 +9,9 @@ from sglang.kernels.ops.speculative.dspark.dspark_draft_model import (
+     SampleStepTokens,
+ )
+ from sglang.srt.environ import DsparkFoldedSampling, envs
++from sglang.srt.speculative.dspark_components.dspark_draft import (
++    select_draft_hidden_without_anchor,
++)
+ from sglang.srt.utils import get_available_gpu_memory
+ 
+ logger = logging.getLogger(__name__)
+@@ -40,6 +43,8 @@ class DsparkDraftSampler:
+         self.model = model
+         self.markov_head = model.markov_head
+         self.gamma = int(gamma)
++        self.sample_from_anchor = bool(model.sample_from_anchor)
++        self.query_token_num = self.gamma if self.sample_from_anchor else self.gamma + 1
+         max_bs = int(max_bs)
+         if out is not None:
+             assert out.shape == (max_bs * self.gamma,) and out.dtype == torch.int64
+@@ -91,10 +96,19 @@ class DsparkDraftSampler:
+         self.greedy_mask[:bs].copy_((sampling_info.top_ks <= 1).view(-1)[:bs])
+ 
+     def __call__(self, hidden_states, input_ids):
+-        bs = hidden_states.shape[0] // self.gamma
+-        base_logits, confidence_tap = self.model.compute_base_logits(hidden_states)
++        bs = hidden_states.shape[0] // self.query_token_num
++        if self.sample_from_anchor:
++            model_hidden = hidden_states
++            sample_hidden = hidden_states.view(bs, self.gamma, -1)
++        else:
++            model_hidden, sample_hidden = select_draft_hidden_without_anchor(
++                hidden_states,
++                bs=bs,
++                gamma=self.gamma,
++            )
++        base_logits, confidence_tap = self.model.compute_base_logits(model_hidden)
+         base_logits = base_logits.view(bs, self.gamma, -1)
+-        anchor = input_ids.view(bs, self.gamma)[:, 0]
++        anchor = input_ids.view(bs, self.query_token_num)[:, 0]
+ 
+         if self.folded_sampling:
+ 
+@@ -116,7 +130,7 @@ class DsparkDraftSampler:
+         draft_tokens, corrected_logits = self.markov_head.sample_block(
+             base_logits,
+             first_prev_tokens=anchor,
+-            hidden_states=hidden_states.view(bs, self.gamma, -1),
++            hidden_states=sample_hidden,
+             sampler=sampler,
+         )
+         self.out[: draft_tokens.numel()].copy_(draft_tokens.reshape(-1))
+@@ -126,7 +140,7 @@ class DsparkDraftSampler:
+             )
+         if self.confidence_out is not None:
+             confidence = self.confidence_fn(
+-                draft_hidden=hidden_states.view(bs, self.gamma, -1),
++                draft_hidden=sample_hidden,
+                 anchor_tokens=anchor,
+                 draft_tokens=draft_tokens,
+                 confidence_tap=confidence_tap,
+diff --git a/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py b/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py
+index 666cfd8c0b..ff6f19fcde 100644
+--- a/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py
++++ b/python/sglang/srt/speculative/dspark_components/dspark_worker_v2.py
+@@ -152,18 +152,22 @@ class DSparkWorkerV2(BaseSpecWorker):
+         )
+         self.gamma = runtime_config.gamma
+         self.verify_num_draft_tokens = runtime_config.verify_num_draft_tokens
++        self.sample_from_anchor = bool(self.draft_model.sample_from_anchor)
++        self.query_token_num = self.gamma if self.sample_from_anchor else self.gamma + 1
+         self.speculative_num_draft_tokens = self.verify_num_draft_tokens
+         self._mask_token_id = runtime_config.mask_token_id
+ 
+         if self.ps.tp_rank == 0:
+             logger.info(
+                 "Initialized DSpark draft runner. attention_backend=%s, model=%s, "
+-                "gamma=%s, verify_num_draft_tokens=%s, mask_token_id=%s, "
+-                "markov_head=%s",
++                "gamma=%s, verify_num_draft_tokens=%s, query_token_num=%s, "
++                "sample_from_anchor=%s, mask_token_id=%s, markov_head=%s",
+                 bundle.resolved_attention_backend,
+                 self.draft_model.__class__.__name__,
+                 self.gamma,
+                 self.verify_num_draft_tokens,
++                self.query_token_num,
++                self.sample_from_anchor,
+                 self._mask_token_id,
+                 type(self.draft_model.markov_head).__name__,
+             )
+@@ -172,7 +176,7 @@ class DSparkWorkerV2(BaseSpecWorker):
+             length=self.verify_num_draft_tokens, device=self.device
+         )
+         self._draft_block_spec_info = make_draft_block_spec_info(
+-            draft_token_num=int(self.gamma), device=self.device
++            draft_token_num=int(self.query_token_num), device=self.device
+         )
+ 
+         if getattr(self.draft_model, "uses_own_vocab_modules", False):

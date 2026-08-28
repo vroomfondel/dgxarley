@@ -68,6 +68,33 @@
     - sglang_speculative_enabled | bool
     - (sglang_speculative_algo | upper) == 'DSPARK'
 
+# DFLASH couples the block size to the verify window too, but with a DIFFERENT
+# rule than DSPARK: SGLang requires speculative_num_draft_tokens ==
+# speculative_dflash_block_size (EQUAL, no +1) and raises at boot otherwise.
+# Same reasoning as the DSPARK assert above: launch.sh always passes
+# num_draft_tokens explicitly, so a mismatch would only ever surface as a
+# crash-looping head. Empty block_size = auto-infer from the draft checkpoint,
+# in which case SGLang resolves num_draft_tokens itself.
+- name: Validate DFLASH block-size / draft-token pairing ({{ inst.prefix }})
+  ansible.builtin.assert:
+    that:
+      - (sglang_speculative_dflash_block_size | string | length == 0) or
+        ((sglang_speculative_num_draft_tokens | int) ==
+         (sglang_speculative_dflash_block_size | int))
+    fail_msg: >-
+      Instance '{{ inst.prefix }}': DFLASH requires speculative_num_draft_tokens
+      == speculative_dflash_block_size, but the profile has
+      num_draft_tokens={{ sglang_speculative_num_draft_tokens }} vs
+      block_size={{ sglang_speculative_dflash_block_size }}.
+    success_msg: >-
+      {{ inst.prefix }}: DFLASH block size
+      {{ 'auto (from the draft checkpoint)'
+         if (sglang_speculative_dflash_block_size | string | length == 0)
+         else sglang_speculative_dflash_block_size ~ ' (== draft tokens)' }}
+  when:
+    - sglang_speculative_enabled | bool
+    - (sglang_speculative_algo | upper) == 'DFLASH'
+
 # Does this instance need the QSFP fabric at all? NO when it is single-node:
 # nodes[0] is the only rank, there are no peers, so there is no NCCL traffic to
 # carry — and its sriov_key typically has no qsfp_sriov_assignments entry, so
@@ -191,6 +218,10 @@
         # DSPARK-only; empty for every other algo (launch.sh omits the flags).
         SGLANG_SPECULATIVE_DSPARK_BLOCK_SIZE: "{{ sglang_speculative_dspark_block_size | string }}"
         SGLANG_SPECULATIVE_DSPARK_SPS_TABLE_PATH: "{{ sglang_speculative_dspark_sps_table_path }}"
+        # DFLASH-only; empty for every other algo (launch.sh omits the flag).
+        SGLANG_SPECULATIVE_DFLASH_BLOCK_SIZE: "{{ sglang_speculative_dflash_block_size | string }}"
+        # Empty -> no flag -> the per-arch resolver in overrides.py chooses.
+        SGLANG_SPECULATIVE_DRAFT_ATTENTION_BACKEND: "{{ sglang_speculative_draft_attention_backend }}"
         SGLANG_SPECULATIVE_ADAPTIVE: "{{ sglang_speculative_adaptive | string | lower }}"
         SGLANG_SPECULATIVE_ADAPTIVE_CONFIG_JSON: "{{ sglang_speculative_adaptive_config | to_json }}"
         # GDN ReplaySSM ring spec-verify (>=0.5.16, PR #28695). Only read inside
@@ -205,6 +236,9 @@
         SGLANG_MAMBA_SCHEDULER_STRATEGY: "{{ sglang_mamba_scheduler_strategy }}"
         SGLANG_MAMBA_FULL_MEMORY_RATIO: "{{ sglang_mamba_full_memory_ratio | string }}"
         SGLANG_MAX_MAMBA_CACHE_SIZE: "{{ sglang_max_mamba_cache_size | string }}"
+        # Empty = launch.sh unsets it (see the note in defaults/main/sglang.yml:
+        # the name collides with SGLang's own env var, and "" is not None there).
+        SGLANG_MAMBA_SSM_DTYPE: "{{ sglang_mamba_ssm_dtype }}"
         SGLANG_ENABLE_SPEC_V2: "{{ '1' if (sglang_enable_spec_v2 | bool) else '' }}"
         SGLANG_DIST_TIMEOUT: "{{ sglang_dist_timeout | string }}"
         SGLANG_WATCHDOG_TIMEOUT: "{{ sglang_watchdog_timeout | string }}"

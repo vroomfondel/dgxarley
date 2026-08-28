@@ -478,6 +478,21 @@ if [ "$SGLANG_SPECULATIVE_ENABLED" = "true" ]; then
   if [ -n "$SGLANG_SPECULATIVE_DSPARK_BLOCK_SIZE" ]; then
     args+=(--speculative-dspark-block-size "$SGLANG_SPECULATIVE_DSPARK_BLOCK_SIZE")
   fi
+  # DFLASH-only knob (Nemotron-3.5-Lightning and later). Unset -> SGLang infers
+  # the block size from the draft checkpoint (falling back to 16). When set, the
+  # profile MUST also set speculative_num_draft_tokens to the SAME value - note
+  # the rule differs from DSPARK's gamma+1 (asserted in sglang_instance.yml).
+  if [ -n "$SGLANG_SPECULATIVE_DFLASH_BLOCK_SIZE" ]; then
+    args+=(--speculative-dflash-block-size "$SGLANG_SPECULATIVE_DFLASH_BLOCK_SIZE")
+  fi
+  # Draft-side attention backend. Empty -> flag omitted -> SGLang's per-arch
+  # resolver (arg_groups/overrides.py) picks one, but ONLY while the value is
+  # None, so passing this deliberately disables that resolution. Needed e.g. for
+  # the Nemotron-3.5-Lightning DSpark draft, whose attention sinks hard-require
+  # trtllm_mha while the resolver would hand it flashinfer on SM121.
+  if [ -n "$SGLANG_SPECULATIVE_DRAFT_ATTENTION_BACKEND" ]; then
+    args+=(--speculative-draft-attention-backend "$SGLANG_SPECULATIVE_DRAFT_ATTENTION_BACKEND")
+  fi
   if [ -n "$SGLANG_SPECULATIVE_DSPARK_SPS_TABLE_PATH" ]; then
     if [ -f "$SGLANG_SPECULATIVE_DSPARK_SPS_TABLE_PATH" ]; then
       args+=(--speculative-dspark-sps-table-path "$SGLANG_SPECULATIVE_DSPARK_SPS_TABLE_PATH")
@@ -559,6 +574,23 @@ if [ -n "$SGLANG_MAMBA_FULL_MEMORY_RATIO" ]; then
 fi
 if [ -n "$SGLANG_MAX_MAMBA_CACHE_SIZE" ] && [ "$SGLANG_MAX_MAMBA_CACHE_SIZE" != "0" ]; then
   args+=(--max-mamba-cache-size "$SGLANG_MAX_MAMBA_CACHE_SIZE")
+fi
+# SSM-state dtype of the mamba cache. Empty = no flag; SGLang then reads the
+# model config's own mamba_ssm_dtype (float32 for the NemotronH checkpoints).
+# float16 halves the per-slot state and is what the SGLang cookbook's DGX Spark
+# cells pass for Nemotron-3.5-Lightning.
+# The UNSET is load-bearing, not tidiness: SGLANG_MAMBA_SSM_DTYPE is ALSO
+# SGLang's own env var (declared EnvStr(None), read directly by
+# configs/mamba_utils.py::mamba2_state_dtype). Its .get() uses os.getenv, so an
+# empty string is a SET value, not None, and every pod of every model would log
+# "Invalid mamba_ssm_dtype '' ... Using default 'float32'". Unsetting it restores
+# the None the library expects; when non-empty we pass the flag AND leave the env
+# in place, which is exactly what SGLang itself does (server_args mirrors the
+# flag back into this env var).
+if [ -n "$SGLANG_MAMBA_SSM_DTYPE" ]; then
+  args+=(--mamba-ssm-dtype "$SGLANG_MAMBA_SSM_DTYPE")
+else
+  unset SGLANG_MAMBA_SSM_DTYPE
 fi
 if [ -n "$SGLANG_MAX_RUNNING_REQUESTS" ] && [ "$SGLANG_MAX_RUNNING_REQUESTS" != "0" ]; then
   args+=(--max-running-requests "$SGLANG_MAX_RUNNING_REQUESTS")

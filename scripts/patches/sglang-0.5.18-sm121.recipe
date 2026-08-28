@@ -60,6 +60,14 @@
 #      first flag in this recipe line that ADDS A MODEL rather than fixing one,
 #      and the first whose runtime half lives outside the image (p65). See the
 #      flag's own block near IMAGE_TAG and OPEN RISK F.
+#   8b. NEW: APPLY_NEMOTRON35_SPEC_PR36186=1 — build_sm121_image.sh applies
+#      sglang-nemotron35-spec-pr36186.patch (upstream PR #36186, MERGED
+#      2026-08-25 = three days AFTER this tag, bundled with its two DFlash2
+#      prerequisites #35371/#35496) before pip install. It adds the MTP / DFlash
+#      / DSpark speculative paths for Nemotron 3.5 Lightning. Unlike 8a this is a
+#      pure BACKPORT of merged code, so it EXPIRES: set it to 0 as soon as
+#      SGLANG_REF contains 41e7612dee. Serving the target unspeculated does not
+#      need it. See the flag's own block near IMAGE_TAG.
 #   8. Upstream dependency churn that rides along with the ref (informational,
 #      none of it a knob here): sgl-kernel 0.4.5 to 0.4.6.post1, sgl-deep-gemm
 #      0.1.5.post1 to 0.1.5.post3, quack-kernels >=0.6.1 to ==0.6.4, NEW
@@ -406,5 +414,42 @@ APPLY_QWEN36_MIXED_NVFP4_PR27906=0
 # which fails the image unless qwen4_exp imports AND the SM121 trtllm veto is
 # actually in place. See OPEN RISK F.
 APPLY_QWEN4EXP_PR36497=1
+
+# -- Nemotron 3.5 Lightning speculative decoding: MERGED-BUT-TOO-LATE -> ON ---
+# build_sm121_image.sh applies sglang-nemotron35-spec-pr36186.patch before pip
+# install. That patch is upstream PR #36186 ("[Model] Support Nemotron 3.5
+# Lightning speculative decoding", MERGED 2026-08-25) BUNDLED WITH its two
+# DFlash2 prerequisites, #35371 (local convolution + candidate selector) and
+# #35496 (quantized target lm_head in the selector). All three are in main; none
+# is in v0.5.18, which was tagged 2026-08-22, three days before #36186 landed.
+# The prerequisites are not optional padding: #36186 is written against the
+# post-DFlash2 dflash.py and fails on 5 of 18 files without them.
+#
+# WHAT IT BUYS: the three published speculative decoders for
+# nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4 — the in-checkpoint MTP head,
+# and the two external drafts ...-NVFP4-DFlash and ...-NVFP4-DSpark (NVIDIA's own
+# recommendation for DGX Spark). Without it DSPARK/DFLASH abort at backend setup
+# with "Model NemotronHForCausalLM implements neither set_dspark_layers_to_capture
+# nor set_dflash_layers_to_capture", because v0.5.18's nemotron_h.py has no
+# aux-hidden-state capture hook while the dflash family requests one
+# unconditionally.
+#
+# WHAT IT IS NOT NEEDED FOR: serving that target UNSPECULATED. Its mixed
+# W4A16_NVFP4 + quantized lm_head shape is already covered by the merged PR
+# #27906 that v0.5.18 ships natively (which is why APPLY_QWEN36_MIXED_NVFP4_PR27906
+# is 0 above). Set this flag to 0 to build an image that still serves the model,
+# just without a drafter.
+#
+# UNLIKE most flags here this one is a pure BACKPORT of merged code, so it has a
+# hard expiry: set it to 0 the moment SGLANG_REF is a ref containing 41e7612dee
+# (the first tag after v0.5.18 will). Re-applying merged code fails the
+# in-container dry-run and aborts the build, which is the intended loud failure.
+#
+# VERIFIED 2026-08-28 (host-side, pre-build): both `git apply --check -p1`
+# (strict, fuzz 0) and `patch --dry-run -p1` are clean against a pristine v0.5.18
+# worktree, and pyflakes reports no undefined names across the 16 changed files.
+# NOT GPU-validated — no image carrying it has been built or served yet.
+# Consumer: roles/k8s_dgx/model_profiles/nvidia-nvidia-nemotron-3.5-lightning-30b-a3b-nvfp4.yml
+APPLY_NEMOTRON35_SPEC_PR36186=1
 
 IMAGE_TAG=xomoxcc/dgx-spark-sglang:0.5.18-sm121

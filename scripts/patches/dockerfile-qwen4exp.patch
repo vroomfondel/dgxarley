@@ -28,9 +28,18 @@ decode.py and are applied at container start, deliberately — one of the two is
 a DEFENSIVE veto that must survive image re-bumps, see that file's docstring.
 An image built from this step alone crashes at backend init on GB10.
 
+FIXED 2026-08-28: the hunk header said `+293,19` while the body is 18 added plus
+3 context lines = 21. GNU patch stopped after 19 and aborted with "malformed
+patch at line 53", which means `patch --dry-run` in build_sm121_image.sh would
+have die()d on every build with APPLY_QWEN4EXP_PR36497=1. Latent, not observed:
+sglang-0.5.18-sm121.recipe (the only recipe setting that flag) has never been
+built. Count corrected to 21, nothing else touched; re-verified by applying
+dockerfile-sm121 -> this -> dockerfile-nemotron35-spec onto a pristine
+container-build/Dockerfile.sglang-nightly.
+
 --- a/container-build/Dockerfile.sglang-nightly
 +++ b/container-build/Dockerfile.sglang-nightly
-@@ -293,3 +293,19 @@
+@@ -293,3 +293,21 @@
 +# Qwen3.8-Flash-Next / Qwen4-Exp architecture (upstream PR #36497, not yet
 +# merged; captured from the upstream-owned branch qwen4-main-squashed @
 +# 99c9362e). 94 files, 52 of them new: the qwen4_exp model + its MTP head +

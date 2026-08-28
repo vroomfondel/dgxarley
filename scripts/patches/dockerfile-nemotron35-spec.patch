@@ -1,0 +1,57 @@
+Nemotron 3.5 Lightning speculative decoding (PR #36186 + the two DFlash2
+prerequisites #35371/#35496) patch-application step for
+container-build/Dockerfile.sglang-nightly.
+
+Adds one COPY+RUN step that applies sglang-nemotron35-spec-pr36186.patch to the
+sglang Python source AFTER the SM121 sgl-kernel patches but BEFORE
+`uv pip install ./python`, so the installed package picks up the new speculative
+paths. Same pattern as dockerfile-qwen36-mixed-nvfp4.patch / dockerfile-qwen4exp.patch.
+
+Apply to: container-build/Dockerfile.sglang-nightly AFTER dockerfile-sm121.patch
+has been applied. Application is gated by build_sm121_image.sh on the recipe
+variable APPLY_NEMOTRON35_SPEC_PR36186=1 (set in sglang-0.5.18-sm121.recipe;
+remove the variable / set 0 once the pinned SGLANG_REF already contains the
+merge commit 41e7612dee — re-applying merged code fails the in-container
+dry-run and aborts the build, which is the intended loud failure).
+
+STACKABLE: like dockerfile-qwen36-mixed-nvfp4.patch and dockerfile-qwen4exp.patch
+this hunk uses ONLY trailing context (the `# Install sglang package` comment
+block) with no leading context, so it inserts immediately before that comment
+regardless of whether another model patch (dsv4, qwen36, qwen4exp) already
+inserted its COPY+RUN block there first. build_sm121_image.sh applies this as
+step 2i, after 2c (dsv4), 2f (qwen36) and 2h (qwen4exp), so on a recipe with
+several of them enabled this block ends up last, directly before
+`# Install sglang`. Works standalone too.
+
+SCOPE NOTE: this build step covers the three speculative decoders (MTP / DFlash /
+DSpark) for nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4. Serving that
+TARGET without speculation needs none of it — v0.5.18 already carries the
+mixed-NVFP4 support (merged PR #27906) the checkpoint requires.
+
+--- a/container-build/Dockerfile.sglang-nightly
++++ b/container-build/Dockerfile.sglang-nightly
+@@ -293,3 +293,24 @@
++# Nemotron 3.5 Lightning speculative decoding (upstream PR #36186, MERGED
++# 2026-08-25, three days AFTER the v0.5.18 tag — plus its two DFlash2
++# prerequisites #35371 and #35496, without which #36186 does not apply to
++# v0.5.18 at all). 16 files: the NemotronH aux-hidden-state capture hook that
++# DFLASH/DSPARK hard-require, the Nemotron-3.5 DFlash/DSpark draft layouts
++# (draft-owned embeddings, packed projections, attention sinks, Markov bonus
++# anchor), ModelOpt W4A16 NVFP4 for the two published draft checkpoints, and the
++# Nemotron-H target/draft attention-backend resolver. Applied to the sglang
++# Python source before pip install so the installed dist-packages picks up the
++# changes. This COPY+RUN step only exists in builds whose recipe sets
++# APPLY_NEMOTRON35_SPEC_PR36186=1 (the dockerfile patch adding this step is
++# gated by build_sm121_image.sh).
++COPY patches/sglang-nemotron35-spec-pr36186.patch /tmp/sglang-nemotron35-spec-pr36186.patch
++RUN set -e; cd /data/sglang && \
++    echo "=== Applying sglang-nemotron35-spec-pr36186.patch (PR #36186 + #35371 + #35496) ===" && \
++    patch --dry-run -p1 < /tmp/sglang-nemotron35-spec-pr36186.patch && \
++    patch -p1 < /tmp/sglang-nemotron35-spec-pr36186.patch && \
++    grep -q 'def set_dflash_layers_to_capture' python/sglang/srt/models/nemotron_h.py && \
++    grep -q 'def is_nemotron_35_draft_config' python/sglang/srt/speculative/dflash_utils.py && \
++    echo 'Nemotron 3.5 spec PR #36186 patch applied successfully'
++
+ # Install sglang package (no deps, no build isolation since base has torch).
+ # Moved here from its original early-stage location so the installed
+ # dist-packages picks up the patched nvfp4_blockwise_moe.cuh above.

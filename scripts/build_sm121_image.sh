@@ -867,6 +867,16 @@ preflight() {
             sglang-qwen4exp-pr36497.patch
         )
     fi
+    # Nemotron 3.5 Lightning speculative-decoding patches (PR #36186 + the two
+    # DFlash2 prerequisites) are only required when the recipe opts in via
+    # APPLY_NEMOTRON35_SPEC_PR36186=1. See apply_patches().
+    if [[ -f "${PATCHES_DIR}/${RECIPE_NAME}.recipe" ]] \
+        && grep -qE '^APPLY_NEMOTRON35_SPEC_PR36186=1' "${PATCHES_DIR}/${RECIPE_NAME}.recipe"; then
+        required_files+=(
+            dockerfile-nemotron35-spec.patch
+            sglang-nemotron35-spec-pr36186.patch
+        )
+    fi
 
     local missing=0
     for f in "${required_files[@]}"; do
@@ -1238,6 +1248,24 @@ apply_patches() {
         apply_qwen4exp_patch=1
     fi
 
+    # Nemotron 3.5 Lightning speculative decoding (PR #36186, MERGED 2026-08-25)
+    # bundled with its two DFlash2 prerequisites (#35371, #35496) — gated by an
+    # explicit recipe variable, same as the others. Like qwen4exp this is not an
+    # optimization: v0.5.18 was tagged three days before #36186 merged, so
+    # without it the DSPARK/DFLASH drafts for
+    # nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4 abort at backend setup
+    # ("implements neither set_dspark_layers_to_capture nor
+    # set_dflash_layers_to_capture"). Serving that target WITHOUT speculation
+    # needs none of it. Drop APPLY_NEMOTRON35_SPEC_PR36186 the moment the pinned
+    # SGLANG_REF contains 41e7612dee (the first tag after v0.5.18 will) —
+    # re-applying merged code fails the in-container dry-run and aborts.
+    # Trailing-context-only dockerfile hunk, so it STACKS after 2c/2f/2h.
+    local apply_nemotron35_spec_patch=0
+    if [[ -f "${PATCHES_DIR}/${RECIPE_NAME}.recipe" ]] \
+        && grep -qE '^APPLY_NEMOTRON35_SPEC_PR36186=1' "${PATCHES_DIR}/${RECIPE_NAME}.recipe"; then
+        apply_nemotron35_spec_patch=1
+    fi
+
     # 1. Drop sgl-kernel source patches into the build context.
     # The Dockerfile COPY steps read from container-build/patches/ and the
     # in-container `patch` invocations are conditionally gated by the
@@ -1315,6 +1343,11 @@ apply_patches() {
     local qwen4exp_source_patches=(
         sglang-qwen4exp-pr36497.patch
     )
+    # Nemotron 3.5 spec source patch (PR #36186 + #35371 + #35496 squashed into
+    # one rebased-onto-v0.5.18 diff) — copied only when the recipe opts in.
+    local nemotron35_spec_source_patches=(
+        sglang-nemotron35-spec-pr36186.patch
+    )
     local patches_to_copy=( "${always_source_patches[@]}" )
     if (( apply_gemma4_mtp_patch )); then
         patches_to_copy+=( "${mtp_source_patches[@]}" )
@@ -1339,6 +1372,9 @@ apply_patches() {
     fi
     if (( apply_qwen4exp_patch )); then
         patches_to_copy+=( "${qwen4exp_source_patches[@]}" )
+    fi
+    if (( apply_nemotron35_spec_patch )); then
+        patches_to_copy+=( "${nemotron35_spec_source_patches[@]}" )
     fi
     # sgl-kernel patch variant: a main-ahead SGLANG_REF (post-v0.5.13) can drift
     # the sgl-kernel CMakeLists out from under the SM121 sgl-kernel patches (e.g.
@@ -1644,6 +1680,25 @@ apply_patches() {
         echo "Qwen4-Exp Dockerfile patched"
     else
         echo "Skipping dockerfile-qwen4exp.patch (recipe does not set APPLY_QWEN4EXP_PR36497=1)"
+    fi
+
+    # 2i. Nemotron 3.5 Lightning speculative decoding (PR #36186 + the DFlash2
+    #     prerequisites #35371/#35496) Dockerfile patch — recipe-gated (see the
+    #     apply_nemotron35_spec_patch determination above). Adds the COPY + RUN
+    #     step that applies sglang-nemotron35-spec-pr36186.patch to the sglang
+    #     source before `uv pip install ./python`. Trailing-context-only, so it
+    #     STACKS after 2c (dsv4), 2f (qwen36) and 2h (qwen4exp) and must run
+    #     AFTER all three.
+    if (( apply_nemotron35_spec_patch )); then
+        echo "Applying dockerfile-nemotron35-spec.patch..."
+        patch --dry-run -p1 < "${PATCHES_DIR}/dockerfile-nemotron35-spec.patch" \
+            || die "Nemotron 3.5 spec Dockerfile patch dry-run failed — regenerate dockerfile-nemotron35-spec.patch"
+        patch -p1 < "${PATCHES_DIR}/dockerfile-nemotron35-spec.patch"
+        grep -q 'sglang-nemotron35-spec-pr36186.patch' container-build/Dockerfile.sglang-nightly \
+            || die "Nemotron 3.5 spec Dockerfile patch verification failed"
+        echo "Nemotron 3.5 spec Dockerfile patched"
+    else
+        echo "Skipping dockerfile-nemotron35-spec.patch (recipe does not set APPLY_NEMOTRON35_SPEC_PR36186=1)"
     fi
 
     # 2g. Floor-pin huggingface_hub (ARG HF_HUB_MIN_VERSION + gated uv pip

@@ -86,6 +86,34 @@ sglang_speculative_dspark_block_size: "{{ sglang_model_profiles[_sglang_active_m
 # for this: point it at a path the pod already sees, e.g. somewhere under
 # /root/.cache/huggingface (the shared JuiceFS mount).
 sglang_speculative_dspark_sps_table_path: "{{ sglang_model_profiles[_sglang_active_model].speculative_dspark_sps_table_path | default('') }}"
+# --- DFLASH-only speculative knob (Nemotron-3.5-Lightning and later) --------
+# DFlash's draft block size = the verify-window length. Empty (the norm) -> SGLang
+# infers it from the draft checkpoint's block_size, and falls back to 16 if that
+# read fails.
+# HARD COUPLING, and note it differs from DSPARK's: DFlash requires
+# speculative_num_draft_tokens == block_size (EQUAL, not block_size + 1) and
+# raises at boot otherwise (arg_groups/speculative_hook.py::_handle_dflash).
+# Since this launcher always passes num_draft_tokens explicitly, overriding the
+# block size here means overriding speculative_num_draft_tokens to the SAME value
+# in the same profile. sglang_instance.yml asserts the pair rather than letting
+# the pod crash-loop.
+sglang_speculative_dflash_block_size: "{{ sglang_model_profiles[_sglang_active_model].speculative_dflash_block_size | default('') }}"
+
+# Attention backend for the DRAFT model during speculative decoding
+# (--speculative-draft-attention-backend). Empty = no flag, which is NOT the
+# same as "no effect": SGLang's per-architecture resolver in
+# arg_groups/overrides.py fills the value in only while it is None, so leaving
+# this empty hands the choice to the resolver, and setting it takes the choice
+# away from the resolver for good.
+# WHY IT EXISTS AS A KNOB: on GB10/SM121 the NemotronH resolver picks the
+# non-sm100 branch (target triton, draft flashinfer, since is_sm100_supported()
+# is major==10 only and GB10 is major 12), but a draft checkpoint that carries
+# attention sinks - the Nemotron-3.5-Lightning DSpark draft has
+# attention_sink_bias true - raises at construction unless this is trtllm_mha.
+# So for that combination the resolver's own default is self-contradictory and
+# the profile has to override it. Independent of attention_backend, which
+# selects the TARGET backend.
+sglang_speculative_draft_attention_backend: "{{ sglang_model_profiles[_sglang_active_model].speculative_draft_attention_backend | default('') }}"
 # Draft model path for EAGLE/EAGLE3. Empty = use model's own MTP heads (NEXTN).
 # For external draft models: set to the HF model ID (e.g. "togethercomputer/Aurora-Spec-Minimax-M2.5").
 sglang_speculative_draft_model_path: "{{ sglang_model_profiles[_sglang_active_model].speculative_draft_model_path | default('') }}"
@@ -131,6 +159,20 @@ sglang_mamba_scheduler_strategy: "{{ sglang_model_profiles[_sglang_active_model]
 # Empty = SGLang default (auto-fit) — no behavior change for models that omit them.
 sglang_mamba_full_memory_ratio: "{{ sglang_model_profiles[_sglang_active_model].mamba_full_memory_ratio | default('') }}"
 sglang_max_mamba_cache_size: "{{ sglang_model_profiles[_sglang_active_model].max_mamba_cache_size | default('') }}"
+
+# SSM-state dtype of the mamba cache -> --mamba-ssm-dtype. Valid: float32,
+# bfloat16, float16. Empty (default) = no flag; SGLang then reads the value from
+# the model config's own mamba_ssm_dtype and falls back to float32.
+# float16 HALVES the per-slot SSM state vs the float32 most NemotronH checkpoints
+# declare, which directly raises the max_mamba_cache_size the auto-fit can afford
+# and therefore the max_running_requests ceiling on hybrid models. It is what the
+# SGLang cookbook's DGX Spark cells for Nemotron-3.5-Lightning pass.
+# CAUTION: this shares its name with SGLang's OWN env var (server_args sets
+# SGLANG_MAMBA_SSM_DTYPE from the flag, and configs/mamba_utils.py reads it
+# directly). That is deliberate - the two agree when set - but it is also why
+# launch.sh UNSETS the variable when it is empty: an empty string is not None,
+# so mamba_utils would log "Invalid mamba_ssm_dtype ''" on every pod otherwise.
+sglang_mamba_ssm_dtype: "{{ sglang_model_profiles[_sglang_active_model].mamba_ssm_dtype | default('') }}"
 
 # Enable MTP spec_v2 — required alongside mamba_scheduler_strategy=extra_buffer
 # for speculative decoding on hybrid-attention models. Sets SGLANG_ENABLE_SPEC_V2=1.
