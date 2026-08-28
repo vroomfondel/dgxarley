@@ -4,6 +4,14 @@ nvidia_gpu_timeslice_replicas: 5
 
 # NVIDIA DCGM exporter — per-GPU Prometheus metrics. Multi-arch (arm64 OK on GB10).
 # Tag schema: <DCGM-version>-<exporter-version>-<os>. Verified arm64 manifest present.
+#
+# 2026-08-28: switched from the -ubuntu22.04 to the -distroless variant on the
+# 4.5.2-4.8.1 -> 4.6.0-4.8.3 bump. NVIDIA STOPPED publishing -ubuntu22.04 after
+# 4.5.2-4.8.1 (last ubuntu tag; 4.5.3-4.8.2 and 4.6.0-4.8.3 are distroless-only),
+# so staying on ubuntu means freezing the exporter. Safe here: the DaemonSet
+# overrides no command/args and both probes are httpGet, so nothing needs a
+# shell. arm64 manifest verified present for 4.6.0-4.8.3-distroless.
+#
 # Check newer: curl -sH "Authorization: Bearer $(curl -s 'https://nvcr.io/proxy_auth?scope=repository:nvidia/k8s/dcgm-exporter:pull' | jq -r .token)" \
-#   https://nvcr.io/v2/nvidia/k8s/dcgm-exporter/tags/list | jq '.tags[] | select(test("ubuntu22.04$"))'
-dcgm_exporter_image: "nvcr.io/nvidia/k8s/dcgm-exporter:4.5.2-4.8.1-ubuntu22.04"
+#   https://nvcr.io/v2/nvidia/k8s/dcgm-exporter/tags/list | jq '.tags[] | select(test("distroless$"))'
+dcgm_exporter_image: "nvcr.io/nvidia/k8s/dcgm-exporter:4.6.0-4.8.3-distroless"

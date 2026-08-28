@@ -1,10 +1,12 @@
 ---
 # nfd.yml
-# Node Feature Discovery v0.18.3 — auto-labels nodes with hardware capabilities
+# Node Feature Discovery v0.19.0 — auto-labels nodes with hardware capabilities
 # (CPU family, GPU vendor/device, instruction sets, etc.)
 # https://github.com/kubernetes-sigs/node-feature-discovery
 #
-# To upgrade: kubectl kustomize "https://github.com/kubernetes-sigs/node-feature-discovery/deployment/overlays/default?ref=v<VERSION>" > roles/kubectlstuff/files/nfd_node-feature-discovery.yml
+# To upgrade: kubectl kustomize "https://github.com/kubernetes-sigs/node-feature-discovery/deployment/overlays/default?ref=v<VERSION>" > roles/k8s_infra/files/nfd_node-feature-discovery.yml
+# NOTE: re-apply the local nfd-worker cpu-request patch (5m -> 20m) after every
+# re-render; see the header of that file.
 
 - name: Deploy Node Feature Discovery
   kubernetes.core.k8s:

@@ -1,7 +1,10 @@
-# Node Feature Discovery v0.18.3
-# Generated with: kubectl kustomize "https://github.com/kubernetes-sigs/node-feature-discovery/deployment/overlays/default?ref=v0.18.3"
+# Node Feature Discovery v0.19.0
+# Generated with: kubectl kustomize "https://github.com/kubernetes-sigs/node-feature-discovery/deployment/overlays/default?ref=v0.19.0"
 # https://github.com/kubernetes-sigs/node-feature-discovery
-# kubectl kustomize "https://github.com/kubernetes-sigs/node-feature-discovery/deployment/overlays/default?ref=v0.18.3" > roles/k8s_infra/files/nfd_node-feature-discovery.yml
+# kubectl kustomize "https://github.com/kubernetes-sigs/node-feature-discovery/deployment/overlays/default?ref=v0.19.0" > roles/k8s_infra/files/nfd_node-feature-discovery.yml
+#
+# LOCAL PATCH (re-apply on every re-render): nfd-worker resources.requests.cpu
+# raised from the upstream 5m to 20m.
 ---
 apiVersion: v1
 kind: Namespace
@@ -849,12 +852,6 @@ rules:
   - list
   - watch
 - apiGroups:
-  - ""
-  resources:
-  - nodes/proxy
-  verbs:
-  - get
-- apiGroups:
   - topology.node.k8s.io
   resources:
   - noderesourcetopologies
@@ -904,7 +901,7 @@ rules:
 - apiGroups:
   - nfd.k8s-sigs.io
   resources:
-  - nodefeaturegroup/status
+  - nodefeaturegroups/status
   verbs:
   - patch
   - update
@@ -1023,9 +1020,15 @@ data:
     #  labelWhiteList:
     #  noPublish: false
     #  noOwnerRefs: false
+    #  # Select from node, pod and ds. Use [] to disable owner references.
+    #  ownerRefs: [pod, ds]
     #  sleepInterval: 60s
     #  featureSources: [all]
     #  labelSources: [all]
+    #  # Discover these features but omit them from the published NodeFeature object
+    #  # to reduce its size. Exact key or '*' prefix (e.g. pci.device, pci.*).
+    #  # Only for features no NodeFeatureRule/NodeFeatureGroup consumes.
+    #  noPublishFeatures: []
     #  klog:
     #    addDirHeader: false
     #    alsologtostderr: false
@@ -1135,6 +1138,9 @@ data:
     #          matchExpressions:
     #            e1000e: {op: Exists}
     #        - feature: kernel.selinux
+    #          matchExpressions:
+    #            enabled: {op: IsFalse}
+    #        - feature: kernel.kvm
     #          matchExpressions:
     #            enabled: {op: IsFalse}
     #        - feature: kernel.version
@@ -1261,7 +1267,7 @@ data:
     #          matchName: {op: In, value: ["SWAP", "X86", "ARM"]}
 kind: ConfigMap
 metadata:
-  name: nfd-worker-conf-c2mbm9t788
+  name: nfd-worker-conf-m45f8m9fm8
   namespace: node-feature-discovery
 ---
 apiVersion: apps/v1
@@ -1296,7 +1302,7 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.uid
-        image: registry.k8s.io/nfd/node-feature-discovery:v0.18.3
+        image: registry.k8s.io/nfd/node-feature-discovery:v0.19.0
         imagePullPolicy: IfNotPresent
         livenessProbe:
           httpGet:
@@ -1314,7 +1320,6 @@ spec:
           initialDelaySeconds: 5
         resources:
           limits:
-            cpu: 20m
             memory: 1Gi
           requests:
             cpu: 10m
@@ -1327,7 +1332,7 @@ spec:
           readOnlyRootFilesystem: true
           runAsNonRoot: true
       dnsPolicy: ClusterFirstWithHostNet
-      serviceAccount: nfd-gc
+      serviceAccountName: nfd-gc
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -1372,7 +1377,7 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.uid
-        image: registry.k8s.io/nfd/node-feature-discovery:v0.18.3
+        image: registry.k8s.io/nfd/node-feature-discovery:v0.19.0
         imagePullPolicy: IfNotPresent
         livenessProbe:
           httpGet:
@@ -1389,7 +1394,6 @@ spec:
             port: http
         resources:
           limits:
-            cpu: 300m
             memory: 4Gi
           requests:
             cpu: 100m
@@ -1406,7 +1410,7 @@ spec:
           name: nfd-master-conf
           readOnly: true
       enableServiceLinks: false
-      serviceAccount: nfd-master
+      serviceAccountName: nfd-master
       tolerations:
       - effect: NoSchedule
         key: node-role.kubernetes.io/control-plane
@@ -1449,7 +1453,7 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.uid
-        image: registry.k8s.io/nfd/node-feature-discovery:v0.18.3
+        image: registry.k8s.io/nfd/node-feature-discovery:v0.19.0
         imagePullPolicy: IfNotPresent
         livenessProbe:
           httpGet:
@@ -1470,7 +1474,6 @@ spec:
           periodSeconds: 10
         resources:
           limits:
-            cpu: 200m
             memory: 512Mi
           requests:
             cpu: 20m
@@ -1508,7 +1511,7 @@ spec:
           name: nfd-worker-conf
           readOnly: true
       dnsPolicy: ClusterFirstWithHostNet
-      serviceAccount: nfd-worker
+      serviceAccountName: nfd-worker
       volumes:
       - hostPath:
           path: /boot
@@ -1532,5 +1535,5 @@ spec:
           path: /etc/kubernetes/node-feature-discovery/features.d/
         name: features-d
       - configMap:
-          name: nfd-worker-conf-c2mbm9t788
+          name: nfd-worker-conf-m45f8m9fm8
         name: nfd-worker-conf

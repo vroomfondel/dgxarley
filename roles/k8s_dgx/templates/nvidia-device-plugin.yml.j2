@@ -44,7 +44,7 @@ spec:
       containers:
         - name: nvidia-device-plugin-ctr
           # https://github.com/NVIDIA/k8s-device-plugin
-          image: nvcr.io/nvidia/k8s-device-plugin:v0.18.2
+          image: nvcr.io/nvidia/k8s-device-plugin:v0.20.0
           args:
             - "--device-discovery-strategy=nvml"
             - "--device-list-strategy=cdi-cri"
