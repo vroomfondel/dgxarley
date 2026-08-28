@@ -2,7 +2,7 @@
 # - certmanager.yml
 
 # install cert-manager
-# wget https://github.com/cert-manager/cert-manager/releases/download/v1.19.2/cert-manager.yaml -O cert-manager_cert-manager.yml
+# wget https://github.com/cert-manager/cert-manager/releases/download/v1.21.1/cert-manager.yaml -O cert-manager_cert-manager.yml
 
 - name: Attempt to create cert-manager namespace
   kubernetes.core.k8s:
