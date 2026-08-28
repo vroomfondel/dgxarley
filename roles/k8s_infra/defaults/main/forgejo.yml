@@ -30,6 +30,8 @@ forgejo:
     email: "admin@example.com"
     password: "changeme"
   images:
-    server: { repo: "codeberg.org/forgejo/forgejo", tag: "15.0.3" }
+    # 16.0.3 is out, but X->X+1 must be walked incrementally (see the
+    # major-upgrade rule in CLAUDE.md), so this stays on the 15 series.
+    server: { repo: "codeberg.org/forgejo/forgejo", tag: "15.0.7" }
   resources:
     server: { memory_request: "256Mi", memory_limit: "1Gi" }
