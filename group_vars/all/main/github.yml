@@ -1,0 +1,12 @@
+---
+# Public dummy/example values. Real values live in group_vars/all/vault/ (git-crypt).
+# GitHub API token, used only to lift the ANONYMOUS rate limit on release-tag
+# lookups (currently: rustfs-cli in roles/k3sserver/tasks/rustfs_client.yml).
+# Empty string = no Authorization header is sent, i.e. the anonymous 60 req/h
+# per source IP. That budget is shared with every other tool on this control
+# node and is routinely exhausted; a token raises it to 5000 req/h.
+# A classic PAT with NO scopes (or a fine-grained token with public-repo read)
+# is sufficient: these lookups only read public releases.
+# Real value goes into group_vars/all/vault/github.yml as:
+#   github_api_token: "ghp_..."
+github_api_token: ""
