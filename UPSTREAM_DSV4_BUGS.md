@@ -641,6 +641,78 @@ low-quality/LLM-generated; a 2026-08-18 note from nvpohanh on host-mem-cache
 reuse and prefill chunk batching), all still B200/GB300/MegaMoE topics, no
 SM120/SM121 mention, still informational only. #32750 idle since 2026-08-06.
 #23602 roadmap idle since 2026-08-13. No other tracked ref changed.
+**Update 2026-08-28 (SGLang v0.5.18 released 2026-08-22, contains PR #34926,
+Wall 7 migration now acute; new finding on Walls 2/4/5 auto-routing since
+v0.5.13).** SGLang **v0.5.18** released 2026-08-22 (tag cut
+2026-08-20T14:29:24-07:00, 710 PRs since v0.5.17) is now the latest release.
+Confirmed via `git merge-base --is-ancestor` on the local sglang clone that
+commit `bc312d18` (PR #34926, "Clean deprecated DeepSeek V4 Environs",
+merged 2026-08-17) is an ancestor of the v0.5.18 tag, and direct grep of
+`environ.py` at that tag confirms `SGLANG_TOPK_TRANSFORM_512_TORCH` is gone.
+**Wall 7's env-var migration is therefore acute now, not forward-looking**:
+at the next image bump past v0.5.18, the profile flag must switch from
+setting `SGLANG_TOPK_TRANSFORM_512_TORCH=1` to passing
+`--dsa-topk-backend=torch` as a server arg (`layers/attention/dsv4/indexer.py`
+now gates on `self.dsa_topk_backend.is_torch()`). Not yet urgent for the
+currently-deployed image (`xomoxcc/dgx-spark-sglang:0.5.17-sm121`, which
+predates this commit and still honors the env var). Walls 2/4/5 env vars
+(`SGLANG_OPT_FP8_WO_A_GEMM`, `SGLANG_OPT_DEEPGEMM_HC_PRENORM`,
+`SGLANG_FP8_PAGED_MQA_LOGITS_TORCH`) are confirmed present, unchanged, in
+`environ.py` at the v0.5.18 tag, surviving both #34926 and PR #35060 ("Clean
+up environ.py: remove dead env vars, unify deprecation handling", merged
+2026-08-17, also confirmed an ancestor of v0.5.18).
+
+**Correction to §8 (2026-06-14 conclusion on Walls 2/4/5 auto-routing).**
+Direct source inspection of `server_args.py::_handle_model_specific_adjustments()`
+(called unconditionally during server-arg postprocessing) shows that for
+`model_arch in ["DeepseekV4ForCausalLM"]` AND `is_sm120_supported()`, SGLang
+unconditionally sets `envs.SGLANG_OPT_FP8_WO_A_GEMM.set(False)` (Wall 2),
+`envs.SGLANG_OPT_DEEPGEMM_HC_PRENORM.set(False)` (Wall 4), and
+`envs.SGLANG_FP8_PAGED_MQA_LOGITS_TORCH.set(True)` (Wall 5).
+`is_sm120_supported()` (`utils/common.py`) checks
+`device_capability_majors=[12]` only, a major-only check that also matches
+SM121/GB10. Git blame shows this block has been present, byte-identical
+(aside from an unrelated `SGLANG_OPT_FUSE_MHC_POST_PRE` guard added
+2026-08-14), since **PR #24692 itself** (commit `524ba10e`, merged
+2026-06-01, in v0.5.13 and every release since, including the
+currently-deployed `0.5.17-sm121` image). This means §8's 2026-06-14
+statements "kein Auto-Routing für SM121 in #24692" (Wall 4) and
+"Env-Var-Routing unverändert" (Wall 5) were incomplete: the auto-routing
+exists and covers SM121 via the major-only check; §8's table text is left as
+originally written above, this note is the correction. Practical effect: our
+manual profile flags (`opt_fp8_wo_a_gemm: false`, `opt_deepgemm_hc_prenorm:
+false`, `fp8_paged_mqa_logits_torch: true`) are very likely redundant since
+v0.5.13 (upstream forces the identical values), not harmful since the values
+match. Recommend verifying on a future test boot whether removing the manual
+flags changes anything (expect no change); until verified, keep them as
+belt-and-suspenders.
+
+**New, hardware-specific: PR #34019 ("[SM12x] Default the fused MHC
+post+pre path on", merged 2026-08-14) plus PR #35214 ("[DSV4] Turn on mhc
+post pre fusion by default", merged 2026-08-18), both in v0.5.18.** These
+default `SGLANG_OPT_FUSE_MHC_POST_PRE=True` on SM120/SM121 (guarded by
+`is_set()`, so an explicit override still wins), replacing a previously
+unfused fp32 SIMT cuBLAS fallback (`cutlass_80_simt_sgemm`, no tensor cores)
+for the `hc_pre` GEMM with a fused TileLang kernel. PR #34019's own
+benchmark, run on **2x DGX Spark (GB10/sm_121, TP=2)** with
+`deepseek-ai/DeepSeek-V4-Flash-0731` plus DSPARK, measured about -7.3ms/step
+from this PR alone (9.54ms to 0.86ms on the fp32 SIMT path), and combined
+with an unrelated FP8 wo_a change (#34018) an overall decode step drop from
+70.31ms to 63.19ms (-10.1%), with GSM8K accuracy unaffected (0.970 to 0.980
+at n=200, within noise). Not bit-identical at temperature 0 (split-K
+reduction changes accumulation order); set `SGLANG_OPT_FUSE_MHC_POST_PRE=0`
+for bit-exact reproduction against the old default. Directly relevant to
+this cluster once we move to a v0.5.18+ image; not yet tested here.
+
+**Issue tracking, re-verified 2026-08-28:** #26324 (closed 2026-08-15,
+stale-bot) had no new activity since the 2026-08-21 comment, still closed
+and unresolved. #33636 gained 3 more comments 2026-08-18 through 2026-08-25
+(nvpohanh: DSV4 GB300-disagg agentic-workload optimization items, plus a
+list of PRs #35944/#35947/#33672), still exclusively B200/GB300 topics, no
+SM120/SM121 mention, still informational only. #32750 idle since 2026-08-06.
+#23602 roadmap idle since 2026-08-13. New model in v0.5.18's cookbook,
+DeepSeek-V4-Pro-0813 (#34809), a Pro-variant refresh, not re-evaluated for
+capacity here.
 
 ---
 
@@ -734,5 +806,5 @@ einem v0.5.13-Image ändert.
   size `dgx_swap_size`); kubelet policy `roles/k3sserver/templates/etc_rancher_k3s_kubelet-config.yaml.j2`
   (`failSwapOn: false`, `swapBehavior: LimitedSwap`)
 - Active model: `group_vars/all/main/sglang.yml` (`sglang_model`)
-- Image: `xomoxcc/dgx-spark-sglang:0.5.14-sm121` — recipe `scripts/patches/sglang-0.5.14-sm121.recipe`
+- Image: `xomoxcc/dgx-spark-sglang:0.5.17-sm121`, recipe `scripts/patches/sglang-0.5.17-sm121.recipe` (updated 2026-08-28; was stale at 0.5.14)
 - Release notes: see the 2026-06-29 block at the top of this file; v0.5.16 (2026-07-25) release notes summarized in the 2026-07-28 block
