@@ -415,6 +415,13 @@ iptables -t mangle -A HTFWMARK_OUT -j CONNMARK --restore-mark
 # `ip rule add` was undone behind our back and the return path fell back to the main table.
 # Do NOT re-add them here: the `ip rule del` would delete the netplan-managed rule and
 # replace it with one at a different priority on every nightly run.
+
+# ip rule: fwmark → routing table
+{% for rule in fwmark_rules %}
+# ip rule del fwmark {{ rule.mark }} table {{ rule.table }} 2>/dev/null || true
+# ip rule add fwmark {{ rule.mark }} table {{ rule.table }}
+{% endfor %}
+
 {% endif %}
 
 exit 0
