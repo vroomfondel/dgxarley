@@ -12,8 +12,9 @@ ovs_vlan_extra:
         via: 192.168.124.1
         table: 124
 fwmark_routing:
+  # mark is DECIMAL: it is also rendered into the netplan routing-policy, which rejects "0x.." strings.
   - iface: "br0.124"
-    mark: "0x65"
+    mark: 101
     inbound_src: "192.168.122.0/24"
     inbound_dst: "192.168.124.100"
     table: 124

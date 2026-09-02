@@ -408,11 +408,13 @@ iptables -t mangle -I OUTPUT 1 -j HTFWMARK_OUT
 
 iptables -t mangle -A HTFWMARK_OUT -j CONNMARK --restore-mark
 
-# ip rule: fwmark → routing table
-{% for rule in fwmark_rules %}
-ip rule del fwmark {{ rule.mark }} table {{ rule.table }} 2>/dev/null || true
-ip rule add fwmark {{ rule.mark }} table {{ rule.table }}
-{% endfor %}
+# NOTE: the matching `ip rule add fwmark <mark> table <table>` rules used to be created
+# here. They are now declared as netplan `routing-policy:` entries (rendered from the same
+# fwmark_routing data by etc_netplan_01-ovs-vlans.yaml.j2). Reason: a netplan/networkd
+# reconfigure silently drops policy rules it does not know about, so the imperative
+# `ip rule add` was undone behind our back and the return path fell back to the main table.
+# Do NOT re-add them here: the `ip rule del` would delete the netplan-managed rule and
+# replace it with one at a different priority on every nightly run.
 {% endif %}
 
 exit 0

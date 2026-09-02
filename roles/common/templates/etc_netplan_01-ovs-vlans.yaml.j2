@@ -60,9 +60,20 @@ network:
 {% endfor -%}
 {% endif -%}
 {% endif -%}
-{% if vlan_extra.routing_policy is defined %}
+{# fwmark return-path rules, from both supported locations (same two sources as iptables.sh.j2):
+   ovs_vlan_extra[<id>].fwmark_routing and the flat top-level fwmark_routing list.
+   These used to be installed imperatively by `ip rule add` at the end of iptables.sh;
+   they now live here so a netplan/networkd reconfigure cannot drop them again. #}
+{% set _fwmark_policies = [] %}
+{% for rule in vlan_extra.fwmark_routing | default([]) %}
+{% set _ = _fwmark_policies.append(rule) %}
+{% endfor %}
+{% for rule in fwmark_routing | default([]) if rule.iface | default('') == ovs_bridge_name ~ '.' ~ vlan.id %}
+{% set _ = _fwmark_policies.append(rule) %}
+{% endfor %}
+{% if vlan_extra.routing_policy is defined or _fwmark_policies | length > 0 %}
       routing-policy:
-{% for policy in vlan_extra.routing_policy %}
+{% for policy in vlan_extra.routing_policy | default([]) %}
         - from: {{ policy.from }}
 {% if policy.to is defined %}
           to: {{ policy.to }}
@@ -71,6 +82,15 @@ network:
 {% if policy.priority is defined %}
           priority: {{ policy.priority }}
 {% endif -%}
+{% endfor -%}
+{% for rule in _fwmark_policies %}
+{# netplan rejects a routing-policy entry without from/to, so default `from` to the local
+   VLAN address (inbound_dst): replies on a marked connection carry exactly that source. #}
+        - from: {{ rule.rule_from | default(rule.inbound_dst ~ ('' if '/' in rule.inbound_dst else '/32'), true) }}
+{# `mark` must be a decimal unsigned int here; netplan rejects a 0x-prefixed string. #}
+          mark: {{ rule.mark }}
+          table: {{ rule.table }}
+          priority: {{ rule.priority | default(30000 + vlan.id, true) }}
 {% endfor -%}
 {% endif -%}
 {% if vlan.ipv6_privacy is defined %}
