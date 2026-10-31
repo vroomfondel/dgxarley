@@ -19,10 +19,81 @@
 # internet/LAN egress, and Traefik-only ingress.
 hermes_network_policies_enabled: false
 
-# Skill directories (absolute or ~) installed for every user with skills_enabled; the basename is the skill name.
-hermes_skill_dirs: []
-# roles.yaml (`roles: {<role>: [<skill dir relative to the file>, ...]}`); users with skills_role get those skills in addition.
-hermes_skill_roles_file: ""
+# === Hermes skills ===
+# Users with `skills_enabled: true` get skills installed at pod start by the init-skills initContainer into
+# $HERMES_HOME/skills/<name> and into the skills dir of every profile ($HERMES_HOME/profiles/<p>/skills/<name>).
+# Where the skills come from is decided by the overlay: hermes_skill_sources lists the sources, they are applied in
+# order and a later source wins when two provide the same skill name. Nothing here knows about a concrete package or
+# server. STANDALONE vars (not inside the hermes: dict) to avoid the hash_behaviour=replace trap.
+#
+# What a user gets from one source:
+#   * the skills listed in the source's `base` (all users with skills_enabled), plus
+#   * the skills of the user's `skills_role` that the source provides: names from hermes_skill_roles[<role>] (matched
+#     by skill name) and, for `command` sources with `roles_file`, the entries of that file's role (see below).
+# `base` left out = every skill the source offers. `base: []` = nothing except role skills.
+# Every name in `base`/`skills` must exist in its source; a role name must exist in at least one source (otherwise
+# the playbook, or for command/wellknown the init container, fails).
+#
+# Fields of all sources: type (required), name (optional label, [a-z0-9]{1,10}, unique, default s<index>), base,
+# skills (optional list limiting what the source offers; default: everything it has).
+#
+#   type: dir        Directory on the Ansible controller (path, ~ is expanded). Each subdirectory containing a
+#                    SKILL.md is a skill (name = directory name). Uploaded as one ConfigMap per skill and user-needed
+#                    skill (hermes-skill-<source>-<skill>, below ~200 kB each); the pod rolls when content changes.
+#     - {type: dir, path: "~/skills-checkout/skills", skills: [foo], base: [foo]}
+#   type: files      Like dir, but `path` is relative to the inventory directory (fallback: playbook_dir), e.g. the
+#                    overlay repo itself (`files/hermes_skills`); an absolute path is used as is. With
+#                    `template: true` files ending in .j2 are rendered with Jinja (all variables available) and the
+#                    .j2 suffix is cut; other files are copied verbatim.
+#     - {type: files, path: "files/hermes_skills", template: true}
+#   type: command   Own initContainer init-skills-<name> per source (before the merge step) that runs an arbitrary
+#                    shell command, e.g. to install a package from a private index and let it write the skills.
+#                    Fields: image (required), image_pull_policy (optional), command (required, run as
+#                    `sh -c "set -eu; <command>"`; `$(` is escaped for Kubernetes), skills_dir (required, where the
+#                    command leaves the skills: every directory below it with a SKILL.md is a skill, name = basename;
+#                    put it under /work/<something>, /work is an emptyDir shared by all init containers of the pod),
+#                    env (optional list of {name, value}, no secrets), env_from_secret (optional name of an existing
+#                    Secret in the hermes namespace, referenced via envFrom, never rendered), roles_file (optional,
+#                    relative to skills_dir: `roles: {<role>: [<skill dir relative to skills_dir>, ...]}`; the skills
+#                    of the user's role are installed in addition; entries bypass `skills`). The merge container only
+#                    has Python's stdlib, so roles_file must stay within a small YAML subset (a `roles:` key, one
+#                    `<role>:` key per role, `- <path>` list items, # comments) or be a .json file.
+#     - type: command
+#       name: demo
+#       image: "python:3.14-slim"
+#       command: "pip install --no-cache-dir --index-url https://index.example.com/ some-package==1.2.3 && some-tool prepare --workdir /work/demo"
+#       skills_dir: /work/demo/skills
+#       roles_file: roles.yaml
+#       base: [some-skill]
+#   type: wellknown Agent Skills Discovery: the skills are published by a server (e.g. a krag server) under a
+#                    well-known URI (RFC 8615, prefix /.well-known/) in the format of the draft "Agent Skills Discovery
+#                    via Well-Known URIs" 0.2.0 (Cloudflare); schema https://schemas.agentskills.io/discovery/0.2.0/schema.json
+#                    (the `$schema` of such an index). URLs:
+#                      index_url  https://<host>/.well-known/agent-skills/index.json
+#                      SKILL.md   https://<host>/.well-known/agent-skills/<name>/SKILL.md
+#                      reference  https://<host>/.well-known/agent-skills/<name>/reference/<file>.md
+#                    The index lists the skills; `url` may be absolute or relative (resolved against the index URL):
+#                      {"$schema": "https://schemas.agentskills.io/discovery/0.2.0/schema.json",
+#                       "skills": [{"name": "my-skill", "type": "skill-md", "description": "What the skill does.",
+#                                   "url": "https://skills.example.org/.well-known/agent-skills/my-skill/SKILL.md",
+#                                   "digest": "sha256:<hex>"}]}
+#                    The init container loads the index, then per selected skill SKILL.md (its sha256 must equal
+#                    `digest`) and the files reference/<file>.md that SKILL.md links to (found from those links; each
+#                    is checked against the response ETag when that is a quoted "sha256:<hex>"). Any mismatch fails the
+#                    pod start; nothing is installed from a failed source. Plain Python stdlib, no packages needed.
+#                    `skills` (optional) limits the index entries that may be fetched.
+#     - {type: wellknown, index_url: "https://skills.example.org/.well-known/agent-skills/index.json", skills: [my-skill], base: [my-skill]}
+#     - {type: wellknown, index_url: "http://<service>.<namespace>.svc.cluster.local:<port>/.well-known/agent-skills/index.json", skills: [my-skill], base: [my-skill]}
+#
+# Pods fetch command and wellknown sources at every start (initContainers), so the pod must reach whatever they
+# download; these skills are NOT re-fetched while a pod keeps running. A change of a source definition rolls the pod.
+hermes_skill_sources: []
+# Role -> skill names (matched against the skills of all sources), maintained in the overlay. Users pick one role with
+# skills_role. Roles may also come from a command source's roles_file.
+hermes_skill_roles: {}
+# Image of the merging init-skills initContainer (python3 stdlib for the wellknown fetch, the role evaluation and the
+# copy; runs as root to chown the copies to the user's uid/gid). command sources bring their own image.
+hermes_skills_image: "python:3.14-slim"
 
 # Global (non-secret) Hermes config — nested dict. Defined ONLY here (single
 # file) so it sidesteps the hash_behaviour=replace trap that forces seafile:/

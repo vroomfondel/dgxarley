@@ -1,10 +1,15 @@
-{% for s in _hermes_skills_by_user[item.username].slugs %}
-- name: "skill-{{ s }}"
+{#- Volumes of the init-skills containers: ConfigMaps of the dir/files skills this user gets, plus the shared /work emptyDir. -#}
+- name: skills-work
+  emptyDir: {}
+{% for s in _skills.spec.sources if s.type in ['dir', 'files'] %}
+{% for n in s.skills %}
+- name: "skill-{{ s.name }}-{{ n }}"
   configMap:
-    name: "hermes-skill-{{ s }}"
+    name: "hermes-skill-{{ s.name }}-{{ n }}"
     items:
-{% for f in _hermes_skill_catalog[s].files %}
-      - key: {{ (f | replace('/', '__')) | to_json }}
-        path: {{ f | to_json }}
+{% for f in _hermes_skill_catalog[s.name ~ '-' ~ n].files %}
+      - key: {{ (f.dest | replace('/', '__')) | to_json }}
+        path: {{ f.dest | to_json }}
+{% endfor %}
 {% endfor %}
 {% endfor %}

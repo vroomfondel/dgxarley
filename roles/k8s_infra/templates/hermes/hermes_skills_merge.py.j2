@@ -1,0 +1,259 @@
+{% raw %}
+# init-skills: merges the skill sources of one user and installs them into $HERMES_HOME/skills and every profile.
+# Python stdlib only. Input: env SKILLS_SPEC (JSON, rendered by Ansible), HERMES_HOME; no secrets are read or printed.
+import hashlib
+import json
+import os
+import re
+import shutil
+import sys
+import urllib.error
+import urllib.request
+from urllib.parse import urljoin
+
+STAGE = "/tmp/skills-stage"
+SRC = "/tmp/skills-src"
+NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+REFERENCE = re.compile(r"reference/([A-Za-z0-9_][A-Za-z0-9_.-]*\.md)")
+DIGEST = re.compile(r"sha256:([0-9a-f]{64})")
+
+spec = json.loads(os.environ["SKILLS_SPEC"])
+home = os.environ["HERMES_HOME"]
+role = spec["role"]
+role_names = spec["role_names"]
+role_known = bool(spec["role_in_map"])
+staged = {}
+
+
+def log(msg):
+    print("init-skills: " + msg, flush=True)
+
+
+def die(msg):
+    print("init-skills: ERROR: " + msg, file=sys.stderr, flush=True)
+    sys.exit(1)
+
+
+def put(name, src_dir, origin):
+    """Copies a skill directory into the stage; a later source replaces an earlier copy."""
+    if not os.path.isfile(os.path.join(src_dir, "SKILL.md")):
+        die("%s: %s has no SKILL.md" % (origin, src_dir))
+    dest = os.path.join(STAGE, name)
+    if name in staged:
+        log("  %s from %s replaces the copy from %s" % (name, origin, staged[name]))
+    shutil.rmtree(dest, ignore_errors=True)
+    shutil.copytree(src_dir, dest, ignore=shutil.ignore_patterns("..*"))
+    staged[name] = origin
+    log("  staged %s (%s)" % (name, origin))
+
+
+def select(src, offered):
+    """offered: skill name -> location. Returns the selected names: base (default all) plus the role names offered."""
+    only = src.get("skills")
+    if only is not None:
+        for n in only:
+            if n not in offered:
+                die("source %s offers no skill %s" % (src["name"], n))
+        offered = {n: offered[n] for n in only}
+    base = src.get("base")
+    names = list(offered) if base is None else list(base)
+    for n in names:
+        if n not in offered:
+            die("source %s offers no skill %s (base)" % (src["name"], n))
+    for n in role_names:
+        if n in offered and n not in names:
+            names.append(n)
+    return names, offered
+
+
+def discover(root):
+    """Every directory below root with a SKILL.md: skill name -> relative path (None when the name is ambiguous)."""
+    found = {}
+    for cur, dirs, files in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        if "SKILL.md" in files and cur != root:
+            found.setdefault(os.path.basename(cur), []).append(os.path.relpath(cur, root))
+    out = {}
+    for n, rels in found.items():
+        out[n] = rels[0] if len(rels) == 1 else (n if n in rels else None)
+    return out
+
+
+def read_roles(path):
+    """Reads roles from a .json file or from the YAML subset `roles:` / `<role>:` / `- <path>` (comments allowed)."""
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    if path.endswith(".json"):
+        return json.loads(text)["roles"]
+    roles = {}
+    current = None
+    seen_roles = False
+    for no, raw in enumerate(text.splitlines(), 1):
+        line = re.sub(r"(^|\s)#.*$", "", raw).rstrip()
+        item = line.strip()
+        if not item or item == "---":
+            continue
+        if not seen_roles:
+            if item != "roles:":
+                die("%s:%d: expected 'roles:'" % (path, no))
+            seen_roles = True
+        elif item.startswith("-"):
+            if current is None:
+                die("%s:%d: list item outside of a role" % (path, no))
+            roles[current].append(item[1:].strip().strip("'\""))
+        elif item.endswith(":") or item.endswith(": []"):
+            current = item.split(":")[0].strip().strip("'\"")
+            roles[current] = []
+        else:
+            die("%s:%d: unsupported YAML (only roles / <role>: / - <path> is understood; use a .json file otherwise)" % (path, no))
+    return roles
+
+
+def do_dir(src):
+    for n in src["skills"]:
+        put(n, "/seed-skills/%s/%s" % (src["name"], n), "%s:%s" % (src["type"], src["name"]))
+
+
+def do_command(src):
+    global role_known
+    root = src["skills_dir"]
+    if not os.path.isdir(root):
+        die("source %s: skills_dir %s does not exist (did the init-skills-%s container run?)" % (src["name"], root, src["name"]))
+    found = discover(root)
+    log("  found %d skills below %s" % (len(found), root))
+    for n, rel in found.items():
+        if rel is None:
+            log("  note: skill name %s is ambiguous below %s" % (n, root))
+    names, offered = select(src, found)
+    entries = {}
+    for n in names:
+        if offered[n] is None:
+            die("source %s: skill name %s is ambiguous below %s" % (src["name"], n, root))
+        entries[n] = offered[n]
+    if src.get("roles_file") and role:
+        path = os.path.join(root, src["roles_file"])
+        if not os.path.isfile(path):
+            die("source %s: roles_file %s does not exist" % (src["name"], path))
+        roles = read_roles(path)
+        if role in roles:
+            role_known = True
+            for rel in roles[role]:
+                entries[os.path.basename(rel.rstrip("/"))] = rel.rstrip("/")
+    for n, rel in entries.items():
+        put(n, os.path.join(root, rel), "command:%s" % src["name"])
+
+
+def http_get(url):
+    if not url.startswith(("http://", "https://")):
+        die("refusing non-http URL %s" % url)
+    log("  GET " + url)
+    try:
+        with urllib.request.urlopen(url, timeout=30) as resp:
+            return resp.read(), resp.headers
+    except (urllib.error.URLError, OSError) as exc:
+        die("%s: %s" % (url, exc))
+
+
+def do_wellknown(src):
+    index_url = src["index_url"]
+    body, _ = http_get(index_url)
+    try:
+        index = json.loads(body.decode("utf-8"))
+    except ValueError:
+        die("%s: not valid JSON" % index_url)
+    if not isinstance(index, dict) or not isinstance(index.get("skills"), list):
+        die("%s: index without a 'skills' list" % index_url)
+    entries = {i["name"]: i for i in index["skills"] if isinstance(i, dict) and isinstance(i.get("name"), str)}
+    names, _ = select(src, {n: n for n in entries})
+    for n in names:
+        entry = entries[n]
+        if not NAME.fullmatch(n):
+            die("%s: unsafe skill name %r" % (index_url, n))
+        url, digest = entry.get("url"), entry.get("digest")
+        if not isinstance(url, str) or not isinstance(digest, str):
+            die("%s: entry %s has no url or digest" % (index_url, n))
+        m = DIGEST.fullmatch(digest.strip())
+        if m is None:
+            die("%s: entry %s has an unknown digest format" % (index_url, n))
+        skill_url = urljoin(index_url, url)
+        skill, _ = http_get(skill_url)
+        got = hashlib.sha256(skill).hexdigest()
+        if got != m.group(1):
+            die("digest of %s differs: index sha256:%s, downloaded sha256:%s" % (skill_url, m.group(1), got))
+        log("  %s: SKILL.md sha256 verified (%s)" % (n, got[:12]))
+        files = {"SKILL.md": skill}
+        pending = [skill]
+        while pending:
+            text = pending.pop().decode("utf-8", errors="replace")
+            for ref in sorted(set(REFERENCE.findall(text))):
+                rel = "reference/" + ref
+                if rel in files:
+                    continue
+                data, headers = http_get(urljoin(skill_url, rel))
+                etag = (headers.get("ETag") or "").strip()
+                if etag.startswith("W/"):
+                    etag = etag[2:]
+                etag = etag.strip().strip('"')
+                if DIGEST.fullmatch(etag) and etag != "sha256:" + hashlib.sha256(data).hexdigest():
+                    die("digest of %s differs from its ETag %s" % (rel, etag))
+                files[rel] = data
+                pending.append(data)
+        dest = os.path.join(SRC, src["name"], n)
+        shutil.rmtree(dest, ignore_errors=True)
+        for rel, data in files.items():
+            target = os.path.join(dest, rel)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as fh:
+                fh.write(data)
+        put(n, dest, "wellknown:%s" % src["name"])
+
+
+def chown_tree(path):
+    os.chown(path, spec["uid"], spec["gid"], follow_symlinks=False)
+    for cur, dirs, files in os.walk(path):
+        for n in dirs + files:
+            os.chown(os.path.join(cur, n), spec["uid"], spec["gid"], follow_symlinks=False)
+
+
+log("hermes_home=%s role=[%s] role skills=%s sources=%s" % (home, role, role_names, [s["type"] + ":" + s["name"] for s in spec["sources"]]))
+shutil.rmtree(STAGE, ignore_errors=True)
+os.makedirs(STAGE)
+for source in spec["sources"]:
+    log("source %s (%s)" % (source["name"], source["type"]))
+    if source["type"] in ("dir", "files"):
+        do_dir(source)
+    elif source["type"] == "command":
+        do_command(source)
+    elif source["type"] == "wellknown":
+        do_wellknown(source)
+    else:
+        die("unknown source type %s" % source["type"])
+
+if role and not role_known:
+    die("skills_role %s is neither a key of hermes_skill_roles nor of a roles_file" % role)
+missing = [n for n in role_names if n not in staged]
+if missing:
+    die("skills of role %s that no source provides: %s" % (role, missing))
+log("%d skills to install: %s" % (len(staged), ", ".join(sorted(staged))))
+
+targets = [home + "/skills"] + [home + "/profiles/%s/skills" % p for p in spec["profiles"]]
+for t in targets:
+    os.makedirs(t, exist_ok=True)
+    marker = os.path.join(t, ".ops-skills")
+    if os.path.isfile(marker):
+        with open(marker, encoding="utf-8") as fh:
+            for line in fh.read().splitlines():
+                old = line.strip()
+                if old and "/" not in old and old not in (".", ".."):
+                    shutil.rmtree(os.path.join(t, old), ignore_errors=True)
+    for n in sorted(staged):
+        shutil.rmtree(os.path.join(t, n), ignore_errors=True)
+        shutil.copytree(os.path.join(STAGE, n), os.path.join(t, n))
+        chown_tree(os.path.join(t, n))
+    with open(marker, "w", encoding="utf-8") as fh:
+        fh.write("".join(n + "\n" for n in sorted(staged)))
+    os.chown(t, spec["uid"], spec["gid"])
+    os.chown(marker, spec["uid"], spec["gid"])
+    log("installed %d skills into %s" % (len(staged), t))
+log("done")
+{% endraw %}

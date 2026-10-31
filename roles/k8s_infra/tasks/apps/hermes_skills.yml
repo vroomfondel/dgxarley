@@ -1,113 +1,214 @@
 ---
-# Skills je Hermes-Nutzer als ConfigMap je Skill (hermes-skill-<slug>); die Pods kopieren sie per initContainer nach $HERMES_HOME.
+# Skills per Hermes user. Sources come from hermes_skill_sources (defaults/main/hermes.yml):
+#   dir/files    -> read on the controller, one ConfigMap per skill and user-needed skill (hermes-skill-<source>-<skill>)
+#   command      -> own initContainer init-skills-<name> per source (no ConfigMap)
+#   wellknown    -> fetched by the init-skills container itself (no ConfigMap)
+# Result facts: _hermes_skills_by_user[username] = {spec, cms, hash}, _hermes_skill_catalog (ConfigMap keys -> files).
 - name: Reset hermes skill facts
   ansible.builtin.set_fact:
     _hermes_skills_by_user: {}
     _hermes_skill_catalog: {}
+    _hermes_skill_cm_keys: []
+    _hermes_skill_hash: {}
+    _hermes_skill_srcs: []
     _hermes_skill_users: "{{ _hermes_active_users | selectattr('skills_enabled', 'defined') | selectattr('skills_enabled', 'true') | list }}"
 
 - name: Resolve hermes skills for skills-enabled users
   when: _hermes_skill_users | length > 0
   block:
-    - name: Assert hermes skill source variables
+    - name: Assert hermes skill source list and roles
       ansible.builtin.assert:
         that:
-          - hermes_skill_dirs is sequence
-          - hermes_skill_dirs is not string
-          - (hermes_skill_roles_file | default('') | length > 0) or (_hermes_skill_users | selectattr('skills_role', 'defined') | selectattr('skills_role', 'ne', '') | list | length == 0)
-        fail_msg: "hermes_skill_dirs must be a list; hermes_skill_roles_file is required when a user sets skills_role"
+          - hermes_skill_sources is sequence
+          - hermes_skill_sources is not string
+          - hermes_skill_sources | length > 0
+          - hermes_skill_sources | select('mapping') | list | length == hermes_skill_sources | length
+          - hermes_skill_roles is mapping
+          - hermes_skills_image | string | length > 0
+        fail_msg: >-
+          Users with skills_enabled need hermes_skill_sources (non-empty list of mappings with a type), hermes_skill_roles
+          (mapping role -> list of skill names) and hermes_skills_image; see roles/k8s_infra/defaults/main/hermes.yml.
 
-    - name: Load hermes skill role mapping
+    - name: Normalize hermes skill sources (default names)
       ansible.builtin.set_fact:
-        _hermes_skill_roles: "{{ (lookup('file', hermes_skill_roles_file | expanduser) | from_yaml).roles | default({}) if hermes_skill_roles_file | length > 0 else {} }}"
-        _hermes_skill_roles_dir: "{{ (hermes_skill_roles_file | expanduser | dirname) if hermes_skill_roles_file | length > 0 else '' }}"
+        _hermes_skill_srcs: "{{ _hermes_skill_srcs + [item | combine({'name': item.name | default('s' ~ _i) | string})] }}"
+      loop: "{{ hermes_skill_sources }}"
+      loop_control:
+        index_var: _i
+        label: "#{{ _i }} {{ item.type | default('?') }}"
 
-    - name: Assert hermes skill roles are known
+    - name: Assert hermes skill sources are well-formed
       ansible.builtin.assert:
-        that: item.skills_role in _hermes_skill_roles
-        fail_msg: "Unknown skills_role '{{ item.skills_role }}' for hermes user {{ item.username }}; known: {{ _hermes_skill_roles.keys() | list }}"
+        that:
+          - item.type | default('') in ['dir', 'files', 'command', 'wellknown']
+          - item.name is match('^[a-z0-9]{1,10}$')
+          - _hermes_skill_srcs | map(attribute='name') | select('eq', item.name) | list | length == 1
+          - item.base | default(none) is none or (item.base is sequence and item.base is not string)
+          - item.skills | default(none) is none or (item.skills is sequence and item.skills is not string)
+          - (item.base | default([], true) + item.skills | default([], true)) | map('string') | map('regex_search', '^[a-z0-9]([-a-z0-9]{0,44}[a-z0-9])?$') | select('none') | list | length == 0
+          - item.type not in ['dir', 'files'] or item.path | default('') | string | length > 0
+          - item.type != 'command' or (item.image | default('') | string | length > 0 and item.command | default('') | string | length > 0 and item.skills_dir | default('') | string is match('^/work/.+'))
+          - item.type != 'command' or item.env | default([]) is sequence
+          - item.type != 'command' or item.env | default([]) | rejectattr('name', 'defined') | list | length == 0
+          - item.type != 'command' or item.env_from_secret | default('') is string
+          - item.type != 'wellknown' or item.index_url | default('') is match('^https?://[^ ]+$')
+          - item.roles_file | default('') == '' or item.type == 'command'
+          - item.type not in ['dir', 'files'] or item.get('template') is none or item.template is boolean
+        fail_msg: >-
+          Invalid hermes_skill_sources entry '{{ item.name }}' (type {{ item.type | default('?') }}): type must be dir, files, command or
+          wellknown; name [a-z0-9]{1,10} and unique; base/skills lists of skill names (lowercase DNS-label style, max 46 chars);
+          dir/files need path; command needs image, command and skills_dir below /work/ (env: list of name/value, env_from_secret: Secret
+          name); wellknown needs an http(s) index_url; roles_file only for command; template must be a boolean.
+      loop: "{{ _hermes_skill_srcs }}"
+      loop_control:
+        label: "{{ item.name }} ({{ item.type | default('?') }})"
+
+    - name: Assert hermes skill roles are well-formed
+      ansible.builtin.assert:
+        that:
+          - item.value is sequence
+          - item.value is not string
+          - item.value | map('string') | map('regex_search', '^[a-z0-9]([-a-z0-9]{0,44}[a-z0-9])?$') | select('none') | list | length == 0
+        fail_msg: "hermes_skill_roles.{{ item.key }} must be a list of valid skill names (lowercase DNS-label style, max 46 chars)"
+      loop: "{{ hermes_skill_roles | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Assert user skill roles are known or resolvable from a roles_file
+      ansible.builtin.assert:
+        that: (item.skills_role in hermes_skill_roles) or (_hermes_skill_srcs | selectattr('roles_file', 'defined') | selectattr('roles_file', 'ne', '') | list | length > 0)
+        fail_msg: "skills_role '{{ item.skills_role }}' of hermes user {{ item.username }} is not a key of hermes_skill_roles and no source has a roles_file; known: {{ hermes_skill_roles.keys() | list }}"
       loop: "{{ _hermes_skill_users | selectattr('skills_role', 'defined') | selectattr('skills_role', 'ne', '') | list }}"
       loop_control:
         label: "{{ item.username }}"
 
-    - name: Collect skill directories per hermes user
-      ansible.builtin.set_fact:
-        _hermes_skill_dirs_by_user: "{{ _hermes_skill_dirs_by_user | default({}) | combine({item.username: ((hermes_skill_dirs | map('expanduser') | list) + ((_hermes_skill_roles[item.skills_role] | map('regex_replace', '^', _hermes_skill_roles_dir ~ '/') | list) if item.skills_role | default('') | length > 0 else [])) | map('realpath') | unique | list}) }}"
-      loop: "{{ _hermes_skill_users }}"
+    # --- dir / files: locate the root on the controller ---
+    - name: Stat candidate roots of dir/files skill sources
+      ansible.builtin.stat:
+        path: "{{ item.1 }}"
+      loop: "{{ _hermes_skill_candidates }}"
+      vars:
+        _hermes_skill_candidates: >-
+          {%- set out = [] -%}
+          {%- for s in _hermes_skill_srcs if s.type in ['dir', 'files'] -%}
+          {%- if s.type == 'dir' or s.path.startswith('/') or s.path.startswith('~') -%}
+          {%- set _ = out.append([s.name, s.path | expanduser]) -%}
+          {%- else -%}
+          {%- set _ = out.append([s.name, (inventory_dir | default(playbook_dir)) ~ '/' ~ s.path]) -%}
+          {%- set _ = out.append([s.name, playbook_dir ~ '/' ~ s.path]) -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
       loop_control:
-        label: "{{ item.username }}"
+        label: "{{ item.0 }}: {{ item.1 }}"
+      register: _hermes_skill_stat
+      delegate_to: localhost
+      become: false
+      check_mode: false
 
-    - name: Derive the distinct skill directory list
+    - name: Pick the root directory of each dir/files skill source
       ansible.builtin.set_fact:
-        _hermes_skill_all_dirs: "{{ _hermes_skill_dirs_by_user.values() | flatten | unique | sort }}"
+        _hermes_skill_roots: >-
+          {%- set out = [] -%}
+          {%- for s in _hermes_skill_srcs if s.type in ['dir', 'files'] -%}
+          {%- set hits = _hermes_skill_stat.results | selectattr('item.0', 'eq', s.name) | selectattr('stat.isdir', 'defined') | selectattr('stat.isdir') | list -%}
+          {%- if hits | length > 0 -%}{%- set _ = out.append(s | combine({'root': hits[0].item.1 | realpath})) -%}{%- endif -%}
+          {%- endfor -%}
+          {{ out }}
 
-    - name: Assert hermes skill slugs are valid and unique
+    - name: Assert every dir/files skill source has an existing directory
       ansible.builtin.assert:
-        that:
-          - _hermes_skill_all_dirs | map('basename') | unique | length == _hermes_skill_all_dirs | length
-          - _hermes_skill_all_dirs | map('basename') | map('regex_search', '^[a-z0-9]([-a-z0-9]{0,46}[a-z0-9])?$') | select('none') | list | length == 0
-        fail_msg: "Skill directory basenames must be unique DNS labels (max 48 chars): {{ _hermes_skill_all_dirs }}"
+        that: _hermes_skill_roots | selectattr('name', 'eq', item.name) | list | length == 1
+        fail_msg: "Skill source '{{ item.name }}' ({{ item.type }}, path {{ item.path }}) is no directory on the controller (tried: {{ _hermes_skill_stat.results | selectattr('item.0', 'eq', item.name) | map(attribute='item.1') | list }})"
+      loop: "{{ _hermes_skill_srcs | selectattr('type', 'in', ['dir', 'files']) | list }}"
+      loop_control:
+        label: "{{ item.name }}"
 
-    - name: Find hermes skill files
+    - name: Find skill files of dir/files sources
       ansible.builtin.find:
-        paths: "{{ item }}"
+        paths: "{{ item.root }}"
         recurse: true
         file_type: file
-      loop: "{{ _hermes_skill_all_dirs }}"
+      loop: "{{ _hermes_skill_roots }}"
+      loop_control:
+        label: "{{ item.name }}: {{ item.root }}"
       register: _hermes_skill_find
       delegate_to: localhost
       become: false
       check_mode: false
 
-    - name: Assert every hermes skill directory has a SKILL.md
-      ansible.builtin.assert:
-        that: (item.item ~ '/SKILL.md') in (item.files | map(attribute='path') | list)
-        fail_msg: "{{ item.item }} contains no SKILL.md"
-      loop: "{{ _hermes_skill_find.results }}"
-      loop_control:
-        label: "{{ item.item }}"
-
-    - name: Build hermes skill catalog
+    - name: Build the skill catalog of dir/files sources
       ansible.builtin.set_fact:
-        _hermes_skill_catalog: "{{ _hermes_skill_catalog | combine({item.item | basename: {'dir': item.item, 'files': item.files | map(attribute='path') | map('relpath', item.item) | sort | list}}) }}"
-      loop: "{{ _hermes_skill_find.results }}"
+        _hermes_skill_cat_raw: "{{ lookup('template', 'hermes/hermes_skills_catalog.json.j2') | from_json }}"
+
+    - name: Assert dir/files sources provide every skill they are asked for
+      ansible.builtin.assert:
+        that: _hermes_skill_cat_raw.errors | length == 0
+        fail_msg: "{{ _hermes_skill_cat_raw.errors }}"
+
+    - name: Keep the catalog and offered skills
+      ansible.builtin.set_fact:
+        _hermes_skill_catalog: "{{ _hermes_skill_cat_raw.catalog }}"
+        _hermes_skill_offered: "{{ _hermes_skill_cat_raw.offered }}"
+
+    - name: Assert dir/files skill names fit into ConfigMap and volume names
+      ansible.builtin.assert:
+        that: item.value.skill is match('^[a-z0-9]([-a-z0-9]{0,44}[a-z0-9])?$')
+        fail_msg: "Skill directory '{{ item.value.skill }}' of source {{ item.value.src }} must be a lowercase DNS label of at most 46 characters"
+      loop: "{{ _hermes_skill_catalog | dict2items }}"
       loop_control:
-        label: "{{ item.item }}"
+        label: "{{ item.key }}"
+
+    - name: Compute hermes skill spec per user
+      ansible.builtin.set_fact:
+        _hermes_skills_by_user: "{{ _hermes_skills_by_user | combine({item.username: lookup('template', 'hermes/hermes_skills_spec.json.j2') | from_json}) }}"
+      loop: "{{ _hermes_skill_users }}"
+      loop_control:
+        label: "{{ item.username }}"
+
+    - name: Assert every role skill is provided by some source
+      ansible.builtin.assert:
+        that:
+          - >-
+            (item.value.spec.role_names | difference(
+              (_hermes_skill_offered.values() | flatten)
+            )) | length == 0 or (_hermes_skill_srcs | selectattr('type', 'in', ['command', 'wellknown']) | list | length > 0)
+        fail_msg: "Role skills {{ item.value.spec.role_names | difference(_hermes_skill_offered.values() | flatten) }} of hermes user {{ item.key }} are offered by no dir/files source and there is no command/wellknown source"
+      loop: "{{ _hermes_skills_by_user | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Derive the ConfigMaps that are needed
+      ansible.builtin.set_fact:
+        _hermes_skill_cm_keys: "{{ _hermes_skills_by_user.values() | map(attribute='cms') | flatten | unique | sort }}"
 
     - name: Render and size-check hermes skill ConfigMaps
       ansible.builtin.set_fact:
-        _hermes_skill_hash: "{{ _hermes_skill_hash | default({}) | combine({item.key: _cm_text | hash('sha256')}) }}"
+        _hermes_skill_hash: "{{ _hermes_skill_hash | combine({item: _cm_text | hash('sha256')}) }}"
       vars:
-        _cm_text: "{{ lookup('template', 'hermes/hermes_skill_configmap.yaml.j2') }}"
-      loop: "{{ _hermes_skill_catalog | dict2items }}"
-      loop_control:
-        label: "{{ item.key }}"
+        _cm_text: "{{ lookup('template', 'hermes/hermes_skill_configmap.yaml.j2', template_vars={'item': {'key': item, 'value': _hermes_skill_catalog[item]}}) }}"
+      loop: "{{ _hermes_skill_cm_keys }}"
 
     - name: Assert hermes skill ConfigMaps stay below the apply annotation limit
       ansible.builtin.assert:
-        that: (lookup('template', 'hermes/hermes_skill_configmap.yaml.j2') | length) < 200000
-        fail_msg: "Skill {{ item.key }} exceeds 200 kB; split it or trim reference files"
-      loop: "{{ _hermes_skill_catalog | dict2items }}"
-      loop_control:
-        label: "{{ item.key }}"
+        that: "{{ (lookup('template', 'hermes/hermes_skill_configmap.yaml.j2', template_vars={'item': {'key': item, 'value': _hermes_skill_catalog[item]}}) | length) < 200000 }}"
+        fail_msg: "Skill {{ item }} exceeds 200 kB; split it or trim reference files"
+      loop: "{{ _hermes_skill_cm_keys }}"
 
     - name: Apply hermes skill ConfigMaps
       kubernetes.core.k8s:
         state: present
         apply: true
-        definition: "{{ lookup('template', 'hermes/hermes_skill_configmap.yaml.j2') | from_yaml }}"
-      loop: "{{ _hermes_skill_catalog | dict2items }}"
+        definition: "{{ lookup('template', 'hermes/hermes_skill_configmap.yaml.j2', template_vars={'item': {'key': item, 'value': _hermes_skill_catalog[item]}}) | from_yaml }}"
+      loop: "{{ _hermes_skill_cm_keys }}"
+
+    # The hash covers the user's spec (incl. the command/wellknown definitions), the image and the content of the used ConfigMaps.
+    - name: Add the roll hash to each user's skill set
+      ansible.builtin.set_fact:
+        _hermes_skills_by_user: "{{ _hermes_skills_by_user | combine({item.key: item.value | combine({'hash': ([hermes_skills_image, item.value.spec | to_json] + (item.value.cms | map('extract', _hermes_skill_hash) | list)) | join('|') | hash('sha256')})}) }}"
+      loop: "{{ _hermes_skills_by_user | dict2items }}"
       loop_control:
         label: "{{ item.key }}"
-
-    - name: Compute hermes skill set per user
-      ansible.builtin.set_fact:
-        _hermes_skills_by_user: "{{ _hermes_skills_by_user | combine({item.username: {'slugs': _slugs, 'hash': (_slugs | map('extract', _hermes_skill_hash) | join(',') ~ ':' ~ _slugs | join(',')) | hash('sha256')}}) }}"
-      vars:
-        _slugs: "{{ _hermes_skill_dirs_by_user[item.username] | map('basename') | sort | list }}"
-      loop: "{{ _hermes_skill_users }}"
-      loop_control:
-        label: "{{ item.username }}"
 
 - name: List hermes skill ConfigMaps
   kubernetes.core.k8s_info:
@@ -125,4 +226,4 @@
     kind: ConfigMap
     namespace: "{{ hermes.namespace }}"
     name: "{{ item }}"
-  loop: "{{ _hermes_skill_cms.resources | map(attribute='metadata.name') | difference(_hermes_skill_catalog.keys() | map('regex_replace', '^', 'hermes-skill-') | list) }}"
+  loop: "{{ _hermes_skill_cms.resources | map(attribute='metadata.name') | difference(_hermes_skill_cm_keys | map('regex_replace', '^', 'hermes-skill-') | list) }}"

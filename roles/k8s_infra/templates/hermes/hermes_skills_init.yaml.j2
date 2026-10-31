@@ -1,47 +1,61 @@
-{%- set _sk = _hermes_skills_by_user[item.username] -%}
-{%- set _targets = ['/opt/data/skills'] + (item.profiles | default([]) | map(attribute='name') | map('regex_replace', '^(.*)$', '/opt/data/profiles/\\1/skills') | list) -%}
-- name: init-skills
-  image: "{{ hermes.busybox_image }}"
+{#- initContainers (list items) that install the skills of one user. Context: item = hermes user, _skills = _hermes_skills_by_user[item.username].
+    One init-skills-<name> container per `command` source (writes below /work, an emptyDir shared by all of them), then the
+    merging init-skills container (Python stdlib only): wellknown fetch, roles, copy to $HERMES_HOME/skills and the profiles. -#}
+{% for s in _skills.spec.sources if s.type == 'command' %}
+{%- set _src = _hermes_skill_srcs | selectattr('name', 'eq', s.name) | first %}
+- name: "init-skills-{{ s.name }}"
+  image: {{ _src.image | to_json }}
+{% if _src.get('image_pull_policy') %}
+  imagePullPolicy: {{ _src.image_pull_policy | to_json }}
+{% endif %}
   env:
     - name: TZ
       value: "{{ hermes.timezone }}"
+{% for e in _src.get('env') | default([], true) %}
+    - name: {{ e.name | to_json }}
+      value: {{ e.value | default('') | string | to_json }}
+{% endfor %}
+{% if _src.get('env_from_secret') %}
+  envFrom:
+    - secretRef:
+        name: {{ _src.env_from_secret | to_json }}
+{% endif %}
   command:
     - sh
     - -c
-    - |
-      set -eu
-      for t in "$@"; do
-        mkdir -p "$t"
-        if [ -f "$t/.ops-skills" ]; then
-          while read -r s; do
-            if [ -n "$s" ]; then rm -rf "${t:?}/$s"; fi
-          done < "$t/.ops-skills"
-        fi
-        : > "$t/.ops-skills"
-        for d in /seed-skills/*; do
-          s=${d##*/}
-          rm -rf "${t:?}/$s"
-          (cd "$d" && find -L . -name '..*' -prune -o -type f -print) | while read -r f; do
-            mkdir -p "$t/$s/$(dirname "$f")"
-            cp -L "$d/$f" "$t/$s/$f"
-          done
-          echo "$s" >> "$t/.ops-skills"
-          chown -R {{ item.uid }}:{{ item.gid }} "$t/$s"
-        done
-        chown {{ item.uid }}:{{ item.gid }} "$t" "$t/.ops-skills"
-      done
-    - init-skills
-{% for t in _targets %}
-    - "{{ t }}"
+    - {{ ('set -eu\necho "init-skills-' ~ s.name ~ ': running command"\n' ~ (_src.command | replace('$(', '$$('))) | to_json }}
+  volumeMounts:
+    - name: skills-work
+      mountPath: /work
 {% endfor %}
+- name: init-skills
+  image: "{{ hermes_skills_image }}"
+  env:
+    - name: TZ
+      value: "{{ hermes.timezone }}"
+    - name: HERMES_HOME
+      value: /opt/data
+    - name: SKILLS_SPEC
+      value: {{ _skills.spec | to_json | to_json }}
+  command:
+    - python3
+    - -u
+    - -c
+    - |
+{% filter indent(6, true) %}{% include 'hermes/hermes_skills_merge.py.j2' %}{% endfilter %}
+
   securityContext:
     runAsUser: 0
     runAsNonRoot: false
   volumeMounts:
     - name: data
       mountPath: /opt/data
-{% for s in _sk.slugs %}
-    - name: "skill-{{ s }}"
-      mountPath: "/seed-skills/{{ s }}"
+    - name: skills-work
+      mountPath: /work
+{% for s in _skills.spec.sources if s.type in ['dir', 'files'] %}
+{% for n in s.skills %}
+    - name: "skill-{{ s.name }}-{{ n }}"
+      mountPath: "/seed-skills/{{ s.name }}/{{ n }}"
       readOnly: true
+{% endfor %}
 {% endfor %}

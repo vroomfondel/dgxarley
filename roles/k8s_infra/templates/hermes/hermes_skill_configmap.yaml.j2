@@ -8,5 +8,5 @@ metadata:
     hermes-component: skill
 data:
 {% for f in item.value.files %}
-  {{ (f | replace('/', '__')) | to_json }}: {{ lookup('file', item.value.dir ~ '/' ~ f) | to_json }}
+  {{ (f.dest | replace('/', '__')) | to_json }}: {{ (lookup('template', item.value.root ~ '/' ~ f.src) if item.value.render and f.src != f.dest else lookup('file', item.value.root ~ '/' ~ f.src)) | to_json }}
 {% endfor %}

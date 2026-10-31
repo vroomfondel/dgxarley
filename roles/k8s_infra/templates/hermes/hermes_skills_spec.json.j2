@@ -1,0 +1,22 @@
+{#- Per-user skill spec (JSON) for the init-skills container. Context: item = hermes user, _hermes_skill_srcs (normalized
+    sources), _hermes_skill_offered {source: [skill]} of the dir/files sources, hermes_skill_roles. -#}
+{%- set _role = item.skills_role | default('') -%}
+{%- set _role_names = (hermes_skill_roles.get(_role, []) if _role else []) -%}
+{%- set _out = [] -%}
+{%- set _cms = [] -%}
+{%- for s in _hermes_skill_srcs -%}
+{%- if s.type in ['dir', 'files'] -%}
+{%- set _off = _hermes_skill_offered[s.name] -%}
+{%- set _names = [] -%}
+{%- for n in (s.base if s.get('base') is not none else _off) + _role_names -%}
+{%- if n in _off and n not in _names -%}{%- set _ = _names.append(n) -%}{%- endif -%}
+{%- endfor -%}
+{%- set _ = _out.append({'type': s.type, 'name': s.name, 'skills': _names}) -%}
+{%- for n in _names -%}{%- set _ = _cms.append(s.name ~ '-' ~ n) -%}{%- endfor -%}
+{%- elif s.type == 'command' -%}
+{%- set _ = _out.append({'type': 'command', 'name': s.name, 'skills_dir': s.skills_dir, 'roles_file': s.get('roles_file') | default('', true), 'base': s.get('base'), 'skills': s.get('skills'), 'command': s.command, 'image': s.image, 'image_pull_policy': s.get('image_pull_policy'), 'env': s.get('env'), 'env_from_secret': s.get('env_from_secret')}) -%}
+{%- elif s.type == 'wellknown' -%}
+{%- set _ = _out.append({'type': 'wellknown', 'name': s.name, 'index_url': s.index_url, 'base': s.get('base'), 'skills': s.get('skills')}) -%}
+{%- endif -%}
+{%- endfor -%}
+{{ {'spec': {'role': _role, 'role_names': _role_names, 'role_in_map': (_role in hermes_skill_roles) if _role else false, 'uid': item.uid, 'gid': item.gid, 'profiles': item.profiles | default([]) | map(attribute='name') | list, 'sources': _out}, 'cms': _cms} | to_json }}

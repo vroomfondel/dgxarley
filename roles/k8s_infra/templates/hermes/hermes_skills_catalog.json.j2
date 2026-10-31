@@ -1,0 +1,30 @@
+{#- Catalog of the dir/files skill sources. Context: _hermes_skill_find.results (one per source, item = source + root).
+    Emits JSON: offered {source: [skill]}, catalog {"<source>-<skill>": {src, skill, root, render, files[{src, dest}]}}, errors [text]. -#}
+{%- set _cat = {} -%}
+{%- set _off = {} -%}
+{%- set _err = [] -%}
+{%- for r in _hermes_skill_find.results -%}
+{%- set s = r.item -%}
+{%- set _pairs = [] -%}
+{%- for p in r.files | map(attribute='path') | map('relpath', s.root) | sort -%}
+{%- set _ = _pairs.append({'src': p, 'dest': (p[:-3] if (s.get('template') | default(false) | bool) and p.endswith('.j2') else p)}) -%}
+{%- endfor -%}
+{%- set _dests = _pairs | map(attribute='dest') | list -%}
+{%- set _all = [] -%}
+{%- for d in _dests -%}
+{%- set top = d.split('/')[0] -%}
+{%- if '/' in d and top not in _all and (top ~ '/SKILL.md') in _dests -%}{%- set _ = _all.append(top) -%}{%- endif -%}
+{%- endfor -%}
+{%- set _want = s.skills if s.get('skills') is not none else _all -%}
+{%- for n in _want if n not in _all -%}{%- set _ = _err.append('source ' ~ s.name ~ ' (' ~ s.root ~ ') has no skill directory with a SKILL.md named ' ~ n) -%}{%- endfor -%}
+{%- for n in (s.get('base') or []) if n not in _all -%}{%- set _ = _err.append('source ' ~ s.name ~ ' (' ~ s.root ~ ') has no base skill ' ~ n) -%}{%- endfor -%}
+{%- set _ = _off.update({s.name: _want | select('in', _all) | list}) -%}
+{%- for n in _off[s.name] -%}
+{%- set _files = [] -%}
+{%- for p in _pairs if p.dest.startswith(n ~ '/') -%}
+{%- set _ = _files.append({'src': p.src, 'dest': p.dest[(n | length) + 1:]}) -%}
+{%- endfor -%}
+{%- set _ = _cat.update({s.name ~ '-' ~ n: {'src': s.name, 'skill': n, 'root': s.root, 'render': (s.get('template') | default(false) | bool), 'files': _files}}) -%}
+{%- endfor -%}
+{%- endfor -%}
+{{ {'offered': _off, 'catalog': _cat, 'errors': _err} | to_json }}
