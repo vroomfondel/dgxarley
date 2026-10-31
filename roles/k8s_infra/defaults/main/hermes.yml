@@ -18,6 +18,11 @@
 # hermes pods) while allowing DNS, the litellm + searxng namespaces, full
 # internet/LAN egress, and Traefik-only ingress.
 hermes_network_policies_enabled: false
+# Additional in-cluster namespaces the hermes pods may reach through hermes-egress (whole namespace, any port),
+# on top of DNS, litellm, searxng and internet/LAN. Example: [krag] for an MCP/RAG backend reached via its
+# service name (http://<service>.<namespace>.svc.cluster.local:<port>), e.g. by the init-skills wellknown source.
+# The target namespace must also admit hermes in its own ingress policy.
+hermes_network_egress_namespaces: []
 
 # === Hermes skills ===
 # Users with `skills_enabled: true` get skills installed at pod start by the init-skills initContainer into
