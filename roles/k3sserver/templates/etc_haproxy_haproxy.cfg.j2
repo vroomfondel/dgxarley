@@ -78,6 +78,20 @@ frontend hub_ingress_https
     tcp-request connection reject unless { src {{ hub_ingress.source_ips | join(' ') }} }
     default_backend k3s_https_back
 
+{% for name, s in hub_ingress_mail_services | default({}) | dictsort if s.enabled | bool %}
+# Mail from the hub ({{ name }}): raw TCP to the mailserver NodePort, TLS/STARTTLS ends in the pod.
+frontend hub_ingress_mail_{{ name }}
+    bind {{ hub_ingress.bind_address }}:{{ s.gate_port }} accept-proxy
+    mode tcp
+    option tcplog
+    tcp-request connection reject unless { src {{ hub_ingress.source_ips | join(' ') }} }
+    default_backend hub_ingress_mail_{{ name }}_back
+
+backend hub_ingress_mail_{{ name }}_back
+    mode tcp
+    server mailserver 127.0.0.1:{{ s.nodeport }} send-proxy-v2
+{% endfor %}
+
 {% endif %}
 # ---------------------------------------------------------------------
 # Backend für HTTP

@@ -208,8 +208,9 @@ iptables -A HTSTUFFIN -m state --state NEW -p tcp -m multiport --dport 80,443 -j
 {% endif %}
 
 {% if hub_ingress.enabled | default(false) | bool and isk3smaster | default(false) | bool %}
+{% set _hub_ports = [hub_ingress.port] + (hub_ingress_mail_services | default({}) | dict2items | selectattr('value.enabled') | map(attribute='value.gate_port') | list) %}
 {% for _src in hub_ingress.source_ips %}
-iptables -A HTSTUFFIN -m state --state NEW -p tcp --dport {{ hub_ingress.port }} -s {{ _src }} -j RETURN
+iptables -A HTSTUFFIN -m state --state NEW -p tcp -m multiport --dports {{ _hub_ports | join(',') }} -s {{ _src }} -j RETURN
 {% endfor %}
 {% endif %}
 
@@ -234,8 +235,9 @@ iptables -A HTSTUFFIN{{ ' ! -i ' ~ kwg_if if kwg_on else '' }} -m state --state 
 {% if kwg_on %}
 {% set kwg_ops = kwg.ops_subnet | mandatory %}
 {% if hub_ingress.enabled | default(false) | bool and isk3smaster | default(false) | bool %}
-# accept-proxy bind: tunnel sources other than hub_ingress.source_ips (RETURN above) must never reach it.
-iptables -A HTSTUFFIN -i {{ kwg_if }} -m state --state NEW -p tcp --dport {{ hub_ingress.port }} -j DROP
+{% set _hub_ports = [hub_ingress.port] + (hub_ingress_mail_services | default({}) | dict2items | selectattr('value.enabled') | map(attribute='value.gate_port') | list) %}
+# accept-proxy binds: tunnel sources other than hub_ingress.source_ips (RETURN above) must never reach them.
+iptables -A HTSTUFFIN -i {{ kwg_if }} -m state --state NEW -p tcp -m multiport --dports {{ _hub_ports | join(',') }} -j DROP
 {% endif %}
 # Ops WireGuard tunnel (roles/ops_wireguard, outbound to the Ops hub): the trusted sources (ops peers, or the
 # whole ops subnet when ops_wireguard_trusted_sources is empty) may reach this box through the tunnel only.
