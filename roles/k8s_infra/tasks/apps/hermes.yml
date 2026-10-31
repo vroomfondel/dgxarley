@@ -410,6 +410,9 @@
 
 # === Per-user shared ConfigMaps + Secrets (used by both agent + webui pods) ===
 
+- name: Render hermes skill ConfigMaps
+  import_tasks: hermes_skills.yml
+
 - name: Render per-user hermes config.yaml ConfigMap
   kubernetes.core.k8s:
     state: present

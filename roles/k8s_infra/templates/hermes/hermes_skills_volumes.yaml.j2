@@ -1,0 +1,10 @@
+{% for s in _hermes_skills_by_user[item.username].slugs %}
+- name: "skill-{{ s }}"
+  configMap:
+    name: "hermes-skill-{{ s }}"
+    items:
+{% for f in _hermes_skill_catalog[s].files %}
+      - key: {{ (f | replace('/', '__')) | to_json }}
+        path: {{ f | to_json }}
+{% endfor %}
+{% endfor %}

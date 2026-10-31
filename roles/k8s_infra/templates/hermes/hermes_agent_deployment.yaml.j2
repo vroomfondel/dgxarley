@@ -20,6 +20,8 @@
 {%- set _matrix = item.matrix | default({}) -%}
 {%- set _matrix_enabled = _matrix.get('enabled', hermes.matrix.enabled_default) -%}
 {%- set _gateway_enabled = (_email_enabled or _matrix_enabled) -%}
+{#- Skills are installed by the agent pod when the dashboard is on, else by the webui pod. -#}
+{%- set _skills = _hermes_skills_by_user.get(item.username) -%}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -66,6 +68,7 @@ spec:
         # does NOT auto-roll the pod. Hash the cleartext (the value is otherwise
         # only Secret-referenced) — stable across runs, unlike a re-salted hash.
         checksum/auth:   "{{ (item.basicauth_password | default(item.litellm_token)) | hash('sha256') }}"
+        checksum/skills: "{{ _skills.hash if _skills else '' }}"
         # ALWAYS emit gated checksums with the gate flag folded into the value —
         # never wrap them in a Jinja if/endif block. A disable (enabled->disabled) must still
         # CHANGE the annotation so the pod rolls; dropping the key relies on the
@@ -176,6 +179,9 @@ spec:
             - name: seed-secret
               mountPath: /seed-secret
               readOnly: true
+{% if _skills %}
+{% filter indent(8, true) %}{% include 'hermes/hermes_skills_init.yaml.j2' %}{% endfilter %}
+{%- endif %}
         # Install shipped dashboard themes into $HERMES_HOME/dashboard-themes/
         # where `_discover_user_themes()` reads them. We COPY (not subPath-mount
         # the ConfigMap onto the dir) so the directory stays writable and any
@@ -715,6 +721,9 @@ spec:
         - name: seed-secret
           secret:
             secretName: "hermes-env-{{ item.username }}"
+{% if _skills %}
+{% filter indent(8, true) %}{% include 'hermes/hermes_skills_volumes.yaml.j2' %}{% endfilter %}
+{% endif %}
         # [retired 2026-10-11] hermes_health_patch.py: v0.21.6 probe sends Bearer $API_SERVER_KEY (upstream #76051); see git history.
 {% if _email_enabled %}
         # Single-file patch mount for the gateway sidecar's email adapter —

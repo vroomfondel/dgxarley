@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: "hermes-skill-{{ item.key }}"
+  namespace: "{{ hermes.namespace }}"
+  labels:
+    app: hermes
+    hermes-component: skill
+data:
+{% for f in item.value.files %}
+  {{ (f | replace('/', '__')) | to_json }}: {{ lookup('file', item.value.dir ~ '/' ~ f) | to_json }}
+{% endfor %}

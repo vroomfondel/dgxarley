@@ -19,6 +19,11 @@
 # internet/LAN egress, and Traefik-only ingress.
 hermes_network_policies_enabled: false
 
+# Skill directories (absolute or ~) installed for every user with skills_enabled; the basename is the skill name.
+hermes_skill_dirs: []
+# roles.yaml (`roles: {<role>: [<skill dir relative to the file>, ...]}`); users with skills_role get those skills in addition.
+hermes_skill_roles_file: ""
+
 # Global (non-secret) Hermes config — nested dict. Defined ONLY here (single
 # file) so it sidesteps the hash_behaviour=replace trap that forces seafile:/
 # forgejo: to duplicate every key across three files. Access as hermes.<group>.

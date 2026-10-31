@@ -1,0 +1,47 @@
+{%- set _sk = _hermes_skills_by_user[item.username] -%}
+{%- set _targets = ['/opt/data/skills'] + (item.profiles | default([]) | map(attribute='name') | map('regex_replace', '^(.*)$', '/opt/data/profiles/\\1/skills') | list) -%}
+- name: init-skills
+  image: "{{ hermes.busybox_image }}"
+  env:
+    - name: TZ
+      value: "{{ hermes.timezone }}"
+  command:
+    - sh
+    - -c
+    - |
+      set -eu
+      for t in "$@"; do
+        mkdir -p "$t"
+        if [ -f "$t/.ops-skills" ]; then
+          while read -r s; do
+            if [ -n "$s" ]; then rm -rf "${t:?}/$s"; fi
+          done < "$t/.ops-skills"
+        fi
+        : > "$t/.ops-skills"
+        for d in /seed-skills/*; do
+          s=${d##*/}
+          rm -rf "${t:?}/$s"
+          (cd "$d" && find -L . -name '..*' -prune -o -type f -print) | while read -r f; do
+            mkdir -p "$t/$s/$(dirname "$f")"
+            cp -L "$d/$f" "$t/$s/$f"
+          done
+          echo "$s" >> "$t/.ops-skills"
+          chown -R {{ item.uid }}:{{ item.gid }} "$t/$s"
+        done
+        chown {{ item.uid }}:{{ item.gid }} "$t" "$t/.ops-skills"
+      done
+    - init-skills
+{% for t in _targets %}
+    - "{{ t }}"
+{% endfor %}
+  securityContext:
+    runAsUser: 0
+    runAsNonRoot: false
+  volumeMounts:
+    - name: data
+      mountPath: /opt/data
+{% for s in _sk.slugs %}
+    - name: "skill-{{ s }}"
+      mountPath: "/seed-skills/{{ s }}"
+      readOnly: true
+{% endfor %}
