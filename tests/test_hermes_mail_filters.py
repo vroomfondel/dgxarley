@@ -120,6 +120,13 @@ def test_disabled_email_keeps_identity_only() -> None:
     assert default_off["email"]["enabled"] is False
     assert default_off["email"]["address"] == "x@y.example"
     assert "imap_host" not in default_off["email"]
+    inactive = hermes_mail.resolve_email(user(enabled=False, email={}), settings(backend="nope"))
+    assert inactive["email"] == {
+        "enabled": True,
+        "local": "alice",
+        "domain": "hermes.dgx.clientmail.example",
+        "address": "alice@hermes.dgx.clientmail.example",
+    }
 
 
 @pytest.mark.parametrize(

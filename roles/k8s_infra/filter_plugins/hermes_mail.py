@@ -41,7 +41,8 @@ def resolve_email(user: Mapping[str, Any], settings: Mapping[str, Any]) -> dict[
             domain_replace, enabled_default).
 
     Returns:
-        The user; without an ``email`` block unchanged, with email disabled only ``enabled`` and the address are set.
+        The user; without an ``email`` block unchanged, with email or the user disabled only ``enabled`` and the
+        address are set.
 
     Raises:
         AnsibleFilterError: Unknown backend, unset host, missing password, or a bad local part / domain.
@@ -77,7 +78,8 @@ def resolve_email(user: Mapping[str, Any], settings: Mapping[str, Any]) -> dict[
     if not DOMAIN_RE.match(domain):
         raise AnsibleFilterError(f"{where}: domain {domain!r} must match {DOMAIN_RE.pattern}")
     email.update(local=local, domain=domain, address=f"{local}@{domain}")
-    if not email["enabled"]:
+    # A disabled user deploys nothing, so its credentials and hosts are not required.
+    if not (email["enabled"] and bool(user.get("enabled", False))):
         return out
 
     backend = str(_setting(settings, "backend"))

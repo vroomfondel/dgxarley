@@ -58,7 +58,8 @@ hermes_mail_settings:
   service_domain: "{{ dns_external_domain_suffix }}"
   domain_prefix: "{{ hermes_mail_domain_prefix }}"
   domain_replace: "{{ hermes_mail_domain_replace }}"
-  enabled_default: "{{ hermes.email.enabled_default }}"
+  # Tolerates an overlay whose hermes: dict (hash_behaviour=replace) carries no email section.
+  enabled_default: "{{ (hermes.email | default({})).enabled_default | default(true) }}"
 
 # === Hermes skills ===
 # Users with `skills_enabled: true` get skills installed at pod start by the init-skills initContainer into
