@@ -102,5 +102,14 @@ podman_apt_purge: false
 nfs_exports: []
 nfs_exports_default_options: "rw,sync,no_subtree_check,no_root_squash"
 
+# sysctls for tasks/mptcp.yml, written 1:1 to /etc/sysctl.d/60-mptcp.conf; keys the
+# kernel does not have are skipped. Empty dict = no-op.
+mptcp_sysctls:
+  net.mptcp.enabled: 0
+  net.ipv4.tcp_migrate_req: 0
+
+# iptables.sh: raw/PREROUTING drop of IPv4 TCP carrying IP options (CVE-2026-98432, Red Hat mitigation)
+iptables_drop_tcp_ip_options: true
+
 # 00- drop-in wins via sshd first-match over installer drop-ins
 common_ssh_password_auth: false

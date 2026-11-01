@@ -187,6 +187,13 @@
       ovs_vlan_extra.values() | selectattr('fwmark_routing', 'defined') | list | length == 0
     ))
 
+- name: disable MPTCP and request-socket migration (CVE-2026-98432)
+  import_tasks: mptcp.yml
+  tags:
+    - sysctl
+    - mptcp
+  when: mptcp_sysctls | default({}) | length > 0
+
 - name: disable USB autosuspend (GRUB + udev)
   tags:
     - usb_autosuspend

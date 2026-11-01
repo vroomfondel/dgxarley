@@ -1,0 +1,38 @@
+---
+# file: roles/common/tasks/mptcp.yml
+#
+# Disable MPTCP and request-socket migration via sysctl (CVE-2026-98432,
+# use-after-free in the IPv4 TCP handshake; the demonstrated exploit needs an
+# MPTCP listener, the second path needs net.ipv4.tcp_migrate_req=1). Go >= 1.24
+# opens listeners as MPTCP by default and falls back to TCP when enabled=0.
+# Not a substitute for the kernel fix, only shrinks the attack surface.
+
+- name: check which mptcp-related sysctls this kernel has
+  ansible.builtin.stat:
+    path: "/proc/sys/{{ item.key | replace('.', '/') }}"
+  loop: "{{ mptcp_sysctls | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: mptcp_sysctl_stat
+  check_mode: false
+
+- name: set mptcp sysctls (boot-persistent via /etc/sysctl.d)
+  ansible.builtin.sysctl:
+    name: "{{ item.item.key }}"
+    value: "{{ item.item.value | string }}"
+    sysctl_file: /etc/sysctl.d/60-mptcp.conf
+    sysctl_set: true
+    state: present
+    reload: true
+  loop: "{{ mptcp_sysctl_stat.results }}"
+  loop_control:
+    label: "{{ item.item.key }} = {{ item.item.value }}"
+  when: item.stat.exists
+
+- name: report sysctls this kernel does not have
+  ansible.builtin.debug:
+    msg: "{{ item.item.key }} missing in this kernel, skipped"
+  loop: "{{ mptcp_sysctl_stat.results }}"
+  loop_control:
+    label: "{{ item.item.key }}"
+  when: not item.stat.exists

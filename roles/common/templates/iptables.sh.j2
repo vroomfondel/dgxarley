@@ -12,6 +12,20 @@ iptables -N HTSTUFFOUT
 iptables -D INPUT -j HTSTUFFIN
 iptables -I INPUT 1 -j HTSTUFFIN
 
+{% if iptables_drop_tcp_ip_options | default(true) | bool %}
+# CVE-2026-98432: drop IPv4 TCP with IP options (IHL > 5), counterpart of Red Hat's nft rule `ip hdrlength > 5`
+iptables -t raw -N HTIPOPTS 2>/dev/null || true
+iptables -t raw -F HTIPOPTS
+iptables -t raw -D PREROUTING -p tcp -m u32 --u32 "0&0x0F000000=0x06000000:0x0F000000" -j HTIPOPTS 2>/dev/null || true
+iptables -t raw -I PREROUTING 1 -p tcp -m u32 --u32 "0&0x0F000000=0x06000000:0x0F000000" -j HTIPOPTS || echo "WARN: xt_u32 missing, CVE-2026-98432 IP-options drop not active" >&2
+iptables -t raw -A HTIPOPTS -m limit --limit 5/min -j LOG --log-prefix "HT_TCP_IPOPTS_DROP " --log-level 4
+iptables -t raw -A HTIPOPTS -j DROP
+{% else %}
+iptables -t raw -D PREROUTING -p tcp -m u32 --u32 "0&0x0F000000=0x06000000:0x0F000000" -j HTIPOPTS 2>/dev/null || true
+iptables -t raw -F HTIPOPTS 2>/dev/null || true
+iptables -t raw -X HTIPOPTS 2>/dev/null || true
+{% endif %}
+
 /sbin/ipset -N xosrc nethash comment
 /sbin/ipset -N geoblocklist nethash
 /sbin/ipset -N geoallowlist nethash
