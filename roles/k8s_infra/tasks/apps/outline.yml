@@ -23,10 +23,10 @@
             == ([outline_admin] + outline_users) | selectattr('hermes_user', 'defined') | length
           - >-
             ([outline_admin] + outline_users) | selectattr('hermes_user', 'defined') | map(attribute='hermes_user')
-            | difference(hermes_users | default([]) | map(attribute='username')) | length == 0
+            | difference((hermes_users | default([]) | hermes_resolve_email(hermes_mail_settings)) | map(attribute='username')) | length == 0
           - >-
             outline_users | map(attribute='email') | map('lower')
-            | intersect(hermes_users | default([]) | selectattr('enabled') | selectattr('outline', 'defined')
+            | intersect((hermes_users | default([]) | hermes_resolve_email(hermes_mail_settings)) | selectattr('enabled') | selectattr('outline', 'defined')
                         | map(attribute='email') | map(attribute='address') | map('lower'))
             | length == 0
         fail_msg: "Outline vars invalid: dummies in outline_secret_key / outline_utils_secret / postgresql_outline_password / outline_admin, or bad outline_users (role, duplicate email, hermes_user duplicate or unknown); set them in group_vars/all/vault/"
@@ -530,7 +530,7 @@
         _outline_human_email: >-
           {{ ([outline_admin] + outline_users) | selectattr('hermes_user', 'defined') | selectattr('hermes_user', 'eq', item.username)
              | map(attribute='email') | first | default('') }}
-      loop: "{{ hermes_users | default([]) | selectattr('enabled') | selectattr('outline', 'defined') | list }}"
+      loop: "{{ (hermes_users | default([]) | hermes_resolve_email(hermes_mail_settings)) | selectattr('enabled') | selectattr('outline', 'defined') | list }}"
       loop_control:
         label: "{{ item.username }}"
       no_log: true

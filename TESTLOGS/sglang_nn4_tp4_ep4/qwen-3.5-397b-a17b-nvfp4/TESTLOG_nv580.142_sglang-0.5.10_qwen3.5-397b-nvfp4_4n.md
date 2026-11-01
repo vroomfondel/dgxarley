@@ -390,7 +390,7 @@ Config: cutlass-direct MoE / triton attn / fi_cutlass fp4 / `disable_cuda_graph=
 - n=4: all 4 `status=error`, `ttft=None`, `ot=0`, total_time ≈ 6.04 s — immediate error, no tokens generated.
 - n=8: all 8 `status=error`, same pattern, total_time ≈ 4.04 s.
 
-Loki retrieval of the bench pod later revealed the bench client was hitting `socket.gaierror: [Errno -3] Temporary failure in name resolution` against `sglang.dgx.elasticc.io` — a **transient cluster DNS hiccup** (CoreDNS or upstream), not a backend fault. The SGLang head and workers were healthy throughout; the bench simply couldn't reach them for the ~10 s window spanning the n=4 / n=8 start.
+Loki retrieval of the bench pod later revealed the bench client was hitting `socket.gaierror: [Errno -3] Temporary failure in name resolution` against `sglang.dgx.example.com` — a **transient cluster DNS hiccup** (CoreDNS or upstream), not a backend fault. The SGLang head and workers were healthy throughout; the bench simply couldn't reach them for the ~10 s window spanning the n=4 / n=8 start.
 
 **Retest (2026-04-14 09:57)** with an explicit `--start-at 30 --end-at 30` single-case run on the same config delivered a full clean result:
 

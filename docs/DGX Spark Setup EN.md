@@ -140,7 +140,7 @@ Ansible templates with Jinja2 `{% for %}` loops at column 0 inside ConfigMap dat
 
 ### nsupdate DNS Registration
 
-Zone must be `elasticc.io` (parent zone), not `dgx.example.com`. Records as FQDN with trailing dot (e.g. `ollama.dgx.example.com.`). The TSIG key `dgx.example.com` is only authorized for records under `dgx.example.com`.
+Zone must be the parent zone (e.g. `example.com`), not `dgx.example.com`. Records as FQDN with trailing dot (e.g. `ollama.dgx.example.com.`). The TSIG key `dgx.example.com` is only authorized for records under `dgx.example.com`.
 
 ### HF Preload Job: Delete-and-Recreate
 

@@ -15,7 +15,7 @@
 #   - multilingual token salad             (marlin path)
 # ============================================================================
 set -uo pipefail
-EP="${EP:-https://sglang.dgx.elasticc.io}"
+EP="${EP:-https://sglang.dgx.example.com}"
 MODEL="${MODEL:-vroomfondel/Hy3-NVFP4-W4A4}"
 MAXTOK="${MAXTOK:-256}"
 

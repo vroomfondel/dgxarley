@@ -71,12 +71,15 @@ hermes_users:
         soul: "You are a meticulous research assistant."
     email:                             # omit block or set enabled:false to skip
       enabled: false
-      address: "hermes-example@example.com"
-      password: "imap-app-password"    # Gmail/Outlook: app password, NOT account password
-      imap_host: "imap.example.com"
-      smtp_host: "smtp.example.com"
-      imap_port: 993                   # default 993  (IMAP SSL)
-      smtp_port: 587                   # default 587  (SMTP STARTTLS)
+      password: "imap-app-password"    # on the external backend: that server's password; on cluster: becomes the mailbox password
+      # Everything below is optional: filter hermes_resolve_email derives address = <username>@hermes.<tenant>.clientmail.<parent>
+      # (tenant from `tenant`, else dns_external_domain_suffix) and the hosts/ports from hermes_mail_<hermes_mail_backend>.
+      # address: "hermes-example@example.com"   # full address override (also the Outline/Seafile login)
+      # local: "agent"                          # local part override, keeps the derived domain
+      # imap_host: "imap.example.com"
+      # smtp_host: "smtp.example.com"
+      # imap_port: 143                          # 993 → TLS, anything else → STARTTLS
+      # smtp_port: 587
       poll_interval: 15                # default 15s between IMAP polls
       home_address: "owner@example.com"  # fallback recipient for autonomous tasks
       allow_all_users: false           # true → ignore allowed_users
@@ -141,3 +144,13 @@ hermes_users:
       enabled: false
       address: "hermes-admin@example.com"
     enabled: false
+
+# Where the agents' mailboxes live (STANDALONE vars, roles/k8s_infra/defaults/main/hermes.yml has the full comment):
+# external = a mail server outside this repo (set its hosts in vault/hermes.sops.yml), cluster = this repo's
+# Postfix/Dovecot, which then gets every active agent's mailbox generated into mail_domains.
+hermes_mail_backend: "external"
+hermes_mail_external:
+  imap_host: "imap.example.com"
+  imap_port: 143
+  smtp_host: "smtp.example.com"
+  smtp_port: 587

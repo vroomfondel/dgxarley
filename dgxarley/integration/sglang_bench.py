@@ -47,12 +47,12 @@
 # `python -m dgxarley.integration.sglang_bench`):
 #
 #   sglang-bench --backend sglang-oai \
-#       --base-url https://sglang.dgx.elasticc.io \
+#       --base-url https://sglang.dgx.example.com \
 #       --dataset-name random --random-input-len 1024 --random-output-len 512 \
 #       --num-prompts 200 --max-concurrency 32
 #
 #   sglang-bench --sweep 1,4,8,16,32,64 --backend sglang-oai \
-#       --base-url https://sglang.dgx.elasticc.io \
+#       --base-url https://sglang.dgx.example.com \
 #       --dataset-name random --random-input-len 1024 --random-output-len 512
 #
 # All UNKNOWN flags pass straight through to sglang.bench_serving. Wrapper-owned flags:

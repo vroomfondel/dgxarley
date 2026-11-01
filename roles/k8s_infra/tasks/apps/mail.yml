@@ -11,15 +11,17 @@
     _postfix_install: "{{ postfix_enabled | default(false) | bool and not (postfix_teardown | default(false) | bool) }}"
     _dovecot_install: "{{ dovecot_enabled | default(false) | bool and not (dovecot_teardown | default(false) | bool) }}"
     _hub_services: "{{ hub_ingress_mail_services | dict2items | selectattr('value.enabled') | map(attribute='key') | list }}"
-    _mailboxes: "{{ mail_domains | subelements('mailboxes', skip_missing=True) | map('last') | list }}"
-    _aliases: "{{ mail_domains | subelements('aliases', skip_missing=True) | map('last') | list }}"
+    # mail_domains plus the Hermes agents' mailboxes when hermes_mail_backend is cluster (filter_plugins/hermes_mail.py).
+    _mail_domains: "{{ mail_domains | mail_domains_with_hermes(hermes_users | default([]), hermes_mail_settings, hermes.enabled | default(false) | bool) }}"
+    _mailboxes: "{{ _mail_domains | subelements('mailboxes', skip_missing=True) | map('last') | list }}"
+    _aliases: "{{ _mail_domains | subelements('aliases', skip_missing=True) | map('last') | list }}"
   block:
     - name: Assert mail settings are real
       ansible.builtin.assert:
         that:
           - postgresql_mail_password | length >= 16
-          - mail_domains | map(attribute='domain') | reject('match', '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$') | list | length == 0
-          - mail_domains | map(attribute='domain') | unique | length == mail_domains | length
+          - _mail_domains | map(attribute='domain') | reject('match', '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$') | list | length == 0
+          - _mail_domains | map(attribute='domain') | unique | length == _mail_domains | length
           - _mailboxes | map(attribute='local') | reject('match', '^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$') | list | length == 0
           - _mailboxes | map(attribute='password') | map('length') | select('lt', 12) | list | length == 0
           - _aliases | map(attribute='from') | reject('match', '^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$') | list | length == 0

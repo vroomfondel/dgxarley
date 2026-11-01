@@ -17,7 +17,7 @@
 
 - name: Ensure _hermes_active_users is populated (standalone-run safety)
   ansible.builtin.set_fact:
-    _hermes_active_users: "{{ hermes_users | selectattr('enabled', 'true') | list }}"
+    _hermes_active_users: "{{ hermes_users | hermes_resolve_email(hermes_mail_settings) | selectattr('enabled', 'true') | list }}"
   when: _hermes_active_users is not defined
 
 - name: Resolve effective Seafile workspace gate per hermes user

@@ -1,9 +1,9 @@
 {% macro q(s) %}'{{ (s | string) | replace("'", "''") }}'{% endmacro %}
 {% macro addr(local, domain) %}{{ local if '@' in local else local ~ '@' ~ domain }}{% endmacro %}
--- Upserts mail_domains; every statement that changes a row reports "INSERT 0 1".
+-- Upserts _mail_domains (mail_domains + generated Hermes mailboxes); every statement that changes a row reports "INSERT 0 1".
 \set ON_ERROR_STOP on
 BEGIN;
-{% for d in mail_domains %}
+{% for d in _mail_domains %}
 INSERT INTO domain (domain, description) VALUES ({{ q(d.domain) }}, {{ q(d.description | default('')) }})
   ON CONFLICT (domain) DO UPDATE SET description = EXCLUDED.description, active = true, modified = now()
   WHERE (domain.description, domain.active) IS DISTINCT FROM (EXCLUDED.description, true);

@@ -51,14 +51,14 @@ certmanager_acme_issuers:
     nsupdate: primary
     dns_zones: ["{{ dns_external_domain_suffix }}"]
     tsig_secret_name: tsig-secret
-    private_key_ref: elasticc-issuer-key-production
+    private_key_ref: acme-issuer-key-production
   - name: letsencrypt-secondary
     nsupdate: secondary
     dns_zones: ["example.eu"]
     tsig_secret_name: tsig-secret-secondary
-    private_key_ref: elasticc-issuer-key-secondary
+    private_key_ref: acme-issuer-key-secondary
   - name: letsencrypt-tenant
     nsupdate: tenant
     dns_zones: "{{ tenants.values() | map(attribute='domain') | unique | list }}"
     tsig_secret_name: tsig-secret-tenant
-    private_key_ref: elasticc-issuer-key-tenant
+    private_key_ref: acme-issuer-key-tenant

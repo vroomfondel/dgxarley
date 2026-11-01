@@ -65,7 +65,7 @@ Image:            xomoxcc/comfyui:sm121  (BUILDTIME 2026-04-25T15:07:41Z)
 Pod node selector: spark-id=4 (pinned to spark4)
 Launch flags:     main.py --listen 0.0.0.0 --port 8188
                   --use-sage-attention --highvram
-External endpoint: https://comfyui.dgx.elasticc.io
+External endpoint: https://comfyui.dgx.example.com
 ConfigMap source:  roles/k8s_dgx/templates/comfyui_launch.sh.j2
 ```
 

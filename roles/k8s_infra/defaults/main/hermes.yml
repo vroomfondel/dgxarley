@@ -24,6 +24,42 @@ hermes_network_policies_enabled: false
 # The target namespace must also admit hermes in its own ingress policy.
 hermes_network_egress_namespaces: []
 
+# === Hermes mailboxes (STANDALONE, not inside the hermes: dict: hash_behaviour=replace) ===
+# Which mail server holds the agents' mailboxes and where the gateway connects. The address domain is the same on
+# both backends, so a customer moves between them without new addresses:
+#   external  a mail server outside this repo, accounts managed there; hosts in hermes_mail_external (vault)
+#   cluster   this repo's Postfix/Dovecot (tags postfix + dovecot): the mailboxes of every active user with email
+#             enabled are generated into mail_domains (apps/mail.yml, explicit entries win); hosts in hermes_mail_cluster
+hermes_mail_backend: "external"
+hermes_mail_external:
+  imap_host: ""
+  imap_port: 143
+  smtp_host: ""
+  smtp_port: 587
+# mail_hostname is the hub's public mail name: the hub must pass imaps + submission through (hub_ingress_mail).
+hermes_mail_cluster:
+  imap_host: "{{ mail_hostname }}"
+  imap_port: 993
+  smtp_host: "{{ mail_hostname }}"
+  smtp_port: 587
+# Address domain: <prefix>.<service domain with domain_replace[0] -> [1]>, the service domain being
+# tenants[<tenant>].domain for a tenant user, else dns_external_domain_suffix: hermes.<tenant>.clientmail.<parent>.
+# tenants.<t>.mail_domain pins a tenant's domain, email.address a user's full address, email.local the local part
+# (default: username); per-user email.imap_host / smtp_host / *_port override the backend.
+hermes_mail_domain_prefix: "hermes"
+hermes_mail_domain_replace: [".clients.", ".clientmail."]
+# Argument bundle of the hermes_resolve_email / mail_domains_with_hermes filters (filter_plugins/hermes_mail.py).
+hermes_mail_settings:
+  backend: "{{ hermes_mail_backend }}"
+  backends:
+    external: "{{ hermes_mail_external }}"
+    cluster: "{{ hermes_mail_cluster }}"
+  tenants: "{{ tenants | default({}) }}"
+  service_domain: "{{ dns_external_domain_suffix }}"
+  domain_prefix: "{{ hermes_mail_domain_prefix }}"
+  domain_replace: "{{ hermes_mail_domain_replace }}"
+  enabled_default: "{{ hermes.email.enabled_default }}"
+
 # === Hermes skills ===
 # Users with `skills_enabled: true` get skills installed at pod start by the init-skills initContainer into
 # $HERMES_HOME/skills/<name> and into the skills dir of every profile ($HERMES_HOME/profiles/<p>/skills/<name>).
@@ -314,11 +350,12 @@ hermes:
 #           webui_enabled?     (default false),
 #           tenant?            (key of tenants → extra <username>.hermes[-webui].<tenants[tenant].domain>),
 #           hermes_debug?      (default false),
-#           email?: {           (default disabled — omit block to skip)
+#           email?: {           (omit block to skip; resolved by filter_plugins/hermes_mail.py, see hermes_mail_*)
 #               enabled,        (default hermes.email.enabled_default)
-#               address, password, imap_host, smtp_host,
-#               imap_port?      (default 993),
-#               smtp_port?      (default 587),
+#               password,
+#               address?        (default <local>@hermes.<tenant>.clientmail.<parent>; also the Outline/Seafile login),
+#               local?          (default username),
+#               imap_host?, smtp_host?, imap_port?, smtp_port?  (default hermes_mail_<backend>),
 #               poll_interval?  (default 15),
 #               home_address?,
 #               allow_all_users?, allowed_users?,

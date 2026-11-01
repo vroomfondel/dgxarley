@@ -140,7 +140,7 @@ Ansible-Templates mit Jinja2 `{% for %}`-Loops an Spalte 0 innerhalb von ConfigM
 
 ### nsupdate DNS-Registrierung
 
-Zone muss `elasticc.io` (Parent-Zone) sein, nicht `dgx.example.com`. Records als FQDN mit Trailing Dot (z.B. `ollama.dgx.example.com.`). Der TSIG-Key `dgx.example.com` ist nur für Records unter `dgx.example.com` autorisiert.
+Zone muss die Parent-Zone (z.B. `example.com`) sein, nicht `dgx.example.com`. Records als FQDN mit Trailing Dot (z.B. `ollama.dgx.example.com.`). Der TSIG-Key `dgx.example.com` ist nur für Records unter `dgx.example.com` autorisiert.
 
 ### HF Preload Job: Delete-and-Recreate
 

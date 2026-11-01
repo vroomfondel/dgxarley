@@ -17,10 +17,22 @@
 #   tenant            (optional)      → extra <username>.hermes[-webui].<tenants[tenant].domain> routes,
 #                                        wildcard cert per tenant via tenant_tls_issuer (tag hermes_tenant)
 
+# email blocks are resolved here (address, hosts, ports from hermes_mail_*), everything below reads item.email.*.
 - name: Filter enabled hermes users
   tags: [hermes_tenant]
   ansible.builtin.set_fact:
-    _hermes_active_users: "{{ hermes_users | selectattr('enabled', 'true') | list }}"
+    _hermes_active_users: "{{ hermes_users | hermes_resolve_email(hermes_mail_settings) | selectattr('enabled', 'true') | list }}"
+
+- name: Assert the cluster mail backend is installed
+  when:
+    - hermes_mail_backend == 'cluster'
+    - _hermes_active_users | selectattr('email', 'defined') | map(attribute='email') | selectattr('enabled') | list | length > 0
+  ansible.builtin.assert:
+    that:
+      - postfix_enabled | default(false) | bool and not (postfix_teardown | default(false) | bool)
+      - dovecot_enabled | default(false) | bool and not (dovecot_teardown | default(false) | bool)
+    fail_msg: "hermes_mail_backend=cluster needs postfix_enabled and dovecot_enabled: the agents' mailboxes live there (apps/mail.yml generates them into mail_domains)"
+    quiet: true
 
 - name: Assert every active hermes user has an Outline API key
   when: hermes.outline.enabled | bool
