@@ -17,13 +17,30 @@ iptables -I INPUT 1 -j HTSTUFFIN
 iptables -t raw -N HTIPOPTS 2>/dev/null || true
 iptables -t raw -F HTIPOPTS
 iptables -t raw -D PREROUTING -p tcp -m u32 --u32 "0&0x0F000000=0x06000000:0x0F000000" -j HTIPOPTS 2>/dev/null || true
-iptables -t raw -I PREROUTING 1 -p tcp -m u32 --u32 "0&0x0F000000=0x06000000:0x0F000000" -j HTIPOPTS || echo "WARN: xt_u32 missing, CVE-2026-98432 IP-options drop not active" >&2
+if iptables -t raw -I PREROUTING 1 -p tcp -m u32 --u32 "0&0x0F000000=0x06000000:0x0F000000" -j HTIPOPTS 2>/dev/null; then
+    nft delete table inet ht_ipopts 2>/dev/null || true
+else
+    nft delete table inet ht_ipopts 2>/dev/null || true
+    if ! nft -f - 2>/dev/null <<'EOF'
+table inet ht_ipopts {
+    chain prerouting {
+        type filter hook prerouting priority -310; policy accept;
+        ip protocol tcp ip hdrlength > 5 limit rate 5/minute log prefix "HT_TCP_IPOPTS_DROP " level warn
+        ip protocol tcp ip hdrlength > 5 counter drop
+    }
+}
+EOF
+    then
+        echo "WARN: neither xt_u32 nor nft usable, CVE-2026-98432 IP-options drop not active" >&2
+    fi
+fi
 iptables -t raw -A HTIPOPTS -m limit --limit 5/min -j LOG --log-prefix "HT_TCP_IPOPTS_DROP " --log-level 4
 iptables -t raw -A HTIPOPTS -j DROP
 {% else %}
 iptables -t raw -D PREROUTING -p tcp -m u32 --u32 "0&0x0F000000=0x06000000:0x0F000000" -j HTIPOPTS 2>/dev/null || true
 iptables -t raw -F HTIPOPTS 2>/dev/null || true
 iptables -t raw -X HTIPOPTS 2>/dev/null || true
+nft delete table inet ht_ipopts 2>/dev/null || true
 {% endif %}
 
 /sbin/ipset -N xosrc nethash comment
