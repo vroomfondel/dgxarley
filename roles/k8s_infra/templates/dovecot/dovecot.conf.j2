@@ -1,0 +1,143 @@
+# Rendered by roles/k8s_infra/tasks/apps/dovecot.yml; replaces the image's dovecot.conf (rootless, uid vmail).
+dovecot_config_version = 2.4.3
+dovecot_storage_version = 2.4.3
+
+base_dir = /run/dovecot
+state_dir = /run/dovecot
+default_internal_user = vmail
+default_internal_group = vmail
+default_login_user = vmail
+protocols = imap lmtp sieve
+listen = *
+hostname = {{ mail_hostname }}
+postmaster_address = {{ mail_postmaster_address }}
+log_path = /var/log/mail/dovecot.log
+verbose_proctitle = yes
+recipient_delimiter = +
+lmtp_save_to_detail_mailbox = yes
+# Proxied connections arrive from the node's CNI address after kube-proxy SNATs the NodePort.
+haproxy_trusted_networks = {{ cluster_cidr }}
+
+auth_mechanisms = plain login
+auth_verbose = yes
+
+sql_driver = pgsql
+pgsql {{ mail_db_host }} {
+  parameters {
+    port = {{ mail_db_port }}
+    dbname = {{ mail_db_name }}
+    user = {{ mail_db_user }}
+    password = {{ postgresql_mail_password }}
+  }
+}
+
+passdb sql {
+  default_password_scheme = {{ dovecot_default_password_scheme }}
+  query = SELECT username AS user, password FROM mailbox WHERE (username = '%{user|username}' OR username = '%{user}') AND active
+}
+
+userdb sql {
+  query = SELECT '/srv/vmail/' || maildir AS home, CASE WHEN quota > 0 THEN quota || 'B' ELSE 'unlimited' END AS quota_storage_size FROM mailbox WHERE (username = '%{user|username}' OR username = '%{user}') AND active
+  iterate_query = SELECT username AS user FROM mailbox
+}
+
+mail_uid = vmail
+mail_gid = vmail
+mail_driver = maildir
+mail_path = /srv/vmail/%{user|domain}/%{user|username}/maildir
+mail_index_path = /srv/vmail/%{user|domain}/%{user|username}/index
+maildir_copy_with_hardlinks = yes
+
+mail_plugins {
+  quota = yes
+}
+quota "User quota" {
+}
+quota_storage_size = {{ dovecot_quota_default }}
+
+sieve_script personal {
+  path = /srv/vmail/%{user|domain}/%{user|username}/sieve
+  active_path = /srv/vmail/%{user|domain}/%{user|username}/.dovecot.sieve
+}
+
+namespace inbox {
+  inbox = yes
+  mailbox Drafts {
+    auto = subscribe
+    special_use = \Drafts
+  }
+  mailbox Sent {
+    auto = subscribe
+    special_use = \Sent
+  }
+  mailbox Spam {
+    auto = subscribe
+    special_use = \Junk
+  }
+  mailbox Trash {
+    auto = subscribe
+    special_use = \Trash
+  }
+}
+
+ssl = required
+ssl_min_protocol = TLSv1.2
+ssl_server {
+  cert_file = /etc/mail-tls/tls.crt
+  key_file = /etc/mail-tls/tls.key
+  prefer_ciphers = server
+}
+
+service imap-login {
+  process_min_avail = 1
+  inet_listener imap {
+    port = {{ dovecot_ports.imap }}
+  }
+  inet_listener imaps {
+    port = {{ dovecot_ports.imaps }}
+    ssl = yes
+  }
+  inet_listener imap_proxied {
+    port = {{ dovecot_ports.imap_proxied }}
+    haproxy = yes
+  }
+  inet_listener imaps_proxied {
+    port = {{ dovecot_ports.imaps_proxied }}
+    ssl = yes
+    haproxy = yes
+  }
+}
+
+# Postfix (apps/postfix.yml) reaches both over the ClusterIP service; the auth-client protocol is an unauthenticated
+# password oracle, NetworkPolicy dovecot-ingress admits the Postfix pods only.
+service lmtp {
+  inet_listener lmtp {
+    port = {{ dovecot_ports.lmtp }}
+  }
+}
+service auth {
+  inet_listener auth {
+    port = {{ dovecot_ports.auth }}
+  }
+}
+
+service managesieve-login {
+  inet_listener sieve {
+    port = {{ dovecot_ports.sieve }}
+  }
+}
+
+protocol imap {
+  imap_client_workarounds = delay-newmail
+  mail_max_userip_connections = {{ dovecot_max_userip_connections }}
+  mail_plugins {
+    imap_quota = yes
+  }
+}
+
+protocol lmtp {
+  mail_plugins {
+    sieve = yes
+  }
+  quota_full_tempfail = yes
+}

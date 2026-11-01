@@ -1,0 +1,57 @@
+---
+# === Postfix (MTA: MX behind postscreen, submission, submissions) ===
+# Deployed by roles/k8s_infra/tasks/apps/postfix.yml (tag: postfix); namespace, certificate and account DB are shared with
+# Dovecot (defaults/main/mail.yml), delivery (LMTP) and SASL go to the Dovecot service over TCP.
+# false only skips the install; removal is the opt-in `-e postfix_teardown=true` (the queue under postfix_data_base is kept).
+# Inbound from the internet arrives through the upstream hub (hub_ingress_mail, PROXY v2 on 127.0.0.1 NodePorts);
+# all outbound mail leaves through postfix_relayhost (the hub's relay: stable IP, PTR, DKIM signing).
+postfix_enabled: false
+postfix_teardown: false
+postfix_image: "xomoxcc/postfix-pgsql:latest"
+
+# The hub's relay as seen from the cluster, e.g. "[10.20.30.1]:25"; required.
+postfix_relayhost: ""
+# Must not exceed the hub relay's message_size_limit.
+postfix_message_size_limit: 52428800
+postfix_queue_lifetime: "5d"
+# Postscreen DNSBLs; the reply filter keeps resolver-refused answers (127.255.255.x) from counting as listings.
+postfix_postscreen_dnsbl_sites:
+  - "zen.spamhaus.org=127.0.0.[2..11]*3"
+  - "bl.spamcop.net=127.0.0.2*2"
+  - "b.barracudacentral.org=127.0.0.2*2"
+postfix_postscreen_dnsbl_threshold: 3
+# reject_unknown_client_hostname / _helo_hostname / _reverse_client_hostname on port 25, as on the old server.
+postfix_smtpd_strict_dns: true
+
+# Dovecot's ClusterIP service: virtual_transport = lmtp:inet:<service>:<dovecot_service_ports.lmtp>,
+# smtpd_sasl_path = inet:<service>:<dovecot_service_ports.auth>.
+postfix_dovecot_service: "dovecot.{{ mail_namespace }}.svc.cluster.local"
+
+# hostPath on the k3smaster: the queue (<base>/queue) and fail2ban's database (<base>/fail2ban).
+postfix_data_base: "/var/lib/k8s-data/postfix"
+
+# Container ports of the PROXY v2 listeners behind the hub NodePorts; 587 and 465 serve in-cluster clients without a header.
+postfix_ports:
+  smtp_proxied: 10025
+  submission_proxied: 10587
+  submissions_proxied: 10465
+# hub_ingress_mail service -> named container port of its PROXY listener.
+postfix_hub_targets:
+  smtp: smtp-px
+  submission: subm-px
+  submissions: subms-px
+
+# fail2ban sidecar (image, hub URL, ignoreip, sync interval: mail_fail2ban_*): jails postfix[mode=auth|extra] + recidive.
+postfix_fail2ban_enabled: false
+# Sensitive, real value in group_vars/all/vault/postfix.sops.yml: this pod's token in kikube_hub_f2b_api_clients.
+postfix_fail2ban_hub_token: "changeme"
+postfix_fail2ban_bantime: 259200
+postfix_fail2ban_findtime: 3600
+postfix_fail2ban_maxretry: 3
+postfix_fail2ban_auth_maxretry: 1
+postfix_fail2ban_auth_bantime: 7200
+postfix_fail2ban_extra_maxretry: 3
+postfix_fail2ban_extra_bantime: 7200
+# Must not exceed the hub's kikube_hub_f2b_api_max_bantime.
+postfix_fail2ban_recidive_bantime: 604800
+postfix_fail2ban_recidive_maxretry: 3

@@ -1,0 +1,50 @@
+---
+# === Dovecot (IMAP, LMTP delivery, SASL for Postfix, ManageSieve) ===
+# Deployed by roles/k8s_infra/tasks/apps/dovecot.yml (tag: dovecot); namespace, certificate and account DB are shared with
+# Postfix (defaults/main/mail.yml). Rootless image (uid 1000 = vmail), so every listener sits above 1024.
+# false only skips the install; removal is the opt-in `-e dovecot_teardown=true` (maildirs under dovecot_data_base are kept).
+# Inbound IMAP from the internet arrives through the upstream hub (hub_ingress_mail, PROXY v2 on 127.0.0.1 NodePorts).
+dovecot_enabled: false
+dovecot_teardown: false
+# Pinned: dovecot.conf declares dovecot_config_version, bumps are deliberate. Keel only follows rebuilds of the tag.
+dovecot_image: "dovecot/dovecot:2.4.5"
+
+# hostPath on the k3smaster: maildirs (<base>/vmail, uid 1000) and fail2ban's database (<base>/fail2ban).
+dovecot_data_base: "/var/lib/k8s-data/dovecot"
+dovecot_quota_default: "2G"
+dovecot_max_userip_connections: 20
+# Existing hashes (e.g. migrated from PostfixAdmin sha512.b64) keep their {SCHEME} prefix; new ones are {BLF-CRYPT}.
+dovecot_default_password_scheme: "SHA512-CRYPT.B64"  # gitleaks:allow (Dovecot scheme name, not a secret)
+
+# Container ports; the *_proxied ones expect a PROXY v2 header and back the hub NodePorts,
+# lmtp and auth are reachable from the Postfix pods only (NetworkPolicy dovecot-ingress).
+dovecot_ports:
+  imap: 31143
+  imaps: 31993
+  imap_proxied: 31144
+  imaps_proxied: 31994
+  sieve: 34190
+  lmtp: 10024
+  auth: 12345
+# Ports of the ClusterIP service `dovecot`, as in-cluster clients and Postfix see them.
+dovecot_service_ports:
+  imap: 143
+  imaps: 993
+  sieve: 4190
+  lmtp: 24
+  auth: 12345
+# hub_ingress_mail service -> named container port of its PROXY listener.
+dovecot_hub_targets:
+  imap: imap-px
+  imaps: imaps-px
+
+# fail2ban sidecar (image, hub URL, ignoreip, sync interval: mail_fail2ban_*): jails dovecot (filter dovecot24) + recidive.
+dovecot_fail2ban_enabled: false
+# Sensitive, real value in group_vars/all/vault/dovecot.sops.yml: this pod's token in kikube_hub_f2b_api_clients.
+dovecot_fail2ban_hub_token: "changeme"
+dovecot_fail2ban_bantime: 259200
+dovecot_fail2ban_findtime: 3600
+dovecot_fail2ban_maxretry: 3
+# Must not exceed the hub's kikube_hub_f2b_api_max_bantime.
+dovecot_fail2ban_recidive_bantime: 604800
+dovecot_fail2ban_recidive_maxretry: 3

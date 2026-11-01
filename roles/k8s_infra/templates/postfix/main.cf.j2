@@ -1,0 +1,75 @@
+# Rendered by roles/k8s_infra/tasks/apps/postfix.yml
+compatibility_level = 3.6
+myhostname = {{ mail_hostname }}
+myorigin = $myhostname
+mydestination =
+local_transport = error:5.1.1 local delivery is disabled
+alias_maps =
+alias_database =
+inet_interfaces = all
+inet_protocols = ipv4
+# Empty: on the PROXY ports any pod could claim a trusted source address; every client authenticates instead.
+mynetworks =
+relayhost = {{ postfix_relayhost }}
+recipient_delimiter = +
+message_size_limit = {{ postfix_message_size_limit }}
+mailbox_size_limit = 0
+maximal_queue_lifetime = {{ postfix_queue_lifetime }}
+bounce_queue_lifetime = {{ postfix_queue_lifetime }}
+# fail2ban reads the file; the logtail sidecar copies it to stdout for Loki.
+maillog_file = /var/log/mail/postfix.log
+smtpd_banner = $myhostname ESMTP
+biff = no
+append_dot_mydomain = no
+
+virtual_mailbox_domains = proxy:pgsql:/etc/postfix/pgsql/virtual_domains.cf
+virtual_mailbox_maps = proxy:pgsql:/etc/postfix/pgsql/virtual_mailboxes.cf
+virtual_alias_maps = proxy:pgsql:/etc/postfix/pgsql/virtual_alias.cf, proxy:pgsql:/etc/postfix/pgsql/virtual_alias_domain.cf, proxy:pgsql:/etc/postfix/pgsql/virtual_alias_domain_catchall.cf
+# Delivery and SASL over TCP to the Dovecot service (apps/dovecot.yml); its NetworkPolicy admits the Postfix pods only.
+virtual_transport = lmtp:inet:{{ postfix_dovecot_service }}:{{ dovecot_service_ports.lmtp }}
+
+smtpd_tls_cert_file = /etc/mail-tls/tls.crt
+smtpd_tls_key_file = /etc/mail-tls/tls.key
+smtpd_tls_security_level = may
+smtpd_tls_auth_only = yes
+smtpd_tls_received_header = yes
+smtpd_tls_loglevel = 1
+smtpd_tls_mandatory_protocols = >=TLSv1.2
+smtpd_tls_mandatory_ciphers = high
+tls_preempt_cipherlist = yes
+smtp_tls_security_level = may
+smtp_tls_loglevel = 1
+
+smtpd_sasl_type = dovecot
+smtpd_sasl_path = inet:{{ postfix_dovecot_service }}:{{ dovecot_service_ports.auth }}
+smtpd_sasl_auth_enable = no
+smtpd_sasl_security_options = noanonymous
+smtpd_sasl_authenticated_header = no
+broken_sasl_auth_clients = yes
+smtpd_sender_login_maps = proxy:pgsql:/etc/postfix/pgsql/sender_login.cf
+smtpd_client_auth_rate_limit = 20
+
+# Port 25 (MX, behind postscreen).
+smtpd_helo_required = yes
+smtpd_client_restrictions = permit_mynetworks{{ ', reject_unknown_client_hostname' if postfix_smtpd_strict_dns | bool else '' }}
+smtpd_helo_restrictions = permit_mynetworks{{ ', reject_unknown_helo_hostname' if postfix_smtpd_strict_dns | bool else '' }}
+smtpd_sender_restrictions = permit_mynetworks, reject_non_fqdn_sender, reject_unknown_sender_domain{{ ', reject_unknown_reverse_client_hostname' if postfix_smtpd_strict_dns | bool else '' }}
+smtpd_relay_restrictions = permit_mynetworks, reject_unauth_destination
+smtpd_recipient_restrictions = reject_non_fqdn_recipient, reject_unknown_recipient_domain, reject_unauthenticated_sender_login_mismatch, reject_unlisted_recipient, check_policy_service unix:private/policyd-spf
+smtpd_data_restrictions = reject_unauth_pipelining
+# SMTP smuggling protection, https://www.postfix.org/smtp-smuggling.html
+smtpd_discard_ehlo_keywords = chunking, silent-discard
+policyd-spf_time_limit = 3600
+
+# Submission ports: authenticated users only, sending as their own addresses (smtpd_sender_login_maps).
+mua_client_restrictions = permit_sasl_authenticated, reject
+mua_sender_restrictions = reject_sender_login_mismatch, permit_sasl_authenticated, reject
+mua_relay_restrictions = permit_sasl_authenticated, reject
+mua_recipient_restrictions = permit_sasl_authenticated, reject
+
+postscreen_access_list = permit_mynetworks
+postscreen_blacklist_action = drop
+postscreen_greet_action = enforce
+postscreen_dnsbl_sites = {{ postfix_postscreen_dnsbl_sites | join(', ') }}
+postscreen_dnsbl_threshold = {{ postfix_postscreen_dnsbl_threshold }}
+postscreen_dnsbl_action = enforce

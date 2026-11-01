@@ -1,0 +1,128 @@
+---
+# Mail: what Postfix (apps/postfix.yml) and Dovecot (apps/dovecot.yml) share — the namespace, the TLS certificate of
+# mail_hostname and the account store in the shared PostgreSQL (PostfixAdmin schema). Runs under both tags.
+# Knobs: defaults/main/mail.yml. Teardown is per server; the last one out deletes the namespace, the DB is always kept.
+
+- name: Mail — namespace, certificate and accounts
+  when: >-
+    (postfix_enabled | default(false) | bool and not (postfix_teardown | default(false) | bool))
+    or (dovecot_enabled | default(false) | bool and not (dovecot_teardown | default(false) | bool))
+  vars:
+    _postfix_install: "{{ postfix_enabled | default(false) | bool and not (postfix_teardown | default(false) | bool) }}"
+    _dovecot_install: "{{ dovecot_enabled | default(false) | bool and not (dovecot_teardown | default(false) | bool) }}"
+    _hub_services: "{{ hub_ingress_mail_services | dict2items | selectattr('value.enabled') | map(attribute='key') | list }}"
+    _mailboxes: "{{ mail_domains | subelements('mailboxes', skip_missing=True) | map('last') | list }}"
+    _aliases: "{{ mail_domains | subelements('aliases', skip_missing=True) | map('last') | list }}"
+  block:
+    - name: Assert mail settings are real
+      ansible.builtin.assert:
+        that:
+          - postgresql_mail_password | length >= 16
+          - mail_domains | map(attribute='domain') | reject('match', '^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$') | list | length == 0
+          - mail_domains | map(attribute='domain') | unique | length == mail_domains | length
+          - _mailboxes | map(attribute='local') | reject('match', '^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$') | list | length == 0
+          - _mailboxes | map(attribute='password') | map('length') | select('lt', 12) | list | length == 0
+          - _aliases | map(attribute='from') | reject('match', '^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$') | list | length == 0
+          - _hub_services | length == 0 or hub_ingress.enabled | default(false) | bool
+          - _hub_services | difference(postfix_hub_targets.keys() | list + dovecot_hub_targets.keys() | list) | length == 0
+          - _hub_services | intersect(postfix_hub_targets.keys() | list) | length == 0 or _postfix_install | bool
+          - _hub_services | intersect(dovecot_hub_targets.keys() | list) | length == 0 or _dovecot_install | bool
+        fail_msg: >-
+          mail vars invalid: postgresql_mail_password a dummy (< 16 chars), bad or duplicate domain, mailbox local part
+          or alias from (lower-case local parts only), mailbox password shorter than 12, hub_ingress_mail enabled
+          without hub_ingress.enabled, or a hub service without an installed owner (postfix_hub_targets /
+          dovecot_hub_targets); set them in group_vars/all/vault/
+        quiet: true
+
+    - name: Create mail namespace
+      kubernetes.core.k8s:
+        name: "{{ mail_namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+
+    - name: Get PostgreSQL pod
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Pod
+        namespace: postgresql
+        label_selectors:
+          - app=postgresql
+        field_selectors:
+          - status.phase=Running
+      register: mail_postgresql_pods
+
+    - name: Set PostgreSQL pod name fact
+      ansible.builtin.set_fact:
+        mail_postgresql_pod_name: "{{ (mail_postgresql_pods.resources | rejectattr('metadata.deletionTimestamp', 'defined') | first).metadata.name }}"
+
+    # k8s_exec runs for real under --check.
+    - name: Ensure mail user and database exist in PostgreSQL
+      when: not ansible_check_mode
+      kubernetes.core.k8s_exec:
+        namespace: postgresql
+        pod: "{{ mail_postgresql_pod_name }}"
+        command: |
+          bash -c '
+            set -e
+            DB_PASSWORD="{{ postgresql_mail_password }}"
+
+            if psql -U postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='\''{{ mail_db_user }}'\''" | grep -q 1; then
+              psql -U postgres -c "ALTER USER {{ mail_db_user }} WITH PASSWORD '\''${DB_PASSWORD}'\'';"
+              echo "User {{ mail_db_user }}: exists (password ensured)"
+            else
+              psql -U postgres -c "CREATE USER {{ mail_db_user }} WITH PASSWORD '\''${DB_PASSWORD}'\'';"
+              echo "User {{ mail_db_user }}: created"
+            fi
+
+            if psql -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='\''{{ mail_db_name }}'\''" | grep -q 1; then
+              echo "Database {{ mail_db_name }}: exists"
+            else
+              psql -U postgres -c "CREATE DATABASE {{ mail_db_name }} OWNER {{ mail_db_user }};"
+              echo "Database {{ mail_db_name }}: created"
+            fi
+          '
+      register: mail_db_ensure
+      changed_when: "'created' in mail_db_ensure.stdout"
+      no_log: true
+
+    # Base64 in argv: the SQL carries passwords and quotes that must not meet the shell.
+    - name: Ensure mail schema
+      when: not ansible_check_mode
+      kubernetes.core.k8s_exec:
+        namespace: postgresql
+        pod: "{{ mail_postgresql_pod_name }}"
+        command: >-
+          bash -c 'echo {{ lookup('template', 'mail/schema.sql.j2') | b64encode }} | base64 -d
+          | psql -v ON_ERROR_STOP=1 -U postgres -d {{ mail_db_name }}'
+      register: mail_db_schema
+      changed_when: "'already exists' not in mail_db_schema.stderr"
+
+    - name: Ensure mail domains, mailboxes and aliases
+      when: not ansible_check_mode
+      kubernetes.core.k8s_exec:
+        namespace: postgresql
+        pod: "{{ mail_postgresql_pod_name }}"
+        command: >-
+          bash -c 'echo {{ lookup('template', 'mail/accounts.sql.j2') | b64encode }} | base64 -d
+          | psql -v ON_ERROR_STOP=1 -U postgres -d {{ mail_db_name }}'
+      register: mail_db_accounts
+      changed_when: "'INSERT 0 1' in mail_db_accounts.stdout"
+      no_log: true
+
+    - name: Create mail TLS certificate
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: "{{ mail_hostname }}"
+            namespace: "{{ mail_namespace }}"
+          spec:
+            dnsNames:
+              - "{{ mail_hostname }}"
+            secretName: mail-tls
+            issuerRef:
+              name: "{{ mail_tls_issuer }}"
+              kind: ClusterIssuer

@@ -208,6 +208,8 @@ All persistent data uses hostPath volumes under `/var/lib/k8s-data/` on k3smaste
 | Loki + Fluent Bit      | loki                      | Log aggregation (filesystem backend, DaemonSet log collector; gate `fluentbit_enabled`; promtail removed, EOL since 2026-03-02) |
 | NUT Exporter           | monitoring                | Prometheus exporter for NUT UPS metrics (`druggeri/nut_exporter:3.3.0`, per-UPS scrape jobs)                                                                   |
 | Uptime Kuma            | uptimekuma                | Uptime monitoring                                                                                                                                              |
+| Postfix                | mail                      | MX + submission, accounts in the shared `mail` DB, inbound via the hub (`hub_ingress_mail`), outbound via the hub relay, LMTP/SASL to Dovecot                  |
+| Dovecot                | mail                      | IMAP/ManageSieve + LMTP delivery and SASL for Postfix (rootless, maildirs on hostPath), same account DB, IMAP inbound via the hub                              |
 
 FQDNs follow the pattern `<service>.<domain-suffix>` (configured via `dns_external_domain_suffix` in vault).
 

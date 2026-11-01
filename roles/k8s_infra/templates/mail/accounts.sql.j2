@@ -1,0 +1,35 @@
+{% macro q(s) %}'{{ (s | string) | replace("'", "''") }}'{% endmacro %}
+{% macro addr(local, domain) %}{{ local if '@' in local else local ~ '@' ~ domain }}{% endmacro %}
+-- Upserts mail_domains; every statement that changes a row reports "INSERT 0 1".
+\set ON_ERROR_STOP on
+BEGIN;
+{% for d in mail_domains %}
+INSERT INTO domain (domain, description) VALUES ({{ q(d.domain) }}, {{ q(d.description | default('')) }})
+  ON CONFLICT (domain) DO UPDATE SET description = EXCLUDED.description, active = true, modified = now()
+  WHERE (domain.description, domain.active) IS DISTINCT FROM (EXCLUDED.description, true);
+{% for m in d.mailboxes | default([]) %}
+{% set user = m.local ~ '@' ~ d.domain %}
+{% set pw = q(m.password) %}
+{% set unchanged = "(mailbox.password LIKE '{BLF-CRYPT}%' AND crypt(" ~ pw ~ ", substr(mailbox.password, 12)) = substr(mailbox.password, 12))" %}
+{% set update_pw = m.update_password | default(false) | bool %}
+INSERT INTO mailbox (username, password, name, maildir, quota, local_part, domain)
+  VALUES ({{ q(user) }}, '{BLF-CRYPT}' || crypt({{ pw }}, gen_salt('bf', 10)), {{ q(m.name | default('')) }},
+          {{ q(d.domain ~ '/' ~ m.local ~ '/') }}, {{ (m.quota_mb | default(mail_mailbox_quota_mb)) | int * 1048576 }}, {{ q(m.local) }}, {{ q(d.domain) }})
+  ON CONFLICT (username) DO UPDATE SET name = EXCLUDED.name, quota = EXCLUDED.quota, active = true, modified = now()
+{%- if update_pw %}, password = CASE WHEN {{ unchanged }} THEN mailbox.password ELSE EXCLUDED.password END{% endif %}
+
+  WHERE (mailbox.name, mailbox.quota, mailbox.active) IS DISTINCT FROM (EXCLUDED.name, EXCLUDED.quota, true)
+{%- if update_pw %} OR NOT {{ unchanged }}{% endif %};
+-- Self alias as PostfixAdmin creates it, so a catch-all of the domain does not swallow the mailbox.
+INSERT INTO alias (address, goto, domain) VALUES ({{ q(user) }}, {{ q(user) }}, {{ q(d.domain) }})
+  ON CONFLICT (address) DO NOTHING;
+{% endfor %}
+{% for a in d.aliases | default([]) %}
+{% set gotos = [a.goto] if a.goto is string else a.goto %}
+INSERT INTO alias (address, goto, domain)
+  VALUES ({{ q(addr(a.from, d.domain)) }}, {{ q(gotos | map('regex_replace', '^([^@]+)$', '\\1@' ~ d.domain) | join(',')) }}, {{ q(d.domain) }})
+  ON CONFLICT (address) DO UPDATE SET goto = EXCLUDED.goto, active = true, modified = now()
+  WHERE (alias.goto, alias.active) IS DISTINCT FROM (EXCLUDED.goto, true);
+{% endfor %}
+{% endfor %}
+COMMIT;

@@ -1,0 +1,41 @@
+---
+# === Mail: what Postfix and Dovecot share ===
+# Namespace, TLS certificate and the account store in the shared PostgreSQL, ensured by roles/k8s_infra/tasks/apps/mail.yml
+# (runs under both tags, postfix and dovecot). The servers themselves: defaults/main/postfix.yml, defaults/main/dovecot.yml.
+mail_namespace: "mail"
+
+# MX / IMAP / submission name == the PTR of the hub's public address (hub.<customer>.clients.kikube.io, kikube_hub_endpoint_fqdn
+# there); must match kikube_hub_mail_ingress.fqdn on the hub.
+mail_hostname: "hub.{{ dns_external_domain_suffix }}"
+mail_postmaster_address: "postmaster@{{ dns_external_domain_suffix }}"
+# The issuer's TSIG key must be allowed to write _acme-challenge.<mail_hostname>.
+mail_tls_issuer: "letsencrypt-production"
+
+# PostfixAdmin-compatible tables (domain, mailbox, alias, alias_domain); password: postgresql_mail_password.
+mail_db_host: "postgresql.postgresql.svc.cluster.local"
+mail_db_port: 5432
+mail_db_name: "mail"
+mail_db_user: "mail"
+# Default mailbox quota; 0 = unlimited (as in PostfixAdmin).
+mail_mailbox_quota_mb: 2048
+
+# Sensitive, real values in group_vars/all/vault/mail.sops.yml.
+# [{ domain, description?, mailboxes: [{ local, name?, password, quota_mb?, update_password? }],
+#    aliases: [{ from (local part), goto (string or list) }] }]; goto entries without @ get @<domain>.
+# Rows are created/updated, never deleted; a password is set on create and with update_password only.
+mail_domains: []
+
+# logtail sidecar in both pods: log files to stdout for Loki, daily rotation.
+mail_busybox_image: "busybox:1.38"
+
+# fail2ban sidecars (postfix_fail2ban_enabled / dovecot_fail2ban_enabled) send every ban/unban to the hub's ban API
+# (kikube_hub_f2b_api, HTTP through the WireGuard tunnel; the Mikrotik's hub_tcp_ports must list the port). Each pod is
+# its own hub client in kikube_hub_f2b_api_clients with its own token (postfix_fail2ban_hub_token, dovecot_fail2ban_hub_token).
+# Built in ../somestuff (/f2bapistuff), same image and pinned tag as the hub's ban containers.
+mail_fail2ban_image: "xomoxcc/f2b-api:1.1.0-1"
+# e.g. "http://10.20.30.1:8099"; required when a sidecar is enabled.
+mail_fail2ban_hub_url: ""
+# Full reconcile of the pod's hub jail; heals bans/unbans the hub missed.
+mail_fail2ban_sync_interval: 300
+# Never banned in addition to the private ranges, e.g. the customer's own public address.
+mail_fail2ban_ignoreip: []

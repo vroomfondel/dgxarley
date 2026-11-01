@@ -1,0 +1,24 @@
+# Rendered by roles/k8s_infra/tasks/apps/dovecot.yml; jails and values as on the old host-based mail server.
+# backend per jail: Debian's jail.conf sets systemd for [dovecot] (and others), which [DEFAULT] does not override.
+[DEFAULT]
+ignoreip = 127.0.0.1/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 {{ mail_fail2ban_ignoreip | join(' ') }}
+bantime  = {{ dovecot_fail2ban_bantime }}
+findtime = {{ dovecot_fail2ban_findtime }}
+maxretry = {{ dovecot_fail2ban_maxretry }}
+backend = polling
+banaction = hubapi
+banaction_allports = hubapi
+action = %(action_)s
+
+[dovecot]
+enabled = true
+backend = polling
+filter = dovecot24
+logpath = /var/log/mail/dovecot.log
+
+[recidive]
+enabled = true
+backend = polling
+logpath = /var/log/mail/fail2ban.log
+bantime = {{ dovecot_fail2ban_recidive_bantime }}
+maxretry = {{ dovecot_fail2ban_recidive_maxretry }}

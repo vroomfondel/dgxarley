@@ -1,0 +1,335 @@
+---
+# Postfix on k3smaster: MX behind postscreen, submission and submissions; accounts from the shared mail DB (apps/mail.yml),
+# delivery (LMTP) and SASL over TCP to the Dovecot service (apps/dovecot.yml), queue on hostPath.
+# Internet traffic arrives through the hub (hub_ingress_mail -> 127.0.0.1 NodePorts, PROXY v2), outbound mail
+# leaves through postfix_relayhost. Knobs: defaults/main/postfix.yml.
+
+- name: Postfix — install
+  when:
+    - postfix_enabled | default(false) | bool
+    - not (postfix_teardown | default(false) | bool)
+  vars:
+    _hub_services: "{{ hub_ingress_mail_services | dict2items | selectattr('value.enabled') | selectattr('key', 'in', postfix_hub_targets) | list }}"
+  block:
+    - name: Assert postfix settings are real
+      ansible.builtin.assert:
+        that:
+          - postfix_relayhost | length > 0
+          - not postfix_fail2ban_enabled | bool or mail_fail2ban_hub_url is match('^http://[A-Za-z0-9.-]+(:[0-9]+)?/?$')
+          - not postfix_fail2ban_enabled | bool or (postfix_fail2ban_hub_token | length >= 32 and postfix_fail2ban_hub_token is not search('\\s'))
+        fail_msg: >-
+          postfix vars invalid: postfix_relayhost unset, or fail2ban without hub URL (mail_fail2ban_hub_url, http://host:port)
+          / token (postfix_fail2ban_hub_token, >= 32 chars); set them in group_vars/all/vault/
+        quiet: true
+
+    - name: Render postfix configuration
+      ansible.builtin.set_fact:
+        _postfix_main_cf: "{{ lookup('template', 'postfix/main.cf.j2') }}"
+        _postfix_master_cf: "{{ lookup('template', 'postfix/master.cf.j2') }}"
+        _postfix_fail2ban_jail: "{{ lookup('template', 'postfix/fail2ban_jail.j2') }}"
+        _postfix_pgsql_maps: |
+          {% set out = {} %}
+          {% for name, query in {
+               'virtual_domains': "SELECT domain FROM domain WHERE domain='%s' AND active",
+               'virtual_mailboxes': "SELECT maildir FROM mailbox WHERE username='%s' AND active",
+               'virtual_alias': "SELECT goto FROM alias WHERE address='%s' AND active",
+               'virtual_alias_domain': "SELECT goto FROM alias,alias_domain WHERE alias_domain.alias_domain = '%d' AND alias.address = CONCAT('%u', '@', alias_domain.target_domain) AND alias.active AND alias_domain.active",
+               'virtual_alias_domain_catchall': "SELECT goto FROM alias,alias_domain WHERE alias_domain.alias_domain = '%d' AND alias.address = CONCAT('@', alias_domain.target_domain) AND alias.active AND alias_domain.active",
+               'sender_login': "SELECT username AS allowedUser FROM mailbox WHERE username='%s' AND active UNION SELECT goto FROM alias WHERE address='%s' AND active",
+             }.items() %}
+          {% set _ = out.update({name ~ '.cf': 'hosts = ' ~ mail_db_host ~ ':' ~ mail_db_port ~ '\nuser = ' ~ mail_db_user
+                                 ~ '\npassword = ' ~ postgresql_mail_password ~ '\ndbname = ' ~ mail_db_name ~ '\nquery = ' ~ query ~ '\n'}) %}
+          {% endfor %}
+          {{ out }}
+      no_log: true
+
+    - name: Create postfix config
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: postfix-config
+            namespace: "{{ mail_namespace }}"
+          data:
+            main.cf: "{{ _postfix_main_cf }}"
+            master.cf: "{{ _postfix_master_cf }}"
+
+    - name: Create postfix pgsql maps (carry the DB password)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: postfix-pgsql
+            namespace: "{{ mail_namespace }}"
+          type: Opaque
+          stringData: "{{ _postfix_pgsql_maps }}"
+      no_log: true
+
+    - name: Create postfix fail2ban config
+      kubernetes.core.k8s:
+        state: "{{ 'present' if postfix_fail2ban_enabled | bool else 'absent' }}"
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: postfix-fail2ban
+            namespace: "{{ mail_namespace }}"
+          data:
+            kikube.local: "{{ _postfix_fail2ban_jail }}"
+
+    - name: Create postfix fail2ban hub credentials
+      kubernetes.core.k8s:
+        state: "{{ 'present' if postfix_fail2ban_enabled | bool else 'absent' }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: postfix-fail2ban-hub
+            namespace: "{{ mail_namespace }}"
+          type: Opaque
+          stringData:
+            url: "{{ mail_fail2ban_hub_url }}"
+            token: "{{ postfix_fail2ban_hub_token }}"
+      no_log: true
+
+    - name: Create postfix service (in-cluster clients)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          kind: Service
+          apiVersion: v1
+          metadata:
+            name: postfix
+            namespace: "{{ mail_namespace }}"
+            labels:
+              app: postfix
+          spec:
+            selector:
+              app: postfix
+            ports:
+              - { name: submission, port: 587, targetPort: submission, protocol: TCP }
+              - { name: submissions, port: 465, targetPort: submissions, protocol: TCP }
+
+    # kube-proxy binds NodePorts to 127.0.0.0/8 only, so these are reachable for the master's HAProxy alone.
+    - name: Create postfix proxied service (HAProxy backend for the hub)
+      kubernetes.core.k8s:
+        state: "{{ 'present' if _hub_services else 'absent' }}"
+        definition:
+          kind: Service
+          apiVersion: v1
+          metadata:
+            name: postfix-proxied
+            namespace: "{{ mail_namespace }}"
+            labels:
+              app: postfix
+          spec:
+            type: NodePort
+            selector:
+              app: postfix
+            ports: "{{ _postfix_nodeports }}"
+      vars:
+        _postfix_nodeports: >-
+          {%- set out = [] -%}
+          {%- for s in _hub_services -%}
+          {%- set _ = out.append({'name': postfix_hub_targets[s.key], 'port': s.value.nodeport,
+                                  'targetPort': postfix_hub_targets[s.key], 'nodePort': s.value.nodeport, 'protocol': 'TCP'}) -%}
+          {%- endfor -%}
+          {{ out }}
+
+    # Node-local sources (NodePort SNAT, kubelet probes) pass k3s' kube-router policy implicitly; pods get the ClusterIP ports only.
+    - name: Restrict the PROXY listeners to the node
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: postfix-ingress
+            namespace: "{{ mail_namespace }}"
+          spec:
+            podSelector:
+              matchLabels:
+                app: postfix
+            policyTypes:
+              - Ingress
+            ingress:
+              # Pods: the ClusterIP service ports only, never the PROXY listeners.
+              - from:
+                  - namespaceSelector: {}
+                ports:
+                  - { protocol: TCP, port: 587 }
+                  - { protocol: TCP, port: 465 }
+
+    - name: Create postfix deployment
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: postfix
+            namespace: "{{ mail_namespace }}"
+            labels:
+              app: postfix
+            annotations:
+              keel.sh/policy: force
+              keel.sh/match-tag: "true"
+              keel.sh/pollSchedule: "@every 24h"
+              keel.sh/trigger: poll
+          spec:
+            replicas: 1
+            strategy:
+              type: Recreate
+            selector:
+              matchLabels:
+                app: postfix
+            template:
+              metadata:
+                labels:
+                  app: postfix
+                annotations:
+                  checksum/config: "{{ (_postfix_main_cf ~ _postfix_master_cf ~ (_postfix_pgsql_maps | to_json) ~ _postfix_fail2ban_jail) | hash('sha256') }}"
+              spec:
+                nodeSelector:
+                  node-role: k3smaster
+                dnsConfig:
+                  options:
+                    - name: ndots
+                      value: "1"
+                containers: "{{ _postfix_containers + ([_postfix_fail2ban_container] if postfix_fail2ban_enabled | bool else []) }}"
+                restartPolicy: Always
+                volumes:
+                  - name: spool
+                    hostPath:
+                      path: "{{ postfix_data_base }}/queue"
+                      type: DirectoryOrCreate
+                  - name: postfix-config
+                    configMap:
+                      name: postfix-config
+                  # proxymap reads the maps as the postfix user.
+                  - name: postfix-pgsql
+                    secret:
+                      secretName: postfix-pgsql
+                      defaultMode: 0444
+                  - name: tls
+                    secret:
+                      secretName: mail-tls
+                      defaultMode: 0440
+                  - name: maillog
+                    emptyDir:
+                      sizeLimit: 512Mi
+                  - name: fail2ban-db
+                    hostPath:
+                      path: "{{ postfix_data_base }}/fail2ban"
+                      type: DirectoryOrCreate
+                  - name: fail2ban-config
+                    configMap:
+                      name: postfix-fail2ban
+                      optional: true
+                  - name: fail2ban-hub
+                    secret:
+                      secretName: postfix-fail2ban-hub
+                      optional: true
+                      defaultMode: 0400
+      vars:
+        _postfix_containers:
+          - name: postfix
+            image: "{{ postfix_image }}"
+            imagePullPolicy: Always
+            env:
+              - { name: TINI_SUBREAPER, value: "1" }
+            ports:
+              - { name: smtp-px, containerPort: "{{ postfix_ports.smtp_proxied }}", protocol: TCP }
+              - { name: subm-px, containerPort: "{{ postfix_ports.submission_proxied }}", protocol: TCP }
+              - { name: subms-px, containerPort: "{{ postfix_ports.submissions_proxied }}", protocol: TCP }
+              - { name: submission, containerPort: 587, protocol: TCP }
+              - { name: submissions, containerPort: 465, protocol: TCP }
+            resources:
+              requests: { cpu: 20m, memory: 64Mi }
+              limits: { cpu: 500m, memory: 256Mi }
+            readinessProbe:
+              tcpSocket: { port: submission }
+              initialDelaySeconds: 5
+              periodSeconds: 15
+            livenessProbe:
+              tcpSocket: { port: submission }
+              initialDelaySeconds: 30
+              periodSeconds: 30
+            volumeMounts:
+              - { name: spool, mountPath: /var/spool/postfix }
+              - { name: postfix-config, mountPath: /etc/postfix/main.cf, subPath: main.cf, readOnly: true }
+              - { name: postfix-config, mountPath: /etc/postfix/master.cf, subPath: master.cf, readOnly: true }
+              - { name: postfix-pgsql, mountPath: /etc/postfix/pgsql, readOnly: true }
+              - { name: tls, mountPath: /etc/mail-tls, readOnly: true }
+              - { name: maillog, mountPath: /var/log/mail }
+          - name: logtail
+            image: "{{ mail_busybox_image }}"
+            command: ["/bin/sh", "-c", "{{ _postfix_logtail_script }}"]
+            resources:
+              requests: { cpu: 5m, memory: 8Mi }
+              limits: { cpu: 100m, memory: 32Mi }
+            volumeMounts:
+              - { name: maillog, mountPath: /var/log/mail }
+        # Image xomoxcc/f2b-api (../somestuff/f2bapistuff): filter, action hubapi and the hub sync ship with it;
+        # only the jail comes from here. F2B_TOUCH: a missing log file fails the whole start.
+        _postfix_fail2ban_container:
+          name: fail2ban
+          image: "{{ mail_fail2ban_image }}"
+          imagePullPolicy: Always
+          env:
+            - { name: TINI_SUBREAPER, value: "1" }
+            - { name: F2B_LOGTARGET, value: /var/log/mail/fail2ban.log }
+            - { name: F2B_DBPURGEAGE, value: 8d }
+            - { name: F2B_TOUCH, value: "/var/log/mail/postfix.log /var/log/mail/fail2ban.log" }
+            - { name: F2B_HUB_SYNC, value: "1" }
+            - { name: F2B_SYNC_INTERVAL, value: "{{ mail_fail2ban_sync_interval | string }}" }
+          resources:
+            requests: { cpu: 10m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          volumeMounts:
+            - { name: maillog, mountPath: /var/log/mail }
+            - { name: fail2ban-db, mountPath: /var/lib/fail2ban }
+            - { name: fail2ban-config, mountPath: /etc/fail2ban/jail.d/kikube.local, subPath: kikube.local, readOnly: true }
+            - { name: fail2ban-hub, mountPath: /etc/f2b-hub, readOnly: true }
+        # Runs as root: postlogd creates postfix.log 0600. Postfix rotates its own log (entrypoint), this only prunes old ones.
+        _postfix_logtail_script: >-
+          cd /var/log/mail &&
+          tail -F -q postfix.log fail2ban.log &
+          while sleep 86400; do
+          find /var/log/mail -name 'postfix.log.*' -mtime +1 -delete;
+          done
+
+- name: Postfix — teardown (opt-in `-e postfix_teardown=true`)
+  when: postfix_teardown | default(false) | bool
+  block:
+    # The queue and fail2ban's database under postfix_data_base and the mail DB are kept; drop them by hand to abandon.
+    - name: Delete postfix resources
+      kubernetes.core.k8s:
+        state: absent
+        api_version: "{{ item.api_version }}"
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ mail_namespace }}"
+      loop:
+        - { api_version: apps/v1, kind: Deployment, name: postfix }
+        - { api_version: v1, kind: Service, name: postfix }
+        - { api_version: v1, kind: Service, name: postfix-proxied }
+        - { api_version: networking.k8s.io/v1, kind: NetworkPolicy, name: postfix-ingress }
+        - { api_version: v1, kind: ConfigMap, name: postfix-config }
+        - { api_version: v1, kind: ConfigMap, name: postfix-fail2ban }
+        - { api_version: v1, kind: Secret, name: postfix-pgsql }
+        - { api_version: v1, kind: Secret, name: postfix-fail2ban-hub }
+      loop_control:
+        label: "{{ item.kind }}/{{ item.name }}"
+
+    - name: Delete mail namespace when Dovecot is not installed either (cascades the certificate)
+      when: not (dovecot_enabled | default(false) | bool and not (dovecot_teardown | default(false) | bool))
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ mail_namespace }}"

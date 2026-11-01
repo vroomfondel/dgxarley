@@ -1,0 +1,327 @@
+---
+# Dovecot on k3smaster (rootless image, uid 1000 = vmail): IMAP, LMTP delivery and SASL for Postfix (apps/postfix.yml,
+# over TCP), ManageSieve; accounts from the shared mail DB (apps/mail.yml), maildirs on hostPath.
+# Internet IMAP arrives through the hub (hub_ingress_mail -> 127.0.0.1 NodePorts, PROXY v2). Knobs: defaults/main/dovecot.yml.
+
+- name: Dovecot — install
+  when:
+    - dovecot_enabled | default(false) | bool
+    - not (dovecot_teardown | default(false) | bool)
+  vars:
+    _hub_services: "{{ hub_ingress_mail_services | dict2items | selectattr('value.enabled') | selectattr('key', 'in', dovecot_hub_targets) | list }}"
+  block:
+    - name: Assert dovecot settings are real
+      ansible.builtin.assert:
+        that:
+          - not dovecot_fail2ban_enabled | bool or mail_fail2ban_hub_url is match('^http://[A-Za-z0-9.-]+(:[0-9]+)?/?$')
+          - not dovecot_fail2ban_enabled | bool or (dovecot_fail2ban_hub_token | length >= 32 and dovecot_fail2ban_hub_token is not search('\\s'))
+        fail_msg: >-
+          dovecot vars invalid: fail2ban without hub URL (mail_fail2ban_hub_url, http://host:port) / token
+          (dovecot_fail2ban_hub_token, >= 32 chars); set them in group_vars/all/vault/
+        quiet: true
+
+    - name: Render dovecot configuration
+      ansible.builtin.set_fact:
+        _dovecot_conf: "{{ lookup('template', 'dovecot/dovecot.conf.j2') }}"
+        _dovecot_fail2ban_jail: "{{ lookup('template', 'dovecot/fail2ban_jail.j2') }}"
+      no_log: true
+
+    - name: Create dovecot config (carries the DB password)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: dovecot-config
+            namespace: "{{ mail_namespace }}"
+          type: Opaque
+          stringData:
+            dovecot.conf: "{{ _dovecot_conf }}"
+      no_log: true
+
+    - name: Create dovecot fail2ban config
+      kubernetes.core.k8s:
+        state: "{{ 'present' if dovecot_fail2ban_enabled | bool else 'absent' }}"
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: dovecot-fail2ban
+            namespace: "{{ mail_namespace }}"
+          data:
+            kikube.local: "{{ _dovecot_fail2ban_jail }}"
+
+    - name: Create dovecot fail2ban hub credentials
+      kubernetes.core.k8s:
+        state: "{{ 'present' if dovecot_fail2ban_enabled | bool else 'absent' }}"
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: dovecot-fail2ban-hub
+            namespace: "{{ mail_namespace }}"
+          type: Opaque
+          stringData:
+            url: "{{ mail_fail2ban_hub_url }}"
+            token: "{{ dovecot_fail2ban_hub_token }}"
+      no_log: true
+
+    - name: Create dovecot service (in-cluster clients and Postfix)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          kind: Service
+          apiVersion: v1
+          metadata:
+            name: dovecot
+            namespace: "{{ mail_namespace }}"
+            labels:
+              app: dovecot
+          spec:
+            selector:
+              app: dovecot
+            ports:
+              - { name: imap, port: "{{ dovecot_service_ports.imap }}", targetPort: imap, protocol: TCP }
+              - { name: imaps, port: "{{ dovecot_service_ports.imaps }}", targetPort: imaps, protocol: TCP }
+              - { name: sieve, port: "{{ dovecot_service_ports.sieve }}", targetPort: sieve, protocol: TCP }
+              - { name: lmtp, port: "{{ dovecot_service_ports.lmtp }}", targetPort: lmtp, protocol: TCP }
+              - { name: auth, port: "{{ dovecot_service_ports.auth }}", targetPort: auth, protocol: TCP }
+
+    # kube-proxy binds NodePorts to 127.0.0.0/8 only, so these are reachable for the master's HAProxy alone.
+    - name: Create dovecot proxied service (HAProxy backend for the hub)
+      kubernetes.core.k8s:
+        state: "{{ 'present' if _hub_services else 'absent' }}"
+        definition:
+          kind: Service
+          apiVersion: v1
+          metadata:
+            name: dovecot-proxied
+            namespace: "{{ mail_namespace }}"
+            labels:
+              app: dovecot
+          spec:
+            type: NodePort
+            selector:
+              app: dovecot
+            ports: "{{ _dovecot_nodeports }}"
+      vars:
+        _dovecot_nodeports: >-
+          {%- set out = [] -%}
+          {%- for s in _hub_services -%}
+          {%- set _ = out.append({'name': dovecot_hub_targets[s.key], 'port': s.value.nodeport,
+                                  'targetPort': dovecot_hub_targets[s.key], 'nodePort': s.value.nodeport, 'protocol': 'TCP'}) -%}
+          {%- endfor -%}
+          {{ out }}
+
+    # Node-local sources (NodePort SNAT, kubelet probes) pass k3s' kube-router policy implicitly; pods get the ClusterIP ports only.
+    - name: Restrict the PROXY listeners to the node and LMTP/auth to Postfix
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: dovecot-ingress
+            namespace: "{{ mail_namespace }}"
+          spec:
+            podSelector:
+              matchLabels:
+                app: dovecot
+            policyTypes:
+              - Ingress
+            ingress:
+              # Pods: the ClusterIP service ports only, never the PROXY listeners.
+              - from:
+                  - namespaceSelector: {}
+                ports:
+                  - { protocol: TCP, port: "{{ dovecot_ports.imap }}" }
+                  - { protocol: TCP, port: "{{ dovecot_ports.imaps }}" }
+                  - { protocol: TCP, port: "{{ dovecot_ports.sieve }}" }
+              # The auth-client protocol is an unauthenticated password oracle: Postfix pods of this namespace only.
+              - from:
+                  - podSelector:
+                      matchLabels:
+                        app: postfix
+                ports:
+                  - { protocol: TCP, port: "{{ dovecot_ports.lmtp }}" }
+                  - { protocol: TCP, port: "{{ dovecot_ports.auth }}" }
+
+    - name: Create dovecot deployment
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: dovecot
+            namespace: "{{ mail_namespace }}"
+            labels:
+              app: dovecot
+            annotations:
+              keel.sh/policy: force
+              keel.sh/match-tag: "true"
+              keel.sh/pollSchedule: "@every 24h"
+              keel.sh/trigger: poll
+          spec:
+            replicas: 1
+            strategy:
+              type: Recreate
+            selector:
+              matchLabels:
+                app: dovecot
+            template:
+              metadata:
+                labels:
+                  app: dovecot
+                annotations:
+                  checksum/config: "{{ (_dovecot_conf ~ _dovecot_fail2ban_jail) | hash('sha256') }}"
+              spec:
+                nodeSelector:
+                  node-role: k3smaster
+                # The logtail sidecar signals the Dovecot master.
+                shareProcessNamespace: true
+                securityContext:
+                  fsGroup: 1000
+                dnsConfig:
+                  options:
+                    - name: ndots
+                      value: "1"
+                initContainers:
+                  # fsGroup does not apply to hostPath; uid 1000 is vmail in the dovecot image.
+                  - name: prepare
+                    image: "{{ mail_busybox_image }}"
+                    command: ["/bin/sh", "-ec", "chown 1000:1000 /vmail"]
+                    volumeMounts:
+                      - { name: vmail, mountPath: /vmail }
+                containers: "{{ _dovecot_containers + ([_dovecot_fail2ban_container] if dovecot_fail2ban_enabled | bool else []) }}"
+                restartPolicy: Always
+                volumes:
+                  - name: vmail
+                    hostPath:
+                      path: "{{ dovecot_data_base }}/vmail"
+                      type: DirectoryOrCreate
+                  - name: dovecot-config
+                    secret:
+                      secretName: dovecot-config
+                      defaultMode: 0440
+                  - name: tls
+                    secret:
+                      secretName: mail-tls
+                      defaultMode: 0440
+                  - name: maillog
+                    emptyDir:
+                      sizeLimit: 512Mi
+                  - name: fail2ban-db
+                    hostPath:
+                      path: "{{ dovecot_data_base }}/fail2ban"
+                      type: DirectoryOrCreate
+                  - name: fail2ban-config
+                    configMap:
+                      name: dovecot-fail2ban
+                      optional: true
+                  - name: fail2ban-hub
+                    secret:
+                      secretName: dovecot-fail2ban-hub
+                      optional: true
+                      defaultMode: 0400
+      vars:
+        _dovecot_containers:
+          - name: dovecot
+            image: "{{ dovecot_image }}"
+            imagePullPolicy: Always
+            env:
+              - { name: TINI_SUBREAPER, value: "1" }
+            ports:
+              - { name: imap, containerPort: "{{ dovecot_ports.imap }}", protocol: TCP }
+              - { name: imaps, containerPort: "{{ dovecot_ports.imaps }}", protocol: TCP }
+              - { name: imap-px, containerPort: "{{ dovecot_ports.imap_proxied }}", protocol: TCP }
+              - { name: imaps-px, containerPort: "{{ dovecot_ports.imaps_proxied }}", protocol: TCP }
+              - { name: sieve, containerPort: "{{ dovecot_ports.sieve }}", protocol: TCP }
+              - { name: lmtp, containerPort: "{{ dovecot_ports.lmtp }}", protocol: TCP }
+              - { name: auth, containerPort: "{{ dovecot_ports.auth }}", protocol: TCP }
+            resources:
+              requests: { cpu: 20m, memory: 64Mi }
+              limits: { cpu: "1", memory: 512Mi }
+            readinessProbe:
+              tcpSocket: { port: imap }
+              initialDelaySeconds: 5
+              periodSeconds: 15
+            livenessProbe:
+              tcpSocket: { port: imap }
+              initialDelaySeconds: 30
+              periodSeconds: 30
+            volumeMounts:
+              - { name: vmail, mountPath: /srv/vmail }
+              - { name: dovecot-config, mountPath: /etc/dovecot/dovecot.conf, subPath: dovecot.conf, readOnly: true }
+              - { name: tls, mountPath: /etc/mail-tls, readOnly: true }
+              - { name: maillog, mountPath: /var/log/mail }
+          - name: logtail
+            image: "{{ mail_busybox_image }}"
+            command: ["/bin/sh", "-c", "{{ _dovecot_logtail_script }}"]
+            resources:
+              requests: { cpu: 5m, memory: 8Mi }
+              limits: { cpu: 100m, memory: 32Mi }
+            volumeMounts:
+              - { name: maillog, mountPath: /var/log/mail }
+        # Image xomoxcc/f2b-api (../somestuff/f2bapistuff): filter dovecot24, action hubapi and the hub sync ship with it;
+        # only the jail comes from here. F2B_TOUCH: a missing log file fails the whole start, dovecot.log must be writable by uid 1000.
+        _dovecot_fail2ban_container:
+          name: fail2ban
+          image: "{{ mail_fail2ban_image }}"
+          imagePullPolicy: Always
+          env:
+            - { name: TINI_SUBREAPER, value: "1" }
+            - { name: F2B_LOGTARGET, value: /var/log/mail/fail2ban.log }
+            - { name: F2B_DBPURGEAGE, value: 8d }
+            - { name: F2B_TOUCH, value: "/var/log/mail/dovecot.log:1000 /var/log/mail/fail2ban.log" }
+            - { name: F2B_HUB_SYNC, value: "1" }
+            - { name: F2B_SYNC_INTERVAL, value: "{{ mail_fail2ban_sync_interval | string }}" }
+          resources:
+            requests: { cpu: 10m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          volumeMounts:
+            - { name: maillog, mountPath: /var/log/mail }
+            - { name: fail2ban-db, mountPath: /var/lib/fail2ban }
+            - { name: fail2ban-config, mountPath: /etc/fail2ban/jail.d/kikube.local, subPath: kikube.local, readOnly: true }
+            - { name: fail2ban-hub, mountPath: /etc/f2b-hub, readOnly: true }
+        # Runs as root. Dovecot's log is rotated here (USR1 reopens it), HUP reloads renewed certificates (the image has no sleep).
+        _dovecot_logtail_script: >-
+          cd /var/log/mail &&
+          tail -F -q dovecot.log fail2ban.log &
+          while sleep 86400; do
+          cd /var/log/mail;
+          [ -f dovecot.log ] && mv -f dovecot.log dovecot.log.1;
+          pkill -USR1 -f '^/dovecot/sbin/dovecot';
+          pkill -HUP -f '^/dovecot/sbin/dovecot';
+          done
+
+- name: Dovecot — teardown (opt-in `-e dovecot_teardown=true`)
+  when: dovecot_teardown | default(false) | bool
+  block:
+    # The maildirs and fail2ban's database under dovecot_data_base and the mail DB are kept; drop them by hand to abandon.
+    - name: Delete dovecot resources
+      kubernetes.core.k8s:
+        state: absent
+        api_version: "{{ item.api_version }}"
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ mail_namespace }}"
+      loop:
+        - { api_version: apps/v1, kind: Deployment, name: dovecot }
+        - { api_version: v1, kind: Service, name: dovecot }
+        - { api_version: v1, kind: Service, name: dovecot-proxied }
+        - { api_version: networking.k8s.io/v1, kind: NetworkPolicy, name: dovecot-ingress }
+        - { api_version: v1, kind: ConfigMap, name: dovecot-fail2ban }
+        - { api_version: v1, kind: Secret, name: dovecot-config }
+        - { api_version: v1, kind: Secret, name: dovecot-fail2ban-hub }
+      loop_control:
+        label: "{{ item.kind }}/{{ item.name }}"
+
+    - name: Delete mail namespace when Postfix is not installed either (cascades the certificate)
+      when: not (postfix_enabled | default(false) | bool and not (postfix_teardown | default(false) | bool))
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ mail_namespace }}"

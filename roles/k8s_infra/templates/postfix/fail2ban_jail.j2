@@ -1,0 +1,34 @@
+# Rendered by roles/k8s_infra/tasks/apps/postfix.yml; jails and values as on the old host-based mail server.
+# backend per jail: Debian's jail.conf sets systemd for some jails, which [DEFAULT] does not override.
+[DEFAULT]
+ignoreip = 127.0.0.1/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 {{ mail_fail2ban_ignoreip | join(' ') }}
+bantime  = {{ postfix_fail2ban_bantime }}
+findtime = {{ postfix_fail2ban_findtime }}
+maxretry = {{ postfix_fail2ban_maxretry }}
+backend = polling
+banaction = hubapi
+banaction_allports = hubapi
+action = %(action_)s
+
+[postfix-auth]
+enabled = true
+backend = polling
+filter = postfix[mode=auth]
+maxretry = {{ postfix_fail2ban_auth_maxretry }}
+bantime = {{ postfix_fail2ban_auth_bantime }}
+logpath = /var/log/mail/postfix.log
+
+[postfix-extra]
+enabled = true
+backend = polling
+filter = postfix[mode=extra]
+maxretry = {{ postfix_fail2ban_extra_maxretry }}
+bantime = {{ postfix_fail2ban_extra_bantime }}
+logpath = /var/log/mail/postfix.log
+
+[recidive]
+enabled = true
+backend = polling
+logpath = /var/log/mail/fail2ban.log
+bantime = {{ postfix_fail2ban_recidive_bantime }}
+maxretry = {{ postfix_fail2ban_recidive_maxretry }}

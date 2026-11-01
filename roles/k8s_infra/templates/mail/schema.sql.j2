@@ -1,0 +1,48 @@
+-- PostfixAdmin-compatible subset: the Postfix/Dovecot queries and a COPY of migrated rows need exactly these columns.
+\set ON_ERROR_STOP on
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+SET ROLE {{ mail_db_user }};
+
+CREATE TABLE IF NOT EXISTS domain (
+    domain      varchar(255) PRIMARY KEY,
+    description varchar(255) NOT NULL DEFAULT '',
+    aliases     integer      NOT NULL DEFAULT 0,
+    mailboxes   integer      NOT NULL DEFAULT 0,
+    maxquota    bigint       NOT NULL DEFAULT 0,
+    quota       bigint       NOT NULL DEFAULT 0,
+    transport   varchar(255),
+    backupmx    boolean      NOT NULL DEFAULT false,
+    created     timestamptz  NOT NULL DEFAULT now(),
+    modified    timestamptz  NOT NULL DEFAULT now(),
+    active      boolean      NOT NULL DEFAULT true
+);
+
+CREATE TABLE IF NOT EXISTS mailbox (
+    username   varchar(255) PRIMARY KEY,
+    password   varchar(255) NOT NULL,
+    name       varchar(255) NOT NULL DEFAULT '',
+    maildir    varchar(255) NOT NULL,
+    quota      bigint       NOT NULL DEFAULT 0,
+    local_part varchar(255) NOT NULL,
+    domain     varchar(255) NOT NULL REFERENCES domain (domain),
+    created    timestamptz  NOT NULL DEFAULT now(),
+    modified   timestamptz  NOT NULL DEFAULT now(),
+    active     boolean      NOT NULL DEFAULT true
+);
+
+CREATE TABLE IF NOT EXISTS alias (
+    address  varchar(255) PRIMARY KEY,
+    goto     text         NOT NULL,
+    domain   varchar(255) NOT NULL REFERENCES domain (domain),
+    created  timestamptz  NOT NULL DEFAULT now(),
+    modified timestamptz  NOT NULL DEFAULT now(),
+    active   boolean      NOT NULL DEFAULT true
+);
+
+CREATE TABLE IF NOT EXISTS alias_domain (
+    alias_domain  varchar(255) PRIMARY KEY REFERENCES domain (domain),
+    target_domain varchar(255) NOT NULL REFERENCES domain (domain),
+    created       timestamptz  NOT NULL DEFAULT now(),
+    modified      timestamptz  NOT NULL DEFAULT now(),
+    active        boolean      NOT NULL DEFAULT true
+);

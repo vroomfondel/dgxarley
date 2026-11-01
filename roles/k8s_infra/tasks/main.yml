@@ -342,6 +342,29 @@
     - isk3smaster is defined
     - isk3smaster
 
+- name: Ensure mail namespace, certificate and accounts (shared by Postfix and Dovecot)
+  import_tasks: apps/mail.yml
+  tags:
+    - postfix
+    - dovecot
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: Deploy/teardown Dovecot (IMAP, LMTP, SASL; gated install/teardown)
+  import_tasks: apps/dovecot.yml
+  tags: dovecot
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: Deploy/teardown Postfix (MX + submission; gated install/teardown)
+  import_tasks: apps/postfix.yml
+  tags: postfix
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
 - name: Deploy/teardown Outline wiki (gated install/teardown)
   import_tasks: apps/outline.yml
   tags: outline
