@@ -1,0 +1,41 @@
+---
+# Created if missing, otherwise updated in place (counters survive); moved above every static raw rule.
+- name: Ensure raw rule dropping IPv4 TCP with IP options (CVE-2026-98432)
+  community.routeros.command:
+    commands:
+      - >-
+        { :if ([:len [/ip/firewall/raw/find comment="{{ mikrotik_cve_2026_98432_comment }}"]] = 0)
+        do={ /ip/firewall/raw/add chain=prerouting protocol=tcp ipv4-options=any action=drop comment="{{ mikrotik_cve_2026_98432_comment }}" }
+        else={ /ip/firewall/raw/set [find comment="{{ mikrotik_cve_2026_98432_comment }}"] chain=prerouting protocol=tcp ipv4-options=any action=drop };
+        :local top [:pick [/ip/firewall/raw/find dynamic=no] 0];
+        :local rule [:pick [/ip/firewall/raw/find comment="{{ mikrotik_cve_2026_98432_comment }}"] 0];
+        :if ($rule != $top) do={ /ip/firewall/raw/move $rule destination=$top } }
+  changed_when: false
+  when: mikrotik_cve_2026_98432_mitigation | bool
+
+- name: Remove raw rule dropping IPv4 TCP with IP options
+  community.routeros.command:
+    commands:
+      - >-
+        :foreach i in=[/ip/firewall/raw/find comment="{{ mikrotik_cve_2026_98432_comment }}"]
+        do={ /ip/firewall/raw/remove $i }
+  changed_when: false
+  when: not (mikrotik_cve_2026_98432_mitigation | bool)
+
+# The console echoes the command, wrapped at terminal width, into stdout; the raw| marker separates the rule lines from it.
+- name: Read raw rule order
+  community.routeros.command:
+    commands:
+      - ':foreach i in=[/ip/firewall/raw/find dynamic=no] do={ :put ("raw|" . [/ip/firewall/raw/get $i comment]) }'
+  register: _ipopts_rule_order
+  changed_when: false
+  check_mode: false
+
+- name: Assert IPv4-options rule state
+  vars:
+    _raw: "{{ _ipopts_rule_order.stdout_lines[0] | map('trim') | select('match', '^raw\\|') | map('regex_replace', '^raw\\|', '') | list }}"
+  ansible.builtin.assert:
+    that:
+      - (_raw | select('eq', mikrotik_cve_2026_98432_comment) | list | length) == (1 if mikrotik_cve_2026_98432_mitigation | bool else 0)
+      - not (mikrotik_cve_2026_98432_mitigation | bool) or _raw[0] == mikrotik_cve_2026_98432_comment
+    fail_msg: "IPv4-options raw rule missing, duplicated or not first: {{ _raw }}"

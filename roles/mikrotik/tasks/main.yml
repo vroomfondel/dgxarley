@@ -41,3 +41,5 @@
   tags: [mikrotik_firewall, mikrotik]
 - import_tasks: qsfp_roce.yml
   tags: [mikrotik_roce, mikrotik]
+- import_tasks: ipopts.yml
+  tags: [mikrotik_ipopts, mikrotik_firewall, mikrotik]
