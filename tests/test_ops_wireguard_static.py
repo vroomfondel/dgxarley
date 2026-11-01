@@ -64,6 +64,7 @@ def _render(template: Path, **variables: Any) -> str:
     env.filters["quote"] = lambda s: "'" + str(s).replace("'", "'\"'\"'") + "'"
     env.filters["combine"] = lambda a, b: {**a, **b}
     env.filters["mandatory"] = lambda v: v
+    env.filters["dict2items"] = lambda d: [{"key": k, "value": v} for k, v in d.items()]
     env.filters["bool"] = lambda v: v if isinstance(v, bool) else str(v).lower() in ("1", "true", "yes", "on")
     return env.get_template(template.name).render(**variables)
 
@@ -206,8 +207,8 @@ HUB_INGRESS: dict[str, Any] = {
 
 def test_firewall_hub_ingress_drop_sits_between_hub_return_and_ops_accept() -> None:
     out = _render_iptables(**WG_VARS, hub_ingress=HUB_INGRESS, isk3smaster=True)
-    hub = "iptables -A HTSTUFFIN -m state --state NEW -p tcp --dport 8443 -s 10.20.50.1/32 -j RETURN"
-    drop = "iptables -A HTSTUFFIN -i ops-wg -m state --state NEW -p tcp --dport 8443 -j DROP"
+    hub = "iptables -A HTSTUFFIN -m state --state NEW -p tcp -m multiport --dports 8443 -s 10.20.50.1/32 -j RETURN"
+    drop = "iptables -A HTSTUFFIN -i ops-wg -m state --state NEW -p tcp -m multiport --dports 8443 -j DROP"
     ops = "iptables -A HTSTUFFIN -i ops-wg -s 10.20.50.0/24 -j ACCEPT"
     assert out.index(hub) < out.index(drop) < out.index(ops)
 
@@ -222,13 +223,25 @@ def test_firewall_hub_ingress_drop_sits_between_hub_return_and_ops_accept() -> N
 )
 def test_firewall_no_hub_ingress_rules_unless_enabled_on_master(extra: dict[str, Any]) -> None:
     out = _render_iptables(**WG_VARS, **extra)
-    assert "--dport 8443" not in out
+    assert "--dports 8443" not in out
 
 
 def test_firewall_hub_ingress_drop_needs_the_ops_tunnel() -> None:
     out = _render_iptables(hub_ingress=HUB_INGRESS, isk3smaster=True)
-    assert "--dport 8443 -s 10.20.50.1/32 -j RETURN" in out
-    assert "--dport 8443 -j DROP" not in out
+    assert "--dports 8443 -s 10.20.50.1/32 -j RETURN" in out
+    assert "--dports 8443 -j DROP" not in out
+
+
+def test_firewall_hub_ingress_enabled_mail_gate_ports_join_return_and_drop() -> None:
+    mail = {
+        "smtp": {"enabled": True, "gate_port": 8025, "nodeport": 30025},
+        "imaps": {"enabled": True, "gate_port": 8993, "nodeport": 30993},
+        "imap": {"enabled": False, "gate_port": 8143, "nodeport": 30143},
+    }
+    out = _render_iptables(**WG_VARS, hub_ingress=HUB_INGRESS, hub_ingress_mail_services=mail, isk3smaster=True)
+    assert "-m multiport --dports 8443,8025,8993 -s 10.20.50.1/32 -j RETURN" in out
+    assert "-i ops-wg -m state --state NEW -p tcp -m multiport --dports 8443,8025,8993 -j DROP" in out
+    assert "8143" not in out
 
 
 def test_firewall_rendered_script_is_valid_bash() -> None:
