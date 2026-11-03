@@ -49,9 +49,7 @@ fluentbit_auto_kubernetes_labels: false
 fluentbit_pod_labels_structured_metadata: true
 fluentbit_node_label: false
 fluentbit_output_storage_limit: "1G"
-# systemd/journal input — additive, NOT promtail parity. Keep off while the
-# collector acceptance check in FLUENTBIT_VALIDATE.md runs.
-fluentbit_systemd_enabled: false
+fluentbit_systemd_enabled: true
 fluentbit_systemd_units:
   - ulogd2.service
   - k3s.service
