@@ -1,0 +1,27 @@
+---
+- name: Check for the srp_daemon unit and the RDMA link layers
+  ansible.builtin.shell: |
+    set -o pipefail
+    systemctl list-unit-files srp_daemon.service --no-legend | awk '{print "unit:" $2}'
+    cat /sys/class/infiniband/*/ports/*/link_layer 2>/dev/null | sort -u | sed 's/^/ll:/'
+  args:
+    executable: /bin/bash
+  register: _srp_probe
+  changed_when: false
+  check_mode: false
+
+# srp_daemon only works on InfiniBand; on RoCE it exits with "Couldn't read link layer" until start-limit-hit.
+- name: Disable and stop srp_daemon (no InfiniBand port)
+  ansible.builtin.systemd:
+    name: srp_daemon.service
+    state: stopped
+    enabled: false
+  register: _srp_disabled
+  when:
+    - _srp_probe.stdout_lines | select('match', '^unit:') | list | length > 0
+    - "'ll:InfiniBand' not in _srp_probe.stdout_lines"
+
+- name: Clear the failed state of srp_daemon_port@ instances
+  ansible.builtin.command: systemctl reset-failed 'srp_daemon_port@*'
+  when: _srp_disabled is changed
+  failed_when: false

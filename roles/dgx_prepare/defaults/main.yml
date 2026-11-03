@@ -120,3 +120,6 @@ dgx_desktop_apps_remove:
 # https://forums.developer.nvidia.com/t/383023
 # Empty string removes the drop-in. Takes effect only after a reboot.
 dgx_kernel_cma: "128M"
+
+# Disables srptools' srp_daemon when no RDMA port has link_layer InfiniBand (tag: srp).
+dgx_disable_srp_daemon: true

@@ -51,6 +51,11 @@
   ansible.builtin.import_tasks: disable_gui.yml
   tags: disable_gui
 
+- name: Disable srp_daemon on nodes without an InfiniBand port
+  ansible.builtin.import_tasks: srp_daemon.yml
+  when: dgx_disable_srp_daemon | bool
+  tags: srp
+
 - name: Install extra CNI plugins for Multus
   ansible.builtin.import_tasks: cni_plugins.yml
   tags: cni
