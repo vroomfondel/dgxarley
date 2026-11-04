@@ -1,0 +1,11 @@
+---
+# Public dummy/example values. Real values live in group_vars/all/vault/<topic>.sops.yml of the private sops overlay.
+crawl4ai_enabled: false
+# Bearer token for every Crawl4AI endpoint except /health; >= 32 chars.
+crawl4ai_api_token: "changeme"
+# LiteLLM virtual key for the LLM endpoints; created/updated with exactly this value by the litellm deploy (k8s_dgx tag litellm).
+crawl4ai_llm_enabled: false
+crawl4ai_litellm_api_key: "sk-changeme"
+# [] = all models.
+crawl4ai_litellm_key_models: []
+crawl4ai_litellm_key_max_parallel_requests: 4

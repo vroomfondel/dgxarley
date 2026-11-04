@@ -1,0 +1,5 @@
+---
+# Public dummy/example values. Real values live in group_vars/all/vault/<topic>.sops.yml of the private sops overlay.
+camofox_enabled: false
+# Bearer token for every Camofox route except /health; >= 32 chars.
+camofox_api_key: "changeme"

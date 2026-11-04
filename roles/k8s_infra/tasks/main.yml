@@ -372,6 +372,20 @@
     - isk3smaster is defined
     - isk3smaster
 
+- name: Deploy/teardown Crawl4AI web extract/crawl API (gated install/teardown)
+  import_tasks: apps/crawl4ai.yml
+  tags: crawl4ai
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
+- name: Deploy/teardown Camofox anti-detection browser server (gated install/teardown)
+  import_tasks: apps/camofox.yml
+  tags: camofox
+  when:
+    - isk3smaster is defined
+    - isk3smaster
+
 # === DNS ===
 
 - name: Register DNS A records for k8s_infra ingress services

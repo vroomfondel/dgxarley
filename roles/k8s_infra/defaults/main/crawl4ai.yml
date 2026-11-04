@@ -1,0 +1,51 @@
+---
+# === Crawl4AI (self-hosted URL -> markdown / crawl API for agents) ===
+# Deployed by roles/k8s_infra/tasks/apps/crawl4ai.yml (tag: crawl4ai).
+# false only skips the install; removal is the opt-in `-e crawl4ai_teardown=true` (stateless, nothing kept).
+# Endpoints: /md, /crawl, /html, /screenshot, /pdf, /execute_js, /llm/job, MCP at /mcp/sse, /health, /metrics.
+# In-cluster clients: http://crawl4ai.<namespace>.svc.cluster.local:<port>; desktop Hermes agents reach it through
+# Traefik on crawl4ai_hostname (app_exposure.crawl4ai, default lan). Hermes side: plugin `crawl4ai` with
+# CRAWL4AI_URL / CRAWL4AI_API_TOKEN and `web.extract_backend: crawl4ai`.
+crawl4ai_enabled: false
+crawl4ai_teardown: false
+crawl4ai_namespace: "crawl4ai"
+# Multi-arch (amd64 + arm64) tag; keel polls the digest.
+crawl4ai_version: "latest"
+crawl4ai_image: "unclecode/crawl4ai:{{ crawl4ai_version }}"
+crawl4ai_port: 11235
+crawl4ai_hostname: "crawl4ai.{{ dns_external_domain_suffix }}"
+crawl4ai_tls_issuer: "letsencrypt-production"
+# {} = any node; e.g. {"kubernetes.io/arch": "arm64"} or {"node-role": "k3smaster"}.
+crawl4ai_node_selector: {}
+# Pooled Chromium pages; each costs roughly 100-300Mi on top of the ~1Gi base (upstream minimum 4Gi for its default 40).
+crawl4ai_pool_max_pages: 8
+crawl4ai_cpu_request: "250m"
+crawl4ai_cpu_limit: "2"
+crawl4ai_memory_request: "1Gi"
+crawl4ai_memory_limit: "4Gi"
+# tmpfs at /dev/shm for Chromium; counts against the memory limit.
+crawl4ai_shm_size: "1Gi"
+# Deep crawling over /crawl (deep_crawl_strategy) is refused with 400 unless true.
+crawl4ai_allow_deep_crawl: false
+crawl4ai_max_pages: 100
+crawl4ai_max_depth: 5
+# Starlette TrustedHost list; "*" only logs a warning on the non-loopback bind.
+crawl4ai_trusted_hosts: ["*"]
+crawl4ai_log_level: "INFO"
+crawl4ai_timezone: "Europe/Berlin"
+crawl4ai_network_policies_enabled: true
+# In-cluster namespaces allowed to call the API directly; Traefik is always allowed.
+crawl4ai_networkpolicy_client_namespaces: ["hermes"]
+# LLM endpoints (/llm/job, /md with f=llm, LLMExtractionStrategy) via LiteLLM; off = only those endpoints fail.
+crawl4ai_llm_enabled: false
+crawl4ai_llm_provider: "openai/{{ litellm_hermes_alias_model }}"
+crawl4ai_llm_base_url: "http://litellm.{{ litellm_namespace }}.svc.cluster.local:{{ litellm_port }}/v1"
+
+# Sensitive, real values in group_vars/all/vault/crawl4ai.sops.yml.
+# Bearer token for every endpoint except /health; >= 32 chars (`openssl rand -hex 32`), weak keys are refused at startup.
+crawl4ai_api_token: "changeme"
+# LiteLLM virtual key, created/updated with exactly this value by the litellm deploy (k8s_dgx tag litellm) when crawl4ai_llm_enabled.
+crawl4ai_litellm_api_key: "sk-changeme"
+# [] = all models.
+crawl4ai_litellm_key_models: []
+crawl4ai_litellm_key_max_parallel_requests: 4

@@ -1,0 +1,344 @@
+---
+# Crawl4AI: single stateless Deployment (API + loopback redis + Chromium pool in one image), config.yml
+# rendered from templates/crawl4ai/config.yml.j2, bearer token from the Secret. Knobs: defaults/main/crawl4ai.yml.
+
+- name: Crawl4AI — install
+  when:
+    - crawl4ai_enabled | default(false) | bool
+    - not (crawl4ai_teardown | default(false) | bool)
+  block:
+    - name: Assert Crawl4AI auth config is real
+      ansible.builtin.assert:
+        that:
+          - crawl4ai_api_token | length >= 32
+          - crawl4ai_api_token != 'changeme'
+          - (not (crawl4ai_llm_enabled | bool)) or (crawl4ai_litellm_api_key is match('^sk-') and crawl4ai_litellm_api_key != 'sk-changeme' and crawl4ai_litellm_api_key != litellm_master_key)
+        fail_msg: "crawl4ai_api_token / crawl4ai_litellm_api_key still hold dummies; set them in group_vars/all/vault/crawl4ai.sops.yml"
+        quiet: true
+
+    - name: Render Crawl4AI config.yml and container env
+      ansible.builtin.set_fact:
+        _crawl4ai_config_yml: "{{ lookup('template', 'crawl4ai/config.yml.j2') }}"
+        _crawl4ai_env: >-
+          {{ [
+               {'name': 'PORT', 'value': crawl4ai_port | string},
+               {'name': 'CRAWL4AI_ALLOW_DEEP_CRAWL', 'value': 'true' if (crawl4ai_allow_deep_crawl | bool) else 'false'},
+               {'name': 'TZ', 'value': crawl4ai_timezone}
+             ] + ([
+               {'name': 'LLM_PROVIDER', 'value': crawl4ai_llm_provider},
+               {'name': 'OPENAI_BASE_URL', 'value': crawl4ai_llm_base_url},
+               {'name': 'OPENAI_API_BASE', 'value': crawl4ai_llm_base_url}
+             ] if (crawl4ai_llm_enabled | bool) else []) }}
+        _crawl4ai_secret_env: >-
+          {{ {'CRAWL4AI_API_TOKEN': crawl4ai_api_token}
+             | combine({'OPENAI_API_KEY': crawl4ai_litellm_api_key} if (crawl4ai_llm_enabled | bool) else {}) }}
+        # An egress rule with an empty `to` allows everything, so the litellm rule is added only when needed.
+        _crawl4ai_egress: >-
+          {{ [{'to': [{'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': 'kube-system'}},
+                       'podSelector': {'matchLabels': {'k8s-app': 'kube-dns'}}}],
+               'ports': [{'protocol': 'UDP', 'port': 53}, {'protocol': 'TCP', 'port': 53}]}]
+             + ([{'to': [{'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': litellm_namespace}}}]}]
+                if (crawl4ai_llm_enabled | bool) else [])
+             + [{'to': [{'ipBlock': {'cidr': '0.0.0.0/0', 'except': [cluster_cidr, service_cidr]}}]}] }}
+
+    - name: Create crawl4ai namespace
+      kubernetes.core.k8s:
+        name: "{{ crawl4ai_namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+
+    - name: Create crawl4ai egress NetworkPolicy
+      when: crawl4ai_network_policies_enabled | bool
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: crawl4ai-egress
+            namespace: "{{ crawl4ai_namespace }}"
+          spec:
+            podSelector:
+              matchLabels:
+                app: crawl4ai
+            policyTypes:
+              - Egress
+            # DNS, litellm (LLM endpoints only), internet + LAN, but no other in-cluster pods.
+            egress: "{{ _crawl4ai_egress }}"
+
+    - name: Create crawl4ai ingress NetworkPolicy (Traefik + client namespaces)
+      when: crawl4ai_network_policies_enabled | bool
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: crawl4ai-ingress
+            namespace: "{{ crawl4ai_namespace }}"
+          spec:
+            podSelector:
+              matchLabels:
+                app: crawl4ai
+            policyTypes:
+              - Ingress
+            ingress:
+              - from: >-
+                  {{ [{'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': traefik.namespace}},
+                       'podSelector': {'matchLabels': {'app.kubernetes.io/name': 'traefik'}}}]
+                     + (crawl4ai_networkpolicy_client_namespaces
+                        | map('community.general.dict_kv', 'kubernetes.io/metadata.name')
+                        | map('community.general.dict_kv', 'matchLabels')
+                        | map('community.general.dict_kv', 'namespaceSelector') | list) }}
+
+    - name: Create crawl4ai config (config.yml)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: crawl4ai-config
+            namespace: "{{ crawl4ai_namespace }}"
+          data:
+            config.yml: "{{ _crawl4ai_config_yml }}"
+
+    - name: Create crawl4ai env secret
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: crawl4ai-env
+            namespace: "{{ crawl4ai_namespace }}"
+          type: Opaque
+          stringData: "{{ _crawl4ai_secret_env }}"
+
+    - name: Create crawl4ai service
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          kind: Service
+          apiVersion: v1
+          metadata:
+            name: crawl4ai
+            namespace: "{{ crawl4ai_namespace }}"
+            labels:
+              app: crawl4ai
+          spec:
+            selector:
+              app: crawl4ai
+            ports:
+              - port: "{{ crawl4ai_port }}"
+                name: http
+                targetPort: "{{ crawl4ai_port }}"
+                protocol: TCP
+
+    - name: Create crawl4ai deployment
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: crawl4ai
+            namespace: "{{ crawl4ai_namespace }}"
+            labels:
+              app: crawl4ai
+            annotations:
+              keel.sh/policy: force
+              keel.sh/match-tag: "true"
+              keel.sh/pollSchedule: "@every 24h"
+              keel.sh/trigger: poll
+          spec:
+            replicas: 1
+            strategy:
+              type: Recreate
+            selector:
+              matchLabels:
+                app: crawl4ai
+            template:
+              metadata:
+                labels:
+                  app: crawl4ai
+                annotations:
+                  checksum/config: "{{ (_crawl4ai_config_yml ~ (_crawl4ai_env | to_json) ~ (_crawl4ai_secret_env | to_json)) | hash('sha256') }}"
+              spec:
+                nodeSelector: "{{ crawl4ai_node_selector }}"
+                dnsConfig:
+                  options:
+                    - name: ndots
+                      value: "1"
+                containers:
+                  - name: crawl4ai
+                    image: "{{ crawl4ai_image }}"
+                    imagePullPolicy: Always
+                    ports:
+                      - containerPort: "{{ crawl4ai_port }}"
+                        name: http
+                        protocol: TCP
+                    env: "{{ _crawl4ai_env }}"
+                    envFrom:
+                      - secretRef:
+                          name: crawl4ai-env
+                    resources:
+                      requests:
+                        cpu: "{{ crawl4ai_cpu_request }}"
+                        memory: "{{ crawl4ai_memory_request }}"
+                      limits:
+                        cpu: "{{ crawl4ai_cpu_limit }}"
+                        memory: "{{ crawl4ai_memory_limit }}"
+                    startupProbe:
+                      httpGet:
+                        path: /health
+                        port: http
+                      periodSeconds: 5
+                      failureThreshold: 36
+                    readinessProbe:
+                      httpGet:
+                        path: /health
+                        port: http
+                      periodSeconds: 15
+                    livenessProbe:
+                      httpGet:
+                        path: /health
+                        port: http
+                      periodSeconds: 30
+                      timeoutSeconds: 10
+                    volumeMounts:
+                      - name: config
+                        mountPath: /app/config.yml
+                        subPath: config.yml
+                        readOnly: true
+                      - name: shm
+                        mountPath: /dev/shm
+                restartPolicy: Always
+                volumes:
+                  - name: config
+                    configMap:
+                      name: crawl4ai-config
+                  - name: shm
+                    emptyDir:
+                      medium: Memory
+                      sizeLimit: "{{ crawl4ai_shm_size }}"
+
+    - name: Create crawl4ai ip-allowlist middleware
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: Middleware
+          metadata:
+            name: crawl4ai-ip-allowlist
+            namespace: "{{ crawl4ai_namespace }}"
+          spec:
+            ipAllowList:
+              sourceRange: "{{ traefik_public_allowlist if (app_exposure.crawl4ai | default(app_exposure_default)) == 'public' else traefik_internal_allowlist }}"
+
+    - name: Create crawl4ai http to https redirect middleware
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: Middleware
+          metadata:
+            name: redirect-myhttps
+            namespace: "{{ crawl4ai_namespace }}"
+          spec:
+            redirectScheme:
+              scheme: https
+
+    - name: Create crawl4ai TLS certificate
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: "{{ crawl4ai_hostname }}"
+            namespace: "{{ crawl4ai_namespace }}"
+          spec:
+            dnsNames:
+              - "{{ crawl4ai_hostname }}"
+            secretName: "{{ crawl4ai_hostname }}"
+            issuerRef:
+              name: "{{ crawl4ai_tls_issuer }}"
+              kind: ClusterIssuer
+
+    - name: Create crawl4ai http ingressroute with redirect
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: IngressRoute
+          metadata:
+            name: crawl4ai-ingress
+            namespace: "{{ crawl4ai_namespace }}"
+          spec:
+            entryPoints:
+              - web
+            routes:
+              - kind: Rule
+                match: "Host(`{{ crawl4ai_hostname }}`)"
+                priority: 10
+                services:
+                  - kind: Service
+                    name: crawl4ai
+                    namespace: "{{ crawl4ai_namespace }}"
+                    passHostHeader: true
+                    port: "{{ crawl4ai_port }}"
+                middlewares:
+                  - name: redirect-myhttps
+                  - name: crawl4ai-ip-allowlist
+
+    - name: Create crawl4ai https ingressroute
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: IngressRoute
+          metadata:
+            name: crawl4ai-https-ingress
+            namespace: "{{ crawl4ai_namespace }}"
+          spec:
+            entryPoints:
+              - websecure
+            routes:
+              - kind: Rule
+                match: "Host(`{{ crawl4ai_hostname }}`)"
+                priority: 10
+                middlewares:
+                  - name: crawl4ai-ip-allowlist
+                services:
+                  - kind: Service
+                    name: crawl4ai
+                    namespace: "{{ crawl4ai_namespace }}"
+                    passHostHeader: true
+                    port: "{{ crawl4ai_port }}"
+            tls:
+              secretName: "{{ crawl4ai_hostname }}"
+
+    - name: Register DNS A record for crawl4ai
+      community.general.nsupdate:
+        record: "{{ crawl4ai_hostname }}."
+        type: A
+        value: "{{ nsupdate_default.ingress_ip }}"
+        state: present
+
+- name: Crawl4AI — teardown (opt-in `-e crawl4ai_teardown=true`)
+  when: crawl4ai_teardown | default(false) | bool
+  block:
+    - name: Delete crawl4ai namespace (cascades all crawl4ai resources)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ crawl4ai_namespace }}"
+
+    - name: Remove DNS A record for crawl4ai
+      community.general.nsupdate:
+        record: "{{ crawl4ai_hostname }}."
+        type: A
+        state: absent

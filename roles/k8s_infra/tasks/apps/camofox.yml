@@ -1,0 +1,351 @@
+---
+# Camofox: single Deployment of jo-inc/camofox-browser (Camoufox Firefox behind a REST server), per-user
+# profiles on camofox_data_base, bearer key from the Secret. Knobs: defaults/main/camofox.yml.
+
+- name: Camofox — install
+  when:
+    - camofox_enabled | default(false) | bool
+    - not (camofox_teardown | default(false) | bool)
+  block:
+    - name: Assert Camofox auth config is real
+      ansible.builtin.assert:
+        that:
+          - camofox_api_key | length >= 32
+          - camofox_api_key != 'changeme'
+          - (camofox_locale | length > 0) == (camofox_timezone | length > 0)
+        fail_msg: "camofox_api_key still holds the dummy (set it in group_vars/all/vault/camofox.sops.yml) or only one of camofox_locale / camofox_timezone is set"
+        quiet: true
+
+    - name: Build Camofox container env and data volume
+      ansible.builtin.set_fact:
+        _camofox_env: >-
+          {{ [
+               {'name': 'CAMOFOX_PORT', 'value': camofox_port | string},
+               {'name': 'CAMOFOX_BIND_HOST', 'value': '0.0.0.0'},
+               {'name': 'CAMOFOX_COOKIES_DIR', 'value': '/data/cookies'},
+               {'name': 'CAMOFOX_UPLOADS_DIR', 'value': '/data/uploads'},
+               {'name': 'CAMOFOX_PROFILE_DIR', 'value': '/data/profiles'},
+               {'name': 'CAMOFOX_TRACES_DIR', 'value': '/data/traces'},
+               {'name': 'MAX_SESSIONS', 'value': camofox_max_sessions | string},
+               {'name': 'MAX_TABS_PER_SESSION', 'value': camofox_max_tabs_per_session | string},
+               {'name': 'MAX_CONCURRENT_PER_USER', 'value': camofox_max_concurrent_per_user | string},
+               {'name': 'SESSION_TIMEOUT_MS', 'value': camofox_session_timeout_ms | string},
+               {'name': 'BROWSER_IDLE_TIMEOUT_MS', 'value': camofox_browser_idle_timeout_ms | string},
+               {'name': 'MAX_OLD_SPACE_SIZE', 'value': camofox_max_old_space_size | string},
+               {'name': 'CAMOFOX_DISABLE_DEFAULT_ADDONS', 'value': '0' if (camofox_default_addons_enabled | bool) else '1'},
+               {'name': 'CAMOFOX_CRASH_REPORT_ENABLED', 'value': 'true' if (camofox_crash_report_enabled | bool) else 'false'}
+             ] + ([
+               {'name': 'CAMOFOX_LOCALE', 'value': camofox_locale},
+               {'name': 'CAMOFOX_TIMEZONE', 'value': camofox_timezone}
+             ] if (camofox_locale | length > 0) else []) }}
+        _camofox_data_volume: >-
+          {{ {'name': 'data', 'hostPath': {'path': camofox_data_base, 'type': 'DirectoryOrCreate'}}
+             if (camofox_data_base | length > 0) else {'name': 'data', 'emptyDir': {}} }}
+
+    - name: Create camofox namespace
+      kubernetes.core.k8s:
+        name: "{{ camofox_namespace }}"
+        api_version: v1
+        kind: Namespace
+        state: present
+
+    - name: Create camofox egress NetworkPolicy
+      when: camofox_network_policies_enabled | bool
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: camofox-egress
+            namespace: "{{ camofox_namespace }}"
+          spec:
+            podSelector:
+              matchLabels:
+                app: camofox
+            policyTypes:
+              - Egress
+            egress:
+              - to:
+                  - namespaceSelector:
+                      matchLabels:
+                        kubernetes.io/metadata.name: kube-system
+                    podSelector:
+                      matchLabels:
+                        k8s-app: kube-dns
+                ports:
+                  - protocol: UDP
+                    port: 53
+                  - protocol: TCP
+                    port: 53
+              # Internet + LAN, but no other in-cluster pods.
+              - to:
+                  - ipBlock:
+                      cidr: 0.0.0.0/0
+                      except:
+                        - "{{ cluster_cidr }}"
+                        - "{{ service_cidr }}"
+
+    - name: Create camofox ingress NetworkPolicy (Traefik + client namespaces)
+      when: camofox_network_policies_enabled | bool
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: camofox-ingress
+            namespace: "{{ camofox_namespace }}"
+          spec:
+            podSelector:
+              matchLabels:
+                app: camofox
+            policyTypes:
+              - Ingress
+            ingress:
+              - from: >-
+                  {{ [{'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': traefik.namespace}},
+                       'podSelector': {'matchLabels': {'app.kubernetes.io/name': 'traefik'}}}]
+                     + (camofox_networkpolicy_client_namespaces
+                        | map('community.general.dict_kv', 'kubernetes.io/metadata.name')
+                        | map('community.general.dict_kv', 'matchLabels')
+                        | map('community.general.dict_kv', 'namespaceSelector') | list) }}
+
+    - name: Create camofox env secret
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: camofox-env
+            namespace: "{{ camofox_namespace }}"
+          type: Opaque
+          stringData:
+            CAMOFOX_ACCESS_KEY: "{{ camofox_api_key }}"
+            CAMOFOX_API_KEY: "{{ camofox_api_key }}"
+            CAMOFOX_ADMIN_KEY: "{{ camofox_api_key }}"
+
+    - name: Create camofox service
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          kind: Service
+          apiVersion: v1
+          metadata:
+            name: camofox
+            namespace: "{{ camofox_namespace }}"
+            labels:
+              app: camofox
+          spec:
+            selector:
+              app: camofox
+            ports:
+              - port: "{{ camofox_port }}"
+                name: http
+                targetPort: "{{ camofox_port }}"
+                protocol: TCP
+
+    - name: Create camofox deployment
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: camofox
+            namespace: "{{ camofox_namespace }}"
+            labels:
+              app: camofox
+            annotations:
+              keel.sh/policy: force
+              keel.sh/match-tag: "true"
+              keel.sh/pollSchedule: "@every 24h"
+              keel.sh/trigger: poll
+          spec:
+            replicas: 1
+            strategy:
+              type: Recreate
+            selector:
+              matchLabels:
+                app: camofox
+            template:
+              metadata:
+                labels:
+                  app: camofox
+                annotations:
+                  checksum/config: "{{ ((_camofox_env | to_json) ~ camofox_api_key) | hash('sha256') }}"
+              spec:
+                nodeSelector: "{{ camofox_node_selector }}"
+                dnsConfig:
+                  options:
+                    - name: ndots
+                      value: "1"
+                containers:
+                  - name: camofox
+                    image: "{{ camofox_image }}"
+                    imagePullPolicy: Always
+                    ports:
+                      - containerPort: "{{ camofox_port }}"
+                        name: http
+                        protocol: TCP
+                    env: "{{ _camofox_env }}"
+                    envFrom:
+                      - secretRef:
+                          name: camofox-env
+                    resources:
+                      requests:
+                        cpu: "{{ camofox_cpu_request }}"
+                        memory: "{{ camofox_memory_request }}"
+                      limits:
+                        cpu: "{{ camofox_cpu_limit }}"
+                        memory: "{{ camofox_memory_limit }}"
+                    startupProbe:
+                      httpGet:
+                        path: /health
+                        port: http
+                      periodSeconds: 5
+                      failureThreshold: 36
+                    readinessProbe:
+                      httpGet:
+                        path: /health
+                        port: http
+                      periodSeconds: 15
+                    livenessProbe:
+                      httpGet:
+                        path: /health
+                        port: http
+                      periodSeconds: 30
+                      timeoutSeconds: 10
+                    volumeMounts:
+                      - name: data
+                        mountPath: /data
+                      - name: shm
+                        mountPath: /dev/shm
+                restartPolicy: Always
+                volumes:
+                  - "{{ _camofox_data_volume }}"
+                  - name: shm
+                    emptyDir:
+                      medium: Memory
+                      sizeLimit: "{{ camofox_shm_size }}"
+
+    - name: Create camofox ip-allowlist middleware
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: Middleware
+          metadata:
+            name: camofox-ip-allowlist
+            namespace: "{{ camofox_namespace }}"
+          spec:
+            ipAllowList:
+              sourceRange: "{{ traefik_public_allowlist if (app_exposure.camofox | default(app_exposure_default)) == 'public' else traefik_internal_allowlist }}"
+
+    - name: Create camofox http to https redirect middleware
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: Middleware
+          metadata:
+            name: redirect-myhttps
+            namespace: "{{ camofox_namespace }}"
+          spec:
+            redirectScheme:
+              scheme: https
+
+    - name: Create camofox TLS certificate
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: "{{ camofox_hostname }}"
+            namespace: "{{ camofox_namespace }}"
+          spec:
+            dnsNames:
+              - "{{ camofox_hostname }}"
+            secretName: "{{ camofox_hostname }}"
+            issuerRef:
+              name: "{{ camofox_tls_issuer }}"
+              kind: ClusterIssuer
+
+    - name: Create camofox http ingressroute with redirect
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: IngressRoute
+          metadata:
+            name: camofox-ingress
+            namespace: "{{ camofox_namespace }}"
+          spec:
+            entryPoints:
+              - web
+            routes:
+              - kind: Rule
+                match: "Host(`{{ camofox_hostname }}`)"
+                priority: 10
+                services:
+                  - kind: Service
+                    name: camofox
+                    namespace: "{{ camofox_namespace }}"
+                    passHostHeader: true
+                    port: "{{ camofox_port }}"
+                middlewares:
+                  - name: redirect-myhttps
+                  - name: camofox-ip-allowlist
+
+    - name: Create camofox https ingressroute
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: traefik.io/v1alpha1
+          kind: IngressRoute
+          metadata:
+            name: camofox-https-ingress
+            namespace: "{{ camofox_namespace }}"
+          spec:
+            entryPoints:
+              - websecure
+            routes:
+              - kind: Rule
+                match: "Host(`{{ camofox_hostname }}`)"
+                priority: 10
+                middlewares:
+                  - name: camofox-ip-allowlist
+                services:
+                  - kind: Service
+                    name: camofox
+                    namespace: "{{ camofox_namespace }}"
+                    passHostHeader: true
+                    port: "{{ camofox_port }}"
+            tls:
+              secretName: "{{ camofox_hostname }}"
+
+    - name: Register DNS A record for camofox
+      community.general.nsupdate:
+        record: "{{ camofox_hostname }}."
+        type: A
+        value: "{{ nsupdate_default.ingress_ip }}"
+        state: present
+
+- name: Camofox — teardown (opt-in `-e camofox_teardown=true`)
+  when: camofox_teardown | default(false) | bool
+  block:
+    # Profiles under camofox_data_base are kept on disk.
+    - name: Delete camofox namespace (cascades all camofox resources)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: "{{ camofox_namespace }}"
+
+    - name: Remove DNS A record for camofox
+      community.general.nsupdate:
+        record: "{{ camofox_hostname }}."
+        type: A
+        state: absent

@@ -1,0 +1,49 @@
+---
+# === Camofox (anti-detection Firefox REST server for agent browsing) ===
+# Deployed by roles/k8s_infra/tasks/apps/camofox.yml (tag: camofox).
+# false only skips the install; removal is the opt-in `-e camofox_teardown=true` (profiles dir on disk is kept).
+# Backend of the Hermes `camofox` plugin (browser_navigate/snapshot/click/...): CAMOFOX_URL=https://<camofox_hostname>,
+# CAMOFOX_API_KEY=<camofox_api_key>. Firefox starts on the first request and exits after camofox_browser_idle_timeout_ms;
+# every route except /health needs `Authorization: Bearer <camofox_api_key>`.
+camofox_enabled: false
+camofox_teardown: false
+camofox_namespace: "camofox"
+# Multi-arch (amd64 + arm64) tag with the Camoufox binary and yt-dlp baked in; runs as root.
+camofox_version: "latest"
+camofox_image: "ghcr.io/jo-inc/camofox-browser:{{ camofox_version }}"
+camofox_port: 9377
+camofox_hostname: "camofox.{{ dns_external_domain_suffix }}"
+camofox_tls_issuer: "letsencrypt-production"
+# camofox_data_base must exist on every candidate node (hostPath); {} = any node.
+camofox_node_selector:
+  node-role: k3smaster
+# Persisted per-user sessions (cookies/localStorage), cookie imports, uploads, traces; "" = emptyDir (logins lost on restart).
+camofox_data_base: "/mnt/nfs/camofox"
+camofox_cpu_request: "250m"
+camofox_cpu_limit: "2"
+camofox_memory_request: "512Mi"
+camofox_memory_limit: "3Gi"
+# tmpfs at /dev/shm for Firefox; counts against the memory limit.
+camofox_shm_size: "512Mi"
+# Upstream defaults are 50 sessions x 10 tabs; each open tab is Firefox memory.
+camofox_max_sessions: 10
+camofox_max_tabs_per_session: 5
+camofox_max_concurrent_per_user: 3
+camofox_session_timeout_ms: 600000
+camofox_browser_idle_timeout_ms: 300000
+# Node.js V8 heap in MB (upstream default 128).
+camofox_max_old_space_size: 256
+# Both or neither; "" = Camoufox derives a fingerprint-consistent identity.
+camofox_locale: ""
+camofox_timezone: ""
+# uBlock Origin is downloaded from addons.mozilla.org at startup; a failed download blocks startup.
+camofox_default_addons_enabled: true
+# Anonymized crash/hang reports to the upstream Cloudflare worker.
+camofox_crash_report_enabled: false
+camofox_network_policies_enabled: true
+# In-cluster namespaces allowed to call the API directly; Traefik is always allowed.
+camofox_networkpolicy_client_namespaces: ["hermes"]
+
+# Sensitive, real values in group_vars/all/vault/camofox.sops.yml.
+# Set as CAMOFOX_ACCESS_KEY (bearer on every route) and CAMOFOX_API_KEY (cookie import); >= 32 chars.
+camofox_api_key: "changeme"

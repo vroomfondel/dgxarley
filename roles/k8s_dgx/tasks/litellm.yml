@@ -593,6 +593,47 @@
       changed_when: _nodered_key_info.status != 200
       no_log: true
 
+# Crawl4AI virtual key (LLM endpoints only): value comes from vault (crawl4ai_litellm_api_key), so create/update is idempotent.
+- name: Provision Crawl4AI LiteLLM virtual key
+  when:
+    - litellm_enabled | bool
+    - crawl4ai_enabled | default(false) | bool
+    - crawl4ai_llm_enabled | default(false) | bool
+  block:
+    - name: Wait for litellm readiness before provisioning the Crawl4AI key
+      ansible.builtin.uri:
+        url: "https://litellm.{{ dns_external_domain_suffix }}/health/readiness"
+        status_code: 200
+      register: _litellm_ready
+      until: _litellm_ready.status == 200
+      retries: 60
+      delay: 10
+
+    - name: Look up Crawl4AI LiteLLM key
+      ansible.builtin.uri:
+        url: "https://litellm.{{ dns_external_domain_suffix }}/key/info?key={{ crawl4ai_litellm_api_key | urlencode }}"
+        headers:
+          Authorization: "Bearer {{ litellm_master_key }}"
+        status_code: [200, 400, 404]
+      register: _crawl4ai_key_info
+      no_log: true
+
+    - name: Create or update Crawl4AI LiteLLM key
+      ansible.builtin.uri:
+        url: "https://litellm.{{ dns_external_domain_suffix }}/key/{{ 'update' if _crawl4ai_key_info.status == 200 else 'generate' }}"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ litellm_master_key }}"
+        body_format: json
+        body:
+          key: "{{ crawl4ai_litellm_api_key }}"
+          key_alias: "crawl4ai"
+          models: "{{ crawl4ai_litellm_key_models }}"
+          max_parallel_requests: "{{ crawl4ai_litellm_key_max_parallel_requests }}"
+        status_code: 200
+      changed_when: _crawl4ai_key_info.status != 200
+      no_log: true
+
 
 # ============================================================================
 # Teams and virtual keys (declarative, idempotent, no proxy restart)
