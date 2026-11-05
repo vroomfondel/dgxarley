@@ -171,6 +171,8 @@
                   options:
                     - name: ndots
                       value: "1"
+                # Service links would inject CRAWL4AI_PORT=tcp://<svc-ip>:<port>.
+                enableServiceLinks: false
                 containers:
                   - name: crawl4ai
                     image: "{{ crawl4ai_image }}"

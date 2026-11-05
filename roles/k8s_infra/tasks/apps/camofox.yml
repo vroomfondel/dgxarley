@@ -181,6 +181,8 @@
                   options:
                     - name: ndots
                       value: "1"
+                # Service links would inject CAMOFOX_PORT=tcp://<svc-ip>:<port>.
+                enableServiceLinks: false
                 containers:
                   - name: camofox
                     image: "{{ camofox_image }}"
