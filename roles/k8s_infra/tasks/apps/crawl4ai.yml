@@ -1,6 +1,9 @@
 ---
 # Crawl4AI: single stateless Deployment (API + loopback redis + Chromium pool in one image), config.yml
 # rendered from templates/crawl4ai/config.yml.j2, bearer token from the Secret. Knobs: defaults/main/crawl4ai.yml.
+# crawl4ai_usermap_enabled adds per-user tokens and per-user LiteLLM keys (files/crawl4ai/README.md): ConfigMap
+# crawl4ai-usermap (launcher, drop-in, hook patches) at /patches, Secret crawl4ai-users (mapping file), start as root
+# with SETUID/SETGID only, then the launcher patches /app and drops to appuser. Disabled renders the plain Deployment.
 
 - name: Crawl4AI — install
   when:
@@ -16,6 +19,57 @@
         fail_msg: "crawl4ai_api_token / crawl4ai_litellm_api_key still hold dummies; set them in group_vars/all/vault/crawl4ai.sops.yml"
         quiet: true
 
+    - name: Assert Crawl4AI usermap config is real
+      when: crawl4ai_usermap_enabled | bool
+      ansible.builtin.assert:
+        that:
+          - crawl4ai_llm_enabled | bool
+          - crawl4ai_users | length > 0
+          - crawl4ai_users | map(attribute='name') | list | length == crawl4ai_users | map(attribute='name') | unique | list | length
+          - crawl4ai_users | map(attribute='name') | select('match', '^[A-Za-z0-9._@-]{1,64}$') | list | length == crawl4ai_users | length
+          - crawl4ai_users | map(attribute='token') | map('string') | map('length') | min >= 32
+          - crawl4ai_users | map(attribute='token') | list | length == crawl4ai_users | map(attribute='token') | unique | list | length
+          - crawl4ai_users | map(attribute='token') | select('match', '^changeme') | list | length == 0
+          - crawl4ai_api_token not in (crawl4ai_users | map(attribute='token') | list)
+          - (crawl4ai_users | map(attribute='scope') | reject('undefined') | difference(['data', 'admin']) | length) == 0
+        fail_msg: >-
+          crawl4ai_usermap_enabled needs crawl4ai_llm_enabled, at least one user, unique valid names, unique tokens of
+          >= 32 chars (not changeme, not crawl4ai_api_token) and scope data|admin; set crawl4ai_users in the vault
+        quiet: true
+
+    - name: Render Crawl4AI usermap users file
+      when: crawl4ai_usermap_enabled | bool
+      ansible.builtin.set_fact:
+        _crawl4ai_users_yml: "{{ lookup('template', 'crawl4ai/users.yml.j2') }}"
+      no_log: true
+
+    - name: Compose Crawl4AI usermap patch files
+      when: crawl4ai_usermap_enabled | bool
+      ansible.builtin.set_fact:
+        _crawl4ai_usermap_files:
+          crawl4ai_launch.sh: "{{ lookup('file', 'crawl4ai/crawl4ai_launch.sh') }}"
+          crawl4ai_usermap.py: "{{ lookup('file', 'crawl4ai/crawl4ai_usermap.py') }}"
+          crawl4ai_verify_hooks.py: "{{ lookup('file', 'crawl4ai/crawl4ai_verify_hooks.py') }}"
+          _c4lib.py: "{{ lookup('file', 'crawl4ai/patches/_c4lib.py') }}"
+          c10_auth_gate.py: "{{ lookup('file', 'crawl4ai/patches/c10_auth_gate.py') }}"
+          c20_llm_broker.py: "{{ lookup('file', 'crawl4ai/patches/c20_llm_broker.py') }}"
+          c30_api.py: "{{ lookup('file', 'crawl4ai/patches/c30_api.py') }}"
+          c40_server.py: "{{ lookup('file', 'crawl4ai/patches/c40_server.py') }}"
+          c50_mcp_bridge.py: "{{ lookup('file', 'crawl4ai/patches/c50_mcp_bridge.py') }}"
+          _patchlib.py: "{{ lookup('file', role_path ~ '/../k8s_dgx/files/sglang_patches/_patchlib.py') }}"
+
+    - name: Assert Crawl4AI user LiteLLM keys resolve
+      when: crawl4ai_usermap_enabled | bool
+      ansible.builtin.assert:
+        that:
+          - (_crawl4ai_users_yml | from_json).users | selectattr('litellm_key', 'defined') | map(attribute='litellm_key') | select('match', '^sk-') | reject('equalto', 'sk-changeme') | reject('equalto', litellm_master_key) | list | length == (_crawl4ai_users_yml | from_json).users | selectattr('litellm_key', 'defined') | list | length
+          - crawl4ai_users | selectattr('litellm_key_alias', 'defined') | rejectattr('litellm_key', 'defined') | map(attribute='litellm_key_alias') | list | difference(litellm_virtual_keys | selectattr('key', 'defined') | map(attribute='key_alias') | list) | length == 0
+          - crawl4ai_usermap_fallback_openai_key | bool or ((_crawl4ai_users_yml | from_json).users | selectattr('litellm_key', 'defined') | list | length) > 0
+        fail_msg: >-
+          crawl4ai_users: every litellm_key / litellm_key_alias must resolve to a real sk- key (an alias needs a
+          litellm_virtual_keys entry with `key:`); with the fallback off at least one user needs a key
+        quiet: true
+
     - name: Render Crawl4AI config.yml and container env
       ansible.builtin.set_fact:
         _crawl4ai_config_yml: "{{ lookup('template', 'crawl4ai/config.yml.j2') }}"
@@ -28,10 +82,18 @@
                {'name': 'LLM_PROVIDER', 'value': crawl4ai_llm_provider},
                {'name': 'OPENAI_BASE_URL', 'value': crawl4ai_llm_base_url},
                {'name': 'OPENAI_API_BASE', 'value': crawl4ai_llm_base_url}
-             ] if (crawl4ai_llm_enabled | bool) else []) }}
+             ] if (crawl4ai_llm_enabled | bool) else [])
+             + ([
+               {'name': 'CRAWL4AI_USERMAP', 'value': 'on'},
+               {'name': 'CRAWL4AI_USERMAP_FILE', 'value': crawl4ai_usermap_mount_path ~ '/users.yml'},
+               {'name': 'CRAWL4AI_USERMAP_FALLBACK_OPENAI_KEY', 'value': 'on' if (crawl4ai_usermap_fallback_openai_key | bool) else 'off'}
+             ] if (crawl4ai_usermap_enabled | bool) else []) }}
+        # With the usermap on and the fallback off the shared key is not put into the pod at all.
         _crawl4ai_secret_env: >-
           {{ {'CRAWL4AI_API_TOKEN': crawl4ai_api_token}
-             | combine({'OPENAI_API_KEY': crawl4ai_litellm_api_key} if (crawl4ai_llm_enabled | bool) else {}) }}
+             | combine({'OPENAI_API_KEY': crawl4ai_litellm_api_key}
+                       if ((crawl4ai_llm_enabled | bool) and ((not (crawl4ai_usermap_enabled | bool)) or (crawl4ai_usermap_fallback_openai_key | bool)))
+                       else {}) }}
         # An egress rule with an empty `to` allows everything, so the litellm rule is added only when needed.
         _crawl4ai_egress: >-
           {{ [{'to': [{'namespaceSelector': {'matchLabels': {'kubernetes.io/metadata.name': 'kube-system'}},
@@ -104,6 +166,31 @@
           data:
             config.yml: "{{ _crawl4ai_config_yml }}"
 
+    - name: Read crawl4ai env secret
+      when:
+        - crawl4ai_usermap_enabled | bool
+        - not (crawl4ai_usermap_fallback_openai_key | bool)
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: crawl4ai-env
+        namespace: "{{ crawl4ai_namespace }}"
+      register: _crawl4ai_env_secret_live
+      no_log: true
+
+    # A merge-patched Secret keeps keys that are no longer rendered; with the fallback off the shared key must leave the pod.
+    - name: Delete crawl4ai env secret that still carries OPENAI_API_KEY (recreated below without it)
+      when:
+        - crawl4ai_usermap_enabled | bool
+        - not (crawl4ai_usermap_fallback_openai_key | bool)
+        - _crawl4ai_env_secret_live.resources | default([]) | selectattr('data.OPENAI_API_KEY', 'defined') | list | length > 0
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: crawl4ai-env
+        namespace: "{{ crawl4ai_namespace }}"
+
     - name: Create crawl4ai env secret
       kubernetes.core.k8s:
         state: present
@@ -115,6 +202,53 @@
             namespace: "{{ crawl4ai_namespace }}"
           type: Opaque
           stringData: "{{ _crawl4ai_secret_env }}"
+
+    - name: Create crawl4ai usermap patch ConfigMap
+      when: crawl4ai_usermap_enabled | bool
+      kubernetes.core.k8s:
+        state: present
+        # apply (three-way merge) so a renamed or removed key is pruned
+        apply: true
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: crawl4ai-usermap
+            namespace: "{{ crawl4ai_namespace }}"
+            labels:
+              app: crawl4ai
+          data: "{{ _crawl4ai_usermap_files }}"
+
+    - name: Create crawl4ai users Secret
+      when: crawl4ai_usermap_enabled | bool
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: crawl4ai-users
+            namespace: "{{ crawl4ai_namespace }}"
+            labels:
+              app: crawl4ai
+          type: Opaque
+          stringData:
+            users.yml: "{{ _crawl4ai_users_yml }}"
+      no_log: true
+
+    - name: Remove crawl4ai usermap objects (usermap disabled)
+      when: not (crawl4ai_usermap_enabled | bool)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ crawl4ai_namespace }}"
+      loop:
+        - {kind: ConfigMap, name: crawl4ai-usermap}
+        - {kind: Secret, name: crawl4ai-users}
+      loop_control:
+        label: "{{ item.kind }}/{{ item.name }}"
 
     - name: Create crawl4ai service
       kubernetes.core.k8s:
@@ -135,6 +269,89 @@
                 name: http
                 targetPort: "{{ crawl4ai_port }}"
                 protocol: TCP
+
+    - name: Compose Crawl4AI container and volumes
+      ansible.builtin.set_fact:
+        _crawl4ai_container_base:
+          name: crawl4ai
+          image: "{{ crawl4ai_image }}"
+          imagePullPolicy: Always
+          ports:
+            - containerPort: "{{ crawl4ai_port }}"
+              name: http
+              protocol: TCP
+          env: "{{ _crawl4ai_env }}"
+          envFrom:
+            - secretRef:
+                name: crawl4ai-env
+          resources:
+            requests:
+              cpu: "{{ crawl4ai_cpu_request }}"
+              memory: "{{ crawl4ai_memory_request }}"
+            limits:
+              cpu: "{{ crawl4ai_cpu_limit }}"
+              memory: "{{ crawl4ai_memory_limit }}"
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /app/config.yml
+              subPath: config.yml
+              readOnly: true
+            - name: shm
+              mountPath: /dev/shm
+        _crawl4ai_volumes_base:
+          - name: config
+            configMap:
+              name: crawl4ai-config
+          - name: shm
+            emptyDir:
+              medium: Memory
+              sizeLimit: "{{ crawl4ai_shm_size }}"
+
+    # Usermap on: the launcher patches /app as root (owner chmod, so no DAC_OVERRIDE/FOWNER) and drops to appuser
+    # through setpriv, which needs SETUID and SETGID and nothing else.
+    - name: Compose Crawl4AI usermap container additions
+      ansible.builtin.set_fact:
+        _crawl4ai_container: >-
+          {{ _crawl4ai_container_base
+             | combine({
+                 'command': ['bash', '/patches/crawl4ai_launch.sh'],
+                 'securityContext': {
+                   'runAsUser': 0,
+                   'runAsNonRoot': false,
+                   'allowPrivilegeEscalation': false,
+                   'capabilities': {'drop': ['ALL'], 'add': ['SETUID', 'SETGID']}
+                 },
+                 'volumeMounts': _crawl4ai_container_base.volumeMounts + [
+                   {'name': 'usermap-patch', 'mountPath': '/patches', 'readOnly': true},
+                   {'name': 'usermap-users', 'mountPath': crawl4ai_usermap_mount_path, 'readOnly': true}
+                 ]
+               } if (crawl4ai_usermap_enabled | bool) else {}) }}
+        _crawl4ai_volumes: >-
+          {{ _crawl4ai_volumes_base
+             + ([{'name': 'usermap-patch', 'configMap': {'name': 'crawl4ai-usermap'}},
+                 {'name': 'usermap-users', 'secret': {'secretName': 'crawl4ai-users', 'defaultMode': 292}}]
+                if (crawl4ai_usermap_enabled | bool) else []) }}
+        _crawl4ai_pod_annotations: >-
+          {{ {'checksum/config': (_crawl4ai_config_yml ~ (_crawl4ai_env | to_json) ~ (_crawl4ai_secret_env | to_json)) | hash('sha256')}
+             | combine({'checksum/usermap-patch': (_crawl4ai_usermap_files | to_json) | hash('sha256')}
+                       if (crawl4ai_usermap_enabled | bool) else {}) }}
 
     - name: Create crawl4ai deployment
       kubernetes.core.k8s:
@@ -163,8 +380,7 @@
               metadata:
                 labels:
                   app: crawl4ai
-                annotations:
-                  checksum/config: "{{ (_crawl4ai_config_yml ~ (_crawl4ai_env | to_json) ~ (_crawl4ai_secret_env | to_json)) | hash('sha256') }}"
+                annotations: "{{ _crawl4ai_pod_annotations }}"
               spec:
                 nodeSelector: "{{ crawl4ai_node_selector }}"
                 dnsConfig:
@@ -174,57 +390,9 @@
                 # Service links would inject CRAWL4AI_PORT=tcp://<svc-ip>:<port>.
                 enableServiceLinks: false
                 containers:
-                  - name: crawl4ai
-                    image: "{{ crawl4ai_image }}"
-                    imagePullPolicy: Always
-                    ports:
-                      - containerPort: "{{ crawl4ai_port }}"
-                        name: http
-                        protocol: TCP
-                    env: "{{ _crawl4ai_env }}"
-                    envFrom:
-                      - secretRef:
-                          name: crawl4ai-env
-                    resources:
-                      requests:
-                        cpu: "{{ crawl4ai_cpu_request }}"
-                        memory: "{{ crawl4ai_memory_request }}"
-                      limits:
-                        cpu: "{{ crawl4ai_cpu_limit }}"
-                        memory: "{{ crawl4ai_memory_limit }}"
-                    startupProbe:
-                      httpGet:
-                        path: /health
-                        port: http
-                      periodSeconds: 5
-                      failureThreshold: 36
-                    readinessProbe:
-                      httpGet:
-                        path: /health
-                        port: http
-                      periodSeconds: 15
-                    livenessProbe:
-                      httpGet:
-                        path: /health
-                        port: http
-                      periodSeconds: 30
-                      timeoutSeconds: 10
-                    volumeMounts:
-                      - name: config
-                        mountPath: /app/config.yml
-                        subPath: config.yml
-                        readOnly: true
-                      - name: shm
-                        mountPath: /dev/shm
+                  - "{{ _crawl4ai_container }}"
                 restartPolicy: Always
-                volumes:
-                  - name: config
-                    configMap:
-                      name: crawl4ai-config
-                  - name: shm
-                    emptyDir:
-                      medium: Memory
-                      sizeLimit: "{{ crawl4ai_shm_size }}"
+                volumes: "{{ _crawl4ai_volumes }}"
 
     - name: Create crawl4ai ip-allowlist middleware
       kubernetes.core.k8s:

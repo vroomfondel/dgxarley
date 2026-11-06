@@ -49,3 +49,23 @@ crawl4ai_litellm_api_key: "sk-changeme"
 # [] = all models.
 crawl4ai_litellm_key_models: []
 crawl4ai_litellm_key_max_parallel_requests: 4
+
+# === Per-user tokens and LiteLLM keys (files/crawl4ai/README.md) ===
+# Off renders exactly the plain Deployment (no command, securityContext, extra mounts, ConfigMap or Secret).
+# On needs crawl4ai_llm_enabled. The Deployment then starts as root with only SETUID/SETGID, the launcher patches
+# /app from the ConfigMap crawl4ai-usermap (/patches) and drops to appuser. Image tag stays free: if an upstream update
+# moves a hook anchor the pod does not start (usermap on) instead of running unmapped.
+crawl4ai_usermap_enabled: false
+# true: callers without a mapping (operator token, JWT, MCP service, user without own key) use the shared key
+# crawl4ai_litellm_api_key (OPENAI_API_KEY); false: they get 403 on the LLM paths and the key is not in the pod.
+crawl4ai_usermap_fallback_openai_key: false
+# Mount directory of the Secret crawl4ai-users (key users.yml, no subPath, reloaded without restart).
+crawl4ai_usermap_mount_path: "/run/crawl4ai"
+# One entry per user; real values in the vault.
+#   name              [A-Za-z0-9._@-]{1,64}, unique
+#   token             Crawl4AI bearer token, plain text in the vault, >= 32 chars (`openssl rand -hex 32`); only its SHA-256 reaches the Secret
+#   litellm_key_alias key_alias of an entry in litellm_virtual_keys that carries `key:` (resolved here), or
+#   litellm_key       the sk-... value directly (wins over the alias)
+#   models, llm, scope  optional: model allowlist, false = never LLM, data|admin
+# The Crawl4AI key is a separate virtual key from the user's normal one (own key_alias, same user_id).
+crawl4ai_users: []

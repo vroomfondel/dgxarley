@@ -1,0 +1,13 @@
+{#- JSON is valid YAML; consumed by crawl4ai_usermap.py (files/crawl4ai/README.md). Only the SHA-256 of each token is written. -#}
+{%- set ns = namespace(users=[]) -%}
+{%- for u in crawl4ai_users -%}
+{%- set alias_keys = litellm_virtual_keys | default([]) | selectattr('key_alias', 'equalto', u.litellm_key_alias | default('')) | selectattr('key', 'defined') | map(attribute='key') | list -%}
+{%- set key = u.litellm_key | default(alias_keys | first | default('', true), true) -%}
+{%- set entry = {'name': u.name, 'token_sha256': u.token | hash('sha256')} -%}
+{%- if key | length > 0 -%}{%- set _ = entry.update({'litellm_key': key}) -%}{%- endif -%}
+{%- if u.models is defined -%}{%- set _ = entry.update({'models': u.models}) -%}{%- endif -%}
+{%- if u.llm is defined -%}{%- set _ = entry.update({'llm': u.llm | bool}) -%}{%- endif -%}
+{%- if u.scope is defined -%}{%- set _ = entry.update({'scope': u.scope}) -%}{%- endif -%}
+{%- set ns.users = ns.users + [entry] -%}
+{%- endfor -%}
+{{ {'version': 1, 'users': ns.users} | to_nice_json }}

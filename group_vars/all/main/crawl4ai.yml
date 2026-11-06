@@ -9,3 +9,13 @@ crawl4ai_litellm_api_key: "sk-changeme"
 # [] = all models.
 crawl4ai_litellm_key_models: []
 crawl4ai_litellm_key_max_parallel_requests: 4
+# Per-user tokens and LiteLLM keys (see roles/k8s_infra/defaults/main/crawl4ai.yml and files/crawl4ai/README.md).
+crawl4ai_usermap_enabled: false
+crawl4ai_usermap_fallback_openai_key: false
+# Example (invented values; real entries in the vault). The alias must exist in litellm_virtual_keys with a `key:`.
+# crawl4ai_users:
+#   - name: alice
+#     token: "0000000000000000000000000000000000000000000000000000000000000000"
+#     litellm_key_alias: "alice-crawl4ai"
+#     models: ["hermes-default"]
+crawl4ai_users: []
