@@ -9,7 +9,7 @@ hub_ingress:
   source_ips: []
 
 # Mail ports the hub passes through raw: <bind_address>:<gate_port> accept-proxy -> 127.0.0.1:<nodeport> send-proxy-v2
-# -> roles/k8s_infra apps/postfix.yml (smtp, submission(s)) / apps/dovecot.yml (imap(s)). gate_port must match the hub's kikube_hub_mail_ingress.
+# -> roles/k8s_infra apps/postfix.yml (smtp, submission(s)) / apps/dovecot.yml (imap(s)). gate_port must match the hub's mail ingress config.
 # The vault sets hub_ingress_mail (e.g. { smtp: { enabled: true } }), merged over the defaults.
 hub_ingress_mail_defaults:
   smtp:        { enabled: false, gate_port: 8025, nodeport: 30025 }

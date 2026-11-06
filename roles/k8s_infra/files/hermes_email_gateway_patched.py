@@ -2,7 +2,7 @@
 receives, SMTP sends. Configured via EMAIL_* env vars or ``platforms.email`` in config.yaml (see website docs).
 
 ------------------------------------------------------------------------------
-LOCAL PATCH (dgxarley) — synced to upstream tag v0.22.4
+LOCAL PATCH (dgxarley) — synced to upstream tag v0.23.0
 (plugins/platforms/email/adapter.py, 61613 bytes, blob 49abaf5f6a). Must move in
 lockstep with hermes.image_tag: the baseline calls base-class methods that only
 exist from its own tag on. Re-sync procedure: HERMES_EMAIL_UPSTREAM.md.

@@ -40,11 +40,11 @@ dovecot_hub_targets:
 
 # fail2ban sidecar (image, hub URL, ignoreip, sync interval: mail_fail2ban_*): jails dovecot (filter dovecot24) + recidive.
 dovecot_fail2ban_enabled: false
-# Sensitive, real value in group_vars/all/vault/dovecot.sops.yml: this pod's token in kikube_hub_f2b_api_clients.
+# Sensitive, real value in group_vars/all/vault/dovecot.sops.yml: this pod's token in the hub ban API's client list.
 dovecot_fail2ban_hub_token: "changeme"
 dovecot_fail2ban_bantime: 259200
 dovecot_fail2ban_findtime: 3600
 dovecot_fail2ban_maxretry: 3
-# Must not exceed the hub's kikube_hub_f2b_api_max_bantime.
+# Must not exceed the hub ban API's max bantime.
 dovecot_fail2ban_recidive_bantime: 604800
 dovecot_fail2ban_recidive_maxretry: 3

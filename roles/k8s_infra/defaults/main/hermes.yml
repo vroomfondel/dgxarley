@@ -19,7 +19,7 @@
 # internet/LAN egress, and Traefik-only ingress.
 hermes_network_policies_enabled: false
 # Additional in-cluster namespaces the hermes pods may reach through hermes-egress (whole namespace, any port),
-# on top of DNS, litellm, searxng and internet/LAN. Example: [krag, crawl4ai, camofox] for backends reached via their
+# on top of DNS, litellm, searxng and internet/LAN. Example: [ragdoc, crawl4ai, camofox] for backends reached via their
 # service name (http://<service>.<namespace>.svc.cluster.local:<port>), e.g. by the init-skills wellknown source.
 # The target namespace must also admit hermes in its own ingress policy.
 hermes_network_egress_namespaces: []
@@ -107,7 +107,7 @@ hermes_mail_settings:
 #       skills_dir: /work/demo/skills
 #       roles_file: roles.yaml
 #       base: [some-skill]
-#   type: wellknown Agent Skills Discovery: the skills are published by a server (e.g. a krag server) under a
+#   type: wellknown Agent Skills Discovery: the skills are published by a server (e.g. a ragdoc server) under a
 #                    well-known URI (RFC 8615, prefix /.well-known/) in the format of the draft "Agent Skills Discovery
 #                    via Well-Known URIs" 0.2.0 (Cloudflare); schema https://schemas.agentskills.io/discovery/0.2.0/schema.json
 #                    (the `$schema` of such an index). URLs:
@@ -153,7 +153,7 @@ hermes:
   #  * GATEWAY_HEALTH_URL (upstream-deprecated, the only cross-container gateway probe).
   #  * HERMES_DASHBOARD_BASIC_AUTH_*, TERMINAL_CWD, API_SERVER_KEY (>=16 chars), dashboard CLI flags.
   #  * host-wide gateway lock ($HERMES_GATEWAY_LOCK_DIR unset -> container fs, not the shared /opt/data).
-  image_tag: "v0.22.4"                  # agent image (nousresearch/hermes-agent)
+  image_tag: "v0.23.0"                  # agent image (nousresearch/hermes-agent)
   # busybox helper image (fix-perms / init-dashboard-themes initContainers, log-tail sidecar)
   busybox_image: "busybox:1.38"
   # NFS-backed hostPath base on k3smaster — per-user subdirs <base>/<username>

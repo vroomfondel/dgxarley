@@ -38,7 +38,7 @@ mikrotik_dhcp_defaults:
   static_leases: []
 
 mikrotik_cve_2026_98432_mitigation: true
-mikrotik_cve_2026_98432_comment: "kikube-cve-2026-98432: drop IPv4 TCP with IP options"
+mikrotik_cve_2026_98432_comment: "cve-2026-98432: drop IPv4 TCP with IP options"
 
 mikrotik_firewall: {}
 mikrotik_firewall_defaults:

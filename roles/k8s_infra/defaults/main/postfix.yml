@@ -43,7 +43,7 @@ postfix_hub_targets:
 
 # fail2ban sidecar (image, hub URL, ignoreip, sync interval: mail_fail2ban_*): jails postfix[mode=auth|extra] + recidive.
 postfix_fail2ban_enabled: false
-# Sensitive, real value in group_vars/all/vault/postfix.sops.yml: this pod's token in kikube_hub_f2b_api_clients.
+# Sensitive, real value in group_vars/all/vault/postfix.sops.yml: this pod's token in the hub ban API's client list.
 postfix_fail2ban_hub_token: "changeme"
 postfix_fail2ban_bantime: 259200
 postfix_fail2ban_findtime: 3600
@@ -52,6 +52,6 @@ postfix_fail2ban_auth_maxretry: 1
 postfix_fail2ban_auth_bantime: 7200
 postfix_fail2ban_extra_maxretry: 3
 postfix_fail2ban_extra_bantime: 7200
-# Must not exceed the hub's kikube_hub_f2b_api_max_bantime.
+# Must not exceed the hub ban API's max bantime.
 postfix_fail2ban_recidive_bantime: 604800
 postfix_fail2ban_recidive_maxretry: 3

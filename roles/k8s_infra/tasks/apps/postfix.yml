@@ -79,7 +79,7 @@
             name: postfix-fail2ban
             namespace: "{{ mail_namespace }}"
           data:
-            kikube.local: "{{ _postfix_fail2ban_jail }}"
+            hub.local: "{{ _postfix_fail2ban_jail }}"
 
     - name: Create postfix fail2ban hub credentials
       kubernetes.core.k8s:
@@ -293,7 +293,7 @@
           volumeMounts:
             - { name: maillog, mountPath: /var/log/mail }
             - { name: fail2ban-db, mountPath: /var/lib/fail2ban }
-            - { name: fail2ban-config, mountPath: /etc/fail2ban/jail.d/kikube.local, subPath: kikube.local, readOnly: true }
+            - { name: fail2ban-config, mountPath: /etc/fail2ban/jail.d/hub.local, subPath: hub.local, readOnly: true }
             - { name: fail2ban-hub, mountPath: /etc/f2b-hub, readOnly: true }
         # Runs as root: postlogd creates postfix.log 0600. Postfix rotates its own log (entrypoint), this only prunes old ones.
         _postfix_logtail_script: >-

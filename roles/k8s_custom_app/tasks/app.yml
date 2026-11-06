@@ -49,7 +49,7 @@
     _app_teardown: "{{ app.teardown | bool or custom_app_teardown == app.name }}"
     _app_labels:
       app: "{{ app.name }}"
-      kikube.io/custom-app: "{{ app.name }}"
+      dgxarley/custom-app: "{{ app.name }}"
     _app_custom_install: "{{ (app.dir ~ '/tasks/main.yml') is file }}"
 
 - name: Validate {{ app.name }} spec

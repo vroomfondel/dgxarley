@@ -146,7 +146,7 @@ The apparent "eager beats graphs by 63% at n=8" result is bogus: at n=8 the MoE 
 
 **Hypothesis (unverified):** this matches the `StandardDispatcher` / `apply_shuffle_mul_sum` EP combine bug from the header notes: the `a_map/c_map` zero-init + `topk_weights.masked_fill` patches suppress the crash but do not actually fix the combine math — at higher batch sizes (n≥8) the numerical corruption *may* become catastrophic and the model collapses onto a single token. At n≤4 the corruption *may* be small enough that the model still produces usable text (but quality may be subtly degraded — not yet measured). Needs confirmation: (1) verify failure reproduces at n=8, (2) check if disabling piecewise or re-enabling CUDA graphs changes the threshold, (3) compare logits/prob distributions at n=4 vs n=8 to see if the collapse is truly concurrency-triggered rather than some other stateful effect.
 
-Detection note: the kikube-bench harness currently accepts any `finish_reason ∈ {stop, length}` as success. To flag this failure automatically we need an output-quality check — see the follow-up section below.
+Detection note: the bench harness currently accepts any `finish_reason ∈ {stop, length}` as success. To flag this failure automatically we need an output-quality check — see the follow-up section below.
 
 ### Test 3 — `triton` MoE + `fi` attn + `fi_cutlass` fp4, piecewise CUDA graphs **on** (graphs on, piecewise on) — **STABLE**
 

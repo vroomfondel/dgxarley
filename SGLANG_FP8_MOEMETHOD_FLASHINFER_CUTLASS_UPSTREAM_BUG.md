@@ -380,7 +380,7 @@ AttributeError: 'Fp8MoEMethod' object has no attribute 'runner'
 deep_gemm dispatch branch first; on `--disable-cuda-graph` it would
 crash on line 1605 instead. Both lines fail for the same reason.)
 
-The crash is reported by `kikube-bench matrix` as
+The crash is reported by the bench matrix as
 `outcome=startup_crash` with the head pod restart-looping until the
 matrix driver scales the deployment to 0 and moves on to the next case.
 
