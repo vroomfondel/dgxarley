@@ -1,0 +1,42 @@
+---
+# The console echoes the command, wrapped at terminal width, into stdout; the ipv6| marker separates the value from it.
+- name: Read IPv6 stack state
+  community.routeros.command:
+    commands:
+      - ':put ("ipv6|" . [/ipv6/settings/get disable-ipv6])'
+  register: _ipv6_state
+  changed_when: false
+  check_mode: false
+
+- name: Set IPv6 stack state
+  community.routeros.command:
+    commands:
+      - /ipv6/settings/set disable-ipv6={{ 'yes' if mikrotik_disable_ipv6 | bool else 'no' }}
+  changed_when: true
+  when: _ipv6_current != (mikrotik_disable_ipv6 | bool | string | lower)
+  vars:
+    _ipv6_current: "{{ _ipv6_state.stdout_lines[0] | map('trim') | select('match', '^ipv6\\|') | first | regex_replace('^ipv6\\|', '') }}"
+
+# disable-ipv6 leaves the link-local address of WireGuard interfaces; their allowed-address is IPv4 only.
+- name: Read IPv6 stack state after apply
+  community.routeros.command:
+    commands:
+      - ':put ("ipv6|" . [/ipv6/settings/get disable-ipv6])'
+      - >-
+        { :local n 0;
+        :foreach a in=[/ipv6/address/find] do={ :if ([:len [/interface/wireguard/find name=[/ipv6/address/get $a interface]]] = 0) do={ :set n ($n + 1) } };
+        :put ("ipv6addr|" . $n) }
+  register: _ipv6_after
+  changed_when: false
+  check_mode: false
+
+- name: Assert IPv6 stack state
+  vars:
+    _state: "{{ _ipv6_after.stdout_lines[0] | map('trim') | select('match', '^ipv6\\|') | first | regex_replace('^ipv6\\|', '') }}"
+    _addrs: "{{ _ipv6_after.stdout_lines[1] | map('trim') | select('match', '^ipv6addr\\|') | first | regex_replace('^ipv6addr\\|', '') | int }}"
+  ansible.builtin.assert:
+    that:
+      - _state == (mikrotik_disable_ipv6 | bool | string | lower)
+      - not (mikrotik_disable_ipv6 | bool) or _addrs == 0
+    fail_msg: "IPv6 stack: disable-ipv6={{ _state }}, {{ _addrs }} addresses left, wanted mikrotik_disable_ipv6={{ mikrotik_disable_ipv6 }}"
+  when: not ansible_check_mode

@@ -40,6 +40,9 @@ mikrotik_dhcp_defaults:
 mikrotik_cve_2026_98432_mitigation: true
 mikrotik_cve_2026_98432_comment: "cve-2026-98432: drop IPv4 TCP with IP options"
 
+# /ip/firewall rules do not cover IPv6; the stack stays off unless /ipv6/firewall/filter gets its own rules.
+mikrotik_disable_ipv6: true
+
 mikrotik_firewall: {}
 mikrotik_firewall_defaults:
   fasttrack_enabled: false
