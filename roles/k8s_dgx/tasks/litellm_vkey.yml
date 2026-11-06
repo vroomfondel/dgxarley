@@ -1,6 +1,8 @@
 ---
 # Per-key provisioning, included from litellm.yml with loop_var _vkey.
-# Create or update only; an existing key is never rotated.
+# Create or update only; an existing key is never rotated. An entry may carry `key:` (sk-..., from the vault) to be
+# created with exactly that value (needed when another role reads the value, e.g. crawl4ai_users); otherwise LiteLLM
+# generates it. The value is only used on create.
 - name: Read litellm key {{ _vkey.key_alias }}
   ansible.builtin.uri:
     url: "{{ litellm_admin_url }}/key/list?return_full_object=true&size=100&key_alias={{ _vkey.key_alias | urlencode }}"
@@ -118,6 +120,7 @@
               'tpm_limit': _k_want.tpm_limit,
               'rpm_limit': _k_want.rpm_limit,
               'metadata': _vkey.metadata | default({}, true)}
+             | combine({'key': _vkey.key} if (_vkey.key | default('', true)) != '' else {})
              | dict2items | rejectattr('value', 'none') | items2dict }}
         status_code: 200
       register: _litellm_key_generated

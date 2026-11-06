@@ -53,6 +53,8 @@ litellm_teams:
 # Optional fields: team_alias (resolved to team_id; the key inherits the team's
 # models when models is []), user_id, models, max_budget, budget_duration,
 # tpm_limit, rpm_limit (null or 0 = unlimited), metadata (dict).
+# Optional `key:` (sk-..., vault only) creates the key with exactly that value instead of a generated one; used by entries that
+# other roles resolve by key_alias (crawl4ai_users[].litellm_key_alias). Ignored for an existing key (never rotated).
 # An existing key is updated via /key/update when team, models, limits or metadata differ.
 litellm_virtual_keys:
   - key_alias: "openwebui-chat"
