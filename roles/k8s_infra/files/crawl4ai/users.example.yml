@@ -1,0 +1,18 @@
+# Example only, invented values. Real file: Secret mounted at /run/crawl4ai/users.yml (CRAWL4AI_USERMAP_FILE).
+# Hash a token:  printf '%s' "$TOKEN" | sha256sum | cut -d' ' -f1
+version: 1
+users:
+  - name: alice
+    token_sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"  # gitleaks:allow (hash of an invented example token)
+    litellm_key: "sk-example-alice-0000000000000000"
+    models: ["hermes-default"]
+  - name: bob
+    token_sha256: "60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752"  # gitleaks:allow (hash of an invented example token)
+    litellm_key_file: /run/crawl4ai/keys/bob.key
+  - name: carol
+    token_sha256: "fd61a03af4f77d870fc21e05e7e80678095c92d808cfb3b5c279ee04c74aca13"  # gitleaks:allow (hash of an invented example token)
+    # no key in the entry: follows CRAWL4AI_USERMAP_FALLBACK_OPENAI_KEY
+  - name: dave
+    token_sha256: "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3"  # gitleaks:allow (hash of an invented example token)
+    llm: false
+    scope: data
