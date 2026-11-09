@@ -23,6 +23,8 @@ hermes_network_policies_enabled: false
 # service name (http://<service>.<namespace>.svc.cluster.local:<port>), e.g. by the init-skills wellknown source.
 # The target namespace must also admit hermes in its own ingress policy.
 hermes_network_egress_namespaces: []
+# Replica count of every hermes-agent-/hermes-webui-<user> Deployment; per-user item.replicas wins. 0 = apply specs, run no pod.
+hermes_agent_replicas: 1
 
 # === Hermes mailboxes (STANDALONE, not inside the hermes: dict: hash_behaviour=replace) ===
 # Which mail server holds the agents' mailboxes and where the gateway connects. The address domain is the same on
@@ -378,6 +380,7 @@ hermes:
 #               cpu_limit?,     back to email.cpu_limit/memory_limit, then
 #               memory_limit?   '500m'/'512Mi')
 #           },
+#           replicas?           (default hermes_agent_replicas, both Deployments),
 #           enabled }
 # Hostnames: <username>.hermes.<dns> (dashboard) + <username>.hermes-webui.<dns> (webui), plus the same labels under tenants[tenant].domain
 hermes_users: []

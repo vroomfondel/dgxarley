@@ -32,7 +32,7 @@ metadata:
     hermes-component: agent
     hermes-user: "{{ item.username }}"
 spec:
-  replicas: 1
+  replicas: {{ item.replicas | default(hermes_agent_replicas) | int }}
   strategy:
     type: Recreate
   selector:

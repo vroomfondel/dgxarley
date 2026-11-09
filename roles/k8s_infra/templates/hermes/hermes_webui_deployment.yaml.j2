@@ -51,7 +51,7 @@ metadata:
     keel.sh/pollSchedule: "@every 24h"
     keel.sh/trigger: poll
 spec:
-  replicas: 1
+  replicas: {{ item.replicas | default(hermes_agent_replicas) | int }}
   strategy:
     type: Recreate
   selector:
