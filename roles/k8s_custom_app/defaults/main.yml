@@ -62,6 +62,8 @@ custom_app_spec_defaults:
     initial_delay: 10
     period: 15
     liveness_initial_delay: 60
+    # null = period * 2
+    liveness_period: null
   ndots: 1
   keel: false
   ingress:

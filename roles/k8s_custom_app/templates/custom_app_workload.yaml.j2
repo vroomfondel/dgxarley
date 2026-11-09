@@ -126,7 +126,7 @@ spec:
 {% set probe = {'tcpSocket': {'port': 'http'}} %}
 {% endif %}
           readinessProbe: {{ probe | combine({'initialDelaySeconds': app.probes.initial_delay | int, 'periodSeconds': app.probes.period | int}) | to_json }}
-          livenessProbe: {{ probe | combine({'initialDelaySeconds': app.probes.liveness_initial_delay | int, 'periodSeconds': (app.probes.period | int) * 2}) | to_json }}
+          livenessProbe: {{ probe | combine({'initialDelaySeconds': app.probes.liveness_initial_delay | int, 'periodSeconds': (app.probes.liveness_period if app.probes.liveness_period is not none else (app.probes.period | int) * 2) | int}) | to_json }}
 {% endif %}
           volumeMounts:
 {% for path in app.files %}

@@ -446,7 +446,8 @@ The generic install renders Namespace, image pull Secret, env ConfigMap/Secret (
 (`subPath` mounts), PVCs, egress/ingress NetworkPolicies, Service, Deployment, Traefik IP-allowlist + redirect
 Middlewares, cert-manager Certificate, both IngressRoutes and the nsupdate A record, then `extra_manifests` and the
 post hook. Every building block is a default that the spec can switch off (`ingress.enabled`,
-`network_policies.enabled`, `probes.enabled`, `ingress.dns`, `port: 0` for no Service). The merged spec is
+`network_policies.enabled`, `probes.enabled`, `ingress.dns`, `port: 0` for no Service). Probe timing: `probes.initial_delay` and
+`probes.period` (readiness), `probes.liveness_initial_delay`, `probes.liveness_period` (default: twice `period`). The merged spec is
 available to templates and hooks as `app` (`app.name`, `app.namespace`, `app.dir`, `app.ingress.hostname`, ...).
 Spec keys and defaults: `roles/k8s_custom_app/defaults/main.yml`.
 
