@@ -13,7 +13,7 @@
 # ─── Dual-UPS support ──────────────────────────────────────────────────
 #
 # Two identical UPS units (same USB vendor:product ID) are distinguished
-# via stable udev symlinks (/dev/ups-1, /dev/ups-2) keyed by USB KERNELS path.
+# via busport in ups.conf (nut-scanner -U).
 #
 # Per-UPS shutdown logic:
 #   nut_ups_powers_self  — which UPS powers this host (powervalue=1 in MONITOR)
@@ -50,7 +50,10 @@
   register: nut_udev_rule
 
 - name: reload udev rules and re-trigger USB subsystem
-  shell: udevadm control --reload-rules && udevadm trigger --subsystem-match=usb --action=add
+  shell: >-
+    udevadm control --reload-rules &&
+    udevadm trigger --subsystem-match=usb --action=add
+    --attr-match=idVendor={{ nut_ups_vendorid }} --attr-match=idProduct={{ nut_ups_productid }}
   when: nut_udev_rule is changed
 
 - name: deploy nut.conf
