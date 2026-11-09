@@ -2,9 +2,9 @@
 # defaults file for k3sserver
 # ~ $ curl -s https://api.github.com/repos/k3s-io/k3s/releases | jq -r '.[0].tag_name'
 # curl -s https://update.k3s.io/v1-release/channels | jq -r '.data[] | select(.id|IN("stable","latest")) | "\(.id)\t\(.latest)"'
-# v1.37.1+k3s1
+# v1.37.2+k3s1
 
-k3s_version: "v1.37.1+k3s1"
+k3s_version: "v1.37.2+k3s1"
 
 k3s_node_ip: "{{ ansible_facts.default_ipv4.address }}"
 

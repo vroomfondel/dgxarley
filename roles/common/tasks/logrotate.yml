@@ -1,0 +1,21 @@
+---
+- name: check for the cloud-init-base logrotate config
+  ansible.builtin.stat:
+    path: /etc/logrotate.d/cloud-init-base
+  register: _logrotate_cloudinit_base
+
+# cloud-init-base took over this config without an rm_conffile for the old name; logrotate aborts on the duplicate.
+- name: remove the obsolete cloud-init logrotate config
+  ansible.builtin.file:
+    path: /etc/logrotate.d/cloud-init
+    state: absent
+  when: _logrotate_cloudinit_base.stat.exists
+
+- name: validate the logrotate config
+  ansible.builtin.command: logrotate -d /etc/logrotate.conf
+  register: _logrotate_check
+  changed_when: false
+  failed_when: >-
+    _logrotate_check.rc != 0 or
+    (_logrotate_check.stderr_lines | select('match', '^error:') | list | length > 0)
+  check_mode: false

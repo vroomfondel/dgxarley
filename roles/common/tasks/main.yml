@@ -244,6 +244,11 @@
     - upgradestuff
   import_tasks: upgradeallandautoremove.yml
 
+- name: logrotate cleanup and config validation
+  tags:
+    - logrotate
+  import_tasks: logrotate.yml
+
 - name: node_exporter cpufreq textfile collector
   tags:
     - cpufreq_textfile
