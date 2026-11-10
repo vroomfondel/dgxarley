@@ -32,16 +32,7 @@ done
 # NOTE: nvfp4_blockwise_moe.cuh SM121 tile fix not possible via runtime patch.
 # Requires SM121-specific sgl-kernel build. Use flashinfer_cutlass MoE for NVFP4.
 
-# Version gate: warn if the container image changed — patches below may need review.
-# Dev builds report __version__=0.0.0 (no setuptools-scm), so we check the image
-# tag (injected as SGLANG_IMAGE env var by Ansible) instead of the Python version.
-# The grep guards still prevent patching if the target code has changed.
-SGLANG_EXPECTED_IMAGE="scitrera/dgx-spark-sglang:0.5.10"
-if [ -n "$SGLANG_IMAGE" ] && [ "$SGLANG_IMAGE" != "$SGLANG_EXPECTED_IMAGE" ]; then
-  echo "WARNING: SGLang image changed (expected ${SGLANG_EXPECTED_IMAGE}, got ${SGLANG_IMAGE})."
-  echo "         Monkey-patches may no longer apply or may need updating."
-fi
-
+# Exact-tag image version gate removed 2026-11-10; the grep guards below gate each patch.
 # Patch moe_wna16 weight loader for EP-aware qzeros handling (SGLang 0.5.9 bug).
 # Two bugs in the w13_qzeros/w2_qzeros branches:
 #   1. Uses raw global expert_id (0-127) instead of local EP index (0-63)
@@ -147,52 +138,7 @@ if grep -q 'num_experts=layer.num_experts,  # global num experts' "$MODELOPT_QUA
   echo "Patched modelopt_quant.py: CutlassMoEParams uses num_local_experts for EP"
 fi
 
-# TODO (followup 2026-06-29): REMOVABLE on any image built from SGLang v0.5.14+.
-# PR #25820 (merged 2026-06-22, shipped in the v0.5.14 release 2026-06-26) adds a
-# get_model_loader() short-circuit that routes SHARDED_STATE before ModelOptModelLoader
-# is reached, so this monkey-patch becomes dead code there. Drop this whole block once
-# the pinned sglang_image is v0.5.14+. Ref: SGLANG_TP_EP_MOE_UPSTREAM_BUG.md.
-# Patch ModelOptModelLoader to support load_format=sharded_state (SGLang 0.5.9 bug).
-# ModelOptModelLoader inherits DefaultModelLoader whose _prepare_weights() doesn't
-# handle LoadFormat.SHARDED_STATE → "Unknown load_format" error. Fix: for pre-quantized
-# models with sharded_state, delegate to ShardedStateLoader instead of super().load_model().
-LOADER="/usr/local/lib/python3.12/dist-packages/sglang/srt/model_loader/loader.py"
-if grep -q 'class ModelOptModelLoader' "$LOADER" 2>/dev/null; then
-  python3 << 'PATCH_MODELOPT_SHARDED_EOF'
-import sys
-f = "/usr/local/lib/python3.12/dist-packages/sglang/srt/model_loader/loader.py"
-with open(f) as fh:
-    code = fh.read()
-old = '''        if model_config._is_already_quantized():
-            logger.info("Model is already quantized, loading directly...")
-            # Use default loading for pre-quantized models
-            return super().load_model(
-                model_config=model_config, device_config=device_config
-            )'''
-new = '''        if model_config._is_already_quantized():
-            logger.info("Model is already quantized, loading directly...")
-            # Sharded state: delegate to ShardedStateLoader (which calls
-            # process_weights_after_loading and loads per-rank shard files).
-            # DefaultModelLoader._prepare_weights doesn't handle SHARDED_STATE.
-            if self.load_config.load_format == LoadFormat.SHARDED_STATE:
-                logger.info("Using ShardedStateLoader for pre-quantized sharded model")
-                _sharded_loader = ShardedStateLoader(self.load_config)
-                return _sharded_loader.load_model(
-                    model_config=model_config, device_config=device_config
-                )
-            # Use default loading for pre-quantized models
-            return super().load_model(
-                model_config=model_config, device_config=device_config
-            )'''
-if old not in code:
-    print("ModelOptModelLoader: already patched or source changed, skipping")
-    sys.exit(0)
-code = code.replace(old, new, 1)
-with open(f, 'w') as fh:
-    fh.write(code)
-print("Patched ModelOptModelLoader: sharded_state support for pre-quantized models")
-PATCH_MODELOPT_SHARDED_EOF
-fi
+# ModelOptModelLoader sharded_state patch removed: fixed upstream in SGLang v0.5.14 (PR #25820).
 
 # Clean stale shard files from previous failed runs so we only detect
 # freshly written shards in the post-save check below.

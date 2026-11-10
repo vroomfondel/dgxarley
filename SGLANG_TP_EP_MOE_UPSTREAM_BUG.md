@@ -54,6 +54,8 @@ The threshold stated in the 2026-06-24 update above ("can be removed once a rele
 or Docker image carries post-2026-06-22 main") is now met. **Action item: the
 `ModelOptModelLoader` SHARDED_STATE loader-dispatch monkey-patch in `sglang_launch.sh`
 and `sglang_shard_launch.sh` can be removed on any image built from v0.5.14+.**
+**Done 2026-11-10:** removed from `sglang_shard_launch.sh` (all profiles and
+`default_sglang_image` are on 0.5.14+); `sglang_launch.sh` no longer carried it.
 All three remaining bugs — (a) `moe_wna16` qzeros EP (vLLM PR #35598 still open,
 vLLM still at v0.23.0), (b) NVFP4 input_scale `else`-branch EP slicing (SGLang
 PR #23531 still open), (c) `_shuffle_rows_torch` `a_map`/`c_map` OOB (separate
