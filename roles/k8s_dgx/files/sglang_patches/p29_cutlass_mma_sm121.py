@@ -41,11 +41,16 @@ from _patchlib import DIST_PACKAGES, Patch
 MMA_PATHS = (
     "nvidia_cutlass_dsl/python_packages/cutlass/cute/nvgpu/tcgen05/mma.py",
     "flashinfer/data/cutlass/python/CuTeDSL/cutlass/cute/nvgpu/tcgen05/mma.py",
+    # nvidia-cutlass-dsl >= 4.8: python sources moved to dsl_packages, `Arch` is spelled base_dsl.Arch.
+    "nvidia_cutlass_dsl/dsl_packages/cutlass/cute/nvgpu/tcgen05/mma.py",
 )
 
 OLD_ARCHS = "Arch.sm_100a,"
 NEW_ARCHS = "Arch.sm_100a, Arch.sm_120a, Arch.sm_121a,"
 MARKER = "sm_121a"
+
+OLD_ARCHS_V48 = "base_dsl.Arch.sm_100a,\n        base_dsl.Arch.sm_100f,"
+NEW_ARCHS_V48 = "base_dsl.Arch.sm_100a,\n        base_dsl.Arch.sm_120a,\n        base_dsl.Arch.sm_121a,\n        base_dsl.Arch.sm_100f,"
 
 
 def _patch_copy(relpath: str) -> None:
@@ -53,7 +58,10 @@ def _patch_copy(relpath: str) -> None:
 
     @patch.run
     def apply(p: Patch) -> None:
-        p.replace_all(OLD_ARCHS, NEW_ARCHS, marker=MARKER)
+        if "base_dsl.Arch.sm_100a," in p.code:
+            p.replace(OLD_ARCHS_V48, NEW_ARCHS_V48, marker=MARKER)
+        else:
+            p.replace_all(OLD_ARCHS, NEW_ARCHS, marker=MARKER)
 
 
 _existing = [rel for rel in MMA_PATHS if os.path.isfile(os.path.join(DIST_PACKAGES, rel))]
