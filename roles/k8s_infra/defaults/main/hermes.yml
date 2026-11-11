@@ -155,7 +155,7 @@ hermes:
   #  * GATEWAY_HEALTH_URL (upstream-deprecated, the only cross-container gateway probe).
   #  * HERMES_DASHBOARD_BASIC_AUTH_*, TERMINAL_CWD, API_SERVER_KEY (>=16 chars), dashboard CLI flags.
   #  * host-wide gateway lock ($HERMES_GATEWAY_LOCK_DIR unset -> container fs, not the shared /opt/data).
-  image_tag: "v0.23.0"                  # agent image (nousresearch/hermes-agent)
+  image_tag: "v0.23.1"                  # agent image (nousresearch/hermes-agent)
   # busybox helper image (fix-perms / init-dashboard-themes initContainers, log-tail sidecar)
   busybox_image: "busybox:1.38"
   # NFS-backed hostPath base on k3smaster — per-user subdirs <base>/<username>
