@@ -79,7 +79,33 @@ BRANCH_NAME="sm121"
 # source patches (PRs #22929/#22928) are also applied — the underlying
 # build steps and SM121 sgl-kernel patches are identical.
 #
-# Current line (v0.5.21 - SELECTED 2026-10-03, NOT YET BUILT):
+# Current line (v0.5.23 - SELECTED 2026-11-10, NOT YET BUILT):
+#   sglang-0.5.23-sm121.recipe         - SGLang v0.5.23 (released 2026-11-02;
+#                                        spans v0.5.22 too, no 0.5.22 recipe).
+#                                        First NEW BASE since 0.5.18: v0.5.23
+#                                        hard-pins torch 2.14.1, so BASE_IMAGE
+#                                        and BASE_XOMOXCC_IMAGE move to
+#                                        2.14.1-v1-cu132, built from
+#                                        pytorch-2.14.1-dev-v1.recipe via
+#                                        build_pytorch_base_image.sh FIRST.
+#                                        Pins: flashinfer 0.6.18.post1 -> 0.7.3
+#                                        (deliberately past upstream's 0.7.2)
+#                                        paired with cutlass-dsl 4.6.2 -> 4.8.0
+#                                        (0.7.3 requires >=4.8.0), transformers
+#                                        5.12.1 -> 5.19.0, tokenizers 0.22.2 ->
+#                                        0.23.2, HF_HUB_MIN_VERSION -> 1.31.0.
+#                                        SGL_KERNEL_PATCH_VARIANT "-v0.5.23",
+#                                        COSMETIC again (hunks shift +1; the
+#                                        -v0.5.21 set still applies at offset 1).
+#                                        Source patches dsv4-mtp-marlin and
+#                                        tilelang still apply and stay on; all
+#                                        other APPLY_* stay off. Runtime patch
+#                                        replay (spark5 /root/patchreplay-0523)
+#                                        clean after re-anchoring p20 / p29 /
+#                                        p30 / p34 / p37 / p69.
+#                                        Tag: xomoxcc/dgx-spark-sglang:0.5.23-sm121
+#
+# Previous line (v0.5.21 - SELECTED 2026-10-03, BUILT + PUSHED 2026-10-03):
 #   sglang-0.5.21-sm121.recipe         - SGLang v0.5.21 (released 2026-10-02).
 #                                        Build side is quiet once more: the
 #                                        sgl-kernel tree stays at
@@ -448,7 +474,26 @@ BRANCH_NAME="sm121"
 #RECIPE_NAME="sglang-0.5.15.post1-sm121"
 #IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.15.post1-sm121"
 
-# v0.5.21 (2026-10-03): ACTIVE SELECTION, NOT YET BUILT. SGLang v0.5.21
+# v0.5.23 (2026-11-10): ACTIVE SELECTION, NOT YET BUILT. SGLang v0.5.23
+# (released 2026-11-02), recipe covers the v0.5.22 delta as well.
+#   * NEW BASE: torch 2.13.0 -> 2.14.1 (upstream hard pin). Build
+#     xomoxcc/dgx-spark-pytorch-dev:2.14.1-v1-cu132 first with
+#     build_pytorch_base_image.sh (pytorch-2.14.1-dev-v1.recipe); the base check
+#     below aborts with that hint while it is missing.
+#   * flashinfer 0.7.3 + cutlass-dsl 4.8.0 move TOGETHER (matched pair);
+#     fallback pair 0.7.2 + 4.8.0 (OPEN RISK G). transformers 5.19.0, tokenizers
+#     0.23.2, HF hub >= 1.31.0.
+#   * SGL_KERNEL_PATCH_VARIANT="-v0.5.23": bodies identical, hunks +1.
+#   * Runtime patches re-anchored for v0.5.23 (p20 self-gates off, upstream
+#     fixed qzeros EP); only a built image proves p29 on cutlass-dsl 4.8.0.
+# STILL OPEN before promoting: acceptance gate on the built image, GLM DSA
+# prefill via #32779, p34 retirement check.
+RECIPE_NAME="sglang-0.5.23-sm121"
+IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.23-sm121"
+
+# Rollback: v0.5.21 (selected 2026-10-03, built + pushed 2026-10-03 as
+# xomoxcc/dgx-spark-sglang:0.5.21-sm121, default_sglang_image since). Sits on
+# the 2.13.0 base: rebuild with `--base recipe`. SGLang v0.5.21
 # (released 2026-10-02). Build-side nothing that feeds a knob moved except one
 # cosmetic suffix: SGL_KERNEL_DIR, BASE_IMAGE (torch stays 2.13.0),
 # FLASHINFER_VERSION (v0.5.21 still pins 0.6.18), transformers, kernels,
@@ -470,8 +515,8 @@ BRANCH_NAME="sm121"
 #     re-anchoring p10 / p37 / p67 (OPEN RISK A); release review in C / F.
 # STILL OPEN before promoting: acceptance gate on the built image (p37 GSM8K
 # A/B, MoE tok/s after #40105, boot log for Rust radix core + DeepGEMM probe).
-RECIPE_NAME="sglang-0.5.21-sm121"
-IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.21-sm121"
+#RECIPE_NAME="sglang-0.5.21-sm121"
+#IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.21-sm121"
 
 # Rollback: v0.5.20 (selected 2026-09-22, built + pushed 2026-09-22 as
 # xomoxcc/dgx-spark-sglang:0.5.20-sm121; no acceptance-gate run). SGLang v0.5.20
@@ -677,18 +722,17 @@ NO_LOCAL_COPY=0
 # rewritten every time we cut a new base. Use `--base recipe` to build an old
 # line on exactly the base its recipe names. Supported aliases:
 #
-#   xomoxcc   xomoxcc/dgx-spark-pytorch-dev:2.13.0-v1-cu132
-#             Our locally-built 2.13/cu132 base (scripts/build_pytorch_base_image.sh).
-#             Bumped 2026-08-28 from 2.12.0-v1-cu132 to match upstream SGLang
-#             v0.5.18's torch 2.13.0 pin (see OPEN RISK D in that recipe);
-#             v0.5.19 keeps that pin, so it is still current.
+#   xomoxcc   xomoxcc/dgx-spark-pytorch-dev:2.14.1-v1-cu132
+#             Our locally-built 2.14/cu132 base (scripts/build_pytorch_base_image.sh).
+#             Bumped 2026-11-10 from 2.13.0-v1-cu132 to match upstream SGLang
+#             v0.5.23's torch 2.14.1 pin (2.13.0 before that, since v0.5.18).
 #             Only present on spark5's podman store — never published.
 #             THIS IS THE DEFAULT (no --base needed) and what you want for
 #             performance.
 #
 #   recipe    Whatever BASE_IMAGE the selected recipe names. Use this to
 #             reproduce an older line on its original base (0.5.16 / 0.5.17 are
-#             recorded at 2.12.0-v1-cu132 and were deliberately NOT bumped).
+#             recorded at 2.12.0-v1-cu132, 0.5.18 - 0.5.21 at 2.13.0-v1-cu132).
 #
 #   scitrera  scitrera/dgx-spark-pytorch-dev:2.12.0-v1-cu132
 #             scitrera's published upstream base. Pulled from Docker Hub.
@@ -704,7 +748,7 @@ NO_LOCAL_COPY=0
 #
 # Any other --base VALUE is passed through verbatim as the BASE_IMAGE.
 # BUILD_SM121_BASE_IMAGE env var overrides --base for scripting.
-BASE_XOMOXCC_IMAGE="xomoxcc/dgx-spark-pytorch-dev:2.13.0-v1-cu132"
+BASE_XOMOXCC_IMAGE="xomoxcc/dgx-spark-pytorch-dev:2.14.1-v1-cu132"
 BASE_SCITRERA_IMAGE="scitrera/dgx-spark-pytorch-dev:2.12.0-v1-cu132"
 BASE_IMAGE_ALIAS=""
 BASE_IMAGE_OVERRIDE="${BUILD_SM121_BASE_IMAGE:-}"
@@ -833,7 +877,7 @@ image never leaves the build host.
 Options:
   --base VALUE Select the PyTorch dev base image this build sits on:
                  xomoxcc   ${BASE_XOMOXCC_IMAGE}
-                           (THE DEFAULT; locally-built 2.13/cu132; fast path)
+                           (THE DEFAULT; locally-built 2.14/cu132; fast path)
                  scitrera  ${BASE_SCITRERA_IMAGE}
                            (upstream published; one torch minor behind)
                  recipe    whatever BASE_IMAGE the selected recipe names
@@ -1234,7 +1278,7 @@ EOF
 # ============================================================================
 #
 # The default base is a locally-built xomoxcc image,
-#   ${BASE_XOMOXCC_IMAGE} = xomoxcc/dgx-spark-pytorch-dev:2.13.0-v1-cu132
+#   ${BASE_XOMOXCC_IMAGE} = xomoxcc/dgx-spark-pytorch-dev:2.14.1-v1-cu132
 # which is NOT on Docker Hub — it's built locally via
 # scripts/build_pytorch_base_image.sh and kept in the build host's podman store.
 # If the sglang build runs before the base image exists, podman will try
@@ -1344,8 +1388,8 @@ If the image has not been pushed to Docker Hub, build it first:
   bash ${SCRIPT_DIR}/build_pytorch_base_image.sh
 
 That build takes approximately 3-5 hours (cold) or 30-60 min (with warm
-ccache from a prior run). It produces the CUDA 13.2 + PyTorch 2.13 base
-that this sglang build depends on.
+ccache from a prior run). Its RECIPE_NAME must name the recipe for this tag
+(e.g. pytorch-2.14.1-dev-v1 for :2.14.1-v1-cu132).
 EOF
             exit 1
             ;;

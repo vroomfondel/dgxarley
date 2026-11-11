@@ -1,0 +1,136 @@
+Disable FlashAttention-3 (Hopper) build in sgl-kernel for DGX Spark GB10.
+
+MAINAHEAD VARIANT — regenerated against SGLang tag v0.5.14.
+
+Why a separate file from sgl-kernel-disable-fa3.patch:
+  Upstream restructured the FA3 enablement between v0.5.13 and v0.5.14. The old
+  recipe dead-coded an UNCONDITIONAL `if ("${CUDA_VERSION}" VERSION_GREATER_EQUAL
+  "12.4")` block that force-set SGL_KERNEL_ENABLE_FA3 ON. That line no longer
+  exists. v0.5.14 (sgl-kernel/CMakeLists.txt ~line 108) now ships:
+
+      set(DEFAULT_SGL_KERNEL_ENABLE_FA3 OFF)
+      if (... aarch64|arm64 ...) message("For aarch64, disable FA3 by default")
+      if (CUDA >= 12.4 AND NOT aarch64) set(DEFAULT_SGL_KERNEL_ENABLE_FA3 ON)
+      ...
+      option(SGL_KERNEL_ENABLE_FA3 "Enable FA3" ${DEFAULT_SGL_KERNEL_ENABLE_FA3})
+
+  i.e. upstream ALREADY defaults FA3 OFF on aarch64. On our GB10 (aarch64) fleet
+  the canonical patch is therefore REDUNDANT — FA3 is off out of the box. This
+  variant keeps the build pipeline uniform (same APPLY_SGL_KERNEL_DISABLE_FA3
+  gate + the 'dgxarley sgl-kernel-disable-fa3.patch' marker grep) and adds
+  belt-and-suspenders by wrapping the only DEFAULT-ON setter (the non-aarch64
+  path) in `if (FALSE AND ...)`, so SGL_KERNEL_ENABLE_FA3 stays OFF on EVERY
+  arch this recipe is ever built on — not just aarch64. The downstream
+  `if (SGL_KERNEL_ENABLE_FA3)` build block (~line 393) and the sm_90a gencode
+  block (~line 233) then skip all ~475 hopper/instantiations/flash_fwd_*.cu
+  files and the sm_90a cubins.
+
+Selected automatically by build_sm121_image.sh when the recipe sets
+SGL_KERNEL_MAINAHEAD=1 (installed under the canonical name
+sgl-kernel-disable-fa3.patch). The v0.5.13 recipes keep the original.
+
+Apply to: sgl-kernel/CMakeLists.txt, AFTER sgl-kernel-arch-prune.patch (arch-prune
+edits lines ~136/~217, below this hunk, so there is no interaction).
+
+Upstream source: sgl-project/sglang tag v0.5.14
+
+── v0.5.19 VARIANT ─────────────────────────────────────────────────────────
+Regenerated 2026-09-10 against SGLang tag v0.5.19 (released 2026-09-03), from
+the -v0.5.18 variant (same edits, same path). Sequentially re-diffed with ZERO
+fuzz and ZERO offset in build order (arch-prune -> disable-fa3 ->
+skip-sm90-target -> skip-flashmla), so this is not just the v0.5.18 file with a
+rewritten header.
+
+The sgl-kernel tree did NOT move in v0.5.19: it is still at
+python/sglang/kernels/aot/ (package "sglang-kernel", still version 0.4.6.post1,
+same CMakeLists.txt / Makefile / csrc layout), so SGL_KERNEL_DIR is unchanged.
+
+Selected by build_sm121_image.sh when the recipe sets
+SGL_KERNEL_PATCH_VARIANT="-v0.5.19"; installed into the build context under
+the canonical name, so the Dockerfile step is unchanged. The matching
+Dockerfile side is the recipe's SGL_KERNEL_DIR=python/sglang/kernels/aot,
+which re-points the post-apply grep verification and the wheel build's cd.
+
+Content unchanged vs the -v0.5.18 variant; regenerated only to keep all four
+files of the -v0.5.19 suffix set in lockstep (the suffix selects all four). The
+hunk moved by +1 line on v0.5.19 (upstream's new SGL_KERNEL_CXX_STANDARD
+set() sits above it) and is re-anchored here at zero offset.
+
+Upstream source: sgl-project/sglang tag v0.5.19
+
+── v0.5.20 VARIANT ─────────────────────────────────────────────────────────
+Regenerated 2026-09-22 against SGLang tag v0.5.20 (released 2026-09-18), from
+the -v0.5.19 variant. Sequentially re-diffed with ZERO fuzz and ZERO offset in
+build order (arch-prune -> disable-fa3 -> skip-sm90-target -> skip-flashmla).
+
+CONTENT IS BYTE-IDENTICAL to the -v0.5.19 variant apart from the hunk line
+numbers: diffing the two patch bodies with the @@ headers normalised away
+reports no difference. This suffix set exists only so the anchors match the
+ref exactly.
+
+The sgl-kernel tree did NOT move in v0.5.20: still python/sglang/kernels/aot/
+(package "sglang-kernel", version bumped 0.4.6.post1 -> 0.4.7 by #39346, same
+CMakeLists.txt / Makefile / csrc layout), so SGL_KERNEL_DIR is unchanged.
+
+Selected by build_sm121_image.sh when the recipe sets
+SGL_KERNEL_PATCH_VARIANT="-v0.5.20"; installed into the build context under
+the canonical name, so the Dockerfile step is unchanged. The matching
+Dockerfile side is the recipe's SGL_KERNEL_DIR=python/sglang/kernels/aot,
+which re-points the post-apply grep verification and the wheel build's cd.
+
+NOTE, different from every previous suffix bump in this line: the -v0.5.19 set
+does NOT fail loudly on v0.5.20. All four apply there, two of them with a
+non-zero offset (-10, see below), so a recipe that forgets to move the suffix
+builds a CORRECT tree instead of aborting. The suffix is still moved because
+zero-offset anchors are what makes the next drift detectable.
+
+What moved in v0.5.20 for THIS file: nothing. The hunk applies at offset 0 on
+the raw ref; it is re-cut here only to keep all four files of the -v0.5.20
+suffix set in lockstep (the suffix selects all four).
+
+Upstream source: sgl-project/sglang tag v0.5.20
+── v0.5.21 VARIANT ─────────────────────────────────────────────────────────
+Regenerated 2026-10-03 against SGLang tag v0.5.21 (released 2026-10-02), from
+the -v0.5.20 variant. Sequentially re-diffed (arch-prune, disable-fa3,
+skip-sm90-target, skip-flashmla) with ZERO fuzz and ZERO offset in that order.
+CONTENT IS BYTE-IDENTICAL to the -v0.5.20 variant apart from the hunk line
+numbers. The sgl-kernel tree did NOT move: still python/sglang/kernels/aot
+(SGL_KERNEL_DIR), package sglang-kernel 0.4.7.
+
+NOTE: the -v0.5.20 set does NOT fail loudly on v0.5.21 either. All four apply,
+two of them (skip-sm90-target, skip-flashmla) at offset -4, so a recipe that
+forgets to move the suffix builds a CORRECT tree instead of aborting. The suffix
+is still moved because zero-offset anchors are what makes the next drift
+detectable.
+
+What moved in v0.5.21 for THIS file: nothing. The hunk applies at offset 0 on
+the raw ref; it is re-cut only to keep all four files of the -v0.5.21 suffix set
+in lockstep (the suffix selects all four).
+
+Upstream source: sgl-project/sglang tag v0.5.21
+── v0.5.23 VARIANT ─────────────────────────────────────────────────────────
+Regenerated 2026-11-10 against SGLang tag v0.5.23, from the -v0.5.21 variant,
+sequentially re-diffed (arch-prune, disable-fa3, skip-sm90-target,
+skip-flashmla) with ZERO fuzz and ZERO offset. Content is byte-identical to
+the -v0.5.21 variant apart from the hunk line numbers (+1 everywhere below the
+new "Torch 2.14 headers reject anything below C++20" comment that v0.5.23 added
+above SGL_KERNEL_CXX_STANDARD, now "20"). The sgl-kernel tree did NOT move:
+still python/sglang/kernels/aot (SGL_KERNEL_DIR), package sglang-kernel 0.4.10.
+The -v0.5.21 set still applies at offset 1 (silent), so the suffix is
+discipline, not a tripwire.
+--- a/python/sglang/kernels/aot/CMakeLists.txt
++++ b/python/sglang/kernels/aot/CMakeLists.txt
+@@ -111,7 +111,12 @@
+ if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+     message(STATUS "For aarch64, disable FA3 by default")
+ endif()
+-if ("${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.4" AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
++# dgxarley sgl-kernel-disable-fa3.patch: FA3 is Hopper-only (SM90a) and can
++# never run on GB10 (SM121). v0.5.14 already defaults FA3 OFF on aarch64; this
++# wraps the only DEFAULT-ON setter (non-aarch64 path) in `FALSE AND ...` so the
++# option() default stays OFF on EVERY arch and the FA3 build block + sm_90a
++# gencode are skipped entirely. Structure kept byte-identical for easy diffing.
++if (FALSE AND "${CUDA_VERSION}" VERSION_GREATER_EQUAL "12.4" AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+     set(DEFAULT_SGL_KERNEL_ENABLE_FA3 ON)
+ endif()
+ 

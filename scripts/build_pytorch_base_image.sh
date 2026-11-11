@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# build_pytorch_base_image.sh — Build xomoxcc/dgx-spark-pytorch-dev:2.13.0-v1-cu132.
+# build_pytorch_base_image.sh — Build xomoxcc/dgx-spark-pytorch-dev:2.14.1-v1-cu132.
 #
-# Produces the PyTorch 2.13.0 + CUDA 13.2.1 + NCCL 2.30.7 base image that our
+# Produces the PyTorch 2.14.1 + CUDA 13.2.1 + NCCL 2.30.7 base image that our
 # custom sgl-kernel sm121 sglang image builds on top of. This replaces the
 # scitrera/dgx-spark-pytorch-dev:2.10.0-v2-cu131 fallback we've been using
 # (see reference_sm121_build_base_regression memory for context on why the
@@ -43,7 +43,7 @@
 # Cold build on a GB10 Spark node: approximately 3-5 hours. Breakdown:
 #   - NCCL from source:                    ~5-10 min
 #   - NCCL tests:                          ~5 min
-#   - PyTorch 2.13 from source:            ~120-180 min  (the bulk)
+#   - PyTorch 2.14 from source:            ~120-180 min  (the bulk)
 #   - torchvision 0.28 from source:        ~15-25 min
 #   - torchaudio 2.11 from source:         ~15-25 min
 # With warm ccache from a previous run: expect 30-60 min for rebuilds of
@@ -92,7 +92,7 @@ CUDA_CONTAINERS_DIR="${BUILD_PYTORCH_CC_DIR:-${HOME}/pythondev_workspace/cuda-co
 BRANCH_NAME="sm121"
 # The active recipe is OUR own (scripts/patches/), not an upstream file:
 # scitrera/cuda-containers main only carries pytorch-2.11.0 / 2.12.0 recipes,
-# so 2.13.0 has no upstream counterpart and install_recipe() simply drops ours
+# so 2.13.0 / 2.14.1 have no upstream counterpart and install_recipe() simply drops ours
 # into the clone. When updating, re-check what upstream has:
 #   git -C ~/pythondev_workspace/cuda-containers fetch origin
 #   ls ~/pythondev_workspace/cuda-containers/container-recipes/*pytorch*
@@ -101,8 +101,10 @@ BRANCH_NAME="sm121"
 #IMAGE_TAG="xomoxcc/dgx-spark-pytorch-dev:2.11.0-v1-cu132"
 #RECIPE_NAME="pytorch-2.12.0-dev-v1"
 #IMAGE_TAG="xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132"
-RECIPE_NAME="pytorch-2.13.0-dev-v1"
-IMAGE_TAG="xomoxcc/dgx-spark-pytorch-dev:2.13.0-v1-cu132"
+#RECIPE_NAME="pytorch-2.13.0-dev-v1"
+#IMAGE_TAG="xomoxcc/dgx-spark-pytorch-dev:2.13.0-v1-cu132"
+RECIPE_NAME="pytorch-2.14.1-dev-v1"
+IMAGE_TAG="xomoxcc/dgx-spark-pytorch-dev:2.14.1-v1-cu132"
 
 # Remote build host. Defaults match build_sm121_image.sh so the same
 # registered podman connection can be reused.

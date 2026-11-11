@@ -1,0 +1,51 @@
+#
+# Custom pytorch dev base recipe: xomoxcc/dgx-spark-pytorch-dev:2.14.1-v1-cu132
+#
+# Purpose: build the CUDA 13.2.1 + PyTorch 2.14.1 base image for the SGLang
+# v0.5.23 line (scripts/patches/sglang-0.5.23-sm121.recipe pins torch==2.14.1
+# hard upstream; sgl-flash-mla and sgl-deep-ep are built against it). Successor
+# to pytorch-2.13.0-dev-v1.recipe, version bumps only. NOT BUILT YET.
+#
+# Delta vs pytorch-2.13.0-dev-v1.recipe (checked 2026-11-10):
+#   - TORCH_VERSION 2.13.0 -> 2.14.1 (PyPI 2026-09-30). Not 2.15.0: sglang
+#     v0.5.23 pins torch==2.14.1 exactly. Release notes for 2.14 were NOT
+#     reviewed; on a CMake-configure failure check them for toolchain minimums.
+#   - TORCH_VISION_VERSION 0.28.0 -> 0.29.1 (release-mate of torch 2.14.1,
+#     requires_dist torch>=2.14.0; 0.29.0 hard-pins torch==2.14.0, 0.29.2 is
+#     the torch 2.15.0 release-mate).
+#   - TORCH_AUDIO_VERSION stays 2.11.0: sglang v0.5.23 pins torchaudio==2.11.0
+#     (PyPI has 2.11.1, requires torch>=2.11). Text-only inference never
+#     imports it.
+#   - IMAGE_TAG :2.13.0-v1-cu132 -> :2.14.1-v1-cu132
+#
+# Deliberately unchanged (one variable per rebuild, same as 2.13.0):
+#   - CUDA_VERSION 13.2.1, NCCL 2.30.7-1, arch list sm_120 + sm_121,
+#     BUILD_JOBS 8 (GB10 ceiling).
+#
+# Follow-up after this image builds successfully:
+#   - sglang-0.5.23-sm121.recipe already points BASE_IMAGE at
+#     :2.14.1-v1-cu132; nothing else to bump.
+#
+DOCKERFILE=Dockerfile.base
+TARGET=pytorch_builder
+
+CUDA_VERSION=13.2.1
+CUDA_SHORT=132
+
+NCCL_VERSION=2.30.7-1
+NCCL_REF=v2.30.7-1
+NCCL_REPO=https://github.com/NVIDIA/nccl.git
+
+BUILD_JOBS=8
+
+#TORCH_CUDA_ARCH_LIST=12.1a
+#NVCC_GENCODE=-gencode=arch=compute_121,code=sm_121
+TORCH_CUDA_ARCH_LIST="12.0;12.1"
+NVCC_GENCODE="-gencode=arch=compute_120,code=sm_120 -gencode=arch=compute_121,code=sm_121"
+
+TORCH_VERSION=2.14.1
+# Pinned to sglang v0.5.23's torchaudio==2.11.0, not PyPI latest 2.11.1.
+TORCH_AUDIO_VERSION=2.11.0
+TORCH_VISION_VERSION=0.29.1
+
+IMAGE_TAG=xomoxcc/dgx-spark-pytorch-dev:2.14.1-v1-cu132
