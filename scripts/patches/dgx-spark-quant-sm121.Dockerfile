@@ -9,7 +9,7 @@
 # Base = the full serving image ON PURPOSE (so quantize + smoke_sglang_spark.sh
 # share one image). Quant itself needs only torch + CUDA + modelopt, NOT sglang,
 # so if the dependency layering below ever conflicts, the clean fallback is to
-# rebase onto xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132 (same torch/cuda,
+# rebase onto xomoxcc/dgx-spark-pytorch-dev:2.14.1-v2-cu132 (same torch/cuda,
 # no sglang) -- see NOTE at the pip step.
 #
 # CONSUMED BY (from the quantizer dir, copied onto the Spark):
@@ -32,7 +32,7 @@
 # (Nothing here is built/pushed automatically -- this is a reviewable draft.)
 # ============================================================================
 
-ARG BASE_IMAGE=xomoxcc/dgx-spark-sglang:0.5.18-sm121
+ARG BASE_IMAGE=xomoxcc/dgx-spark-sglang:0.5.23-sm121
 FROM ${BASE_IMAGE}
 
 # WHAT THE BASE ALREADY SHIPS (verified on 0.5.14-sm121): nvidia-modelopt 0.45.0,
@@ -56,7 +56,8 @@ FROM ${BASE_IMAGE}
 
 # --- 1. freeze the serving stack so the accelerate/hf_transfer install can only ADD,
 #        never MOVE, anything already in the image (torch/flashinfer/sgl-kernel/etc.)
-RUN python3 -m pip freeze --all > /tmp/serving-constraints.txt \
+# `pip list --format=freeze`, not `pip freeze`: the latter emits `torch @ file:///build/...whl`, gone in the slim base.
+RUN python3 -m pip list --format=freeze > /tmp/serving-constraints.txt \
  && echo ">>> froze $(wc -l < /tmp/serving-constraints.txt) serving packages as constraints"
 
 # --- 2. add ONLY the genuinely-missing leaves, pinned by the freeze ----------------
@@ -72,10 +73,12 @@ RUN python3 -m pip freeze --all > /tmp/serving-constraints.txt \
 # sgl-kernel. If a future base makes it ResolutionImpossible against the freeze,
 # install it separately with `--no-deps` and add its pure-python leaves explicitly.
 # NOTE (fallback): should a future base bump make even this conflict, rebase FROM
-# xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132 (no sglang stack to constrain) and
+# xomoxcc/dgx-spark-pytorch-dev:2.14.1-v2-cu132 (no sglang stack to constrain) and
 # run smoke serving from the serving image instead.
-RUN python3 -m pip install --no-cache-dir -c /tmp/serving-constraints.txt \
-      accelerate hf_transfer py-spy flash-linear-attention
+# --no-deps: the 0.5.23 base ships huggingface-hub 2.4.0 against tokenizers' <2.0 pin, so any resolve is impossible.
+RUN python3 -m pip install --no-cache-dir --no-deps \
+      hf_transfer py-spy flash-linear-attention fla-core \
+ && python3 -c "import accelerate, einops, transformers, triton"
 
 # --- 3. assert the base modelopt is new enough for the (later) mixed-precision recipe
 # path (>=0.45 = the release NVIDIA built Qwen3.5-397B-NVFP4-V2 with; first with the

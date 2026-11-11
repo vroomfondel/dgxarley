@@ -73,14 +73,16 @@ DOCKERFILE="${PATCHES_DIR}/dgx-spark-quant-sm121.Dockerfile"
 # rename off `-dev` (build_sm121_image.sh + sglang-0.5.16-sm121.recipe header). The
 # existing xomoxcc/dgx-spark-quant:0.5.16-dev-sm121 (2026-07-28) layers on the
 # flashinfer-0.6.16rc3 serving image and stays as-is; do not overwrite it.
-TAG="${BUILD_QUANT_TAG:-0.5.21-sm121}"
+# 2026-11-11: 0.5.21-sm121 → 0.5.23-sm121 with the serving image (slim PyTorch 2.14.1 base, modelopt 0.48.0,
+# transformers 5.19.0, datasets 5.2.0 in the base).
+TAG="${BUILD_QUANT_TAG:-0.5.23-sm121}"
 
 # Produced image. Overridable wholesale via BUILD_QUANT_IMAGE.
 IMAGE="${BUILD_QUANT_IMAGE:-xomoxcc/dgx-spark-quant:${TAG}}"
 
 # The serving image this layers on (Dockerfile ARG BASE_IMAGE). Defaults to the
 # same tag; override with --base or BUILD_QUANT_BASE_IMAGE (e.g. to rebase onto
-# xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132 per the Dockerfile's NOTE).
+# xomoxcc/dgx-spark-pytorch-dev:2.14.1-v2-cu132 per the Dockerfile's NOTE).
 BASE_IMAGE="${BUILD_QUANT_BASE_IMAGE:-xomoxcc/dgx-spark-sglang:${TAG}}"
 
 # Remote arm64 build host + its registered podman connection name + SSH key.
