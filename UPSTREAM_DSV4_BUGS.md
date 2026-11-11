@@ -1256,6 +1256,14 @@ SGLang v0.5.21 (2026-10-02) is still the latest release; upstream/main is at f00
 
 Local: p67 is retired (d2ae7b2, RETIRED_PATCHES.md), superseding the 10-11 remark that it is not listed there. No wall status change, no FIXED_ rename. Next check: next SGLang tag after v0.5.21 (it will carry the flashinfer 0.7.1 pin).
 
+**Update 2026-11-10 (audit): SGLang v0.5.22 (2026-10-19) and v0.5.23 (2026-11-02) released; no SM12x wall change in either tag; main carries SM120/SM121 DeepGEMM indexer fixes for DSV4.1.**
+
+`gh release list` shows v0.5.23 (2026-11-02T22:14Z, tag commit 297e54fd10) as Latest, after v0.5.22 (2026-10-19, baa9befa38). Pins from `python/pyproject.toml`: v0.5.22 flashinfer 0.7.1 / sgl-deep-gemm 0.2.2 / transformers 5.19.0; v0.5.23 flashinfer 0.7.2 / sgl-deep-gemm 0.2.3.post2 / transformers 5.19.0; main (170804b40a, 2026-11-10) flashinfer 0.7.3 / sgl-deep-gemm 0.2.7 / transformers 5.19.0. `deep_gemm_wrapper/configurer.py` is unchanged at both tags vs v0.5.21 (`sm_version in (120, 121)`), and the release notes list DSV4.1 for H200, MI35x and GB300 only, with no GB10/SM121 content. The 10-12 remark that the next tag carries the flashinfer 0.7.1 pin is now fulfilled by v0.5.22. #32779 (e446698cdd) is contained in v0.5.22 and v0.5.23 (verified via merge-base).
+
+On main only, not in v0.5.23: #48399 (27bc1a0615, 2026-11-06) restricted the DSV4.1 DeepGEMM indexer to strict SM100 and caused an 8x prefill regression on GB10 (#49173, reported on 4x DGX Spark TP4 DSV4.1-Flash, closed 2026-11-09); #49182 (5e6995dd09, 2026-11-08) restores SM120/SM121 for the dense indexer via `is_sm100_or_newer()` (the sparse candidate-table path stays SM100-only because DeepGEMM's paged sparse kernels assert arch == 10); #47658 (4fc912142f, 2026-11-09) honours `SGLANG_OPT_DEEPGEMM_HC_PRENORM` on SM120 for the V4.1 mhc projection; #48424 (1d062d2476) moves to the sgl-deep-gemm 0.2.6 MQA-logits API with an arch-12 dispatch. Net: the regression was introduced and fixed on main between the tags, so v0.5.22/v0.5.23 are unaffected; the 0.5.21-sm121 image is unaffected.
+
+Issues: #23602 closed 2026-10-13 (stale bot; the Upstream references row still says open), #33636 open (updated 2026-10-04), #32750 closed 2026-10-06. No new SM121/GB10 issue or PR updated since 10-12. No wall status change, no FIXED_ rename. Next check: whether #49182 and #48424 land in v0.5.24, and a DeepGEMM-enabled DSV4 trial on a 0.5.22+ image (both profiles still run `disable_deep_gemm: true`).
+
 ---
 
 ## Upstream references
