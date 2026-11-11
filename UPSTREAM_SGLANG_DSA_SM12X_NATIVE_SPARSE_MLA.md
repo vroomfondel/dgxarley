@@ -868,6 +868,24 @@ watch only.
 > image xomoxcc/dgx-spark-sglang:0.5.21-sm121 pins flashinfer 0.6.18.post1 (recipe
 > scripts/patches/sglang-0.5.21-sm121.recipe); the 0.7.1 bump matters only for the next image bump.
 
+> Re-checked 2026-11-10: PR #31481 unchanged (head `7aa9049335de83ed1c2227c176041301a6309a29`,
+> `updatedAt` 2026-09-22T09:03:28Z, no reviews, last comment 2026-08-03, `REVIEW_REQUIRED`; fork
+> branch head matches). `git merge-tree --write-tree upstream/main` now CONFLICTS in
+> `dsa_backend.py` (two hunks: a DCP / autotune-dummy-run block, and the refactor of the
+> `trtllm_batch_decode_with_kv_cache_mla` call into `attention_kwargs = dict(kv_cache=kv, ...)`,
+> which collides with the `kv.view(torch.uint8) if _sparse_sm120` change) against `170804b40a`;
+> a rebase is needed before any further push (not done). Correction to 10-12: v0.5.22
+> (2026-10-13) and v0.5.23 (2026-10-28) both contain e446698cdd (#32779) and e289989933
+> (#41807); pins are flashinfer 0.7.1 / 0.7.2 and sgl-deep-gemm 0.2.2 / 0.2.3.post2 (main:
+> 0.7.3 / 0.2.7, transformers 5.19.0 throughout). Local image 0.5.21-sm121 (flashinfer
+> 0.6.18.post1, sgl-deep-gemm 0.2.0) is behind both tags. `flash_mla_sm120.py` and the
+> `triton_sparse_mla` validator are unchanged; `dsa_backend.py` gained DCP, KV-shard, typed KV
+> view and kimi-k3.1 trtllm changes (#43735, #44280, #46990, #44503, #48714). Open: #43105
+> (SM120 GLM DSA NVFP4 KV with FlashInfer), #47237 (refuse trtllm at launch outside
+> SM100/SM103/SM107), #38969 (per-call Triton fallback when FlashInfer lacks the prefill shape).
+> #42012 still open (fix PR #42333 closed unmerged 2026-11-05, triton the only working backend).
+> Local: p34 retirement decision still pending.
+
 
 ## Proposed PR title
 
