@@ -22,10 +22,15 @@ Re-sync: drop this file once the image ships the fix (the already-applied guards
 make it a no-op then, so it is safe to keep across a bump).
 """
 
-from _patchlib import Patch
+from _patchlib import Patch, target_contains
 
+TARGET = "sglang/srt/layers/quantization/moe_wna16.py"
+
+# v0.5.23 fixed this upstream via _local_expert_ids(); gate off there.
 patch = Patch(
-    name="EP-aware expert_id + tp_rank remapping for qzeros", target="sglang/srt/layers/quantization/moe_wna16.py"
+    name="EP-aware expert_id + tp_rank remapping for qzeros",
+    target=TARGET,
+    when=not target_contains(TARGET, "def _local_expert_ids("),
 )
 
 OLD_W13 = """            if "w13_qzeros" in weight_name:
