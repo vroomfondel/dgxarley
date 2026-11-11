@@ -277,6 +277,8 @@
 > `p57_hf_config_get_config.py` against the v0.5.21 tag and `main` HEAD
 > patches cleanly and is idempotent. PR #22839 and PR #22618 remain CLOSED
 > unmerged. Root cause and monkey-patch requirement unchanged.
+>
+> **Re-verified 2026-11-10:** SGLang v0.5.22 (2026-10-19) and v0.5.23 (2026-11-02, latest) contain no fix; both pin `transformers==5.19.0` (v0.5.21 pinned 5.12.1). `python/sglang/srt/configs/qwen3_5.py` has no commits since 2026-10-12 and on `main` HEAD (`170804b40a`) still has no `from_dict`/`__post_init__`. Offline replay of `p57_hf_config_get_config.py` patches cleanly and is idempotent on v0.5.21, v0.5.22 and v0.5.23. New on `main`: `93cfea6b12` (PR #48758, 2026-11-05) moved `python/sglang/srt/utils/hf_transformers/` to `python/sglang/srt/hf_transformers/`, so p57's `target="sglang/srt/utils/hf_transformers/config.py"` no longer exists there (not yet in any tag; the anchor itself still applies when the file is placed at the old path). p57 needs an `alt_targets` entry for `sglang/srt/hf_transformers/config.py` before the first tag that contains the move. PR #22839 and PR #22618 remain CLOSED unmerged. Root cause and monkey-patch requirement unchanged.
 
 
 ## Summary
