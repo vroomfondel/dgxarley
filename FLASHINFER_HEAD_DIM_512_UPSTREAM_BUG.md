@@ -1,5 +1,11 @@
 # FlashInfer Upstream Bug: head_dim=512 not supported (Gemma-4 global attention)
 
+## Status 2026-11-10 (re-verify; flashinfer v0.7.3 released, no head_dim 512 / dispatch movement; SGLang pins now 0.7.1 / 0.7.2 / 0.7.3 across v0.5.22 / v0.5.23 / main; Gemma4 allowlist moved on main, flashinfer still excluded)
+
+flashinfer released v0.7.2 (2026-10-15), v0.7.2.post1 (2026-10-23) and v0.7.3 (2026-11-04, now GitHub "Latest"); v0.7.4rc1/rc2 are pre-releases (`main` HEAD `7f30bea1`, 2026-11-10). `persistent.cuh` has no commits since 10-12. `prefill.cuh` has four, none touching the `KTraits::IsInvalid()` / `CTA_TILE_Q` / `NUM_MMA_*` dispatch tracked here: #5272 (`3044ec60`, FA2 per-(token, head) FP8 KV scale), #6574 (`5295d50a`, e4m3-query FA2 decode on SM120, validated only for head_dim 256), #6024 (`ac38c600`, NVFP4 scale-factor load overrun fix), #6908 (`e5eda939`, FA2 softmax rescale; not in v0.7.3). #3297 stays closed, #3576 merged, #3684/#4736/#5329 closed, and no head_dim=512 / SM120 / SM121 / Gemma issue or PR was opened or updated since 10-12.
+
+SGLang released v0.5.22 (2026-10-19, pins flashinfer 0.7.1) and v0.5.23 (2026-11-02, Latest, pins 0.7.2); `main` (`170804b40a`, 2026-11-10) pins 0.7.3. The Gemma4 allowlist in the v0.5.23 `arg_groups/model_hook.py` is `("trtllm_mha", "triton", "fa4", "ascend", "intel_xpu", "intel_amx", "aiter")`; on `main` it moved to `arg_groups/model_overrides/gemma4.py` (`_BUILTIN_ATTENTION_BACKENDS`) and gained `fa3`, with `flashinfer` still excluded. `attention_backend: triton` remains mandatory for all Gemma-4 profiles. The deployed image `xomoxcc/dgx-spark-sglang:0.5.21-sm121` still carries flashinfer 0.6.18.post1. No action needed.
+
 ## Status 2026-10-12 (re-verify; SGLang main bumps flashinfer pin to 0.7.1; no prefill.cuh/persistent.cuh movement)
 
 No flashinfer release since v0.7.1 (2026-10-09, still GitHub "Latest"); `main` HEAD is `ae312f7c` (2026-10-12). Zero commits to `prefill.cuh` or `persistent.cuh` since the 2026-10-11 check, and no head_dim=512 / SM120 / SM121 issues or PRs opened since. Issue #3297 remains closed (4 comments, unchanged since 2026-06-04), PR #3576 remains merged (2026-06-15), #3684, #4736 and #5329 unchanged.
