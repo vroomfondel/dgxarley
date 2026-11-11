@@ -648,6 +648,24 @@ REST/GraphQL now report `mergeable: MERGEABLE` / `mergeStateStatus: BLOCKED`
 > torch/Triton or cutedsl route, so the p69 deletion condition is not met.
 > Local: p67 was retired on 2026-10-11 (d2ae7b2, now listed in RETIRED_PATCHES.md); DSA_speedup.md and deepgemm_fix.md carry 2026-10-11 update banners stating the DeepGEMM SM121 block is gone; p30, p35, p68, p69 unchanged.
 
+> Re-checked 2026-11-10: PR #31480 unchanged (head `8d3944adb22eba57e258c7129f54333c7896fcf8`,
+> `updatedAt` 2026-09-10T13:10:42Z, no reviews, last comment 2026-08-03, `REVIEW_REQUIRED`; fork
+> branch head matches). `git merge-tree --write-tree upstream/main` now CONFLICTS in
+> `dsa_backend.py` (three hunks: cuda-graph schedule-metadata refresh and both
+> `paged_mqa_schedule_metadata` build sites) against `170804b40a`. Cause: #32947 (merged
+> 2026-10-13 as `b3991b53da`, in v0.5.22 and v0.5.23) routes the dsa indexer's DeepGEMM entry
+> points through `resolve_paged_mqa_logits_metadata_fn` / `resolve_fp8_paged_mqa_logits_fn` /
+> `resolve_num_sms` in `dsa/utils.py`; with `SGLANG_FP8_PAGED_MQA_LOGITS_TORCH=1` they use the
+> dsv4 torch fallback (no `next_n > 1`, so no MTP, and no Triton fast path). That is an upstream
+> env-flag escape hatch for the same problem, but not the `torch` backend value this PR adds;
+> `exec_.py` choices are still `["auto", "deepgemm", "cutedsl", "aiter"]`. A rebase onto the
+> resolvers is needed before any further push (not done). New tags: v0.5.22 (2026-10-13) pins
+> flashinfer 0.7.1 / sgl-deep-gemm 0.2.2, v0.5.23 (2026-10-28) pins 0.7.2 / 0.2.3.post2; main
+> pins 0.7.3 / 0.2.7. `IndexerKPool._get_topk_paged` still branches only aiter, tilelang, else
+> `deep_gemm.fp8_paged_mqa_logits`, with no torch/triton/cutedsl route and no resolver use, so
+> the p69 deletion condition is not met. Open #49098 (FlashInfer fused SM120 indexer top-k) is
+> a different approach to the SM12x indexer. Local image 0.5.21-sm121 is unchanged.
+
 > [DSA] Add an arch-independent `torch` paged-MQA-logits backend with a fused
 > Triton fast path (unblocks DSA models on SM120/SM121)
 
