@@ -317,7 +317,7 @@
       # FlashInfer 0.6.6 CUTLASS MoE JIT: on first inference, flashinfer_cutlass
       # generates and compiles ~30+ CUTLASS instantiations (moe_gemm_kernels_*,
       # cutlass_kernel_file_gemm_sm90_M{64,128}_group*) via nvcc/cicc/cc1plus.
-      # Default: all compile in parallel → 15+ processes × ~1 GB each → OOM on
+      # Default: all compile in parallel → 15+ processes × 4-7 GB each (cicc, 0.5.23) → OOM on
       # 121 GB DGX Spark. MAX_JOBS limits concurrent compilations.
       MAX_JOBS: "{{ sglang_jit_max_jobs | default(2) | string }}"
       # FlashInfer JIT cache: compiled .so files survive pod restarts.

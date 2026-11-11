@@ -28,7 +28,7 @@ _model_profile:
     litellm_output_cost_per_token: 0.00000047  # $0.47 per 1M, OpenRouter list price, PROXY: qwen/qwen3.8-flash (Flash-Next has no hosted listing), checked 2026-10-10
     # Pinned, not inherited: 0.5.18-sm121 has qwen4_exp but none of the
     # mixed-precision machinery, 0.5.19-sm121 has no qwen4_exp at all.
-    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.21-sm121"
+    sglang_image: "xomoxcc/dgx-spark-sglang:0.5.23-sm121"
     nccl_transport: "roce"
     nodes: [1, 2, 3, 4]
     tp_size: 4
@@ -78,6 +78,8 @@ _model_profile:
     # blaming a decode kernel for degraded long-context output.
     chunked_prefill_size: 4096
     max_running_requests: 32
+    # cicc peaks at 4-7 GB per job on 0.5.23; 4 parallel jobs on a cold JIT cache OOM-killed spark2.
+    jit_max_jobs: 2
     cuda_graph_max_bs: 32
     # bf16 halves the ssm cache; MTP accept len unchanged (validated TP1 only, SINGLE_CLUSTER_COMPARE.md)
     mamba_ssm_dtype: "bfloat16"
