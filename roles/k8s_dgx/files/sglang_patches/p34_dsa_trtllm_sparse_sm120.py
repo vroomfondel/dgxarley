@@ -221,15 +221,23 @@ def apply_dsa_backend(p: Patch) -> None:
 
     # Edit 2: uint8 view of the packed pool (the sm120 checker requires
     # torch.uint8; the pool's store dtype is an fp8 view of the same bytes).
-    p.replace(
-        """        out = flashinfer.decode.trtllm_batch_decode_with_kv_cache_mla(
-            query=q,
-            kv_cache=kv,
-""",
-        """        out = flashinfer.decode.trtllm_batch_decode_with_kv_cache_mla(
-            query=q,
-            kv_cache=kv.view(torch.uint8) if _sparse_sm120 else kv,
-""",
+    # v0.5.23 moved kv_cache into the shared attention_kwargs dict; both spellings stay.
+    p.replace_any(
+        [
+            (
+                "        out = flashinfer.decode.trtllm_batch_decode_with_kv_cache_mla(\n"
+                "            query=q,\n"
+                "            kv_cache=kv,\n",
+                "        out = flashinfer.decode.trtllm_batch_decode_with_kv_cache_mla(\n"
+                "            query=q,\n"
+                "            kv_cache=kv.view(torch.uint8) if _sparse_sm120 else kv,\n",
+            ),
+            (
+                "        attention_kwargs = dict(\n            kv_cache=kv,\n",
+                "        attention_kwargs = dict(\n            kv_cache=kv.view(torch.uint8) if _sparse_sm120 else kv,\n",
+            ),
+        ],
+        marker="kv_cache=kv.view(torch.uint8) if _sparse_sm120 else kv,",
         what="uint8 KV view",
     )
 
