@@ -100,7 +100,7 @@ pypipush: dist/.touchfile_push
 # DOCKERHUB_OVERVIEW_<image>.md → xomoxcc/<image>
 # Short description (`description`) is taken from a `<!-- short: ... -->` HTML
 # comment on the first line of the file (capped at 100 chars by Docker Hub).
-# Long description (`full_description`) is the file content verbatim.
+# Long description (`full_description`) is the file content with table padding stripped (Docker Hub caps it at 25000 bytes).
 DOCKERHUB_NAMESPACE := xomoxcc
 DOCKERHUB_OVERVIEW_FILES := $(wildcard DOCKERHUB_OVERVIEW_*.md)
 
@@ -130,11 +130,11 @@ update-dockerhub-readmes:
 	  if [ $${#SHORT} -gt 100 ]; then \
 	    echo "  -> ERROR: short description is $${#SHORT} chars (Docker Hub limit is 100) — skipping $$REPO"; continue; \
 	  fi; \
-	  echo "Updating $$REPO from $$FILE (short=$${#SHORT} chars, long=$$(wc -c < $$FILE) chars)..."; \
+	  echo "Updating $$REPO from $$FILE (short=$${#SHORT} chars, long=$$(sed -E '/^\|/{s/ {2,}\|/ |/g; s/-{3,}/---/g}' "$$FILE" | wc -c) bytes after table-padding strip, limit 25000)..."; \
 	  RESP=$$(curl -sS -X PATCH "https://hub.docker.com/v2/repositories/$$REPO/" \
 	    -H "Authorization: Bearer $$TOKEN" \
 	    -H "Content-Type: application/json" \
-	    -d "$$(jq -n --arg desc "$$SHORT" --rawfile full "$$FILE" '{description: $$desc, full_description: $$full}')"); \
+	    -d "$$(jq -n --arg desc "$$SHORT" --rawfile full <(sed -E '/^\|/{s/ {2,}\|/ |/g; s/-{3,}/---/g}' "$$FILE") '{description: $$desc, full_description: $$full}')"); \
 	  if echo "$$RESP" | jq -e '.last_updated' >/dev/null 2>&1; then \
 	    echo "$$RESP" | jq -r '"  -> short=\"\(.description)\"  long=\(.full_description|length) chars  updated=\(.last_updated)"'; \
 	  else \

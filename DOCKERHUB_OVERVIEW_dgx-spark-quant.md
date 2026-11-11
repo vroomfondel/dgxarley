@@ -23,8 +23,11 @@ which the shared serving base already does on GB10.
 
 Base = the **full `dgx-spark-sglang:<tag>` serving image, on purpose** — so
 quantize *and* smoke-serve share ONE image on the same Spark. The serving base
-already ships `nvidia-modelopt 0.45.0`, `torch 2.12.0/cu132`, `transformers 5.12.1`,
-`datasets 5.0.0`, `huggingface-hub 1.23.0` (+ the `hf` CLI), `ninja`, `typer`. This
+already ships (measured on `0.5.23-sm121`) `nvidia-modelopt 0.48.0`, `torch 2.14.1`,
+`transformers 5.19.0`, `datasets 5.2.0`, `huggingface-hub 1.23.0` (+ the `hf` CLI),
+`ninja`, `typer` (older tags carry older versions, e.g. `0.5.15-sm121` has
+`nvidia-modelopt 0.45.0`, `torch 2.12.0/cu132`, `transformers 5.12.1`,
+`datasets 5.0.0`). This
 layer therefore adds **only the three genuinely-missing leaves** the quant scripts
 need:
 
@@ -60,10 +63,19 @@ arg), typically in three phases inside this container on a Spark:
 
 ## Tags
 
-| Tag            | Notes                                                                              |
-|----------------|------------------------------------------------------------------------------------|
-| `0.5.15-sm121` | ModelOpt PTQ toolchain on `dgx-spark-sglang:0.5.15-sm121` base, arm64 (current)    |
-| `0.5.14-sm121` | ModelOpt PTQ toolchain on `dgx-spark-sglang:0.5.14-sm121` base, arm64 (rollback)   |
+| Tag                  | Notes                                                                                                         |
+|----------------------|---------------------------------------------------------------------------------------------------------------|
+| `0.5.23-sm121`       | ModelOpt PTQ toolchain on `dgx-spark-sglang:0.5.23-sm121` base, arm64 (current)                               |
+| `0.5.21-sm121`       | ModelOpt PTQ toolchain on `dgx-spark-sglang:0.5.21-sm121` base, arm64 (previous)                              |
+| `0.5.20-sm121`       | ModelOpt PTQ toolchain on `dgx-spark-sglang:0.5.20-sm121` base, arm64                                         |
+| `0.5.19-sm121`       | ModelOpt PTQ toolchain on `dgx-spark-sglang:0.5.19-sm121` base, arm64                                         |
+| `0.5.18-sm121`       | ModelOpt PTQ toolchain on `dgx-spark-sglang:0.5.18-sm121` base, arm64                                         |
+| `0.5.17-sm121`       | ModelOpt PTQ toolchain on `dgx-spark-sglang:0.5.17-sm121` base, arm64                                         |
+| `0.5.16-sm121`       | ModelOpt PTQ toolchain on `dgx-spark-sglang:0.5.16-sm121` base, arm64                                         |
+| `0.5.16-dev-sm121`   | ModelOpt PTQ toolchain on the `dgx-spark-sglang:0.5.16-dev-sm121` (flashinfer 0.6.16rc3) serving image, arm64 |
+| `0.5.15.post1-sm121` | ModelOpt PTQ toolchain on `dgx-spark-sglang:0.5.15.post1-sm121` base, arm64                                   |
+| `0.5.15-sm121`       | ModelOpt PTQ toolchain on `dgx-spark-sglang:0.5.15-sm121` base, arm64                                         |
+| `0.5.14-sm121`       | ModelOpt PTQ toolchain on `dgx-spark-sglang:0.5.14-sm121` base, arm64 (rollback)                              |
 
 Tag tracks the serving base it layers on — bump both in lockstep. `linux/arm64`
 only; the FP4 serving kernels are not useful on non-GB10 hardware.
