@@ -356,6 +356,31 @@ unchanged (247b21a5fa / e60e09c0d3), `updatedAt` unchanged at 2026-09-23. The cl
 `ghcr.io/berriai/litellm:main-stable` (mutable tag; pod started 2026-10-11T16:19Z, image digest
 sha256:60947db020b5). The HAProxy TLS sidecar workaround remains required.
 
+**2026-11-10 re-verify, still broken; no fix in v1.105.x..v1.108.4, `main` now forwards credentials but not `ssl_verify`:**
+LiteLLM stable advanced to **v1.108.4** (published 2026-11-09T23:00Z; v1.108.0 on 2026-11-04,
+v1.108.1 to v1.108.3 on 11-05..11-07), with backport point releases up to v1.106.7, v1.105.7,
+v1.104.8 and v1.103.10 (2026-10-27..11-04) and prereleases v1.109.0-rc.1 / v1.107.0-rc.3. Scanned
+the release notes of every stable tag published since 2026-10-12: zero hits for
+`module_level_aclient`, `BaseLLMAIOHTTPHandler` or an ollama `ssl_verify` change; the ollama entries
+are chat-only (v1.106.0: #45053, #45079, #45177; v1.108.0: #39010) and #38400 touches only the
+`aiohttp_openai/` handler. The handler differs between tags (v1.105.7 blob `449952217b5e` 4148 B,
+v1.106.7 `ad2f15cdd7c4` 4154 B, v1.108.0 and v1.108.4 `816028499e81` 4249 B) but the bug is
+unchanged in all of them: `[TODO]: migrate embeddings to a base handler as well.` at line 4, `await
+litellm.module_level_aclient.post(url=_ollama_embed_url(api_base), json=data)` without `ssl_verify`
+at line 102 in v1.108.x. On `main` the file is blob `e1fc9a8d262b` (5512 B, last commit `3f38730d2`,
+2026-11-06, basedpyright typing cleanup). PR #48707 ("fix(ollama): forward embedding credentials,
+headers and timeout", merged 2026-10-28, `3d7b94b34`) is the only functional change since the last
+check: `main.py` now passes `api_key`, `headers` and `timeout` into `ollama_aembeddings`, but the
+call still goes through the `litellm.module_level_aclient` singleton at line 125 with no
+`ssl_verify`. #48707 is not yet in a stable tag. Issue #30778 remains closed (`not_planned`,
+2026-09-24). PRs #30810 and #30848 remain open and unmerged, head commits unchanged (247b21a5fa /
+e60e09c0d3), `updatedAt` 2026-10-13. The cluster pod `litellm-6d7686b9bc-2kp67`
+(`ghcr.io/berriai/litellm:main-stable`, started 2026-11-04T14:44Z, digest sha256:c560d3171368) has
+the same shape as v1.108.x: line 102 calls `module_level_aclient.post(...)` without `ssl_verify`.
+The local TLS sidecar and the `https://...:11435` plus `ssl_verify: false` model entries were not
+touched by the 2026-10-29/30 and 11-04/06 LiteLLM changes (virtual keys, extra hosts). The HAProxy
+TLS sidecar workaround remains required.
+
 ## Upstream Fix
 
 The embedding path in `litellm/llms/ollama/completion/handler.py` should stop using
