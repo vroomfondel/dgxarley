@@ -12,6 +12,37 @@
     fail_msg: "wantsopenvswitch and openvswitch_teardown are mutually exclusive"
     quiet: true
 
+- name: Back up the network config before any change (rollback source)
+  when: netplan_rollback_seconds | int > 0
+  block:
+    - name: Install netplan-safe-apply
+      ansible.builtin.copy:
+        src: netplan_safe_apply.sh
+        dest: /usr/local/sbin/netplan-safe-apply
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Ensure the rollback backup directory exists
+      ansible.builtin.file:
+        path: /var/backups/netplan-rollback
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Pick the rollback archive name
+      ansible.builtin.set_fact:
+        netplan_rollback_tar: "/var/backups/netplan-rollback/{{ now(utc=true, fmt='%Y%m%dT%H%M%SZ') }}.tar"
+
+    - name: Archive netplan, networkd and OVS drop-in config
+      ansible.builtin.shell:
+        cmd: >-
+          cd / && tar -cpf {{ netplan_rollback_tar | quote }}
+          etc/netplan etc/systemd/network etc/networkd-dispatcher/configured.d
+          $(ls -d etc/systemd/system/netplan-ovs-*.service.d 2>/dev/null)
+      changed_when: true
+
 # Opt-in via -e openvswitch_teardown=true; netplan files of OVS mode are already removed by the tasks below.
 - name: Open vSwitch teardown (non-OVS host)
   when: openvswitch_teardown | bool
@@ -148,12 +179,12 @@
     patterns: '*.yaml,*.yml'
   register: netplan_files_found
 
+# The OVS files count as managed in both modes: non-OVS hosts get them removed further down.
 - name: Build list of managed netplan filenames
   set_fact:
     netplan_managed_files: >-
       {{
-        (['00-ovs-bridges.yaml', '01-ovs-vlans.yaml']
-          if (wantsopenvswitch is defined and wantsopenvswitch) else [])
+        ['00-ovs-bridges.yaml', '01-ovs-vlans.yaml']
         + (['01-network-custom.yaml']
           if (wantsopenvswitch is not defined or not wantsopenvswitch
               or (hw_iface is defined and hw_iface != ovs_bridge_iface)) else [])
@@ -576,8 +607,59 @@
   shell: "netplan apply"
   failed_when: false
   when:
+    - netplan_rollback_seconds | int == 0
     - netplan_changed or (stale_internal_port_removed is defined and stale_internal_port_removed is changed) or (ovs_internal_port_migrated is defined and ovs_internal_port_migrated is changed)
     - netplan_generate.rc == 0
+
+- name: apply netplan with automatic rollback
+  when:
+    - netplan_rollback_seconds | int > 0
+    - netplan_changed or (stale_internal_port_removed is defined and stale_internal_port_removed is changed) or (ovs_internal_port_migrated is defined and ovs_internal_port_migrated is changed)
+    - netplan_generate.rc == 0
+  block:
+    - name: List OVS bridges the new non-OVS config replaces
+      ansible.builtin.command: ovs-vsctl --timeout=5 list-br
+      register: _netplan_ovs_bridges
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: not (wantsopenvswitch | default(false))
+
+    - name: Start netplan-safe-apply detached
+      ansible.builtin.command:
+        argv: "{{ ['systemd-run', '--unit=netplan-safe-apply', '--collect', '--property=Type=exec', '/usr/local/sbin/netplan-safe-apply',
+                   netplan_rollback_tar, netplan_rollback_seconds | string, static_gateway | default(ansible_default_ipv4.gateway)]
+                  + ((_netplan_ovs_bridges.stdout_lines | default([])) if (_netplan_ovs_bridges.rc | default(1)) == 0 else []) }}"
+
+    # The controller is the confirmation: an ssh round trip after the apply proves the management path survived.
+    - name: Confirm the new network from the controller
+      delegate_to: localhost
+      become: false
+      vars:
+        _ssh: "ssh -o BatchMode=yes -o ConnectTimeout=3 -o ServerAliveInterval=2 -o ServerAliveCountMax=2 {{ ansible_user | default('root') }}@{{ ansible_host }}"
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -u
+          st() { {{ _ssh }} cat /run/netplan-safe-apply/state 2>/dev/null; }
+          end=$(( $(date +%s) + 900 ))
+          s=""
+          while [ "$(date +%s)" -lt "$end" ]; do
+            s="$(st)"
+            case "$s" in awaiting-confirm|rolled-back|committed) break ;; esac
+            sleep 2
+          done
+          [ "$s" = "awaiting-confirm" ] || { echo "state before confirm: ${s:-unreachable}"; exit 1; }
+          {{ _ssh }} touch /run/netplan-safe-apply/confirm || { echo "confirm failed"; exit 1; }
+          end=$(( $(date +%s) + {{ netplan_rollback_seconds | int + 30 }} ))
+          while [ "$(date +%s)" -lt "$end" ]; do
+            s="$(st)"
+            case "$s" in committed) echo committed; exit 0 ;; rolled-back) echo "rolled back"; exit 1 ;; esac
+            sleep 2
+          done
+          echo "final state: ${s:-unreachable}"; exit 1
+      register: _netplan_safe_apply
+      changed_when: _netplan_safe_apply.stdout == 'committed'
 
 - name: Check if OVS bridge port exists for native VLAN setup
   command: ovs-vsctl port-to-br {{ ovs_bridge_iface }}

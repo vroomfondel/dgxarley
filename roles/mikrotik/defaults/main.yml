@@ -8,10 +8,14 @@ mikrotik_identity: ""
 
 # Settings dicts: inventory sets <name> (partial is fine), tasks/main.yml merges it over <name>_defaults into _<name>.
 mikrotik_bridge: {}
+# vlan_ports: [{name, vlan_id, interface, allowed_macs, comment?}] tagged VLAN on a non-bridge port (e.g. the uplink trunk)
+# joined to the bridge; bridge filters pass only frames from/to allowed_macs plus ARP broadcast towards them.
 mikrotik_bridge_defaults:
   name: bridge
   ports: []
   vlans: []
+  vlan_ports: []
+mikrotik_bridge_vlan_port_comment: "{{ mikrotik_object_prefix }}-bvp"
 
 mikrotik_management: {}
 mikrotik_management_defaults:

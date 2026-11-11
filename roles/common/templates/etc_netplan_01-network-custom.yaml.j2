@@ -1,14 +1,23 @@
+{% set _iface = hw_iface if hw_iface is defined else ansible_default_ipv4.interface %}
+{% set _vlan_id = static_vlan_id | default('') | string %}
 network:
   version: 2
   renderer: networkd
   ethernets:
-    {% if hw_iface is defined -%}{{ hw_iface }}{%- else -%}{{ ansible_default_ipv4.interface }}{%- endif -%}:
-{% if static_ip is defined %}
+    {{ _iface }}:
+{% if static_ip is defined and _vlan_id | length > 0 %}
+      dhcp4: false
+      dhcp6: false
+      link-local: [ ]
+{% elif static_ip is defined %}
       dhcp4: false
       dhcp6: false
       link-local: [ ]
       addresses:
         - {{ static_ip }}
+{% for addr in static_extra_addresses | default([]) %}
+        - {{ addr }}
+{% endfor %}
       routes:
         - to: default
           via: {{ static_gateway }}
@@ -31,4 +40,26 @@ network:
       optional: true
       addresses:
         - {{ hw_iface2_address }}
+{% endif %}
+{% if static_ip is defined and _vlan_id | length > 0 %}
+  vlans:
+    {{ _iface }}.{{ _vlan_id }}:
+      id: {{ _vlan_id }}
+      link: {{ _iface }}
+      dhcp4: false
+      dhcp6: false
+      link-local: [ ]
+      addresses:
+        - {{ static_ip }}
+{% for addr in static_extra_addresses | default([]) %}
+        - {{ addr }}
+{% endfor %}
+      routes:
+        - to: default
+          via: {{ static_gateway }}
+      nameservers:
+        addresses:
+{% for dns in static_dns %}
+          - {{ dns }}
+{% endfor %}
 {% endif %}

@@ -24,6 +24,8 @@
   tags: [mikrotik_ports, mikrotik]
 - import_tasks: vlans.yml
   tags: [mikrotik_vlans, mikrotik]
+- import_tasks: bridge_vlan_ports.yml
+  tags: [mikrotik_vlan_ports, mikrotik]
 - import_tasks: management.yml
   tags: [mikrotik_mgmt, mikrotik]
 - import_tasks: uplink.yml

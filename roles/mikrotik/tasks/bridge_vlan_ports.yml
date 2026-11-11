@@ -1,0 +1,159 @@
+---
+- name: Validate bridge VLAN ports
+  ansible.builtin.assert:
+    that:
+      - item.name is match('^[A-Za-z0-9_.-]+$')
+      - item.vlan_id | int > 0
+      - item.interface | length > 0
+      - item.allowed_macs | default([]) | length > 0
+      - item.allowed_macs | select('match', '^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$') | list | length == item.allowed_macs | length
+    fail_msg: "bridge vlan_port {{ item.name | default('?') }}: needs name, vlan_id, interface and allowed_macs (aa:bb:cc:dd:ee:ff)"
+    quiet: true
+  loop: "{{ _mikrotik_bridge.vlan_ports }}"
+  loop_control:
+    label: "{{ item.name | default('?') }}"
+
+# The rule set is hashed into the comment, so a changed MAC list rebuilds it while the bridge port is disabled.
+- name: Build bridge VLAN port filter rules
+  ansible.builtin.set_fact:
+    _bvp_rules: "{{ _bvp_rules | default({}) | combine({item.name: _rules}) }}"
+  vars:
+    _macs: "{{ item.allowed_macs | map('upper') | list }}"
+    _arp_bcast: "dst-mac-address=FF:FF:FF:FF:FF:FF/FF:FF:FF:FF:FF:FF mac-protocol=arp"
+    _rules: >-
+      {%- set r = [] -%}
+      {%- for chain in ['forward', 'input'] -%}
+      {%- for m in _macs -%}
+      {%- set _ = r.append('chain=' ~ chain ~ ' in-interface=' ~ item.name ~ ' src-mac-address=' ~ m ~ '/FF:FF:FF:FF:FF:FF action=accept') -%}
+      {%- endfor -%}
+      {%- set _ = r.append('chain=' ~ chain ~ ' in-interface=' ~ item.name ~ ' action=drop') -%}
+      {%- endfor -%}
+      {%- for chain in ['forward', 'output'] -%}
+      {%- for m in _macs -%}
+      {%- set _ = r.append('chain=' ~ chain ~ ' out-interface=' ~ item.name ~ ' dst-mac-address=' ~ m ~ '/FF:FF:FF:FF:FF:FF action=accept') -%}
+      {%- endfor -%}
+      {%- set _ = r.append('chain=' ~ chain ~ ' out-interface=' ~ item.name ~ ' ' ~ _arp_bcast ~ ' action=accept') -%}
+      {%- set _ = r.append('chain=' ~ chain ~ ' out-interface=' ~ item.name ~ ' action=drop') -%}
+      {%- endfor -%}
+      {{ r }}
+  loop: "{{ _mikrotik_bridge.vlan_ports }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Ensure VLAN interface for bridge VLAN port
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/interface/vlan/find name="{{ item.name }}"]] = 0)
+        do={ /interface/vlan/add name="{{ item.name }}" vlan-id={{ item.vlan_id }} interface={{ item.interface }}
+        comment="{{ mikrotik_bridge_vlan_port_comment }} {{ item.name }}" }
+        else={ /interface/vlan/set [find name="{{ item.name }}"] vlan-id={{ item.vlan_id }} interface={{ item.interface }}
+        comment="{{ mikrotik_bridge_vlan_port_comment }} {{ item.name }}" }
+  loop: "{{ _mikrotik_bridge.vlan_ports }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: false
+
+# Filters are in place before the port joins the bridge; a rebuild runs with the port disabled.
+- name: Ensure bridge filters for bridge VLAN port
+  vars:
+    _rules: "{{ _bvp_rules[item.name] }}"
+    _tag: "{{ mikrotik_bridge_vlan_port_comment }} {{ item.name }} {{ ((_rules | join('|')) | hash('sha1'))[:8] }}"
+    _prefix: "{{ mikrotik_bridge_vlan_port_comment }} {{ item.name }} "
+  community.routeros.command:
+    commands:
+      - >-
+        { :local want {{ _rules | length }};
+        :local have [:len [/interface/bridge/filter/find comment="{{ _tag }}"]];
+        :local all 0;
+        :foreach i in=[/interface/bridge/filter/find] do={ :if ([:find [/interface/bridge/filter/get $i comment] "{{ _prefix }}"] = 0) do={ :set all ($all + 1) } };
+        :if (($have != $want) || ($all != $want)) do={
+        :local p [/interface/bridge/port/find interface="{{ item.name }}"];
+        :if ([:len $p] > 0) do={ /interface/bridge/port/disable $p };
+        :foreach i in=[/interface/bridge/filter/find] do={ :if ([:find [/interface/bridge/filter/get $i comment] "{{ _prefix }}"] = 0) do={ /interface/bridge/filter/remove $i } };
+        {% for r in _rules %}/interface/bridge/filter/add {{ r }} comment="{{ _tag }}"; {% endfor %}
+        :if ([:len $p] > 0) do={ /interface/bridge/port/enable $p } } }
+  loop: "{{ _mikrotik_bridge.vlan_ports }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: false
+
+- name: Ensure bridge port for bridge VLAN port
+  community.routeros.command:
+    commands:
+      - >-
+        :if ([:len [/interface/bridge/port/find interface="{{ item.name }}"]] = 0)
+        do={ /interface/bridge/port/add bridge={{ _mikrotik_bridge.name }} interface="{{ item.name }}"
+        comment="{{ item.comment | default(mikrotik_bridge_vlan_port_comment ~ ' ' ~ item.name) }}" }
+        else={ /interface/bridge/port/set [find interface="{{ item.name }}"] bridge={{ _mikrotik_bridge.name }} disabled=no
+        comment="{{ item.comment | default(mikrotik_bridge_vlan_port_comment ~ ' ' ~ item.name) }}" }
+  loop: "{{ _mikrotik_bridge.vlan_ports }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: false
+
+# Stale = a VLAN interface carrying the marker whose name is no longer listed; port and filters go first.
+- name: Remove stale bridge VLAN ports
+  vars:
+    _keep: "{{ _mikrotik_bridge.vlan_ports | map(attribute='name') | list }}"
+  community.routeros.command:
+    commands:
+      - >-
+        :foreach v in=[/interface/vlan/find] do={
+        :local c [/interface/vlan/get $v comment]; :local n [/interface/vlan/get $v name];
+        :if (([:find $c "{{ mikrotik_bridge_vlan_port_comment }} "] = 0){% for k in _keep %} && ($n != "{{ k }}"){% endfor %}) do={
+        :foreach p in=[/interface/bridge/port/find interface=$n] do={ /interface/bridge/port/remove $p };
+        :foreach i in=[/interface/bridge/filter/find] do={ :if ([:find [/interface/bridge/filter/get $i comment] ("{{ mikrotik_bridge_vlan_port_comment }} " . $n . " ")] = 0) do={ /interface/bridge/filter/remove $i } };
+        /interface/vlan/remove $v } }
+  changed_when: false
+
+# Catches filters and ports left behind when their VLAN interface was already gone.
+- name: Remove orphaned bridge VLAN port filters and ports
+  vars:
+    _keep: "{{ _mikrotik_bridge.vlan_ports | map(attribute='name') | list }}"
+    _p: "{{ mikrotik_bridge_vlan_port_comment }} "
+  community.routeros.command:
+    commands:
+      - >-
+        { :foreach i in=[/interface/bridge/filter/find] do={
+        :local c [/interface/bridge/filter/get $i comment];
+        :if ([:find $c "{{ _p }}"] = 0) do={
+        :local r [:pick $c {{ _p | length }} [:len $c]]; :local n [:pick $r 0 [:find $r " "]];
+        :if ((true){% for k in _keep %} && ($n != "{{ k }}"){% endfor %}) do={ /interface/bridge/filter/remove $i } } };
+        :foreach i in=[/interface/bridge/port/find] do={
+        :local c [/interface/bridge/port/get $i comment]; :local n [/interface/bridge/port/get $i interface];
+        :if (([:find $c "{{ _p }}"] = 0){% for k in _keep %} && ($n != "{{ k }}"){% endfor %}) do={ /interface/bridge/port/remove $i } } }
+  changed_when: false
+
+- name: Read bridge VLAN port filter comments
+  community.routeros.command:
+    commands:
+      - ':foreach i in=[/interface/bridge/filter/find] do={ :put ("bvp|" . [/interface/bridge/filter/get $i comment] . "|" . [/interface/bridge/filter/get $i disabled]) }'
+  register: _bvp_filter_state
+  changed_when: false
+  check_mode: false
+
+- name: Assert bridge VLAN port filters
+  vars:
+    _lines: "{{ _bvp_filter_state.stdout_lines[0] | map('trim') | select('match', '^bvp[|]') | list }}"
+    _prefix: "{{ mikrotik_bridge_vlan_port_comment }} {{ item.name }} "
+    _tag: "{{ mikrotik_bridge_vlan_port_comment }} {{ item.name }} {{ ((_bvp_rules[item.name] | join('|')) | hash('sha1'))[:8] }}"
+  ansible.builtin.assert:
+    that:
+      - (_lines | select('match', '^bvp[|]' ~ (_prefix | regex_escape)) | list | length) == (_bvp_rules[item.name] | length)
+      - (_lines | select('eq', 'bvp|' ~ _tag ~ '|false') | list | length) == (_bvp_rules[item.name] | length)
+    fail_msg: "bridge filters for {{ item.name }} incomplete, stale or disabled: {{ _lines }}"
+  loop: "{{ _mikrotik_bridge.vlan_ports }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Assert no stale bridge VLAN port filters remain
+  vars:
+    _keep: "{{ _mikrotik_bridge.vlan_ports | map(attribute='name') | list }}"
+    _names: >-
+      {{ _bvp_filter_state.stdout_lines[0] | map('trim') | select('match', '^bvp[|]' ~ (mikrotik_bridge_vlan_port_comment | regex_escape) ~ ' ')
+      | map('regex_replace', '^bvp[|]' ~ (mikrotik_bridge_vlan_port_comment | regex_escape) ~ ' ([^ ]+) .*$', '\1') | unique | list }}
+  ansible.builtin.assert:
+    that:
+      - _names | difference(_keep) | length == 0
+    fail_msg: "stale bridge VLAN port filters left for: {{ _names | difference(_keep) }}"

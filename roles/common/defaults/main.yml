@@ -22,6 +22,8 @@ deinstall_apparmor: false
 
 # Opt-in OVS removal on hosts with wantsopenvswitch false: -e openvswitch_teardown=true (refuses while bridges exist).
 openvswitch_teardown: false
+# >0: apply detached, revert unless gateway ping AND controller ssh confirm succeed within N s (netplan_safe_apply.sh).
+netplan_rollback_seconds: 0
 
 # bottom (btm) system monitor — NOT in Ubuntu apt, installed from the GitHub
 # release .deb. Pin the version here (tag has no leading "v"). Asset naming is
