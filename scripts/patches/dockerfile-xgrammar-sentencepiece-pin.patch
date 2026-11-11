@@ -55,12 +55,12 @@ scitrera/cuda-containers.
 +    if [ -n "$XGRAMMAR_VERSION" ]; then \
 +        echo "=== Pinning xgrammar==${XGRAMMAR_VERSION} ==="; \
 +        uv pip install --no-deps "xgrammar==${XGRAMMAR_VERSION}"; \
-+        python3 -c "import xgrammar; print('xgrammar', xgrammar.__version__)"; \
++        python3 -c "import importlib.metadata as m, xgrammar; print('xgrammar', m.version('xgrammar'))"; \
 +    fi; \
 +    if [ -n "$SENTENCEPIECE_VERSION" ]; then \
 +        echo "=== Pinning sentencepiece==${SENTENCEPIECE_VERSION} ==="; \
 +        uv pip install --no-deps "sentencepiece==${SENTENCEPIECE_VERSION}"; \
-+        python3 -c "import sentencepiece; print('sentencepiece', sentencepiece.__version__)"; \
++        python3 -c "import importlib.metadata as m, sentencepiece; print('sentencepiece', m.version('sentencepiece'))"; \
 +    fi
 +
  # Break up dist-packages into smaller layers to avoid hitting Docker layer size limits
