@@ -17,6 +17,15 @@
 #     (PyPI has 2.11.1, requires torch>=2.11). Text-only inference never
 #     imports it.
 #   - IMAGE_TAG :2.13.0-v1-cu132 -> :2.14.1-v1-cu132
+#   - NEW NCCL_TESTS_REF=v2.21.1 + DOCKERFILE_PATCHES: the nccl-tests device_api/gin
+#     tests broke the link step (undefined MPI::Comm::Comm) on the first 2.14.1
+#     build attempts 2026-11-11 with master AND v2.20.0; the 2.13.0 base likely never
+#     rebuilt that layer (cached clone). The patch adds -DOMPI_SKIP_MPICXX.
+#   - NEW dockerfile-base-torch-pep517-build.patch: torch 2.14 switched its
+#     build backend to scikit-build-core and fails `setup.py bdist_wheel`
+#     (pytorch#152276); the wheel is built with `python -m build --wheel
+#     --no-isolation` (+ build, scikit-build-core, six). MAX_JOBS still caps the
+#     parallelism via [tool.scikit-build.env] CMAKE_BUILD_PARALLEL_LEVEL.
 #
 # Deliberately unchanged (one variable per rebuild, same as 2.13.0):
 #   - CUDA_VERSION 13.2.1, NCCL 2.30.7-1, arch list sm_120 + sm_121,
@@ -35,6 +44,11 @@ CUDA_SHORT=132
 NCCL_VERSION=2.30.7-1
 NCCL_REF=v2.30.7-1
 NCCL_REPO=https://github.com/NVIDIA/nccl.git
+# nccl-tests' device_api/gin tests include mpi.h from C++ and break the link (undefined MPI::Comm::Comm, only -lmpi);
+# the patch builds with -DOMPI_SKIP_MPICXX, which nccl-tests honours from the env only since v2.21.
+NCCL_TESTS_REF=v2.21.1
+# torch 2.14 moved to scikit-build-core and rejects `setup.py bdist_wheel`; build via `python -m build --no-isolation`.
+DOCKERFILE_PATCHES="dockerfile-base-nccl-tests-skip-mpicxx.patch dockerfile-base-torch-pep517-build.patch"
 
 BUILD_JOBS=8
 

@@ -103,8 +103,10 @@ BRANCH_NAME="sm121"
 #IMAGE_TAG="xomoxcc/dgx-spark-pytorch-dev:2.12.0-v1-cu132"
 #RECIPE_NAME="pytorch-2.13.0-dev-v1"
 #IMAGE_TAG="xomoxcc/dgx-spark-pytorch-dev:2.13.0-v1-cu132"
-RECIPE_NAME="pytorch-2.14.1-dev-v1"
-IMAGE_TAG="xomoxcc/dgx-spark-pytorch-dev:2.14.1-v1-cu132"
+#RECIPE_NAME="pytorch-2.14.1-dev-v1"
+#IMAGE_TAG="xomoxcc/dgx-spark-pytorch-dev:2.14.1-v1-cu132"
+RECIPE_NAME="pytorch-2.14.1-dev-v2"
+IMAGE_TAG="xomoxcc/dgx-spark-pytorch-dev:2.14.1-v2-cu132"
 
 # Remote build host. Defaults match build_sm121_image.sh so the same
 # registered podman connection can be reused.
@@ -332,6 +334,17 @@ install_recipe() {
     # the case where someone edits the recipe without updating the script).
     grep -q "^IMAGE_TAG=${IMAGE_TAG}$" "container-recipes/${RECIPE_NAME}.recipe" \
         || die "Recipe IMAGE_TAG doesn't match expected ${IMAGE_TAG}"
+
+    # Optional recipe knob DOCKERFILE_PATCHES: space-separated patch files from scripts/patches/, applied to the
+    # freshly reset clone (prepare_cuda_containers hard-resets it, so re-runs stay idempotent).
+    local patches
+    patches="$(set -a; source "container-recipes/${RECIPE_NAME}.recipe"; echo "${DOCKERFILE_PATCHES:-}")"
+    local p
+    for p in ${patches}; do
+        [[ -f "${PATCHES_DIR}/${p}" ]] || die "Dockerfile patch not found: ${PATCHES_DIR}/${p}"
+        git apply "${PATCHES_DIR}/${p}" || die "Dockerfile patch does not apply: ${p}"
+        echo "Applied ${p}"
+    done
 }
 
 # ============================================================================
@@ -349,6 +362,7 @@ run_build() {
     local R_NCCL_VERSION R_NCCL_REF R_NCCL_REPO
     local R_BUILD_JOBS R_TORCH_CUDA_ARCH_LIST R_NVCC_GENCODE
     local R_TORCH_VERSION R_TORCH_AUDIO_VERSION R_TORCH_VISION_VERSION
+    local R_NCCL_TESTS_REF R_SQUASH_ALL
     local R_IMAGE_TAG
     # shellcheck disable=SC1090
     source <(
@@ -362,6 +376,8 @@ run_build() {
         echo "R_NCCL_VERSION='${NCCL_VERSION}'"
         echo "R_NCCL_REF='${NCCL_REF}'"
         echo "R_NCCL_REPO='${NCCL_REPO}'"
+        echo "R_NCCL_TESTS_REF='${NCCL_TESTS_REF:-}'"
+        echo "R_SQUASH_ALL='${SQUASH_ALL:-0}'"
         echo "R_BUILD_JOBS='${BUILD_JOBS}'"
         echo "R_TORCH_CUDA_ARCH_LIST='${TORCH_CUDA_ARCH_LIST}'"
         echo "R_NVCC_GENCODE='${NVCC_GENCODE}'"
@@ -386,6 +402,7 @@ run_build() {
     echo "  NCCL_VERSION         = ${R_NCCL_VERSION}"
     echo "  NCCL_REF             = ${R_NCCL_REF}"
     echo "  NCCL_REPO            = ${R_NCCL_REPO}"
+    echo "  NCCL_TESTS_REF       = ${R_NCCL_TESTS_REF:-<Dockerfile default>}"
     echo "  TORCH_VERSION        = ${R_TORCH_VERSION}"
     echo "  TORCH_VISION_VERSION = ${R_TORCH_VISION_VERSION}"
     echo "  TORCH_AUDIO_VERSION  = ${R_TORCH_AUDIO_VERSION}"
@@ -405,6 +422,9 @@ run_build() {
     # was the source of a real problem in an earlier sgl-kernel build where
     # the image ended up as `localhost/xomoxcc/dgx-spark-sglang:0.5.10-sm121`
     # and needed a manual `podman tag` before `podman save` could be used.
+    # Empty NCCL_TESTS_REF keeps the Dockerfile default (nccl-tests master).
+    local -a extra_args=()
+    [[ -n "${R_NCCL_TESTS_REF}" ]] && extra_args+=(--build-arg "NCCL_TESTS_REF=${R_NCCL_TESTS_REF}")
     podman --connection "${PODMAN_CONNECTION}" build \
         -f "container-build/${R_DOCKERFILE}" \
         --target "${R_TARGET}" \
@@ -413,6 +433,7 @@ run_build() {
         --build-arg "NCCL_VERSION=${R_NCCL_VERSION}" \
         --build-arg "NCCL_REF=${R_NCCL_REF}" \
         --build-arg "NCCL_REPO=${R_NCCL_REPO}" \
+        "${extra_args[@]}" \
         --build-arg "TORCH_CUDA_ARCH_LIST=${R_TORCH_CUDA_ARCH_LIST}" \
         --build-arg "NVCC_GENCODE=${R_NVCC_GENCODE}" \
         --build-arg "TORCH_VERSION=${R_TORCH_VERSION}" \
@@ -427,6 +448,18 @@ run_build() {
         die "Build finished but docker.io/${IMAGE_TAG} not present in remote image store"
     fi
     echo "Remote build complete: ${IMAGE_TAG} (also tagged as docker.io/${IMAGE_TAG})"
+
+    # Recipe SQUASH_ALL=1: flatten in a second build so the main build keeps its layer cache (--squash-all disables it).
+    if [[ "${R_SQUASH_ALL}" == "1" ]]; then
+        log "Squashing ${IMAGE_TAG} into one layer (SQUASH_ALL=1)"
+        local squash_dir
+        squash_dir="$(mktemp -d)"
+        printf 'FROM docker.io/%s\n' "${IMAGE_TAG}" > "${squash_dir}/Containerfile"
+        podman --connection "${PODMAN_CONNECTION}" build --squash-all \
+            -f "${squash_dir}/Containerfile" -t "${IMAGE_TAG}" -t "docker.io/${IMAGE_TAG}" "${squash_dir}"
+        rm -rf "${squash_dir}"
+        echo "Squashed: $(podman --connection "${PODMAN_CONNECTION}" image inspect "docker.io/${IMAGE_TAG}" --format '{{.Size}} bytes, {{len .RootFS.Layers}} layer(s)')"
+    fi
 }
 
 # ============================================================================

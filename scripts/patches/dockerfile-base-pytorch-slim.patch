@@ -1,0 +1,49 @@
+diff --git a/container-build/Dockerfile.base b/container-build/Dockerfile.base
+index d2229d8..3d798f9 100644
+--- a/container-build/Dockerfile.base
++++ b/container-build/Dockerfile.base
+@@ -259,3 +259,11 @@ COPY --from=pytorch_builder /usr/local/lib/python3.12/dist-packages /usr/local/l
+ COPY --from=pytorch_builder /usr/local/bin /usr/local/bin
+ 
+ WORKDIR /data
++
++# dgxarley: Stage 8: pytorch_builder minus build leftovers; build it with --squash-all, a later-layer rm alone saves nothing.
++FROM pytorch_builder AS pytorch_slim
++
++# pytorch_builder's WORKDIR lives under /build, which the prune removes.
++WORKDIR /data
++COPY stages/base_slim_prune.sh /opt/base_slim_prune.sh
++RUN bash /opt/base_slim_prune.sh && rm -f /opt/base_slim_prune.sh
+diff --git a/container-build/stages/base_slim_prune.sh b/container-build/stages/base_slim_prune.sh
+new file mode 100644
+index 0000000..8b2f25d
+--- /dev/null
++++ b/container-build/stages/base_slim_prune.sh
+@@ -0,0 +1,27 @@
++#!/bin/bash
++# dgxarley: drop build leftovers from the pytorch base; keeps nvcc, CUDA headers/shared libs, gcc and ninja for JIT.
++set -euo pipefail
++cd /
++
++du_root() { du -sxB1M / 2>/dev/null | cut -f1; }
++before=$(du_root)
++
++# PyTorch/vision/audio source and build trees; the wheels are already installed into dist-packages.
++rm -rf /build
++
++# libcudart_static/libcudadevrt/libculibos stay because nvcc links them by default.
++find /usr/local/cuda-*/ /usr/local/lib -name '*_static.a' \
++    ! -name 'libcudart_static.a' ! -name 'libcudadevrt.a' ! -name 'libculibos.a' -delete
++
++# Forward-compat libcuda is not in the ld cache (the host driver is used); compat_orin is Jetson-only.
++rm -rf /usr/local/cuda-*/compat /usr/local/cuda-*/compat_orin
++
++rm -rf /opt/nvidia/nsight-compute /usr/local/cuda-*/nsight-compute-* /usr/local/cuda-*/compute-sanitizer
++rm -f /usr/local/cuda-*/bin/cuda-gdb /usr/local/cuda-*/bin/cuda-gdbserver
++rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/*
++
++echo "base_slim_prune: ${before} MiB -> $(du_root) MiB"
++
++nvcc --version | tail -1
++command -v gcc g++ ninja >/dev/null
++python3 -c "import torch, torchvision; print('base slim OK', torch.__version__, torch.cuda.get_arch_list() if torch.cuda.is_available() else 'no-gpu')"

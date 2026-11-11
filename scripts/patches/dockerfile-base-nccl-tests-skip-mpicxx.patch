@@ -1,0 +1,14 @@
+diff --git a/container-build/Dockerfile.base b/container-build/Dockerfile.base
+index d2229d8..c3412d7 100644
+--- a/container-build/Dockerfile.base
++++ b/container-build/Dockerfile.base
+@@ -111,7 +111,9 @@ RUN if echo "${NCCL_TESTS_REF}" | grep -qE '^[0-9a-fA-F]{40}$'; then \
+ 
+ WORKDIR /build/nccl-tests
+ 
++# dgxarley: mpi.h pulls in the OpenMPI C++ bindings, nccl-tests links only -lmpi (env flags need nccl-tests >= 2.21).
+ RUN --mount=type=cache,id=ccache,target=/root/.ccache \
++    CXXFLAGS=-DOMPI_SKIP_MPICXX NVCUFLAGS=-DOMPI_SKIP_MPICXX \
+     make -j${BUILD_JOBS} MPI=1 NCCL_HOME=/usr/local CUDA_HOME=${CUDA_HOME} MPI_HOME=${MPI_HOME}
+ 
+ # Stage 4: Base Development Image

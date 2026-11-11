@@ -1,0 +1,28 @@
+diff --git a/container-build/Dockerfile.base b/container-build/Dockerfile.base
+index d2229d8..fe91847 100644
+--- a/container-build/Dockerfile.base
++++ b/container-build/Dockerfile.base
+@@ -197,7 +197,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
+         wheel \
+         cmake \
+         ninja \
+-        numba
++        numba \
++        build \
++        scikit-build-core \
++        six
+ 
+ # Clone PyTorch
+ RUN if echo "${TORCH_REF}" | grep -qE '^[0-9a-fA-F]{40}$'; then \
+@@ -212,9 +215,10 @@ RUN if echo "${TORCH_REF}" | grep -qE '^[0-9a-fA-F]{40}$'; then \
+ WORKDIR /build/pytorch
+ 
+ # Build & Install PyTorch
++# dgxarley: torch >= 2.14 builds via scikit-build-core and rejects `setup.py bdist_wheel` (pytorch#152276).
+ RUN --mount=type=cache,id=ccache,target=/root/.ccache \
+     --mount=type=cache,target=/root/.cache/uv \
+-    python3 setup.py bdist_wheel && \
++    python3 -m build --wheel --no-isolation && \
+     uv pip install /build/pytorch/dist/*.whl
+ 
+ # Build & install torchvision

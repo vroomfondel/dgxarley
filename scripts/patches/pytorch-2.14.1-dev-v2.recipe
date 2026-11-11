@@ -1,0 +1,44 @@
+#
+# Custom pytorch dev base recipe: xomoxcc/dgx-spark-pytorch-dev:2.14.1-v2-cu132
+#
+# v2 = v1 (pytorch-2.14.1-dev-v1.recipe, identical pins, nccl-tests pin and the two Dockerfile.base patches)
+# built as the SLIM base:
+#   - TARGET=pytorch_slim (dockerfile-base-pytorch-slim.patch): pytorch_builder + stages/base_slim_prune.sh,
+#     which drops /build (torch/vision/audio source + build tree, ~8.7 GB), CUDA *_static.a except
+#     cudart/cudadevrt/culibos, cuda compat/compat_orin (libcuda 595 is not in the ld cache, the host
+#     driver is used), nsight-compute, compute-sanitizer, cuda-gdb and /usr/share/{doc,man,info}.
+#     nvcc, CUDA headers + shared libs, gcc/g++/ninja/cmake stay for the runtime JIT paths.
+#   - SQUASH_ALL=1: the base is flattened ONCE into a single layer (a later-layer rm saves nothing);
+#     every sglang build stacks its own layers on top and shares this one.
+# All ENV of pytorch_builder is kept (the squash goes through a FROM <tag> rebuild).
+#
+DOCKERFILE=Dockerfile.base
+TARGET=pytorch_slim
+
+CUDA_VERSION=13.2.1
+CUDA_SHORT=132
+
+NCCL_VERSION=2.30.7-1
+NCCL_REF=v2.30.7-1
+NCCL_REPO=https://github.com/NVIDIA/nccl.git
+# nccl-tests' device_api/gin tests include mpi.h from C++ and break the link (undefined MPI::Comm::Comm, only -lmpi);
+# the patch builds with -DOMPI_SKIP_MPICXX, which nccl-tests honours from the env only since v2.21.
+NCCL_TESTS_REF=v2.21.1
+# torch 2.14 moved to scikit-build-core and rejects `setup.py bdist_wheel`; build via `python -m build --no-isolation`.
+# pytorch_slim stage (stages/base_slim_prune.sh) + SQUASH_ALL so the deletions actually leave the image.
+DOCKERFILE_PATCHES="dockerfile-base-nccl-tests-skip-mpicxx.patch dockerfile-base-torch-pep517-build.patch dockerfile-base-pytorch-slim.patch"
+SQUASH_ALL=1
+
+BUILD_JOBS=8
+
+#TORCH_CUDA_ARCH_LIST=12.1a
+#NVCC_GENCODE=-gencode=arch=compute_121,code=sm_121
+TORCH_CUDA_ARCH_LIST="12.0;12.1"
+NVCC_GENCODE="-gencode=arch=compute_120,code=sm_120 -gencode=arch=compute_121,code=sm_121"
+
+TORCH_VERSION=2.14.1
+# Pinned to sglang v0.5.23's torchaudio==2.11.0, not PyPI latest 2.11.1.
+TORCH_AUDIO_VERSION=2.11.0
+TORCH_VISION_VERSION=0.29.1
+
+IMAGE_TAG=xomoxcc/dgx-spark-pytorch-dev:2.14.1-v2-cu132
