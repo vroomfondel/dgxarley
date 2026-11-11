@@ -46,6 +46,19 @@ NEW_SCHEDULE_FLAG = """                build_schedule_metadata=not (
                     or self.paged_mqa_logits_backend.value == "torch"  # dgxarley p69
                 ),"""
 
+# >= v0.5.23: the argument fits on one line.
+OLD_SCHEDULE_FLAG_V0523 = "            build_schedule_metadata=not (use_aiter_paged_mqa or use_tilelang_paged_mqa),"
+NEW_SCHEDULE_FLAG_V0523 = """            build_schedule_metadata=not (
+                use_aiter_paged_mqa
+                or use_tilelang_paged_mqa
+                or self.paged_mqa_logits_backend.value == "torch"  # dgxarley p69
+            ),"""
+SCHEDULE_FLAG_VARIANTS = [
+    (OLD_SCHEDULE_FLAG, NEW_SCHEDULE_FLAG),
+    (OLD_SCHEDULE_FLAG_V0523, NEW_SCHEDULE_FLAG_V0523),
+]
+MARKER_SCHEDULE_FLAG = 'self.paged_mqa_logits_backend.value == "torch"  # dgxarley p69'
+
 OLD_ARM = """        else:
             logits = deep_gemm.fp8_paged_mqa_logits(
                 q_fp8.unsqueeze(1),
@@ -72,7 +85,7 @@ NEW_ARM = """        elif self.paged_mqa_logits_backend.value == "torch":  # dgx
 
 @patch_indexer.run
 def apply_indexer(p: Patch) -> None:
-    p.replace(OLD_SCHEDULE_FLAG, NEW_SCHEDULE_FLAG, what="build_schedule_metadata flag")
+    p.replace_any(SCHEDULE_FLAG_VARIANTS, marker=MARKER_SCHEDULE_FLAG, what="build_schedule_metadata flag")
     p.replace(OLD_ARM, NEW_ARM, marker="# dgxarley p69 torch arm", what="paged logits torch arm")
 
 
