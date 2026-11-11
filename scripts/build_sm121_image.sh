@@ -85,8 +85,8 @@ BRANCH_NAME="sm121"
 #                                        First NEW BASE since 0.5.18: v0.5.23
 #                                        hard-pins torch 2.14.1, so BASE_IMAGE
 #                                        and BASE_XOMOXCC_IMAGE move to
-#                                        2.14.1-v1-cu132, built from
-#                                        pytorch-2.14.1-dev-v1.recipe via
+#                                        2.14.1-v2-cu132 (slim, squashed), built from
+#                                        pytorch-2.14.1-dev-v2.recipe via
 #                                        build_pytorch_base_image.sh FIRST.
 #                                        Pins: flashinfer 0.6.18.post1 -> 0.7.3
 #                                        (deliberately past upstream's 0.7.2)
@@ -477,8 +477,8 @@ BRANCH_NAME="sm121"
 # v0.5.23 (2026-11-10): ACTIVE SELECTION, NOT YET BUILT. SGLang v0.5.23
 # (released 2026-11-02), recipe covers the v0.5.22 delta as well.
 #   * NEW BASE: torch 2.13.0 -> 2.14.1 (upstream hard pin). Build
-#     xomoxcc/dgx-spark-pytorch-dev:2.14.1-v1-cu132 first with
-#     build_pytorch_base_image.sh (pytorch-2.14.1-dev-v1.recipe); the base check
+#     xomoxcc/dgx-spark-pytorch-dev:2.14.1-v2-cu132 (slim) first with
+#     build_pytorch_base_image.sh (pytorch-2.14.1-dev-v2.recipe); the base check
 #     below aborts with that hint while it is missing.
 #   * flashinfer 0.7.3 + cutlass-dsl 4.8.0 move TOGETHER (matched pair);
 #     fallback pair 0.7.2 + 4.8.0 (OPEN RISK G). transformers 5.19.0, tokenizers
@@ -490,6 +490,13 @@ BRANCH_NAME="sm121"
 # prefill via #32779, p34 retirement check.
 RECIPE_NAME="sglang-0.5.23-sm121"
 IMAGE_TAG="xomoxcc/dgx-spark-sglang:0.5.23-sm121"
+
+# BUILD_SM121_RECIPE=<name> builds another recipe from scripts/patches/ without editing this file; its IMAGE_TAG wins.
+if [[ -n "${BUILD_SM121_RECIPE:-}" ]]; then
+    RECIPE_NAME="${BUILD_SM121_RECIPE}"
+    IMAGE_TAG="$(grep -E '^IMAGE_TAG=' "$(dirname "${BASH_SOURCE[0]}")/patches/${RECIPE_NAME}.recipe" | head -1 | cut -d= -f2- | tr -d '"')"
+    [[ -n "${IMAGE_TAG}" ]] || { echo "ERROR: recipe ${RECIPE_NAME} has no IMAGE_TAG" >&2; exit 2; }
+fi
 
 # Rollback: v0.5.21 (selected 2026-10-03, built + pushed 2026-10-03 as
 # xomoxcc/dgx-spark-sglang:0.5.21-sm121, default_sglang_image since). Sits on
@@ -722,8 +729,8 @@ NO_LOCAL_COPY=0
 # rewritten every time we cut a new base. Use `--base recipe` to build an old
 # line on exactly the base its recipe names. Supported aliases:
 #
-#   xomoxcc   xomoxcc/dgx-spark-pytorch-dev:2.14.1-v1-cu132
-#             Our locally-built 2.14/cu132 base (scripts/build_pytorch_base_image.sh).
+#   xomoxcc   xomoxcc/dgx-spark-pytorch-dev:2.14.1-v2-cu132
+#             Our locally-built SLIM 2.14/cu132 base (pytorch-2.14.1-dev-v2.recipe: pytorch_slim, squashed).
 #             Bumped 2026-11-10 from 2.13.0-v1-cu132 to match upstream SGLang
 #             v0.5.23's torch 2.14.1 pin (2.13.0 before that, since v0.5.18).
 #             Only present on spark5's podman store — never published.
@@ -748,7 +755,7 @@ NO_LOCAL_COPY=0
 #
 # Any other --base VALUE is passed through verbatim as the BASE_IMAGE.
 # BUILD_SM121_BASE_IMAGE env var overrides --base for scripting.
-BASE_XOMOXCC_IMAGE="xomoxcc/dgx-spark-pytorch-dev:2.14.1-v1-cu132"
+BASE_XOMOXCC_IMAGE="xomoxcc/dgx-spark-pytorch-dev:2.14.1-v2-cu132"
 BASE_SCITRERA_IMAGE="scitrera/dgx-spark-pytorch-dev:2.12.0-v1-cu132"
 BASE_IMAGE_ALIAS=""
 BASE_IMAGE_OVERRIDE="${BUILD_SM121_BASE_IMAGE:-}"
@@ -877,7 +884,7 @@ image never leaves the build host.
 Options:
   --base VALUE Select the PyTorch dev base image this build sits on:
                  xomoxcc   ${BASE_XOMOXCC_IMAGE}
-                           (THE DEFAULT; locally-built 2.14/cu132; fast path)
+                           (THE DEFAULT; locally-built slim 2.14/cu132; fast path)
                  scitrera  ${BASE_SCITRERA_IMAGE}
                            (upstream published; one torch minor behind)
                  recipe    whatever BASE_IMAGE the selected recipe names
@@ -1278,7 +1285,7 @@ EOF
 # ============================================================================
 #
 # The default base is a locally-built xomoxcc image,
-#   ${BASE_XOMOXCC_IMAGE} = xomoxcc/dgx-spark-pytorch-dev:2.14.1-v1-cu132
+#   ${BASE_XOMOXCC_IMAGE} = xomoxcc/dgx-spark-pytorch-dev:2.14.1-v2-cu132
 # which is NOT on Docker Hub — it's built locally via
 # scripts/build_pytorch_base_image.sh and kept in the build host's podman store.
 # If the sglang build runs before the base image exists, podman will try
@@ -1389,7 +1396,7 @@ If the image has not been pushed to Docker Hub, build it first:
 
 That build takes approximately 3-5 hours (cold) or 30-60 min (with warm
 ccache from a prior run). Its RECIPE_NAME must name the recipe for this tag
-(e.g. pytorch-2.14.1-dev-v1 for :2.14.1-v1-cu132).
+(e.g. pytorch-2.14.1-dev-v2 for :2.14.1-v2-cu132).
 EOF
             exit 1
             ;;
@@ -2061,6 +2068,28 @@ apply_patches() {
         echo "xgrammar-sentencepiece-pin Dockerfile patched"
     fi
 
+    # dgxarley: drop flashinfer trtllm-gen cubins (sm100/103/107 only) in the builder; inert unless recipe PRUNE_FLASHINFER_TRTLLM_CUBINS=1.
+    if [[ -f "${PATCHES_DIR}/dockerfile-sglang-prune-trtllm-cubins.patch" ]]; then
+        echo "Applying dockerfile-sglang-prune-trtllm-cubins.patch..."
+        patch --dry-run -p1 < "${PATCHES_DIR}/dockerfile-sglang-prune-trtllm-cubins.patch" \
+            || die "prune-trtllm-cubins Dockerfile patch dry-run failed, regenerate dockerfile-sglang-prune-trtllm-cubins.patch"
+        patch -p1 < "${PATCHES_DIR}/dockerfile-sglang-prune-trtllm-cubins.patch"
+        grep -q 'ARG PRUNE_FLASHINFER_TRTLLM_CUBINS' container-build/Dockerfile.sglang-nightly \
+            || die "prune-trtllm-cubins Dockerfile patch verification failed"
+        echo "prune-trtllm-cubins Dockerfile patched"
+    fi
+
+    # dgxarley: pin triton (recipe TRITON_VERSION); MUST follow prune-trtllm-cubins (anchors on its block).
+    if [[ -f "${PATCHES_DIR}/dockerfile-triton-pin.patch" ]]; then
+        echo "Applying dockerfile-triton-pin.patch..."
+        patch --dry-run -p1 < "${PATCHES_DIR}/dockerfile-triton-pin.patch" \
+            || die "triton-pin Dockerfile patch dry-run failed, regenerate dockerfile-triton-pin.patch"
+        patch -p1 < "${PATCHES_DIR}/dockerfile-triton-pin.patch"
+        grep -q 'ARG TRITON_VERSION' container-build/Dockerfile.sglang-nightly \
+            || die "triton-pin Dockerfile patch verification failed"
+        echo "triton-pin Dockerfile patched"
+    fi
+
     # 3. Drop in the recipe file. run_build() parses it inline and calls
     #    `podman build` directly, bypassing container-build/build-image.sh
     #    (which uses `docker buildx build` — podman has no buildx subcommand).
@@ -2204,9 +2233,13 @@ run_build() {
     # subdir). Podman streams it to the remote build host over the socket;
     # the build runs natively on arm64 and the result lands in the remote
     # host's local image store.
+    echo "  PRUNE_FLASHINFER_TRTLLM_CUBINS = $(recipe_value PRUNE_FLASHINFER_TRTLLM_CUBINS || true)"
+    echo "  TRITON_VERSION       = $(recipe_value TRITON_VERSION || true)"
     podman --connection "${PODMAN_CONNECTION}" build \
         -f "container-build/${R_DOCKERFILE}" \
         --target "${R_TARGET}" \
+        --build-arg "PRUNE_FLASHINFER_TRTLLM_CUBINS=$(recipe_value PRUNE_FLASHINFER_TRTLLM_CUBINS || true)" \
+        --build-arg "TRITON_VERSION=$(recipe_value TRITON_VERSION || true)" \
         --build-arg "BASE_IMAGE=${effective_base_image}" \
         --build-arg "FLASHINFER_VERSION=${R_FLASHINFER_VERSION}" \
         --build-arg "TRANSFORMERS_VERSION=${R_TRANSFORMERS_VERSION}" \
@@ -2422,7 +2455,7 @@ EOF
 
     cat <<EOF
 
-$(log "Build + push complete")
+$(log "Build complete$( ((PUSH_IMAGE)) && echo " + push" || echo ", push skipped (--no-push)")")
 
 Image: ${IMAGE_TAG}
 Patch-set gate: $( (( VERIFY_IMAGE == 1 )) && echo "PASSED (0 ANCHOR-DRIFT, no model-registry regression)" || echo "SKIPPED (--no-verify) — image is UNVERIFIED, run scripts/verify_sglang_image.sh before promoting" )

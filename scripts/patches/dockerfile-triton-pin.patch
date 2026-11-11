@@ -1,0 +1,20 @@
+diff --git a/container-build/Dockerfile.sglang-nightly b/container-build/Dockerfile.sglang-nightly
+index 3eb7203..d52a702 100644
+--- a/container-build/Dockerfile.sglang-nightly
++++ b/container-build/Dockerfile.sglang-nightly
+@@ -542,6 +542,15 @@ RUN if [ "$PRUNE_FLASHINFER_TRTLLM_CUBINS" = "1" ] && [ -d /usr/local/lib/python
+             \( -name fmha -o -name 'batched_gemm-*' \) -print -exec rm -rf {} +; \
+     fi
+ 
++# dgxarley: pin triton to what torch requires (2.14.1: ~=3.8.0); the source-built torch declares no triton dep, so the latest wins.
++ARG TRITON_VERSION=""
++RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
++    if [ -n "$TRITON_VERSION" ]; then \
++        echo "=== Pinning triton==${TRITON_VERSION} ==="; \
++        uv pip install --no-deps "triton==${TRITON_VERSION}"; \
++        python3 -c "import importlib.metadata as m, triton; print('triton', m.version('triton'))"; \
++    fi
++
+ # Break up dist-packages into smaller layers to avoid hitting Docker layer size limits
+ COPY stages/directory_split2.sh /opt/directory_split2.sh
+ RUN chmod +x /opt/directory_split2.sh && \

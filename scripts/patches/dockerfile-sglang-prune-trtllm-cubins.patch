@@ -1,0 +1,18 @@
+diff --git a/container-build/Dockerfile.sglang-nightly b/container-build/Dockerfile.sglang-nightly
+index 7ac8005..3eb7203 100644
+--- a/container-build/Dockerfile.sglang-nightly
++++ b/container-build/Dockerfile.sglang-nightly
+@@ -535,6 +535,13 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
+         python3 -c "import sentencepiece; print('sentencepiece', sentencepiece.__version__)"; \
+     fi
+ 
++# dgxarley: trtllm-gen cubins ship for sm100/sm103/sm107 only (~7 GB) and cannot load on sm121; drop them before the split.
++ARG PRUNE_FLASHINFER_TRTLLM_CUBINS=0
++RUN if [ "$PRUNE_FLASHINFER_TRTLLM_CUBINS" = "1" ] && [ -d /usr/local/lib/python3.12/dist-packages/flashinfer_cubin/cubins ]; then \
++        find /usr/local/lib/python3.12/dist-packages/flashinfer_cubin/cubins -mindepth 2 -maxdepth 2 -type d \
++            \( -name fmha -o -name 'batched_gemm-*' \) -print -exec rm -rf {} +; \
++    fi
++
+ # Break up dist-packages into smaller layers to avoid hitting Docker layer size limits
+ COPY stages/directory_split2.sh /opt/directory_split2.sh
+ RUN chmod +x /opt/directory_split2.sh && \

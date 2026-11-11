@@ -247,7 +247,9 @@ TARGET=runtime
 # EXPECTED NAME, DOES NOT EXIST YET (Docker Hub has 2.13.0 / 2.12.0 / 2.11.0
 # only, checked 2026-11-10). v0.5.23 pins torch==2.14.1; build the base first
 # (OPEN RISK D, BLOCKING). Do NOT point this at the 2.13.0 base.
-BASE_IMAGE=xomoxcc/dgx-spark-pytorch-dev:2.14.1-v1-cu132
+# Slim base (pytorch-2.14.1-dev-v2.recipe): no /build, no CUDA static libs/compat/nsight, squashed once into one
+# shared layer; 2.14.1-v1-cu132 is the full builder base the first 0.5.23 build used.
+BASE_IMAGE=xomoxcc/dgx-spark-pytorch-dev:2.14.1-v2-cu132
 
 # flashinfer 0.7.3 - user decision, one patch release above upstream's
 # flashinfer_python[cu13]==0.7.2 pin (python/pyproject.toml:41). Stable
@@ -298,7 +300,10 @@ HF_HUB_MIN_VERSION=1.31.0
 # missing_deps.py checks presence and not version. Enforced by
 # scripts/patches/dockerfile-tokenizers-pin.patch as the last pip action of
 # the builder stage.
-TOKENIZERS_VERSION=0.23.2
+# 0.23.3 instead of upstream's ==0.23.2 pin (2026-11-11): 0.23.2 caps huggingface-hub <2.0 while
+# HF_HUB_MIN_VERSION resolves hub to 2.x; tokenizers 0.23.3 (2026-10-09, huggingface/tokenizers#2486)
+# only loosens that cap to <3.0 for hub v2. transformers 5.19.0 allows tokenizers <0.24.
+TOKENIZERS_VERSION=0.23.3
 
 # xgrammar 0.2.7 / sentencepiece 0.2.1 - exactly v0.5.23's pyproject pins,
 # unchanged from v0.5.21. Enforced by
@@ -367,4 +372,12 @@ APPLY_QWEN4EXP_PR36497=0
 # -- Nemotron 3.5 Lightning speculative decoding: NATIVE since v0.5.19 -> OFF -
 APPLY_NEMOTRON35_SPEC_PR36186=0
 
+# dockerfile-sglang-prune-trtllm-cubins.patch: drop flashinfer_cubin fmha/batched_gemm (sm100/103/107 only, ~7 GB)
+# in the builder before the dist-packages split. GPU-validated on the squashed slim prototype 2026-11-11
+# (Nemotron-3.5-Lightning-30B-A3B-NVFP4 + DSPARK draft on trtllm_mha, TP1, GSM8K 10/10, no cubin download attempts).
+PRUNE_FLASHINFER_TRTLLM_CUBINS=1
+# torch 2.14.1 requires triton~=3.8.0, but the source-built torch declares no triton dependency, so the build
+# resolved the latest triton (3.9.0), which removed tl.make_block_ptr: SGLang v0.5.23's FLA kernels
+# (kernels/ops/attention/fla/l2norm.py, migrated only on main by #47944) crash Qwen3.8 GDN prefill capture.
+TRITON_VERSION=3.8.0
 IMAGE_TAG=xomoxcc/dgx-spark-sglang:0.5.23-sm121
