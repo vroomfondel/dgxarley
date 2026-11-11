@@ -535,13 +535,36 @@ NEW_BACKEND_REFRESH = """    def _refresh_paged_mqa_schedule_metadata(
             metadata.paged_mqa_schedule_metadata.copy_(new_schedule)"""
 
 
+def _respell_resolve(pair: tuple[str, str]) -> tuple[str, str]:
+    """(old, new) in the >= v0.5.23 spelling: DeepGEMM calls went through resolve_*()."""
+    return (
+        pair[0]
+        .replace("deep_gemm.get_paged_mqa_logits_metadata(", "resolve_paged_mqa_logits_metadata_fn()(")
+        .replace("deep_gemm.get_num_sms()", "resolve_num_sms()"),
+        pair[1]
+        .replace("deep_gemm.get_paged_mqa_logits_metadata(", "resolve_paged_mqa_logits_metadata_fn()(")
+        .replace("deep_gemm.get_num_sms()", "resolve_num_sms()"),
+    )
+
+
+SITE_A_VARIANTS = [(OLD_BACKEND_SITE_A, NEW_BACKEND_SITE_A), _respell_resolve((OLD_BACKEND_SITE_A, NEW_BACKEND_SITE_A))]
+SITE_B_VARIANTS = [(OLD_BACKEND_SITE_B, NEW_BACKEND_SITE_B), _respell_resolve((OLD_BACKEND_SITE_B, NEW_BACKEND_SITE_B))]
+REFRESH_VARIANTS = [
+    (OLD_BACKEND_REFRESH, NEW_BACKEND_REFRESH),
+    _respell_resolve((OLD_BACKEND_REFRESH, NEW_BACKEND_REFRESH)),
+]
+MARKER_SITE_A = "# ctx_lens_2d is still needed unconditionally"
+MARKER_SITE_B = "forward_mode, cache_seqlens_int32, seqlens_expanded, bs\n            )\n            if not self.paged_mqa_logits_backend.is_torch():"
+MARKER_REFRESH = "# Torch backend: schedule metadata is unused"
+
+
 @patch_dsa_backend.run
 def apply_dsa_backend(p: Patch) -> None:
     p.replace_any(BACKEND_IMPORT_VARIANTS, marker=MARKER_BACKEND, what="4a-import")
     p.replace_any(BACKEND_INIT_VARIANTS, marker=MARKER_BACKEND_INIT, what="4b-init")
-    p.replace(OLD_BACKEND_SITE_A, NEW_BACKEND_SITE_A, what="4c-site-A")
-    p.replace(OLD_BACKEND_SITE_B, NEW_BACKEND_SITE_B, what="4d-site-B")
-    p.replace(OLD_BACKEND_REFRESH, NEW_BACKEND_REFRESH, what="4e-refresh-helper")
+    p.replace_any(SITE_A_VARIANTS, marker=MARKER_SITE_A, what="4c-site-A")
+    p.replace_any(SITE_B_VARIANTS, marker=MARKER_SITE_B, what="4d-site-B")
+    p.replace_any(REFRESH_VARIANTS, marker=MARKER_REFRESH, what="4e-refresh-helper")
 
 
 # ── 5) dsa_indexer.py: dispatch to the torch fallback (4 sub-edits, in source order) ──
@@ -686,9 +709,18 @@ DISPATCH_BRANCH_VARIANTS = [
 MARKER_DISPATCH = "logits = fp8_paged_mqa_logits_torch_dsa("
 
 
+FALLBACK_METADATA_VARIANTS = [
+    (OLD_FALLBACK_METADATA, NEW_FALLBACK_METADATA),
+    _respell_resolve((OLD_FALLBACK_METADATA, NEW_FALLBACK_METADATA)),
+]
+MARKER_FALLBACK_METADATA = (
+    "if _is_cuda and not self.paged_mqa_logits_backend.is_torch():\n            if schedule_metadata is None:"
+)
+
+
 @patch_dsa_indexer.run
 def apply_dsa_indexer(p: Patch) -> None:
     p.replace(OLD_INDEXER_IMPORT, NEW_INDEXER_IMPORT, what="5a-import")
     p.replace(OLD_USE_DG_NATIVE, NEW_USE_DG_NATIVE, what="5b-use-dg-native")
-    p.replace(OLD_FALLBACK_METADATA, NEW_FALLBACK_METADATA, what="5c-fallback-metadata")
+    p.replace_any(FALLBACK_METADATA_VARIANTS, marker=MARKER_FALLBACK_METADATA, what="5c-fallback-metadata")
     p.replace_any(DISPATCH_BRANCH_VARIANTS, marker=MARKER_DISPATCH, what="5d-dispatch-branch")
