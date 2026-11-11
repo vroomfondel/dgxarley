@@ -30,7 +30,7 @@
 # Environment overrides:
 #   PRESET        qwen38_nvidia | qwen38_radixark | nemotron35_lightning | qwen38_27b | nemotron3_super | custom | list
 #   MODEL         from the preset (required for custom)
-#   IMAGE         from the preset (xomoxcc/dgx-spark-sglang:0.5.21-sm121)
+#   IMAGE         from the preset (xomoxcc/dgx-spark-sglang:0.5.23-sm121)
 #   MODEL_ARGS    sglang args replacing the preset args entirely
 #   SPEC          1 (qwen38_nvidia: 0 = no MTP; nemotron35_lightning: 0 = no draft, eagle = built-in MTP head)
 #   GAMMA         7 (nemotron35_lightning, qwen38_27b: DSPARK block size; num_draft_tokens = GAMMA + 1)
@@ -42,6 +42,7 @@
 #   MAX_RUNNING   4 (qwen38 presets: max running requests = decode cuda-graph max bs; qwen38_27b: 32, decode cuda-graph max bs only)
 #   MAMBA_CACHE   128 (nemotron3_super: --max-mamba-cache-size, 5 slots per request with MTP 4/1/5; qwen38_27b: 160)
 #   MAMBA_SSM_DTYPE bfloat16 (nemotron3_super: float32 doubles the cache memory, pair it with MAMBA_CACHE=64; qwen38_27b: bfloat16; qwen38_nvidia/radixark: float32)
+#   PATCHES_DIR   local sglang_patches dir (skips the GitHub fetch, e.g. an unpushed working tree)
 #   REF           main (branch, tag or commit; resolved to a SHA, cached as patches-<sha>,
 #                 offline fallback: last SHA seen for REF, else the newest cache)
 #   REPO          vroomfondel/dgxarley
@@ -61,7 +62,7 @@ set -euo pipefail
 # P_DRAFTS (extra repos to pre-download, e.g. an external speculative draft).
 
 qwen38_common() {
-    P_IMAGE="xomoxcc/dgx-spark-sglang:0.5.21-sm121"
+    P_IMAGE="xomoxcc/dgx-spark-sglang:0.5.23-sm121"
     P_ENV=(
         SGLANG_ENABLE_JIT_DEEPGEMM=false
         SGLANG_QWEN4_PLE_FILE_PREFETCH=1
@@ -127,7 +128,7 @@ preset_qwen38_radixark() {
 
 # roles/k8s_dgx/model_profiles/nvidia-nvidia-nemotron-3.5-lightning-30b-a3b-nvfp4.yml; SPEC=0 disables, SPEC=eagle uses the MTP head
 preset_nemotron35_lightning() {
-    P_IMAGE="xomoxcc/dgx-spark-sglang:0.5.21-sm121"
+    P_IMAGE="xomoxcc/dgx-spark-sglang:0.5.23-sm121"
     P_MODEL="nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4"
     P_ENV=(SGLANG_ENABLE_JIT_DEEPGEMM=false)
     P_PLE=0
@@ -168,7 +169,7 @@ preset_nemotron35_lightning() {
 
 # roles/k8s_dgx/model_profiles/vroomfondel-qwen3.8-27b-nvfp4-modelopt.yml at TP=1; SPEC=0 disables, SPEC=eagle uses the MTP head
 preset_qwen38_27b() {
-    P_IMAGE="xomoxcc/dgx-spark-sglang:0.5.21-sm121"
+    P_IMAGE="xomoxcc/dgx-spark-sglang:0.5.23-sm121"
     P_MODEL="vroomfondel/Qwen3.8-27B-NVFP4-ModelOpt"
     P_ENV=(
         SGLANG_ENABLE_JIT_DEEPGEMM=false
@@ -222,7 +223,7 @@ preset_qwen38_27b() {
 
 # roles/k8s_dgx/model_profiles/nvidia-nvidia-nemotron-3-super-120b-a12b-nvfp4.yml at TP=1; SPEC=0 disables, SPEC=builtin uses the in-checkpoint MTP head
 preset_nemotron3_super() {
-    P_IMAGE="xomoxcc/dgx-spark-sglang:0.5.21-sm121"
+    P_IMAGE="xomoxcc/dgx-spark-sglang:0.5.23-sm121"
     P_MODEL="nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4"
     P_ENV=(SGLANG_ENABLE_JIT_DEEPGEMM=false)
     P_PLE=0
@@ -265,7 +266,7 @@ preset_nemotron3_super() {
 
 # Any model: MODEL is required, sglang args come from MODEL_ARGS and the command line.
 preset_custom() {
-    P_IMAGE="xomoxcc/dgx-spark-sglang:0.5.21-sm121"
+    P_IMAGE="xomoxcc/dgx-spark-sglang:0.5.23-sm121"
     P_MODEL=""
     P_ARGS=()
     P_ENV=()
@@ -313,37 +314,45 @@ if podman container exists "${NAME}"; then
 fi
 
 mkdir -p "${CACHE_DIR}"
-ref_file="${CACHE_DIR}/ref-${REF//\//_}"
-
-sha="$(curl -fsSL --max-time 15 -H "Accept: application/vnd.github.sha" \
-    "https://api.github.com/repos/${REPO}/commits/${REF}" 2>/dev/null || true)"
-if [[ "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
-    echo "=== ${REPO}@${REF} -> ${sha}"
-    echo "${sha}" > "${ref_file}"
+if [[ -n "${PATCHES_DIR:-}" ]]; then
+    patch_dir="$(cd "${PATCHES_DIR}" && pwd)"
+    [[ -n "$(compgen -G "${patch_dir}/p[0-9][0-9]_*.py")" ]] \
+        || { echo "ERROR: no p[0-9][0-9]_*.py patches in PATCHES_DIR=${PATCHES_DIR}" >&2; exit 2; }
+    sha="local"
+    echo "=== local patches (PATCHES_DIR): ${patch_dir}"
 else
-    sha=""
-    if [[ -s "${ref_file}" && -d "${CACHE_DIR}/patches-$(< "${ref_file}")" ]]; then
-        sha="$(< "${ref_file}")"
+    ref_file="${CACHE_DIR}/ref-${REF//\//_}"
+
+    sha="$(curl -fsSL --max-time 15 -H "Accept: application/vnd.github.sha" \
+        "https://api.github.com/repos/${REPO}/commits/${REF}" 2>/dev/null || true)"
+    if [[ "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "=== ${REPO}@${REF} -> ${sha}"
+        echo "${sha}" > "${ref_file}"
     else
-        newest="$(ls -1td "${CACHE_DIR}"/patches-* 2>/dev/null | head -n1 || true)"
-        [[ -n "${newest}" ]] && sha="${newest##*/patches-}"
+        sha=""
+        if [[ -s "${ref_file}" && -d "${CACHE_DIR}/patches-$(< "${ref_file}")" ]]; then
+            sha="$(< "${ref_file}")"
+        else
+            newest="$(ls -1td "${CACHE_DIR}"/patches-* 2>/dev/null | head -n1 || true)"
+            [[ -n "${newest}" ]] && sha="${newest##*/patches-}"
+        fi
+        [[ -n "${sha}" ]] || { echo "ERROR: cannot resolve ${REPO}@${REF} and no cached patches in ${CACHE_DIR}" >&2; exit 2; }
+        echo "WARNING: cannot resolve ${REPO}@${REF}, falling back to cached patches-${sha}" >&2
     fi
-    [[ -n "${sha}" ]] || { echo "ERROR: cannot resolve ${REPO}@${REF} and no cached patches in ${CACHE_DIR}" >&2; exit 2; }
-    echo "WARNING: cannot resolve ${REPO}@${REF}, falling back to cached patches-${sha}" >&2
-fi
 
-patch_dir="${CACHE_DIR}/patches-${sha}"
-if [[ -d "${patch_dir}" ]]; then
-    echo "    cached: ${patch_dir}"
-else
-    tmp_dir="$(mktemp -d "${CACHE_DIR}/.tmp.XXXXXX")"
-    trap 'rm -rf "${tmp_dir}"' EXIT
-    echo "=== fetching ${PATCH_PATH} @ ${sha}"
-    curl -fsSL "https://codeload.github.com/${REPO}/tar.gz/${sha}" \
-        | tar -xzf - -C "${tmp_dir}" --strip-components=1 --wildcards "*/${PATCH_PATH}/*.py"
-    [[ -n "$(compgen -G "${tmp_dir}/${PATCH_PATH}/p[0-9][0-9]_*.py")" ]] \
-        || { echo "ERROR: no patches found under ${PATCH_PATH} at ${sha}" >&2; exit 2; }
-    mv "${tmp_dir}/${PATCH_PATH}" "${patch_dir}"
+    patch_dir="${CACHE_DIR}/patches-${sha}"
+    if [[ -d "${patch_dir}" ]]; then
+        echo "    cached: ${patch_dir}"
+    else
+        tmp_dir="$(mktemp -d "${CACHE_DIR}/.tmp.XXXXXX")"
+        trap 'rm -rf "${tmp_dir}"' EXIT
+        echo "=== fetching ${PATCH_PATH} @ ${sha}"
+        curl -fsSL "https://codeload.github.com/${REPO}/tar.gz/${sha}" \
+            | tar -xzf - -C "${tmp_dir}" --strip-components=1 --wildcards "*/${PATCH_PATH}/*.py"
+        [[ -n "$(compgen -G "${tmp_dir}/${PATCH_PATH}/p[0-9][0-9]_*.py")" ]] \
+            || { echo "ERROR: no patches found under ${PATCH_PATH} at ${sha}" >&2; exit 2; }
+        mv "${tmp_dir}/${PATCH_PATH}" "${patch_dir}"
+    fi
 fi
 touch "${patch_dir}"
 echo "    $(ls "${patch_dir}"/p[0-9][0-9]_*.py | wc -l) patches -> ${patch_dir}"
