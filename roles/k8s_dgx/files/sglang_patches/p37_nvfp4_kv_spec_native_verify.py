@@ -357,6 +357,16 @@ NEW_CALL_V0521 = (
 """
 )
 
+# >= v0.5.23: upstream passes the XQA mask for every q_len > 1 (also draft-extend-v2).
+OLD_CALL_V0523 = """                mask = (
+                    self._xqa_spec_dec_mask
+                    if self.forward_metadata.max_seq_len_q > 1
+                    else None
+                )
+"""
+
+NEW_CALL_V0523 = NEW_CALL_V0521.replace(OLD_CALL_V0521, OLD_CALL_V0523)
+
 OLD_SCALES = """        # sink: additional value per head in the denominator of the softmax.
         attention_sink = kwargs.get("sinks", None)
         bmm1_scale, bmm2_scale = self._get_bmm_scales(layer, q_scale)"""
@@ -486,6 +496,7 @@ CALL_VARIANTS = [
     _call_variant("                    multi_ctas_kv_counter_buffer=self._multi_ctas_kv_counter_buffer,\n"),
     (_OLD_CALL_V0519, _NEW_CALL_V0519),  # >= v0.5.19
     (OLD_CALL_V0521, NEW_CALL_V0521),  # >= v0.5.21
+    (OLD_CALL_V0523, NEW_CALL_V0523),  # >= v0.5.23
 ]
 
 # >= v0.5.19 also added a RAGGED verify layout (spec_info.ragged_verify_layout,
@@ -749,6 +760,17 @@ def apply_dfill(p: Patch) -> None:
                 NEW_DMETA_GRAPH.replace(
                     "                spec_info=spec_info,\n            )",
                     "                spec_info=spec_info,\n                kv_view=kv_view,\n            )",
+                ),
+            ),
+            # >= v0.5.23: the update() call gained a trailing plan kwarg.
+            (
+                OLD_DMETA_GRAPH.replace(
+                    "                spec_info=spec_info,\n            )",
+                    "                spec_info=spec_info,\n                plan=forward_batch.kv_loc_plan,\n            )",
+                ),
+                NEW_DMETA_GRAPH.replace(
+                    "                spec_info=spec_info,\n            )",
+                    "                spec_info=spec_info,\n                plan=forward_batch.kv_loc_plan,\n            )",
                 ),
             ),
         ],
