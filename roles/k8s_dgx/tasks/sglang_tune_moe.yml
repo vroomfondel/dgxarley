@@ -6,6 +6,9 @@
 #
 # Usage:
 #   ansible-playbook k8s_dgx.yml --tags sglang_tune_moe
+#   ... -e sglang_tune_dtype=fp8_w8a8 -e sglang_tune_block_shape=128,128 -e '{"sglang_tune_batch_sizes":[1,2,4]}'
+# Each finished batch size lands in <moe_config_dir>/tune_partial/<id>.jsonl (+ merged <id>.json snapshot);
+# a rerun of an interrupted Job resumes from it (-e sglang_tune_resume=false starts fresh).
 #
 # Prerequisites:
 # - Model must be downloaded (run hf_preload first)
@@ -23,6 +26,7 @@
         namespace: "{{ sglang_namespace }}"
       data:
         tune_moe.sh: "{{ lookup('file', role_path ~ '/files/sglang_tune_moe.sh') }}"
+        tune_moe_patch.py: "{{ lookup('file', role_path ~ '/files/sglang_tune_moe_patch.py') }}"
 
 - name: Delete existing SGLang MoE tuning Job
   kubernetes.core.k8s:
@@ -99,7 +103,15 @@
                   - name: FORCE_RETUNE
                     value: "{{ sglang_force_retune | default('false') }}"
                   - name: SGLANG_TUNE_BRANCH
-                    value: "{{ sglang_tune_branch | default('v' ~ sglang_image.split(':')[-1]) }}"
+                    value: "{{ sglang_tune_branch | default('v' ~ (sglang_image.split(':')[-1] | regex_replace('-sm[0-9]+.*$', ''))) }}"
+                  - name: TUNE_DTYPE
+                    value: "{{ sglang_tune_dtype | default('auto') }}"
+                  - name: TUNE_BLOCK_SHAPE
+                    value: "{{ (sglang_tune_block_shape | default('')) if (sglang_tune_block_shape | default('')) is string else (sglang_tune_block_shape | join(',')) }}"
+                  - name: TUNE_BATCH_SIZES
+                    value: "{{ (sglang_tune_batch_sizes | default([])) if (sglang_tune_batch_sizes | default([])) is string else (sglang_tune_batch_sizes | default([]) | join(' ')) }}"
+                  - name: TUNE_RESUME
+                    value: "{{ sglang_tune_resume | default(true) | bool | string | lower }}"
                   - name: PYTHONUNBUFFERED
                     value: "1"
                   - name: RAY_DEDUP_LOGS

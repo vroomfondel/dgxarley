@@ -15,7 +15,11 @@ set -e
 #   RSYNC_TARGETS       — comma-separated IPs of worker nodes for rsync
 #   HF_CACHE_HOST_PATH  — host path for hf-cache (e.g. /var/lib/hf-cache)
 #   FORCE_RETUNE        — set "true" to overwrite existing configs
-#   SGLANG_TUNE_BRANCH  — GitHub branch for tuning scripts (default: main)
+#   SGLANG_TUNE_BRANCH  — GitHub branch for tuning scripts (default: main; a -smNNN image suffix is stripped)
+#   TUNE_DTYPE          — tuner --dtype (default: auto)
+#   TUNE_BLOCK_SHAPE    — override the derived block_shape, e.g. "128,128" or "none"
+#   TUNE_BATCH_SIZES    — space/comma-separated subset of batch sizes (default: upstream list)
+#   TUNE_RESUME         — "true" (default) resumes from the per-batch-size partial file
 
 echo "=== SGLang MoE Triton Kernel Tuning ==="
 echo "Model: ${SGLANG_MODEL}"
@@ -54,27 +58,21 @@ config_dir="${MOE_CONFIG_DIR}/configs/triton_${triton_slug}"
 mkdir -p "$config_dir"
 echo "Config output dir: ${config_dir}"
 
-# 5. Idempotency check — skip if matching JSON exists for this GPU
-existing=$(find "$config_dir" -name "*${gpu_slug}*.json" 2>/dev/null | head -1)
-if [ -n "$existing" ] && [ "$FORCE_RETUNE" != "true" ]; then
-  echo "Tuned config already exists: ${existing}"
-  echo "Set FORCE_RETUNE=true to re-run. Skipping."
-  # Still rsync existing configs
-  if [ -n "$RSYNC_TARGETS" ]; then
-    ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-    IFS=',' read -ra targets <<< "$RSYNC_TARGETS"
-    for target in "${targets[@]}"; do
-      echo "Rsyncing existing configs to ${target} ..."
-      dst="root@${target}:${HF_CACHE_HOST_PATH}/moe_configs/"
-      rsync -ah -e "ssh $ssh_opts" "${MOE_CONFIG_DIR}/" "$dst"
-      echo "Rsync to ${target} complete."
-    done
-  fi
-  exit 0
-fi
+rsync_configs() {
+  [ -n "$RSYNC_TARGETS" ] || return 0
+  local ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+  local target
+  IFS=',' read -ra targets <<< "$RSYNC_TARGETS"
+  for target in "${targets[@]}"; do
+    echo "Rsyncing configs to ${target} ..."
+    rsync -ah -e "ssh $ssh_opts" "${MOE_CONFIG_DIR}/" "root@${target}:${HF_CACHE_HOST_PATH}/moe_configs/"
+    echo "Rsync to ${target} complete."
+  done
+}
 
-# 6. Download tuning scripts from SGLang GitHub
+# 5. Download tuning scripts from SGLang GitHub
 branch="${SGLANG_TUNE_BRANCH:-main}"
+branch="${branch%-sm[0-9]*}"
 base_url="https://raw.githubusercontent.com/sgl-project/sglang/${branch}/benchmark/kernels/fused_moe_triton"
 workdir=$(mktemp -d)
 echo "Downloading tuning scripts from branch '${branch}' ..."
@@ -83,135 +81,79 @@ curl -fsSL "${base_url}/common_utils.py" -o "${workdir}/common_utils.py"
 # Create __init__.py so common_utils can be imported
 touch "${workdir}/__init__.py"
 
-# REMOVED 2026-07-28: "Patch 1" (preserve architectures + quantization_config across
-# the get_text_config() unwrap in get_model_config()). Fixed upstream by PR #20232
-# (merged 2026-03-27, shipped in v0.5.10): upstream now reads architectures and
-# block_shape BEFORE unwrapping text_config, and the patch anchor
-# ("config = config.get_text_config()") no longer exists on main, so the block had
-# been dead code since then. Re-verified against upstream main on 2026-07-28.
-# Background: FIXED_SGLANG_MOE_TUNE_UPSTREAM_BUG.md. The numbering below keeps
-# "Patch 2" so old tuning logs stay greppable.
-python3 -c "
-import pathlib
-p = pathlib.Path('${workdir}/common_utils.py')
-
-# Patch 2: config_groups with group_size=None (channel-wise FP8) sets block_shape=[0, None]
-# instead of block_shape=None. This makes the tuning script crash with 'NoneType % int'.
-# Fix: only set block_shape if group_size is not None.
-src = p.read_text()
-old2 = '''        group_size = weights_config.get(\"group_size\")
-        block_shape = [0, group_size]
-        assert len(block_shape) == 2'''
-new2 = '''        group_size = weights_config.get(\"group_size\")
-        if group_size is not None:
-            block_shape = [0, group_size]
-            assert len(block_shape) == 2'''
-if old2 in src:
-    src = src.replace(old2, new2, 1)
-    p.write_text(src)
-    print('Patched common_utils.py: skip block_shape for channel-wise quant (group_size=None)')
-else:
-    print('WARNING: group_size patch target not found — upstream may have fixed this')
-"
-
-# Patch: replace Ray tqdm progress bar with print-based progress.
-# Ray's tqdm_ray renders in the Ray dashboard, not in kubectl logs — so the
-# tuning loop appears silent. Replace with periodic prints to stdout.
-# Also adds batch_size context (which sweep, how many configs) and a summary
-# line in main() showing the full tuning plan before starting.
-python3 -c "
-import pathlib
-p = pathlib.Path('${workdir}/tuning_fused_moe_triton.py')
-src = p.read_text()
-
-# 1) Replace tqdm loop with print-based progress + batch_size header
-old_loop = '        for config in tqdm(search_space):'
-new_loop = '''        print(flush=True)
-        print(f\"--- batch_size={num_tokens}: tuning {len(search_space)} configs ---\", flush=True)
-        _total = len(search_space)
-        for _cfg_idx, config in enumerate(search_space, 1):
-            if _cfg_idx == 1 or _cfg_idx % 50 == 0 or _cfg_idx == _total:
-                _pct = _cfg_idx / _total * 100
-                _best_str = f\"best={best_time:.1f}us\" if best_time < float(\"inf\") else \"searching...\"
-                print(f\"  batch_size={num_tokens}: [{_cfg_idx}/{_total}] ({_pct:.0f}%) {_best_str}\", flush=True)'''
-if old_loop in src:
-    src = src.replace(old_loop, new_loop, 1)
-    print('Patched: replaced Ray tqdm with print progress + batch_size header')
-else:
-    print('WARNING: tqdm patch target not found — upstream may have changed the loop')
-
-# 2) Add tuning plan summary in main() before _distribute
-old_dist = '        configs = _distribute('
-new_dist = '''        print(flush=True)
-        print(f\"Tuning plan: {len(batch_sizes)} batch sizes {batch_sizes} x {len(search_space)} configs = {len(batch_sizes) * len(search_space)} total benchmarks\", flush=True)
-        configs = _distribute('''
-if old_dist in src:
-    src = src.replace(old_dist, new_dist, 1)
-    print('Patched: added tuning plan summary before _distribute')
-else:
-    print('WARNING: _distribute patch target not found')
-
-# 3) Auto-detect FP8 from quantization_config when --dtype auto
-# Per-channel FP8 models (quant_method='fp8' without weight_block_size)
-# aren't detected by --dtype auto: all use_* flags stay False, so the
-# tuned config filename omits dtype=fp8_w8a8 and SGLang can't find it.
-old_fp8 = '    per_channel_quant = args.per_channel_quant'
-new_fp8 = '''    per_channel_quant = args.per_channel_quant
-    # Auto-detect FP8 from model quantization_config when --dtype auto
-    if args.dtype == \"auto\":
-        from sglang.srt.utils.hf_transformers_utils import get_config as _get_cfg
-        _cfg = _get_cfg(args.model, trust_remote_code=True)
-        _qcfg = getattr(_cfg, \"quantization_config\", None)
-        if isinstance(_qcfg, dict) and _qcfg.get(\"quant_method\") == \"fp8\":
-            use_fp8_w8a8 = True'''
-if old_fp8 in src:
-    src = src.replace(old_fp8, new_fp8, 1)
-    print('Patched: auto-detect FP8 from quantization_config when --dtype auto')
-else:
-    print('WARNING: FP8 auto-detect patch target not found — upstream may handle this now')
-
-p.write_text(src)
-"
+# REMOVED 2026-07-28: "Patch 1" (fixed upstream by PR #20232, see FIXED_SGLANG_MOE_TUNE_UPSTREAM_BUG.md).
+# Patches 2-3 and the progress/resume patches moved from inline heredocs to tune_moe_patch.py.
+python3 /scripts/tune_moe_patch.py "$workdir"
 
 echo "Scripts downloaded to ${workdir}"
 
-# 7. Run the tuning benchmark
-# --dtype auto: relies on get_model_config() for block_shape detection, plus
-# Patch 3 in tuning_fused_moe_triton.py for FP8 auto-detection via
-# quantization_config.quant_method. Without Patch 3, per-channel FP8 models
-# (quant_method="fp8" without weight_block_size) are tuned as BF16 and the
-# config filename omits dtype=fp8_w8a8 — SGLang can't find it at runtime.
-echo "Starting MoE kernel tuning (this may take 30-90 minutes) ..."
+# 6. Run the tuning benchmark: exit 3 = exact target JSON exists; finished batch sizes go to MOE_TUNE_PARTIAL
+tune_dtype="${TUNE_DTYPE:-auto}"
+partial_dir="${MOE_CONFIG_DIR}/tune_partial"
+partial_id=$(echo "${SGLANG_MODEL}_tp${TP}_ep${EP}_${tune_dtype}_bs${TUNE_BLOCK_SHAPE:-auto}_${gpu_slug}_triton_${triton_slug}" | tr '/,' '_x')
+export MOE_TUNE_PARTIAL="${partial_dir}/${partial_id}.jsonl"
+mkdir -p "$partial_dir"
+if [ "${TUNE_RESUME:-true}" != "true" ] && [ -f "$MOE_TUNE_PARTIAL" ]; then
+  mv "$MOE_TUNE_PARTIAL" "${MOE_TUNE_PARTIAL%.jsonl}.discarded-$(date +%Y%m%d%H%M%S).jsonl"
+fi
+[ -f "$MOE_TUNE_PARTIAL" ] && echo "Resume file: ${MOE_TUNE_PARTIAL} ($(wc -l < "$MOE_TUNE_PARTIAL") records)"
+echo "Partial results: ${MOE_TUNE_PARTIAL} (snapshot: ${MOE_TUNE_PARTIAL%.jsonl}.json)"
+
+batch_args=()
+if [ -n "${TUNE_BATCH_SIZES:-}" ]; then
+  read -ra _bs <<< "${TUNE_BATCH_SIZES//,/ }"
+  batch_args=(--batch-sizes "${_bs[@]}")
+fi
+
+export MOE_TUNE_EXISTING_DIR="$config_dir"
+echo "Starting MoE kernel tuning (dtype=${tune_dtype}, block_shape=${TUNE_BLOCK_SHAPE:-derived}) ..."
 cd "$workdir"
 python3 tuning_fused_moe_triton.py \
   --model "$SGLANG_MODEL" \
   --tp-size "$TP" \
   --ep-size "$EP" \
-  --dtype auto \
-  --tune
+  --dtype "$tune_dtype" \
+  "${batch_args[@]}" \
+  --tune || tune_rc=$?
+if [ "${tune_rc:-0}" -eq 3 ]; then
+  echo "Set FORCE_RETUNE=true to re-run. Skipping."
+  rsync_configs
+  exit 0
+elif [ "${tune_rc:-0}" -ne 0 ]; then
+  echo "ERROR: tuning failed (exit ${tune_rc})"
+  exit "$tune_rc"
+fi
 echo "Tuning complete."
 
-# 8. Move generated JSON configs to persistent config dir
+# 7. Move generated JSON configs to persistent config dir
 # The tuning script writes JSON files to the current directory
+move_ts=$(date +%Y%m%d%H%M%S)
 for f in *.json; do
   [ -f "$f" ] || continue
+  if [ -f "${config_dir}/${f}" ]; then
+    backup="${config_dir}/${f}.bak-${move_ts}"
+    cp -p "${config_dir}/${f}" "$backup"
+    echo "Backed up existing ${f} → ${backup}"
+    if [ -n "${TUNE_BATCH_SIZES:-}" ]; then
+      printf '!%.0s' {1..100}; echo
+      echo "!!! ${config_dir}/${f} now holds ONLY batch sizes [${TUNE_BATCH_SIZES}] (subset run)."
+      echo "!!! The previous full file is ${backup}. To merge (new values win):"
+      echo "!!!   python3 -c 'import json,sys; o,n=sys.argv[1:]; d=json.load(open(o)); d.update(json.load(open(n))); json.dump(dict(sorted(d.items(), key=lambda kv: int(kv[0]))), open(n,\"w\"), indent=4)' '${backup}' '${config_dir}/${f}'"
+      printf '!%.0s' {1..100}; echo
+    fi
+  fi
   echo "Moving ${f} → ${config_dir}/"
   mv "$f" "${config_dir}/"
 done
 
+done_ts=$(date +%Y%m%d%H%M%S)
+[ -f "$MOE_TUNE_PARTIAL" ] && mv "$MOE_TUNE_PARTIAL" "${MOE_TUNE_PARTIAL%.jsonl}.done-${done_ts}.jsonl"
+[ -f "${MOE_TUNE_PARTIAL%.jsonl}.json" ] && mv "${MOE_TUNE_PARTIAL%.jsonl}.json" "${MOE_TUNE_PARTIAL%.jsonl}.done-${done_ts}.json"
+
 echo "Configs in ${config_dir}:"
 ls -la "${config_dir}/"
 
-# 9. Rsync config dir to all worker nodes via SSH
-if [ -n "$RSYNC_TARGETS" ]; then
-  ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-  IFS=',' read -ra targets <<< "$RSYNC_TARGETS"
-  for target in "${targets[@]}"; do
-    echo "Rsyncing configs to ${target} ..."
-    dst="root@${target}:${HF_CACHE_HOST_PATH}/moe_configs/"
-    rsync -ah -e "ssh $ssh_opts" "${MOE_CONFIG_DIR}/" "$dst"
-    echo "Rsync to ${target} complete."
-  done
-fi
+# 8. Rsync config dir to all worker nodes via SSH
+rsync_configs
 
 echo "=== MoE Triton Kernel Tuning Job Done ==="
