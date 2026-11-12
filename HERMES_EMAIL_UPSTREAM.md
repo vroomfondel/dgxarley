@@ -36,7 +36,7 @@ All are read from `config.yaml` `platforms.email.extra.*` (not env), rendered by
 | Key                | dgxarley default                      | Effect                                                                                |
 |--------------------|---------------------------------------|---------------------------------------------------------------------------------------|
 | `working_folder`   | `Hermes_Working`                      | INBOX → Working at fetch. `""` → INBOX → Done directly.                               |
-| `done_folder`      | `Hermes_Done`                         | → Done after `handle_message()`. `""` → no moves at all (INBOX + `\Seen`).            |
+| `done_folder`      | `Hermes_Done`                         | → Done when the mail's turn completes. `""` → no moves (INBOX + `\Seen`).             |
 | `sent_folder`      | `Sent`                                | IMAP APPEND (`\Seen`) after each successful SMTP send. `""` → SMTP only.              |
 | `process_existing` | `true`                                | Process the pre-existing UNSEEN backlog on first poll (upstream PR default: `false`). |
 | `quote_original`   | `hermes.email.quote_original_default` | Quote the received mail below the first successful reply to it.                       |
@@ -44,14 +44,22 @@ All are read from `config.yaml` `platforms.email.extra.*` (not env), rendered by
 ### Folder lifecycle
 
 ```
-INBOX ──UID MOVE──▶ Hermes_Working ──handle_message() returns (try/finally)──▶ Hermes_Done
+INBOX ──UID MOVE──▶ Hermes_Working ──on_processing_complete(SUCCESS|FAILURE)──▶ Hermes_Done
                     (visible after a crash =
                      "interrupted mid-processing")
 ```
 
 The Working MOVE only fires when both folders are set AND the mail has a Message-ID, so mail
-is never stranded in Working. The `try/finally` covers every drop path (self, automated,
-not allowlisted, unauthenticated From) as well as exceptions.
+is never stranded in Working. `handle_message()` only spawns the background turn and returns,
+so `[PATCH-12]` moves a mail to Done from the base hook `on_processing_complete`, not on
+return. CANCELLED (interrupt/shutdown) leaves it in Working. Mails merged into a queued
+follow-up while a turn runs (`absorb_turn_input`) are finalized together with the event that
+absorbed them; `on_processing_start` is overridden so the runner fires the hooks for queued
+follow-ups. A fallback sweep in the poll loop finalizes a tracked mail whose hook never fired
+once its session is idle (300 s grace, bounded map of 500; overflow leaves the oldest in
+Working). Mail no background turn owns (self, automated, not allowlisted, unauthenticated
+From, exceptions, `_gateway_accepted` not True) is still finalized at once by the
+`[PATCH-6]` `try/finally`.
 
 ### Move semantics
 

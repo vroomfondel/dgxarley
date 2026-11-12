@@ -10,8 +10,12 @@ exist from its own tag on. Re-sync procedure: HERMES_EMAIL_UPSTREAM.md.
 Adds four behaviours that upstream lacks:
 
   1.  Two-stage IMAP folder lifecycle:
-        INBOX  -- fetch -->  Hermes_Working  -- handle_message() done -->  Hermes_Done
+        INBOX  -- fetch -->  Hermes_Working  -- on_processing_complete() -->  Hermes_Done
       so anything left in Hermes_Working after a crash is visibly "interrupted".
+      The Done move happens when the agent turn for that mail has finished
+      (SUCCESS or FAILURE); an interrupted/cancelled turn stays in Working.
+      Mail that never reaches a background turn (rejected sender, dropped or
+      not accepted by handle_message) moves to Done immediately.
   2.  Sent-mail archival via IMAP APPEND (upstream only sends via SMTP).
   3.  Opt-in processing of pre-existing INBOX mail on startup (upstream marks
       everything already there as seen).
@@ -43,7 +47,14 @@ Patch sections (grep for the markers):
             a Message-ID are present; _mark_uid_consumed(): INBOX→Done MOVE for
             mail the pre-fetch header gate (upstream, since v0.21.6) rejects
   [PATCH-6] _dispatch_message(): try/finally around _sender_accepted + event
-            build + handle_message, so every drop path finalizes out of Working
+            build + handle_message; mail that no background turn owns
+            (event._gateway_accepted is not True) finalizes out of Working at once
+  [PATCH-12] completion-driven Done move: _EmailMessageEvent (records Message-IDs
+            merged into a queued event via absorb_turn_input), self._inflight
+            (bounded Message-ID -> source folder), on_processing_start() (only so
+            the runner fires hooks for queued follow-ups), on_processing_complete()
+            (SUCCESS/FAILURE -> Done, CANCELLED -> stays), _sweep_inflight()
+            (fallback for turns whose hook never fires)
   [PATCH-7] _smtp_send(): APPEND to Sent (single sink for all adapter sends)
   [PATCH-8] _standalone_send(): APPEND to Sent via the shared helper (cron /
             `hermes send` path)
@@ -64,7 +75,7 @@ _standalone_send's IMAP reads use the profile-scoped _get_secret().
 Upstreaming (all OPEN; drop the matching sections once merged):
   - #28697 Sent-folder APPEND          [PATCH-3/7/8]
   - #28699 process_existing            [PATCH-4]
-  - #28702 Working/Done lifecycle      [PATCH-3/4/5/6]
+  - #28702 Working/Done lifecycle      [PATCH-3/4/5/6/12]
   - #113192 quote original             [PATCH-11]
 [PATCH-10] stays dgxarley-only (per-user ``imap_security: starttls`` would make
 it unnecessary).
@@ -104,7 +115,7 @@ from gateway.platforms.base import (
     cache_image_from_bytes,
 )
 from gateway.platforms.helpers import cancel_task
-from gateway.platforms.event import MessageEvent, MessageType
+from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
 from gateway.config import Platform, PlatformConfig
 from utils import is_truthy_value
 from gateway.platforms._shared import (
@@ -749,6 +760,21 @@ def _attach_file(msg: MIMEMultipart, path: Path, filename: str) -> None:
         msg.attach(part)
 
 
+_INFLIGHT_MAX = 500  # [PATCH-12]
+_INFLIGHT_SWEEP_GRACE_S = 300.0  # [PATCH-12]
+
+
+class _EmailMessageEvent(MessageEvent):
+    """[PATCH-12] MessageEvent that remembers the Message-IDs merged into it while queued."""
+
+    def absorb_turn_input(self, other: MessageEvent) -> None:
+        super().absorb_turn_input(other)
+        ids: set[str] = self.__dict__.setdefault("_absorbed_ids", set())
+        if other.message_id:
+            ids.add(other.message_id)
+        ids.update(getattr(other, "_absorbed_ids", ()))
+
+
 class EmailAdapter(BasePlatformAdapter):
     """Email gateway adapter using IMAP (receive) and SMTP (send)."""
 
@@ -843,6 +869,8 @@ class EmailAdapter(BasePlatformAdapter):
         # Track the last IMAP fetch attempt so the poll loop can distinguish "checked, nothing new" from
         # "the check itself failed" (#80016).
         self._thread_context: dict[str, dict[str, str]] = {}
+        # [PATCH-12] Message-ID -> (source folder, event, registered-at monotonic); event loop only.
+        self._inflight: "OrderedDict[str, tuple[str, MessageEvent, float]]" = OrderedDict()
         logger.info("[Email] Adapter initialized for %s", self._address)
         logger.info(
             "[Email] Folder lifecycle: working=%r done=%r sent=%r process_existing=%s imap_security=%s",
@@ -1155,6 +1183,7 @@ class EmailAdapter(BasePlatformAdapter):
         """Poll IMAP for new messages at regular intervals."""
         while self._running:
             try:
+                await self._sweep_inflight()
                 await self._check_inbox()
             except asyncio.CancelledError:
                 break
@@ -1402,12 +1431,10 @@ class EmailAdapter(BasePlatformAdapter):
     async def _dispatch_message(self, msg_data: dict[str, Any]) -> None:
         """Convert a fetched email into a MessageEvent and dispatch it."""
         sender_addr = msg_data["sender_addr"]
-        # [PATCH-6] The finally below ALWAYS finalizes the mail out of its current
-        # folder, so a _sender_accepted() drop (self / automated / non-allowlisted /
-        # unauthenticated) or a handle_message exception after a Working move can't
-        # strand it in Working. _finalize_message no-ops when done_folder is unset,
-        # the mail never moved, or there is no Message-ID to re-locate it by.
+        # [PATCH-6] Mail no background turn owns finalizes in the finally; accepted mail via [PATCH-12].
         source_folder = msg_data.get("source_folder", "INBOX")
+        message_id = msg_data["message_id"]
+        event: Optional[MessageEvent] = None
         try:
             if not self._sender_accepted(sender_addr, msg_data):
                 return
@@ -1427,7 +1454,7 @@ class EmailAdapter(BasePlatformAdapter):
                 else:
                     self._forget_sender_original(sender_addr)
             name = msg_data["sender_name"] or sender_addr
-            event = MessageEvent(
+            event = _EmailMessageEvent(
                 text=text or "(empty email)",
                 message_id=msg_data["message_id"],
                 message_type=(
@@ -1448,11 +1475,81 @@ class EmailAdapter(BasePlatformAdapter):
                 reply_to_message_id=msg_data["in_reply_to"] or None,
             )
             logger.info("[Email] New message from %s: %s", sender_addr, subject)
+            self._inflight_register(message_id, source_folder, event)
             await self.handle_message(event)
         finally:
-            await asyncio.get_running_loop().run_in_executor(
-                None, self._finalize_message, msg_data["message_id"], source_folder
-            )
+            if event is None or event._gateway_accepted is not True:
+                self._inflight.pop(message_id, None)
+                await asyncio.get_running_loop().run_in_executor(
+                    None, self._finalize_message, message_id, source_folder
+                )
+
+    def _inflight_register(self, message_id: str, source_folder: str, event: MessageEvent) -> None:
+        """[PATCH-12] Track a dispatched mail until its turn completes (bounded; oldest stays in Working)."""
+        if not message_id or not self._done_folder:
+            return
+        self._inflight[message_id] = (source_folder, event, time.monotonic())
+        while len(self._inflight) > _INFLIGHT_MAX:
+            dropped, _ = self._inflight.popitem(last=False)
+            logger.warning("[Email] In-flight map full; leaving %s in its folder", dropped)
+
+    async def on_processing_start(self, event: MessageEvent) -> None:
+        """[PATCH-12] Overridden so the runner also fires the hooks for queued follow-up turns."""
+        await super().on_processing_start(event)
+
+    async def on_processing_complete(self, event: MessageEvent, outcome: ProcessingOutcome) -> None:
+        """[PATCH-12] Move the processed mail (and mails merged into its turn) to Done; CANCELLED keeps them."""
+        try:
+            await super().on_processing_complete(event, outcome)
+        except Exception as e:
+            logger.warning("[Email] on_processing_complete base hook failed: %s", e)
+        try:
+            ids = {event.message_id} | set(getattr(event, "_absorbed_ids", ()))
+            entries = [(mid, self._inflight.pop(mid)) for mid in sorted(i for i in ids if i) if mid in self._inflight]
+            if outcome == ProcessingOutcome.CANCELLED or not entries:
+                return
+            await self._finalize_many([(mid, entry[0]) for mid, entry in entries])
+        except Exception as e:
+            logger.error("[Email] Finalize on processing complete failed: %s", e)
+
+    async def _finalize_many(self, items: list[tuple[str, str]]) -> None:
+        def run() -> None:
+            for message_id, source_folder in items:
+                self._finalize_message(message_id, source_folder)
+
+        await asyncio.get_running_loop().run_in_executor(None, run)
+
+    def _session_idle(self, event: MessageEvent) -> bool:
+        """[PATCH-12] True only when neither the adapter nor the runner holds a turn or queue for the event's session."""
+        key = self._event_session_key(event)
+        if key in self._active_sessions or key in self._pending_messages:
+            return False
+        runner = self.gateway_runner
+        if runner is None:
+            return True
+        if runner._is_session_running(key):
+            return False
+        state = runner._peek_session_state(key)
+        return not (state is not None and state.conversation.queued_events)
+
+    async def _sweep_inflight(self) -> None:
+        """[PATCH-12] Finalize mails whose completion hook never fired (merged away or replaced in the pending slot)."""
+        now = time.monotonic()
+        stale: list[tuple[str, str]] = []
+        for mid, (folder, event, ts) in list(self._inflight.items()):
+            if now - ts < _INFLIGHT_SWEEP_GRACE_S:
+                continue
+            try:
+                idle = self._session_idle(event)
+            except Exception as e:
+                logger.debug("[Email] Idle check failed for %s: %s", mid, e)
+                continue
+            if idle:
+                del self._inflight[mid]
+                stale.append((mid, folder))
+                logger.warning("[Email] No completion hook for %s; session idle, finalizing", mid)
+        if stale:
+            await self._finalize_many(stale)
 
     # [PATCH-11] Quote-the-original-email helpers (dgxarley patch, opt-in).
 
