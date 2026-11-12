@@ -12,7 +12,7 @@ repos:
     hooks:
       - id: black
         name: black
-        entry: black --diff --check .
+        entry: .venv/bin/black --diff --check .
         language: system
         pass_filenames: false
         types: [ python ]
