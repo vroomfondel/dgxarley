@@ -6,7 +6,7 @@ outline_enabled: false
 outline_teardown: false
 outline_namespace: "outline"
 # Pinned: startup auto-migrates the schema, so bumps are deliberate.
-outline_image: "outlinewiki/outline:1.10.1"
+outline_image: "outlinewiki/outline:1.12.0"
 outline_busybox_image: "busybox:1.38"
 outline_port: 3000
 outline_hostname: "outline.{{ dns_external_domain_suffix }}"

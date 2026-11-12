@@ -30,13 +30,13 @@ netplan_rollback_seconds: 0
 # `bottom-musl_<version>-1_<arch>.deb`; arch is derived from ansible_architecture
 # (x86_64→amd64 on k3smaster, aarch64→arm64 on the sparks).
 # curl -s https://api.github.com/repos/ClementTsang/bottom/releases/latest | jq -r '.tag_name'
-bottom_version: "0.14.9"
+bottom_version: "0.15.0"
 
 # yq (mikefarah/yq, the Go YAML processor — NOT the apt kislyuk jq-wrapper).
 # Ships only a static binary (no .deb), so it's fetched to /usr/local/bin. Pin
 # the version here (tag HAS a leading "v"); arch derived from ansible_architecture.
 # curl -s https://api.github.com/repos/mikefarah/yq/releases/latest | jq -r '.tag_name'
-yq_version: "v4.54.1"
+yq_version: "v4.54.3"
 
 # smartd monitoring
 smartd_mail_recipients: "root,admin@example.com"
@@ -82,7 +82,7 @@ podman_short_name_mode: permissive
 podman_static_enabled: true
 # curl -s https://api.github.com/repos/mgoltzsche/podman-static/releases/latest | jq -r '.tag_name'
 # Deploy a bump: ansible-playbook common.yml --tags podman --limit dgxsparks  (single host: --limit spark5)
-podman_static_version: "6.1.4"
+podman_static_version: "6.2.0"
 # Bump together with podman_static_version (a mismatch fails the download); "" skips verification for that arch.
 # curl -s https://api.github.com/repos/mgoltzsche/podman-static/releases/tags/v<VERSION> | jq -r '.assets[] | select(.name=="podman-linux-arm64.tar.gz") | .digest'
 podman_static_sha256:

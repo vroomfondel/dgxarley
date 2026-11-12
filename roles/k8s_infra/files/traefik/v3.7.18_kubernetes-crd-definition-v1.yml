@@ -1,11 +1,11 @@
-# Unmodified from upstream except for this header: curl -sfL -o v3.7.13_kubernetes-crd-definition-v1.yml \
-#   https://raw.githubusercontent.com/traefik/traefik/v3.7.13/docs/content/reference/dynamic-configuration/kubernetes-crd-definition-v1.yml
+# Unmodified from upstream except for this header: curl -sfL -o v3.7.18_kubernetes-crd-definition-v1.yml \
+#   https://raw.githubusercontent.com/traefik/traefik/v3.7.18/docs/content/reference/dynamic-configuration/kubernetes-crd-definition-v1.yml
 # New version: replace the tag in the URL and the file name, bump traefik.version in defaults/main/traefik.yml.
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: ingressroutes.traefik.io
 spec:
   group: traefik.io
@@ -494,7 +494,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: ingressroutetcps.traefik.io
 spec:
   group: traefik.io
@@ -757,7 +757,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: ingressrouteudps.traefik.io
 spec:
   group: traefik.io
@@ -873,7 +873,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: middlewares.traefik.io
 spec:
   group: traefik.io
@@ -2295,7 +2295,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: middlewaretcps.traefik.io
 spec:
   group: traefik.io
@@ -2384,7 +2384,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: serverstransports.traefik.io
 spec:
   group: traefik.io
@@ -2568,7 +2568,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: serverstransporttcps.traefik.io
 spec:
   group: traefik.io
@@ -2725,7 +2725,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: tlsoptions.traefik.io
 spec:
   group: traefik.io
@@ -2844,7 +2844,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: tlsstores.traefik.io
 spec:
   group: traefik.io
@@ -2941,7 +2941,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.19.0
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: traefikservices.traefik.io
 spec:
   group: traefik.io

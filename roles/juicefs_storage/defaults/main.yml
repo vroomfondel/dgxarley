@@ -121,7 +121,7 @@ juicefs_backup_meta_interval: "24h"
 # Check upstream for newer releases with:
 #   juicefs:  curl -s https://api.github.com/repos/juicedata/juicefs/releases/latest | jq -r .tag_name
 #             (tag has a "v" prefix — strip it for the var below)
-juicefs_version: "1.4.1"                 # juicedata/juicefs release (arm64+amd64, LTS)
+juicefs_version: "1.4.2"                 # juicedata/juicefs release (arm64+amd64, LTS)
 juicefs_valkey_apt_package: valkey-server  # noble: 7.2.x — sufficient for JuiceFS
 
 # --- Object store (rustfs_server role) --------------------------------------

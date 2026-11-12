@@ -1,7 +1,7 @@
-# Node Feature Discovery v0.19.0
-# Generated with: kubectl kustomize "https://github.com/kubernetes-sigs/node-feature-discovery/deployment/overlays/default?ref=v0.19.0"
+# Node Feature Discovery v0.20.1
+# Generated with: kubectl kustomize "https://github.com/kubernetes-sigs/node-feature-discovery/deployment/overlays/default?ref=v0.20.1"
 # https://github.com/kubernetes-sigs/node-feature-discovery
-# kubectl kustomize "https://github.com/kubernetes-sigs/node-feature-discovery/deployment/overlays/default?ref=v0.19.0" > roles/k8s_infra/files/nfd_node-feature-discovery.yml
+# kubectl kustomize "https://github.com/kubernetes-sigs/node-feature-discovery/deployment/overlays/default?ref=v0.20.1" > roles/k8s_infra/files/nfd_node-feature-discovery.yml
 #
 # LOCAL PATCH (re-apply on every re-render): nfd-worker resources.requests.cpu
 # raised from the upstream 5m to 20m.
@@ -31,7 +31,10 @@ spec:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: NodeFeatureGroup resource holds Node pools by featureGroup
+        description: |-
+          NodeFeatureGroup resource holds Node pools by featureGroup.
+          NodeFeatureGroup is namespaced (short name `nfg`) and has a status subresource.
+          Only objects in the namespace of nfd-master are processed.
         properties:
           apiVersion:
             description: |-
@@ -307,6 +310,8 @@ spec:
                 description: Nodes is a list of FeatureGroupNode in the cluster that
                   match the featureGroupRules
                 items:
+                  description: FeatureGroupNode is a node that matches the rules of
+                    a NodeFeatureGroup.
                   properties:
                     name:
                       description: Name of the node.
@@ -350,6 +355,7 @@ spec:
         description: |-
           NodeFeatureRule resource specifies a configuration for feature-based
           customization of node objects, such as node labeling.
+          NodeFeatureRule is cluster-scoped (short name `nfr`).
         properties:
           apiVersion:
             description: |-
@@ -698,6 +704,7 @@ spec:
         description: |-
           NodeFeature resource holds the features discovered for one node in the
           cluster.
+          NodeFeature is namespaced.
         properties:
           apiVersion:
             description: |-
@@ -995,8 +1002,6 @@ data:
     #    stderrthreshold: 2
     #    v: 0
     #    vmodule:
-    ##   NOTE: the following options are not dynamically run-time configurable
-    ##         and require a nfd-master restart to take effect after being changed
     #    logDir:
     #    logFile:
     #    logFileMaxSize: 1800
@@ -1010,7 +1015,7 @@ data:
     # nfdApiParallelism: 10
 kind: ConfigMap
 metadata:
-  name: nfd-master-conf-8kb68dgffh
+  name: nfd-master-conf-m6k266ccbh
   namespace: node-feature-discovery
 ---
 apiVersion: v1
@@ -1038,8 +1043,6 @@ data:
     #    stderrthreshold: 2
     #    v: 0
     #    vmodule:
-    ##   NOTE: the following options are not dynamically run-time configurable
-    ##         and require a nfd-worker restart to take effect after being changed
     #    logDir:
     #    logFile:
     #    logFileMaxSize: 1800
@@ -1067,6 +1070,7 @@ data:
     #        - "RDSEED"
     #        - "RDTSCP"
     #        - "SGX"
+    #        - "SGXLC"
     #        - "SSE"
     #        - "SSE2"
     #        - "SSE3"
@@ -1267,7 +1271,7 @@ data:
     #          matchName: {op: In, value: ["SWAP", "X86", "ARM"]}
 kind: ConfigMap
 metadata:
-  name: nfd-worker-conf-m45f8m9fm8
+  name: nfd-worker-conf-kbhm2864f8
   namespace: node-feature-discovery
 ---
 apiVersion: apps/v1
@@ -1302,7 +1306,7 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.uid
-        image: registry.k8s.io/nfd/node-feature-discovery:v0.19.0
+        image: registry.k8s.io/nfd/node-feature-discovery:v0.20.1
         imagePullPolicy: IfNotPresent
         livenessProbe:
           httpGet:
@@ -1377,7 +1381,7 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.uid
-        image: registry.k8s.io/nfd/node-feature-discovery:v0.19.0
+        image: registry.k8s.io/nfd/node-feature-discovery:v0.20.1
         imagePullPolicy: IfNotPresent
         livenessProbe:
           httpGet:
@@ -1418,7 +1422,7 @@ spec:
         value: ""
       volumes:
       - configMap:
-          name: nfd-master-conf-8kb68dgffh
+          name: nfd-master-conf-m6k266ccbh
         name: nfd-master-conf
 ---
 apiVersion: apps/v1
@@ -1453,7 +1457,7 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.uid
-        image: registry.k8s.io/nfd/node-feature-discovery:v0.19.0
+        image: registry.k8s.io/nfd/node-feature-discovery:v0.20.1
         imagePullPolicy: IfNotPresent
         livenessProbe:
           httpGet:
@@ -1535,5 +1539,5 @@ spec:
           path: /etc/kubernetes/node-feature-discovery/features.d/
         name: features-d
       - configMap:
-          name: nfd-worker-conf-m45f8m9fm8
+          name: nfd-worker-conf-kbhm2864f8
         name: nfd-worker-conf

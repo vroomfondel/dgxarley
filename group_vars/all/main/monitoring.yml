@@ -34,7 +34,7 @@ alertmanager_gotify_url: "https://gotify.example.com"
 # resting state is explicit. Promtail was removed (EOL 2026-03-02).
 fluentbit_enabled: true
 fluentbit_teardown: false
-fluentbit_image: "fluent/fluent-bit:5.1"
+fluentbit_image: "fluent/fluent-bit:5.2"
 fluentbit_node_selector: {}
 fluentbit_pod_labels:
   - app

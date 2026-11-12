@@ -34,7 +34,7 @@ rustfs_server_total_drives: >-
 rustfs_server_set_drive_count: "{{ rustfs_server_total_drives }}"
 
 # Latest: curl -s https://api.github.com/repos/rustfs/rustfs/releases/latest | jq -r .tag_name
-rustfs_server_version: "1.0.1"
+rustfs_server_version: "1.0.5"
 rustfs_server_libc: musl
 rustfs_server_console_port: 9001
 rustfs_server_console_enable: true

@@ -10,11 +10,11 @@ nvidia_gpu_timeslice_replicas: 5
 # 4.5.2-4.8.1 (last ubuntu tag; 4.5.3-4.8.2 and 4.6.0-4.8.3 are distroless-only),
 # so staying on ubuntu means freezing the exporter. Safe here: the DaemonSet
 # overrides no command/args and both probes are httpGet, so nothing needs a
-# shell. arm64 manifest verified present for 4.6.0-4.8.3-distroless.
+# shell. arm64 manifest verified present for 4.7.0-4.9.0-distroless.
 #
 # Check newer: curl -sH "Authorization: Bearer $(curl -s 'https://nvcr.io/proxy_auth?scope=repository:nvidia/k8s/dcgm-exporter:pull' | jq -r .token)" \
 #   https://nvcr.io/v2/nvidia/k8s/dcgm-exporter/tags/list | jq '.tags[] | select(test("distroless$"))'
-dcgm_exporter_image: "nvcr.io/nvidia/k8s/dcgm-exporter:4.6.0-4.8.3-distroless"
+dcgm_exporter_image: "nvcr.io/nvidia/k8s/dcgm-exporter:4.7.0-4.9.0-distroless"
 
 # NVIDIA device plugin DaemonSet resources. Observed steady state on the sparks
 # is ~1m CPU / ~41Mi RSS (NVML polling only), so the requests are a floor for

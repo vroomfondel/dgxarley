@@ -14,7 +14,7 @@
 # Newest release: gh api repos/k8snetworkplumbingwg/multus-cni/releases/latest --jq '.tag_name'
 set -euo pipefail
 
-MULTUS_REF="${MULTUS_REF:-v4.3.1}"
+MULTUS_REF="${MULTUS_REF:-v4.3.2}"
 UPSTREAM_URL="https://raw.githubusercontent.com/k8snetworkplumbingwg/multus-cni/${MULTUS_REF}/deployments/multus-daemonset-thick.yml"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEST="${SCRIPT_DIR}/multus-daemonset-thick.yml"
@@ -226,7 +226,7 @@ cat > "$DEST" <<EOF
 #    pods starting at once exceed the cgroup limit. The daemon is OOMKilled (137),
 #    all ADDs fail, pods stay Unknown, multus CrashLoopBackOffs and meets the same
 #    herd again — a deadlock that does not clear by itself (seen 2026-07-28 on
-#    elite800 after a reboot). CPU stays at 100m.
+#    the k3smaster after a reboot). CPU stays at 100m.
 #
 # 6. image tag: snapshot-thick → ${MULTUS_REF}-thick.
 #    Upstream hardcodes the rolling snapshot-thick tag in every manifest, release

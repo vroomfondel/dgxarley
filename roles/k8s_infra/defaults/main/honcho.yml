@@ -29,7 +29,7 @@ honcho_namespace: "honcho"
 # .env.template / config.toml.example for new/renamed keys when you do. No keel
 # auto-update annotations on this deployment by design.
 # Git tags can precede the ghcr.io image publish; check the registry, not just the release list.
-honcho_image: "ghcr.io/plastic-labs/honcho:v3.2.2"
+honcho_image: "ghcr.io/plastic-labs/honcho:v3.6.1"
 honcho_port: 8000
 # Number of deriver worker pods. Safe to scale >1 — derivers coordinate via the
 # Postgres job queue with startup jitter (no external broker).
