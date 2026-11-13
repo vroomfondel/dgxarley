@@ -1,7 +1,5 @@
 ---
 # Public dummy/example values. Real values live in the same-named vault/<topic>.sops.yml of the private sops overlay.
 ansible_host: "192.168.124.101"
-host_octet: 101
-mailname: "spark1.example.com"
 
 wantspodman: true

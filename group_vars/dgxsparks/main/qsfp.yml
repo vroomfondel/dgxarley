@@ -3,6 +3,7 @@
 # QSFP Point-to-Point Netzwerk zwischen den Sparks
 qsfp_network: "10.10.10.0/24"
 qsfp_vf_network: "10.10.100.0/24"
+qsfp_ip: "{{ (qsfp_network.split('/')[0].split('.')[:3] + [spark_id | string]) | join('.') }}"
 qsfp_mtu: 9000
 
 # QSFP Interfaces (ConnectX-7 Dual-PCIe Multi-Host)

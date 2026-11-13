@@ -3,6 +3,7 @@
 # ulimits
 memlock_limit: "unlimited"
 stack_limit: 67108864
+host_octet: "{{ 100 + spark_id }}"
 
 # Purge the apt podman once the static bundle is verified working (see
 # roles/common/tasks/installpodman.yml, last task). The sparks run pure-static

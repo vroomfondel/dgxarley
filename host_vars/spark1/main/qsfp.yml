@@ -1,3 +1,0 @@
----
-# Public dummy/example values. Real values live in the same-named vault/<topic>.sops.yml of the private sops overlay.
-qsfp_ip: "10.10.10.1"
