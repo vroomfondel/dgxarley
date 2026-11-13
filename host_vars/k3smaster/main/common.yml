@@ -1,7 +1,6 @@
 ---
 # Public dummy/example values. Real values live in the same-named vault/<topic>.sops.yml of the private sops overlay.
 ansible_host: "192.168.124.100"
-host_octet: 100
 
 # Tang NBDE server (roles/tang) as a podman Quadlet unit.
 wantspodman: true

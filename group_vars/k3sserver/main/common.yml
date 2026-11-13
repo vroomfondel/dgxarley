@@ -1,3 +1,7 @@
 ---
 # Public dummy/example values. Real values live in the same-named vault/<topic>.sops.yml of the private sops overlay.
 mailname: "{{ inventory_hostname }}.example.com"
+host_octet_offset: 100
+# k3smaster = 0, sparkN = N
+host_position: "{{ spark_id | default(0) }}"
+host_octet: "{{ host_octet_offset + host_position }}"
