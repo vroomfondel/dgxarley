@@ -82,14 +82,11 @@ terminal:
   cwd: "{{ item.terminal_cwd | default(hermes.terminal_cwd) }}"
   timeout: 180
 
-# Web-dashboard visual defaults. Only theme+font are ops-managed here; the
-# deep-merge in hermes_merge_config.py preserves any OTHER dashboard.* keys the
-# user sets via the Preferences panel (e.g. show_token_analytics). NOTE: a
-# user's in-UI theme/font change is reset to these values on the next pod
-# restart (ops wins) — move to a per-user override if that's unwanted.
+# Keys set here overwrite in-UI changes on every pod start; hermes_merge_config.py keeps all other dashboard.* keys.
 dashboard:
   theme: "{{ item.dashboard_theme | default(hermes.dashboard_theme) }}"
   font: "{{ item.dashboard_font | default(hermes.dashboard_font) }}"
+  trusted_proxies: {{ hermes_dashboard_trusted_proxies | to_json }}
 
 # Hide built-in provider catalogs from the model picker; see
 # hermes.model_catalog_excluded_providers. A list, so ops replaces the user's.
@@ -156,6 +153,9 @@ platforms:
       # too). Quoted so an empty string renders as "" rather than a YAML null.
       working_folder: "{{ email.working_folder if email.working_folder is defined else 'Hermes_Working' }}"
       done_folder: "{{ email.done_folder if email.done_folder is defined else 'Hermes_Done' }}"
+      # "" falls back to done_folder.
+      failed_folder: "{{ email.failed_folder if email.failed_folder is defined else 'Hermes_Failed' }}"
+      rejected_folder: "{{ email.rejected_folder if email.rejected_folder is defined else 'Hermes_Rejected' }}"
       # IMAP APPEND target for outbound replies; "" → SMTP-only (opt-out).
       # Mirrors upstream PR NousResearch/hermes-agent#28697. Quoted so an empty
       # string renders as "" rather than a YAML null.

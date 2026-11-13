@@ -37,6 +37,8 @@ All are read from `config.yaml` `platforms.email.extra.*` (not env), rendered by
 |--------------------|---------------------------------------|---------------------------------------------------------------------------------------|
 | `working_folder`   | `Hermes_Working`                      | INBOX → Working at fetch. `""` → INBOX → Done directly.                               |
 | `done_folder`      | `Hermes_Done`                         | → Done when the mail's turn completes. `""` → no moves (INBOX + `\Seen`).             |
+| `failed_folder`    | `Hermes_Failed`                       | Turn failed / dispatch error / retry bound hit. `""` → done_folder.                   |
+| `rejected_folder`  | `Hermes_Rejected`                     | Sender rejected (allow-list, self, automated). `""` → done_folder.                    |
 | `sent_folder`      | `Sent`                                | IMAP APPEND (`\Seen`) after each successful SMTP send. `""` → SMTP only.              |
 | `process_existing` | `true`                                | Process the pre-existing UNSEEN backlog on first poll (upstream PR default: `false`). |
 | `quote_original`   | `hermes.email.quote_original_default` | Quote the received mail below the first successful reply to it.                       |
@@ -44,22 +46,34 @@ All are read from `config.yaml` `platforms.email.extra.*` (not env), rendered by
 ### Folder lifecycle
 
 ```
-INBOX ──UID MOVE──▶ Hermes_Working ──on_processing_complete(SUCCESS|FAILURE)──▶ Hermes_Done
+INBOX ──UID MOVE──▶ Hermes_Working ──on_processing_complete──▶ Hermes_Done (SUCCESS)
+                                                           └─▶ Hermes_Failed (FAILURE)
                     (visible after a crash =
                      "interrupted mid-processing")
 ```
 
 The Working MOVE only fires when both folders are set AND the mail has a Message-ID, so mail
 is never stranded in Working. `handle_message()` only spawns the background turn and returns,
-so `[PATCH-12]` moves a mail to Done from the base hook `on_processing_complete`, not on
-return. CANCELLED (interrupt/shutdown) leaves it in Working. Mails merged into a queued
-follow-up while a turn runs (`absorb_turn_input`) are finalized together with the event that
-absorbed them; `on_processing_start` is overridden so the runner fires the hooks for queued
-follow-ups. A fallback sweep in the poll loop finalizes a tracked mail whose hook never fired
-once its session is idle (300 s grace, bounded map of 500; overflow leaves the oldest in
-Working). Mail no background turn owns (self, automated, not allowlisted, unauthenticated
-From, exceptions, `_gateway_accepted` not True) is still finalized at once by the
-`[PATCH-6]` `try/finally`.
+so `[PATCH-12]` moves a mail from the base hook `on_processing_complete` (SUCCESS → Done,
+FAILURE → Failed), not on return. CANCELLED (interrupt/shutdown) leaves it in Working.
+Mails merged into a queued follow-up while a turn runs (`absorb_reply_expected`) are finalized
+together with the event that absorbed them; `on_processing_start` is overridden so the runner
+fires the hooks for queued follow-ups. A fallback sweep in the poll loop moves a tracked mail
+whose hook never fired to Done (WARNING with the Message-ID) once its session is idle (300 s
+grace, bounded map of 500; overflow leaves the oldest in Working).
+
+Mail no background turn owns is still finalized at once by the `[PATCH-6]` `try/finally`:
+sender rejected (self, automated, not allowlisted, unauthenticated From; also the PATCH-5
+pre-fetch gate) → Rejected; exception, no handler, identity/route drop → Failed; command
+handled inline → Done. An empty failed/rejected folder falls back to Done.
+
+Mail the gateway refused because the sender's session was busy or its queue full
+(`run_busy.py` busy-queue cap; shared runtime `queue_full`, whose `QUEUE_FULL_REPLY` the
+adapter's `send()` swallows) is not finalized: it stays in Working and is re-dispatched from
+the poll loop once the session is idle (max 5 attempts, 2 h; attachment files must still
+exist). At the bound (or when attachments are gone) it moves to Failed with a WARNING, or
+stays in Working with a WARNING when `failed_folder` is `""` (never Done). The retry list is
+in-memory, so after a restart such mail simply stays in Working.
 
 ### Move semantics
 

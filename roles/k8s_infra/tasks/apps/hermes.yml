@@ -72,13 +72,8 @@
       {%- endfor -%}
       {{ out | unique | list }}
 
-# --- Per-namespace NetworkPolicies for the Hermes pods (gated by
-# hermes_network_policies_enabled, default OFF). One egress + one ingress policy,
-# selecting ALL hermes pods via `app: hermes` (both agent and webui carry it), so
-# they isolate every user from every other. INERT until k3s network-policy
-# enforcement is re-enabled cluster-wide (disable-network-policy currently true).
-- name: Create hermes egress NetworkPolicy
-  when: hermes_network_policies_enabled | bool
+# Both policies select every hermes pod via `app: hermes` (agent and webui carry it).
+- name: Manage hermes egress NetworkPolicy
   vars:
     # Extra in-cluster namespaces the hermes pods may reach (e.g. a RAG/MCP backend). Only added as a rule when the
     # list is non-empty: an egress rule with an empty `to:` would allow every destination.
@@ -123,7 +118,7 @@
                 - "{{ service_cidr }}"
     _hermes_egress_extra: "{{ [{'to': _hermes_egress_ns_peers}] if _hermes_egress_ns_peers | length > 0 else [] }}"
   kubernetes.core.k8s:
-    state: present
+    state: "{{ 'present' if hermes_network_egress_policy_enabled | bool else 'absent' }}"
     definition:
       apiVersion: networking.k8s.io/v1
       kind: NetworkPolicy
@@ -138,14 +133,9 @@
           - Egress
         egress: "{{ _hermes_egress_base + _hermes_egress_extra }}"
 
-# Ingress: only Traefik (kube-system) may reach the hermes pods → web-UI /
-# dashboard via Traefik works, but no other pod (incl. other users) can connect.
-# kube-router does not block node-local kubelet probes, so liveness/readiness
-# should keep working — verify on first enablement.
-- name: Create hermes ingress NetworkPolicy
-  when: hermes_network_policies_enabled | bool
+- name: Manage hermes ingress NetworkPolicy
   kubernetes.core.k8s:
-    state: present
+    state: "{{ 'present' if hermes_network_ingress_policy_enabled | bool else 'absent' }}"
     definition:
       apiVersion: networking.k8s.io/v1
       kind: NetworkPolicy
@@ -166,6 +156,11 @@
                 podSelector:
                   matchLabels:
                     app.kubernetes.io/name: traefik
+            ports:
+              - protocol: TCP
+                port: "{{ hermes.agent.dashboard_port | int }}"
+              - protocol: TCP
+                port: "{{ hermes.webui.port | int }}"
 
 # One-shot migration cleanup for the pre-rename / pre-split layouts.
 # Safe to keep — both are idempotent absent-asserts.

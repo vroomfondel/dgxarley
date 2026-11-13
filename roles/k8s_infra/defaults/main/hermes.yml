@@ -7,17 +7,14 @@
 # are identical across both UIs. Each one still spawns its own hermes processes
 # when chatting — Hermes is a CLI, not a daemon; there is no shared agent
 # process to multiplex onto.
-# Apply the per-namespace egress/ingress NetworkPolicies for the Hermes pods.
-# STANDALONE var (NOT inside the hermes: dict) to avoid the hash_behaviour=replace
-# trap. Default OFF: the policies are written/version-controlled but NOT applied,
-# because this cluster currently runs with `disable-network-policy: true`
-# (roles/k3sserver/templates/etc_rancher_k3s_config.yaml.j2) → any NetworkPolicy
-# is silently IGNORED. To activate isolation you need BOTH: (1) remove that line
-# + restart k3s on k3smaster (re-enables the kube-router policy controller), and
-# (2) set this true. The policies block all cross-pod traffic (incl. other users'
-# hermes pods) while allowing DNS, the litellm + searxng namespaces, full
-# internet/LAN egress, and Traefik-only ingress.
-hermes_network_policies_enabled: false
+# Standalone vars, not inside the hermes: dict (hash_behaviour=replace). false removes the policy.
+# hermes-ingress: only Traefik may reach the hermes pods, only on the dashboard/webui ports.
+hermes_network_ingress_policy_enabled: false
+# hermes-egress: DNS, litellm, searxng, hermes_network_egress_namespaces and internet/LAN; no other cluster pods.
+hermes_network_egress_policy_enabled: false
+# Peers allowed to set X-Forwarded-For; only spoof-safe while hermes-ingress is applied.
+hermes_dashboard_trusted_proxies:
+  - "{{ cluster_cidr }}"
 # Additional in-cluster namespaces the hermes pods may reach through hermes-egress (whole namespace, any port),
 # on top of DNS, litellm, searxng and internet/LAN. Example: [ragdoc, crawl4ai, camofox] for backends reached via their
 # service name (http://<service>.<namespace>.svc.cluster.local:<port>), e.g. by the init-skills wellknown source.

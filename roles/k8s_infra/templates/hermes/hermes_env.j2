@@ -36,7 +36,7 @@ EMAIL_ALLOW_ALL_USERS={{ 'true' if email.allow_all_users else 'false' }}
 EMAIL_ALLOWED_USERS={{ email.allowed_users | join(',') if email.allowed_users is iterable and email.allowed_users is not string else email.allowed_users }}
 {% endif %}
 {# dgxarley local-patch behavioural knobs (working_folder, done_folder,
-   sent_folder, process_existing) are NOT env vars — they live in config.yaml
+   failed_folder, rejected_folder, sent_folder, process_existing) are NOT env vars — they live in config.yaml
    under platforms.email.extra (see hermes_config.yaml.j2 and
    roles/k8s_infra/files/hermes_email_gateway_patched.py), mirroring upstream PRs
    #28697 / #28699 / #28702. #}
