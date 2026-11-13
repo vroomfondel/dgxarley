@@ -35,10 +35,9 @@ service_cidr: "10.69.0.0/16"
 # peer. Kept deliberately separate from iptables_k3s_external_ips: a firewall
 # exception must not silently grant header trust as well.
 traefik_forwarded_trusted_ips: []
-# Pod/Service CIDRs fuer iptables ipsets
+# Pod CIDR for the localnets/k3spods ipsets
 localnets_k3sserver:
-  - { cidr: "10.68.0.0/16", comment: "k3s-pods" }
-  - { cidr: "10.69.0.0/16", comment: "k3s-services" }
+  - { cidr: "{{ cluster_cidr }}", comment: "k3s-pods" }
 # Keine spezielle Edge-Infrastruktur
 providespxeboot: false
 providesmqttexternal: false
