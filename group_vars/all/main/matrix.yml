@@ -18,7 +18,7 @@ matrix:
   manage_dns: true
   enable_registration: false
   enable_token_authenticator: true
-  trusted_proxies: "10.68.0.0/16,10.69.0.0/16"
+  trusted_proxies: "{{ cluster_cidr }}"
   registration_shared_secret: "CHANGEME_REGISTRATION_SHARED_SECRET"
   macaroon_secret_key: "CHANGEME_MACAROON_SECRET"
   form_secret: "CHANGEME_FORM_SECRET"

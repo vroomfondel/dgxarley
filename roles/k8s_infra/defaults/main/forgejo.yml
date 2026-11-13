@@ -21,7 +21,7 @@ forgejo:
   disable_ssh: true
   disable_registration: true
   # Traefik pods source X-Forwarded-For from the K3s pod CIDR.
-  trusted_proxies: "10.68.0.0/16,10.69.0.0/16"
+  trusted_proxies: "{{ cluster_cidr }}"
   secret_key: "CHANGEME_SECRET_KEY"
   internal_token: "CHANGEME_INTERNAL_TOKEN"
   oauth2_jwt_secret: "CHANGEME_OAUTH2_JWT"
@@ -31,8 +31,7 @@ forgejo:
     email: "admin@example.com"
     password: "changeme"
   images:
-    # 16.0.3 is out, but X->X+1 must be walked incrementally (see the
-    # major-upgrade rule in CLAUDE.md), so this stays on the 15 series.
-    server: { repo: "codeberg.org/forgejo/forgejo", tag: "16.0.6" }
+    # Major bumps (X->X+1) must be walked one series at a time, never skipped.
+    server: { repo: "codeberg.org/forgejo/forgejo", tag: "16.0" }
   resources:
     server: { memory_request: "256Mi", memory_limit: "1Gi" }

@@ -18,7 +18,7 @@ forgejo:
   gid: 1000
   disable_ssh: true
   disable_registration: true
-  trusted_proxies: "10.68.0.0/16,10.69.0.0/16"
+  trusted_proxies: "{{ cluster_cidr }}"
   secret_key: "CHANGEME_SECRET_KEY"
   internal_token: "CHANGEME_INTERNAL_TOKEN"
   oauth2_jwt_secret: "CHANGEME_OAUTH2_JWT"
@@ -28,6 +28,6 @@ forgejo:
     email: "admin@example.com"
     password: "changeme"
   images:
-    server: {repo: "codeberg.org/forgejo/forgejo", tag: "16.0.6"}
+    server: {repo: "codeberg.org/forgejo/forgejo", tag: "16.0"}
   resources:
     server: {memory_request: "256Mi", memory_limit: "1Gi"}

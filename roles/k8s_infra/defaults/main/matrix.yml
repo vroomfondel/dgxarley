@@ -245,7 +245,7 @@ matrix:
     # enable_tls: true                 # false -> never attempt STARTTLS at all
     # tlsname: "mail.example.eu"       # cert hostname, if != smtp_host
   # Traefik pods source X-Forwarded-For from the K3s pod CIDR.
-  trusted_proxies: "10.68.0.0/16,10.69.0.0/16"
+  trusted_proxies: "{{ cluster_cidr }}"
   registration_shared_secret: "CHANGEME_REGISTRATION_SHARED_SECRET"
   macaroon_secret_key: "CHANGEME_MACAROON_SECRET"
   form_secret: "CHANGEME_FORM_SECRET"
