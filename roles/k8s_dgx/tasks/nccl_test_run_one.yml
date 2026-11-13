@@ -15,8 +15,7 @@
       {%- if _transport_name == 'host' -%}
       {
         "host_network": true,
-        "master_addr": "{{ qsfp_pf_ip_spark1 }}",
-        "pf_ips": ["{{ qsfp_pf_ip_spark1 }}", "{{ qsfp_pf_ip_spark2 }}", "{{ qsfp_pf_ip_spark3 }}", "{{ qsfp_pf_ip_spark4 }}"],
+        "master_addr": "{{ qsfp_ip_spark1 }}",
         "nccl_env": {
           "NCCL_SOCKET_IFNAME": "{{ qsfp_sriov_pf_iface | default('enp1s0f0np0') }}",
           "HOST_NETWORK_MODE": "1"
@@ -46,8 +45,7 @@
       {%- elif _transport_name == 'host_roce' -%}
       {
         "host_network": true,
-        "master_addr": "{{ qsfp_pf_ip_spark1 }}",
-        "pf_ips": ["{{ qsfp_pf_ip_spark1 }}", "{{ qsfp_pf_ip_spark2 }}", "{{ qsfp_pf_ip_spark3 }}", "{{ qsfp_pf_ip_spark4 }}"],
+        "master_addr": "{{ qsfp_ip_spark1 }}",
         "nccl_env": {
           "NCCL_SOCKET_IFNAME": "{{ qsfp_sriov_pf_iface | default('enp1s0f0np0') }}",
           "NCCL_IB_HCA": "{{ _qsfp_host_ib_hca }}",

@@ -1,10 +1,10 @@
 ---
 # Public dummy/example values. Real values live in group_vars/all/vault/<topic>.sops.yml of the private sops overlay.
 # QSFP IPs for NCCL bootstrap
-qsfp_ip_spark1: "10.10.10.101"
-qsfp_ip_spark2: "10.10.10.102"
-qsfp_ip_spark3: "10.10.10.103"
-qsfp_ip_spark4: "10.10.10.104"
+qsfp_ip_spark1: "{{ hostvars['spark1'].qsfp_ip }}"
+qsfp_ip_spark2: "{{ hostvars['spark2'].qsfp_ip }}"
+qsfp_ip_spark3: "{{ hostvars['spark3'].qsfp_ip }}"
+qsfp_ip_spark4: "{{ hostvars['spark4'].qsfp_ip }}"
 
 
 # SR-IOV: create Virtual Functions on the QSFP PF used by Multus.

@@ -16,10 +16,10 @@ deinstall_apparmor: true
 install_k3s: true
 
 # K3s Master
-k3smasterip: "192.168.124.100"
+k3smasterip: "{{ hostvars[k3s_master_node_hostname].k3s_node_ip }}"
 k3s_master_node_hostname: "k3smaster"
 # API server URL for local kubeconfig (K3s API binds to VLAN 191)
-kubeconfig_api_server: "https://192.168.124.100:6443"
+kubeconfig_api_server: "https://{{ k3smasterip }}:6443"
 # Cluster CIDRs
 cluster_cidr: "10.68.0.0/16"
 service_cidr: "10.69.0.0/16"
