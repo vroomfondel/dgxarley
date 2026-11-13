@@ -86,8 +86,8 @@ podman_static_version: "6.2.0"
 # Bump together with podman_static_version (a mismatch fails the download); "" skips verification for that arch.
 # curl -s https://api.github.com/repos/mgoltzsche/podman-static/releases/tags/v<VERSION> | jq -r '.assets[] | select(.name=="podman-linux-arm64.tar.gz") | .digest'
 podman_static_sha256:
-  arm64: "c106d09d7524209ce01eb3a02a7e621e9c55ec31d0fada48439cf77aa07afdb6"
-  amd64: "9dd51073fac5a1742f88cf3caff5554615cb4d67ba554d25e8807be635547af5"
+  arm64: "b1bcc37efd6a430dbe5448f07d99544dad435f361bdbab80418a571b5c2d7af1"
+  amd64: "981bcee9ff6a07b3a3e22b9ea98c9aa10bcf67bac2abdc3049595267122378be"
 
 # Purge the (now shadowed) apt podman + its orphaned rootless deps once pure-static is
 # proven working. OPT-IN + only acts when podman_static_enabled: apt podman survives as
