@@ -400,6 +400,9 @@ spec:
             # warning fires because config.yaml still declares terminal.cwd.
             - name: TERMINAL_CWD
               value: "{{ item.terminal_cwd | default(hermes.terminal_cwd) }}"
+            # Unset, the dashboard Files page locks to /opt/data (web_server_files.py _managed_files_policy).
+            - name: HERMES_DASHBOARD_FILES_ROOT
+              value: "{{ item.terminal_cwd | default(hermes.terminal_cwd) }}"
             # Image bakes HERMES_WRITE_SAFE_ROOT=/opt/data; agent/file_safety.py denies writes outside it (os.pathsep list).
             - name: HERMES_WRITE_SAFE_ROOT
               value: "/opt/data:{{ item.terminal_cwd | default(hermes.terminal_cwd) }}"
