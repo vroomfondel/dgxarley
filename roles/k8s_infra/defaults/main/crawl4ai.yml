@@ -36,6 +36,14 @@ crawl4ai_timezone: "Europe/Berlin"
 crawl4ai_network_policies_enabled: true
 # In-cluster namespaces allowed to call the API directly; Traefik is always allowed.
 crawl4ai_networkpolicy_client_namespaces: ["hermes"]
+# Private ranges the crawler must never reach at network level (LAN, node IPs, CGNAT, link-local/metadata).
+# Defense in depth on top of Crawl4AI's own non-global-IP check; cluster_cidr and service_cidr are always excluded.
+crawl4ai_egress_blocked_cidrs:
+  - "10.0.0.0/8"
+  - "172.16.0.0/12"
+  - "192.168.0.0/16"
+  - "100.64.0.0/10"
+  - "169.254.0.0/16"
 # LLM endpoints (/llm/job, /md with f=llm, LLMExtractionStrategy) via LiteLLM; off = only those endpoints fail.
 crawl4ai_llm_enabled: false
 crawl4ai_llm_provider: "openai/{{ litellm_hermes_alias_model }}"
