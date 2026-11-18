@@ -147,6 +147,30 @@
   when: (_ctx | string | length) > 0
   no_log: true                # loop item carries context_probe.headers (API key)
 
+- name: Collect litellm callback module sources
+  ansible.builtin.set_fact:
+    _litellm_callback_files: >-
+      {{ _litellm_callback_files | default({})
+         | combine({item.name ~ '.py': (item.source if item.source is defined
+                                        else lookup('ansible.builtin.file', inventory_dir ~ '/' ~ item.file, rstrip=false))}) }}
+  loop: "{{ litellm_callback_modules }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+
+- name: Create litellm callback modules
+  kubernetes.core.k8s:
+    state: present
+    force: true   # replace, so modules removed from litellm_callback_modules disappear
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: litellm-callbacks
+        namespace: "{{ litellm_namespace }}"
+      data: "{{ _litellm_callback_files | default({}) }}"
+
+
 - name: Create litellm config
   kubernetes.core.k8s:
     state: present
@@ -183,8 +207,19 @@
           {% for key, value in litellm_settings.items() %}
             {{ key }}: {{ value | to_json }}
           {% endfor %}
+          {% set _callbacks = [] %}
+          {% for m in litellm_callback_modules %}
+          {% set _ = _callbacks.append('callbacks.' ~ m.name ~ '.' ~ (m.instance | default('proxy_handler_instance'))) %}
+          {% endfor %}
           {% if litellm_enable_metrics %}
-            callbacks: ["prometheus"]   # Prometheus /metrics — gated by litellm_enable_metrics
+          {% set _ = _callbacks.append('prometheus') %}
+          {% endif %}
+          {% if _callbacks %}
+            # callbacks.<name>.<instance> = litellm_callback_modules (ConfigMap litellm-callbacks);
+            # prometheus = /metrics, gated by litellm_enable_metrics
+            callbacks: {{ _callbacks | to_json }}
+          {% endif %}
+          {% if litellm_enable_metrics %}
             # LiteLLM default is auth-on (require_auth=True). false → open for the
             # annotation scrape; true → keep auth, Prometheus scrapes with a key.
             require_auth_for_metrics_endpoint: {{ litellm_metrics_require_auth | string | lower }}
@@ -270,7 +305,7 @@
             labels:
               app: litellm
             annotations:
-              checksum/config: "{{ (litellm_model_list | string ~ (litellm_settings | string) ~ (litellm_router_settings | string) ~ (litellm_enable_metrics | string) ~ (litellm_metrics_require_auth | string)) | hash('sha256') }}"
+              checksum/config: "{{ (litellm_model_list | string ~ (litellm_settings | string) ~ (litellm_router_settings | string) ~ (litellm_enable_metrics | string) ~ (litellm_metrics_require_auth | string) ~ (litellm_callback_modules | string) ~ (_litellm_callback_files | default({}) | string)) | hash('sha256') }}"
               # LiteLLM Prometheus annotation scrape — only when metrics are ON and
               # /metrics is OPEN (auth off). With auth on, the annotation job can't
               # send a bearer, so a dedicated scrape_config in prometheus.yml takes
@@ -324,11 +359,18 @@
                     mountPath: /app/config.yaml
                     subPath: config.yaml
                     readOnly: true
+                  # LiteLLM resolves callbacks.<name> relative to the config.yaml directory
+                  - name: callbacks
+                    mountPath: /app/callbacks
+                    readOnly: true
             restartPolicy: Always
             volumes:
               - name: config
                 configMap:
                   name: litellm-config
+              - name: callbacks
+                configMap:
+                  name: litellm-callbacks
 
 
 - name: Create litellm ip-allowlist middleware

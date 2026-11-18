@@ -350,6 +350,40 @@ litellm_settings:
 # Empty default — guardrails block is omitted from config.yaml when empty.
 litellm_guardrails: []
 
+# ============================================================================
+# Custom callback modules (call hooks)
+# ============================================================================
+# Self-written LiteLLM call hooks (CustomLogger subclasses) without a custom
+# image. Each entry is written to the ConfigMap litellm-callbacks, mounted as
+# /app/callbacks/<name>.py and registered in litellm_settings.callbacks as
+# callbacks.<name>.<instance>. A change restarts the proxy (checksum/config).
+# A module that fails to import keeps the proxy from starting.
+#   name      module name (valid Python identifier)
+#   instance  module-level CustomLogger instance (default: proxy_handler_instance)
+#   file      path of the module source, relative to the inventory directory
+#             (overlay: litellm_callbacks/<name>.py, pushed by its sync.sh)
+#   source    inline Python source, instead of file
+# Reference: https://docs.litellm.ai/docs/proxy/call_hooks
+#
+# litellm_callback_modules:
+#   - name: "my_hook"
+#     file: "litellm_callbacks/my_hook.py"
+#   - name: "response_tag"
+#     instance: "proxy_handler_instance"
+#     source: |
+#       from litellm.integrations.custom_logger import CustomLogger
+#
+#       class ResponseTag(CustomLogger):
+#           async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+#               return response
+#
+#           async def async_post_call_streaming_iterator_hook(self, user_api_key_dict, response, request_data):
+#               async for chunk in response:
+#                   yield chunk
+#
+#       proxy_handler_instance = ResponseTag()
+litellm_callback_modules: []
+
 # Hermes / Honcho / Hindsight config moved to roles/k8s_infra/defaults/main/{hermes,honcho,hindsight}.yml
 # (those services moved to the k8s_infra role).
 
