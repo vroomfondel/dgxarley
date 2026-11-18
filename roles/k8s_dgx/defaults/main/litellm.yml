@@ -360,7 +360,7 @@ litellm_guardrails: []
 # A module that fails to import keeps the proxy from starting.
 #   name      module name (valid Python identifier)
 #   instance  module-level CustomLogger instance (default: proxy_handler_instance)
-#   file      path of the module source, relative to the inventory directory
+#   file      path of the module source, relative to the inventory directory (fallback: playbook_dir)
 #             (overlay: litellm_callbacks/<name>.py, pushed by its sync.sh)
 #   source    inline Python source, instead of file
 # Reference: https://docs.litellm.ai/docs/proxy/call_hooks

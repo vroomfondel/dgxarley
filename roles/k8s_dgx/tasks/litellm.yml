@@ -152,7 +152,7 @@
     _litellm_callback_files: >-
       {{ _litellm_callback_files | default({})
          | combine({item.name ~ '.py': (item.source if item.source is defined
-                                        else lookup('ansible.builtin.file', inventory_dir ~ '/' ~ item.file, rstrip=false))}) }}
+                                        else lookup('ansible.builtin.file', (inventory_dir | default(playbook_dir)) ~ '/' ~ item.file, rstrip=false))}) }}
   loop: "{{ litellm_callback_modules }}"
   loop_control:
     label: "{{ item.name }}"
