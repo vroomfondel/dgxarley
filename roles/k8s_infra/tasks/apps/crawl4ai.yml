@@ -391,6 +391,8 @@
                       value: "1"
                 # Service links would inject CRAWL4AI_PORT=tcp://<svc-ip>:<port>.
                 enableServiceLinks: false
+                # The crawler never talks to the Kubernetes API; without a token a reachable API server is useless to it.
+                automountServiceAccountToken: false
                 containers:
                   - "{{ _crawl4ai_container }}"
                 restartPolicy: Always
