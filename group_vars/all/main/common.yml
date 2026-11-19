@@ -63,9 +63,6 @@ dyndns_hostname: "dyn.example.com"
 # HAProxy stats
 haproxy_stats_password: "changeme"
 
-# Podman: use the static mgoltzsche/podman-static bundle instead of apt podman.
-# Only takes effect on hosts with `wantspodman: true` (the dgxsparks + k3smaster for
-# the tang Quadlet); installpodman.yml is skipped on all others. When true, apt
-# podman is skipped (buildah still from apt) and the version-pinned static stack is
-# installed under /usr/local. Bump target: roles/common/defaults/main.yml.
-podman_static_enabled: true
+# Podman 6.x with systemd from the own OBS repo; only on `wantspodman: true` hosts, excludes podman_static_enabled.
+podman_obs_enabled: true
+podman_static_enabled: false

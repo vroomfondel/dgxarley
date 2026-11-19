@@ -1,6 +1,10 @@
 ---
 # file: roles/common/tasks/installpodman.yml
 
+- name: install podman from the own OBS repository
+  ansible.builtin.import_tasks: installpodman_obs.yml
+  when: podman_obs_enabled | default(false) | bool
+
 - name: install podman (apt) + buildah
   # buildah is ALWAYS from apt (not shipped in the static bundle). apt podman is
   # installed ONLY when the static overlay is disabled — when podman_static_enabled,

@@ -75,11 +75,11 @@ podman_short_name_mode: permissive
 # packages STAY installed as the system-dependency base — they pull iptables (netavark
 # hard-dep for bridge NAT/port-forward), newuidmap/slirp4netns, buildah and seed
 # subuid/subgid; the static bundle ships none of those. Enable per host/group
-# (host_vars/group_vars) — default false = no change anywhere until opted in.
+# (host_vars/group_vars); needs podman_obs_enabled: false.
 # Upstream containers/podman ships NO self-contained static bundle, so mgoltzsche is
 # the only practical source and it lags upstream by a few weeks; check for a newer
 # arm64 bundle before bumping: https://github.com/mgoltzsche/podman-static/releases
-podman_static_enabled: true
+podman_static_enabled: false
 # curl -s https://api.github.com/repos/mgoltzsche/podman-static/releases/latest | jq -r '.tag_name'
 # Deploy a bump: ansible-playbook common.yml --tags podman --limit dgxsparks  (single host: --limit spark5)
 podman_static_version: "6.2.0"
@@ -97,6 +97,38 @@ podman_static_sha256:
 # slirp/passt). buildah is KEPT (separate apt pkg). Runs AFTER the verify step, so a
 # broken static install never strands the host with no podman at all.
 podman_apt_purge: false
+
+# Podman 6.x with systemd/journald from the own OBS project; excludes podman_static_enabled.
+podman_obs_enabled: true
+podman_obs_repo_base: "https://download.opensuse.org/repositories/home:/vroomfondel:/podman"
+podman_obs_repo_dist: "{{ ('xUbuntu_' ~ ansible_distribution_version) if ansible_distribution == 'Ubuntu' else ('Debian_' ~ ansible_distribution_major_version) }}"
+podman_obs_repo_dists: [Debian_12, Debian_13, xUbuntu_24.04, xUbuntu_26.04]
+podman_obs_repo_label: "home:vroomfondel:podman"
+# Fingerprint 94145A140BC9BE7B07C58C6CD1BEA5B730EB5168, expires 2029-01-27.
+podman_obs_key_sha256: "ad600a85cb87f309cb9a1b8f9c78ac5d49484795994c9e48aa245c67ef5a77fa"  # gitleaks:allow (hash of the public OBS signing key)
+podman_obs_keyring: /etc/apt/keyrings/podman-obs.asc
+# Taken from the OBS repo at priority 1001; everything else there (golang, rustc, cargo) at -10.
+podman_obs_packages:
+  - podman
+  - buildah
+  - skopeo
+  - conmon
+  - crun
+  - catatonit
+  - passt
+  - podman-netavark
+  - podman-aardvark-dns
+  - containers-common
+  - containers-storage
+  - containernetworking
+  - containernetworking-plugins
+podman_obs_install: [podman, buildah, skopeo, crun, containers-common]
+# Debian packages that own /etc/containers/policy.json etc. without a Replaces in the OBS containers-common; purged before the install.
+podman_obs_conflicting_packages: [golang-github-containers-common, golang-github-containers-image]
+# Distro packages that depend on them; purged together (unless already from OBS, epoch 100:) and reinstalled from OBS.
+podman_obs_conflicting_dependents: [podman, buildah, skopeo]
+# latest: every common run follows what the OBS project publishes.
+podman_obs_state: latest
 
 # NFS server exports — only applied when `isnfsmaster: true`.
 # Schema: list of { path, clients: [{ cidr, options? }], owner?, group?, mode? }

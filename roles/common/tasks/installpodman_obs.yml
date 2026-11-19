@@ -1,0 +1,205 @@
+---
+# file: roles/common/tasks/installpodman_obs.yml
+# Podman 6.x with systemd/journald from the own OBS project, amd64 + arm64.
+
+- name: assert the preconditions for the OBS podman
+  ansible.builtin.assert:
+    that:
+      - not (podman_static_enabled | default(false) | bool)
+      - podman_obs_repo_dist in podman_obs_repo_dists
+      - ansible_architecture in ['aarch64', 'x86_64']
+    fail_msg: >-
+      podman_obs_enabled on {{ inventory_hostname }} needs podman_static_enabled: false, a repo from
+      {{ podman_obs_repo_dists | join(', ') }} (got {{ podman_obs_repo_dist }}) and amd64/arm64 (got {{ ansible_architecture }}).
+    quiet: true
+
+- name: Install python3-debian for deb822_repository
+  ansible.builtin.apt:
+    name: python3-debian
+    state: present
+
+- name: Create the apt keyring directory
+  ansible.builtin.file:
+    path: "{{ podman_obs_keyring | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# OBS renews the project key before it expires; the run then fails here until podman_obs_key_sha256 is bumped.
+- name: Place the signing key of the OBS podman repository
+  ansible.builtin.get_url:
+    url: "{{ podman_obs_repo_base }}/{{ podman_obs_repo_dist }}/Release.key"
+    dest: "{{ podman_obs_keyring }}"
+    checksum: "sha256:{{ podman_obs_key_sha256 }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Add the apt source for the OBS podman
+  ansible.builtin.deb822_repository:
+    name: podman-obs
+    types: deb
+    uris: "{{ podman_obs_repo_base }}/{{ podman_obs_repo_dist }}/"
+    suites: "/"
+    signed_by: "{{ podman_obs_keyring }}"
+    enabled: true
+  register: _podman_obs_source
+
+- name: Pin the podman stack to the OBS repository
+  ansible.builtin.copy:
+    content: |
+      Package: {{ podman_obs_packages | join(' ') }}
+      Pin: release l={{ podman_obs_repo_label }}
+      Pin-Priority: 1001
+
+      Package: *
+      Pin: release l={{ podman_obs_repo_label }}
+      Pin-Priority: -10
+    dest: /etc/apt/preferences.d/podman-obs
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: check for a static podman bundle under /usr/local
+  ansible.builtin.stat:
+    path: /usr/local/bin/podman
+  register: _podman_obs_static_present
+
+- name: install the OBS podman stack
+  block:
+    - name: find quadlet container units
+      ansible.builtin.find:
+        paths: /etc/containers/systemd
+        patterns: "*.container"
+      register: _quadlet_units
+      when: _podman_obs_static_present.stat.exists
+
+    - name: check which quadlet units are currently active
+      ansible.builtin.command: "systemctl is-active {{ item.path | basename | regex_replace('\\.container$', '.service') }}"
+      loop: "{{ _quadlet_units.files | default([]) }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      register: _quadlet_active
+      changed_when: false
+      failed_when: false
+
+    - name: collect the quadlet units that must be cycled for the swap
+      ansible.builtin.set_fact:
+        _quadlet_units_to_cycle: >-
+          {{ _quadlet_active.results | default([]) | selectattr('stdout', 'defined') | selectattr('stdout', 'match', '^active')
+             | map(attribute='item.path') | map('basename')
+             | map('regex_replace', '\.container$', '.service') | list }}
+
+    - name: stop quadlet units before replacing the static podman
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+      loop: "{{ _quadlet_units_to_cycle }}"
+
+    - name: remove the static podman bundle
+      when: _podman_obs_static_present.stat.exists
+      vars:
+        _podman_static_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+      block:
+        - name: create temp dir for the static bundle file list
+          ansible.builtin.tempfile:
+            state: directory
+            suffix: podman-static
+          register: _podman_obs_tmp
+          check_mode: false
+
+        - name: download the static bundle to read its file list ({{ podman_static_version }})
+          ansible.builtin.get_url:
+            url: "https://github.com/mgoltzsche/podman-static/releases/download/v{{ podman_static_version }}/podman-linux-{{ _podman_static_arch }}.tar.gz"
+            dest: "{{ _podman_obs_tmp.path }}/podman-static.tar.gz"
+            mode: "0644"
+            checksum: "{{ ('sha256:' + podman_static_sha256[_podman_static_arch]) if (podman_static_sha256[_podman_static_arch] | default('')) | length > 0 else omit }}"
+          check_mode: false
+
+        - name: list the files of the static bundle
+          ansible.builtin.command: "tar -tzf {{ _podman_obs_tmp.path }}/podman-static.tar.gz"
+          register: _podman_static_listing
+          changed_when: false
+          check_mode: false
+
+        # Units and generators under /usr/local/lib/systemd take precedence over the package's, so they must go too.
+        - name: remove the static bundle's files under /usr/local
+          ansible.builtin.file:
+            path: "/{{ item }}"
+            state: absent
+          loop: >-
+            {{ _podman_static_listing.stdout_lines | map('regex_replace', '^[^/]+/', '')
+               | select('match', '^usr/local/.*[^/]$') | list }}
+
+        # containers.conf carries cgroup_manager=cgroupfs and events_logger=file; storage.conf and the managed registries.conf stay.
+        - name: remove the static bundle's container configs
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - /etc/containers/containers.conf
+            - /etc/containers/seccomp.json
+            - /etc/containers/storage.conf.d/00-podman-static.conf
+
+        - name: remove the libpod SHM lock of the static podman
+          ansible.builtin.file:
+            path: /dev/shm/libpod_lock
+            state: absent
+
+      always:
+        - name: clean up the static bundle temp dir
+          ansible.builtin.file:
+            path: "{{ _podman_obs_tmp.path }}"
+            state: absent
+          when: _podman_obs_tmp.path is defined
+          check_mode: false
+
+    - name: list Debian packages that own files of the OBS containers-common, and their dependents
+      ansible.builtin.command: "dpkg-query -W -f='${Package} ${db:Status-Abbrev} ${Version}\n' {{ (podman_obs_conflicting_packages + podman_obs_conflicting_dependents) | join(' ') }}"
+      register: _podman_obs_conflicts
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: refresh the apt cache for the OBS repository
+      ansible.builtin.apt:
+        update_cache: true
+      changed_when: false
+
+    # dpkg unpacks the new containers-common before apt's "pkg-" removal, so the owners must go first; installed non-OBS dependents go with them and come back from OBS below.
+    - name: purge Debian packages that collide with the OBS containers-common
+      ansible.builtin.command: "dpkg --purge {{ (_podman_obs_conflicting + _podman_obs_dependents) | join(' ') }}"
+      vars:
+        _podman_obs_present: "{{ _podman_obs_conflicts.stdout_lines | select('match', '^\\S+ .[^n]') | map('split', ' ') | list }}"
+        _podman_obs_conflicting: "{{ _podman_obs_present | selectattr('0', 'in', podman_obs_conflicting_packages) | map('first') | list }}"
+        _podman_obs_dependents: "{{ _podman_obs_present | selectattr('0', 'in', podman_obs_conflicting_dependents) | rejectattr('2', 'match', '^100:') | map('first') | list }}"
+      when: _podman_obs_conflicting | length > 0
+
+    - name: install the podman stack from the OBS repository
+      ansible.builtin.apt:
+        name: "{{ podman_obs_install }}"
+        state: "{{ podman_obs_state }}"
+
+    - name: reload systemd after the podman swap
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: _podman_obs_static_present.stat.exists
+
+    - name: assert no static podman shadows the packaged one
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /usr/local/bin/podman
+        - /usr/local/lib/systemd/system/podman.service
+        - /usr/local/lib/systemd/system-generators/podman-system-generator
+      register: _podman_obs_leftovers
+      failed_when: _podman_obs_leftovers.stat.exists
+
+  always:
+    - name: start the quadlet units again after the podman swap
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+        daemon_reload: true
+      loop: "{{ _quadlet_units_to_cycle | default([]) }}"
