@@ -43,41 +43,65 @@ iptables -t raw -X HTIPOPTS 2>/dev/null || true
 nft delete table inet ht_ipopts 2>/dev/null || true
 {% endif %}
 
-/sbin/ipset -N xosrc nethash comment
+ipset_stage() {
+    /sbin/ipset -exist -N "$1" nethash comment
+    /sbin/ipset -exist -N "$1_new" nethash comment
+    /sbin/ipset flush "$1_new"
+}
+
+ipset_commit() {
+    /sbin/ipset swap "$1_new" "$1" || echo "WARN: ipset $1 not swapped, old content stays active" >&2
+    /sbin/ipset destroy "$1_new"
+}
+
 /sbin/ipset -N geoblocklist nethash
 /sbin/ipset -N geoallowlist nethash
-/sbin/ipset -N localnets nethash comment
-/sbin/ipset -N k3snodes nethash comment
-/sbin/ipset -N k3spods nethash comment
 
+ipset_stage k3snodes
+K3S_RESOLVE_FAILED=0
 {% for host in groups.get('k3sserver', []) %}
 K3S_IP=$(getent ahostsv4 {{ host }} | head -1 | awk '{print $1}')
-[ -n "$K3S_IP" ] && /sbin/ipset add k3snodes ${K3S_IP}/32 comment {{ host | quote }}
+K3S_IP2=
+[ -n "$K3S_IP" ] && /sbin/ipset -exist add k3snodes_new ${K3S_IP}/32 comment {{ host | quote }}
 {% if hostvars[host].ansible_host is defined and hostvars[host].ansible_host != host %}
 K3S_IP2=$(getent ahostsv4 {{ hostvars[host].ansible_host }} | head -1 | awk '{print $1}')
-[ -n "$K3S_IP2" ] && [ "$K3S_IP2" != "$K3S_IP" ] && /sbin/ipset add k3snodes ${K3S_IP2}/32 comment {{ (host ~ ' (' ~ hostvars[host].ansible_host ~ ')') | quote }}
+[ -n "$K3S_IP2" ] && [ "$K3S_IP2" != "$K3S_IP" ] && /sbin/ipset -exist add k3snodes_new ${K3S_IP2}/32 comment {{ (host ~ ' (' ~ hostvars[host].ansible_host ~ ')') | quote }}
 {% endif %}
+[ -z "$K3S_IP$K3S_IP2" ] && K3S_RESOLVE_FAILED=1
 {% endfor %}
+# a partial resolution would drop nodes from k3snodes
+if [ "$K3S_RESOLVE_FAILED" = 0 ]; then
+    ipset_commit k3snodes
+else
+    echo "WARN: k3snodes not fully resolved, old content stays active" >&2
+    /sbin/ipset destroy k3snodes_new
+fi
 
 # /sbin/ipset add xosrc 162.55.21.144/29 comment "hetzner3 subnet"
+ipset_stage xosrc
 {% for entry in iptables_xosrc_ips | default([]) %}
-/sbin/ipset add xosrc {{ entry.cidr }} comment {{ entry.comment | quote }}
+/sbin/ipset -exist add xosrc_new {{ entry.cidr }} comment {{ entry.comment | quote }}
 {% endfor %}
+ipset_commit xosrc
 
+ipset_stage localnets
+ipset_stage k3spods
 {% for localneth in localnets -%}
-/sbin/ipset add localnets {{ localneth.cidr }} comment {{ localneth.comment | quote }}
+/sbin/ipset -exist add localnets_new {{ localneth.cidr }} comment {{ localneth.comment | quote }}
 {% endfor +%}
 {#/sbin/ipset add localnets {{ localneth.cidr }} comment {{ localneth.comment | quote }}#}
 
 {% if localnets_k3sserver is defined %}
 {% for localneth in localnets_k3sserver -%}
-/sbin/ipset add localnets {{ localneth.cidr }} comment {{ localneth.comment | quote }}
+/sbin/ipset -exist add localnets_new {{ localneth.cidr }} comment {{ localneth.comment | quote }}
 {% endfor %}
 {% for localneth in localnets_k3sserver -%}
-/sbin/ipset add k3spods {{ localneth.cidr }} comment {{ localneth.comment | quote }}
+/sbin/ipset -exist add k3spods_new {{ localneth.cidr }} comment {{ localneth.comment | quote }}
 {% endfor %}
 {% endif %}
 {#/sbin/ipset add localnets {{ localneth.cidr }} comment {{ localneth.comment | quote }}#}
+ipset_commit localnets
+ipset_commit k3spods
 
 iptables -F HTSTUFFIN
 
@@ -290,13 +314,12 @@ iptables -A HTSTUFFIN -m state --state NEW -p tcp -m multiport --dport 22 -s {{ 
 
 {% if 'dnsserver' in group_names %}
 # Create staticsrc ipset with atomic swap (ensures correct type with comment support)
-/sbin/ipset -N staticsrc_new nethash comment
-/sbin/ipset add staticsrc_new 10.0.0.0/8 comment "private range class A"
+ipset_stage staticsrc
+/sbin/ipset -exist add staticsrc_new 10.0.0.0/8 comment "private range class A"
 {% for entry in iptables_static_dns_ips | default([]) %}
-/sbin/ipset add staticsrc_new {{ entry.cidr }} comment {{ entry.comment | quote }}
+/sbin/ipset -exist add staticsrc_new {{ entry.cidr }} comment {{ entry.comment | quote }}
 {% endfor %}
-# Swap if old set exists, otherwise rename
-/sbin/ipset swap staticsrc staticsrc_new 2>/dev/null && /sbin/ipset destroy staticsrc_new || /sbin/ipset rename staticsrc_new staticsrc
+ipset_commit staticsrc
 
 iptables -A INPUT -m set --match-set staticsrc src -p tcp -j ACCEPT
 iptables -A INPUT -m set --match-set staticsrc src -p udp -j ACCEPT

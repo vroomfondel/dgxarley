@@ -2,16 +2,20 @@
 
 # set -x
 
-/sbin/ipset -N localnetsipv6 nethash comment family inet6
+/sbin/ipset -exist -N localnetsipv6 nethash comment family inet6
+/sbin/ipset -exist -N localnetsipv6_new nethash comment family inet6
+/sbin/ipset flush localnetsipv6_new
 
 {% for net in localnets_ipv6 | default([]) -%}
-/sbin/ipset add localnetsipv6 {{ net.cidr }} comment {{ net.comment | quote }}
+/sbin/ipset -exist add localnetsipv6_new {{ net.cidr }} comment {{ net.comment | quote }}
 {% endfor %}
 {% if keepalived_vlans is defined %}
 {% for v in keepalived_vlans if v.ipv6_prefix is defined -%}
-/sbin/ipset add localnetsipv6 {{ v.ipv6_prefix }}:0::/64 comment "keepalived_vlans::vlan{{ v.vlan_id }} ipv6"
+/sbin/ipset -exist add localnetsipv6_new {{ v.ipv6_prefix }}:0::/64 comment "keepalived_vlans::vlan{{ v.vlan_id }} ipv6"
 {% endfor %}
 {% endif %}
+/sbin/ipset swap localnetsipv6_new localnetsipv6 || echo "WARN: ipset localnetsipv6 not swapped, old contents stay active" >&2
+/sbin/ipset destroy localnetsipv6_new
 
 ip6tables -N HTSTUFFIN
 ip6tables -N HTSTUFFOUT
