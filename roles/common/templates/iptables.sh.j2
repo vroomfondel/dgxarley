@@ -2,6 +2,9 @@
 
 # set -x
 
+# ipset < 7.23 reads 256 bytes past the comment argument and segfaults with a short environment (boot, cron; Debian #1118769)
+export IPSET_ARGV_PAD=$(printf '%0300d' 0)
+
 # iptables -I HTSTUFFIN 1 -i virbr0 -j ACCEPT
 
 # iptables -F HTSTUFFIN
