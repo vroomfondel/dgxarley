@@ -23,6 +23,32 @@
   ansible.builtin.set_fact:
     _hermes_active_users: "{{ hermes_users | hermes_resolve_email(hermes_mail_settings) | selectattr('enabled', 'true') | list }}"
 
+# enabled: false only stops a user: existing Deployments go to 0 replicas, nothing is rendered, created or deleted.
+- name: Find Deployments of disabled hermes users
+  kubernetes.core.k8s_info:
+    kind: Deployment
+    namespace: "{{ hermes.namespace }}"
+    label_selectors:
+      - app = hermes
+  register: _hermes_deployments
+
+- name: Scale Deployments of disabled hermes users to 0
+  kubernetes.core.k8s_scale:
+    kind: Deployment
+    namespace: "{{ hermes.namespace }}"
+    name: "{{ item.metadata.name }}"
+    replicas: 0
+    wait: false
+  loop: >-
+    {{ _hermes_deployments.resources | default([])
+       | selectattr('metadata.labels.hermes-user', 'defined')
+       | selectattr('metadata.labels.hermes-user', 'in', hermes_users | rejectattr('enabled', 'true') | map(attribute='username') | list)
+       | rejectattr('metadata.labels.hermes-user', 'in', _hermes_active_users | map(attribute='username') | list)
+       | selectattr('spec.replicas', 'gt', 0)
+       | list }}
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
 - name: Assert the cluster mail backend is installed
   when:
     - hermes_mail_backend == 'cluster'
@@ -315,6 +341,21 @@
           app: hermes
       data:
         hermes_seadrive_start.sh: "{{ lookup('file', 'hermes_seadrive_start.sh') }}"
+
+- name: Render hermes UID-remap entrypoint ConfigMap
+  kubernetes.core.k8s:
+    state: present
+    apply: true  # kubectl-apply three-way merge → prune renamed/removed data keys
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: hermes-uid-remap
+        namespace: "{{ hermes.namespace }}"
+        labels:
+          app: hermes
+      data:
+        hermes_uid_remap.sh: "{{ lookup('file', 'hermes_uid_remap.sh') }}"
 
 - name: Render hermes merge-config ConfigMap
   kubernetes.core.k8s:

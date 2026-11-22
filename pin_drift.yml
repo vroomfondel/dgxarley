@@ -23,7 +23,9 @@ pins:
     file: roles/k8s_infra/defaults/main/hermes.yml
     pattern: 'image_tag:\s*"(?:rc\.\d+-)?(v[\d.]+)"'
     tag_pattern: '^v\d{1,3}(\.\d+)+$'
-    running_image: nousresearch/hermes-agent
+    running_image:
+      - xomoxcc/hermes-agent-tools
+      - nousresearch/hermes-agent
   - name: honcho
     github: plastic-labs/honcho
     file: roles/k8s_infra/defaults/main/honcho.yml

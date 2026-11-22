@@ -1,7 +1,7 @@
 ---
 # === Nous Hermes Agent (per-user deployments) ===
 # Two independent Deployments per active user, both pinned to k3smaster:
-#   hermes-agent-<user>  → official nousresearch/hermes-agent (`hermes dashboard`)
+#   hermes-agent-<user>  → hermes.image (xomoxcc/hermes-agent-tools = nousresearch/hermes-agent + tools; `hermes dashboard`)
 #   hermes-webui-<user>  → ghcr.io/nesquena/hermes-webui (alt browser UI)
 # They share /opt/data via the same hostPath subdir, so sessions/skills/configs
 # are identical across both UIs. Each one still spawns its own hermes processes
@@ -152,7 +152,9 @@ hermes:
   #  * GATEWAY_HEALTH_URL (upstream-deprecated, the only cross-container gateway probe).
   #  * HERMES_DASHBOARD_BASIC_AUTH_*, TERMINAL_CWD, API_SERVER_KEY (>=16 chars), dashboard CLI flags.
   #  * host-wide gateway lock ($HERMES_GATEWAY_LOCK_DIR unset -> container fs, not the shared /opt/data).
-  image_tag: "v0.23.1"                  # agent image (nousresearch/hermes-agent)
+  # nousresearch/hermes-agent + OCR/PDF tools, rootless pip/micromamba (repo_scripts/build-hermes-image.sh); per-user item.image.
+  image: "xomoxcc/hermes-agent-tools"
+  image_tag: "v0.23.1"                  # upstream tag; rebuild + push hermes-agent-tools before every bump
   # busybox helper image (fix-perms / init-dashboard-themes initContainers, log-tail sidecar)
   busybox_image: "busybox:1.38"
   # NFS-backed hostPath base on k3smaster — per-user subdirs <base>/<username>

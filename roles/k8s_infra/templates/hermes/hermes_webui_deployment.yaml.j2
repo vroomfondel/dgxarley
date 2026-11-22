@@ -97,6 +97,8 @@ spec:
         # email-patch: subPath ConfigMap mounts don't surface updates without a restart.
         checksum/email-patch: "{{ _email_enabled | bool }}:{{ lookup('file', 'hermes_email_gateway_patched.py') | hash('sha256') }}"
         # [retired 2026-10-11] hermes_health_patch.py: v0.21.6 probe sends Bearer $API_SERVER_KEY (upstream #76051); see git history.
+        # uid-remap: entrypoint script is read once at container start.
+        checksum/uid-remap: "{{ lookup('file', 'hermes_uid_remap.sh') | hash('sha256') }}"
         # gw-refresh: rolls the pod to add/drop the gateway sidecar and pick up a
         # changed refresher script.
         checksum/gw-refresh:  "{{ _gateway_enabled | bool }}:{{ lookup('file', 'hermes_gateway_state_refresher.py') | hash('sha256') }}"
@@ -186,7 +188,7 @@ spec:
         # ConfigMap/Secret. UID/GID via env; WEBUI_SETTINGS_B64 additionally
         # drives the WebUI settings.json merge (agent pod omits it).
         - name: merge-config
-          image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes.image_tag) }}"
+          image: "{{ item.image | default(hermes.image | default('nousresearch/hermes-agent')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
           command:
             - /opt/hermes/.venv/bin/python
             - /opt/merge-config/hermes_merge_config.py
@@ -226,7 +228,7 @@ spec:
         # contained (no cross-pod volume coupling). The webui's docker_init.bash
         # then runs `uv pip install <agent-src>[all]` against this dir.
         - name: copy-agent-src
-          image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes.image_tag) }}"
+          image: "{{ item.image | default(hermes.image | default('nousresearch/hermes-agent')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
           env:
             - name: TZ
               value: "{{ hermes.timezone }}"
@@ -423,8 +425,11 @@ spec:
         # sessions/skills/.env. Outbound mail/messages from webui-spawned hermes
         # subprocesses also work via the same .env, no extra wiring needed.
         - name: hermes-gateway
-          image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes.image_tag) }}"
+          image: "{{ item.image | default(hermes.image | default('nousresearch/hermes-agent')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
           imagePullPolicy: Always
+          command:
+            - /bin/sh
+            - /opt/hermes-uid-remap/hermes_uid_remap.sh
           args:
             - "gateway"
             - "run"
@@ -473,6 +478,9 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /opt/data
+            - name: uid-remap
+              mountPath: /opt/hermes-uid-remap
+              readOnly: true
 {% if _seafile_workspace %}
             - name: workspace-fuse
               mountPath: /workspace
@@ -514,7 +522,7 @@ spec:
         # directly as the per-user uid and only touches uid-owned /opt/data).
         # Purely cosmetic: the IMAP/SMTP gateway itself is unaffected either way.
         - name: gateway-state-refresh
-          image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes.image_tag) }}"
+          image: "{{ item.image | default(hermes.image | default('nousresearch/hermes-agent')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
           imagePullPolicy: Always
           command:
             - /opt/hermes/.venv/bin/python
@@ -545,6 +553,10 @@ spec:
               readOnly: true
 {% endif %}
       volumes:
+        - name: uid-remap
+          configMap:
+            name: hermes-uid-remap
+            defaultMode: 0755
         - name: data
           hostPath:
             path: "{{ hermes.data_base }}/{{ item.username }}"

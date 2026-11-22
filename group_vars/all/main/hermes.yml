@@ -16,6 +16,8 @@ hermes_users:
   - username: example
     uid: 1500
     gid: 1500
+    # image: "nousresearch/hermes-agent"   # optional; default hermes.image (xomoxcc/hermes-agent-tools)
+    # image_tag: "v0.23.1"                 # optional; default hermes.image_tag; the tag must exist for the image used
     litellm_token: "sk-REPLACE-WITH-PER-USER-LITELLM-VIRTUAL-KEY"
     litellm_model: ""                  # empty → falls back to hermes.default_model
     basicauth_password: "changeme"     # defaults to litellm_token if unset

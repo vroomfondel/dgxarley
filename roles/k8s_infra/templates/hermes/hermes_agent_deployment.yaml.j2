@@ -85,6 +85,8 @@ spec:
         # seafile: rolls the pod to add/drop the seadrive sidecar and to pick up
         # rotated creds (hermes-seafile-<user> Secret is envFrom, read at start).
         checksum/seafile: "{{ _seafile_workspace }}:{{ (hermes.seafile.server_url ~ '|' ~ (item.email.address | default('?')) ~ '|' ~ (item.seafile.web_password | default('none'))) | hash('sha256') }}"
+        # uid-remap: entrypoint script is read once at container start.
+        checksum/uid-remap: "{{ lookup('file', 'hermes_uid_remap.sh') | hash('sha256') }}"
         # gateway: rolls the pod to add/drop the hermes-gateway sidecar (and the
         # api_server /health the dashboard probes). Folded flag, not an if/endif.
         checksum/gateway: "{{ _gateway_enabled | bool }}"
@@ -150,7 +152,7 @@ spec:
         # Uses the agent image because it already has PyYAML in its venv and
         # is guaranteed cached on the node (used by the main container too).
         - name: merge-config
-          image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes.image_tag) }}"
+          image: "{{ item.image | default(hermes.image | default('nousresearch/hermes-agent')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
           imagePullPolicy: Always
           command:
             - /opt/hermes/.venv/bin/python
@@ -221,7 +223,7 @@ spec:
         # under the entrypoint pattern, since pre-#33045 entrypoints only
         # chowned $HERMES_HOME, not /opt/hermes/.
         # - name: copy-ui-tui
-        #   image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes.image_tag) }}"
+        #   image: "{{ item.image | default(hermes.image | default('nousresearch/hermes-agent')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
         #   command:
         #     - sh
         #     - -c
@@ -310,7 +312,7 @@ spec:
               memory: "512Mi"
 {% endif %}
         - name: hermes
-          image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes.image_tag) }}"
+          image: "{{ item.image | default(hermes.image | default('nousresearch/hermes-agent')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
           imagePullPolicy: Always
           # Overrides the image WORKDIR (/opt/hermes). main-wrapper.sh cd's to
           # `${HERMES_ORIG_CWD:-$PWD}` before exec'ing `hermes dashboard`, so
@@ -318,12 +320,12 @@ spec:
           # process cwd (the `!`-shell's os.getcwd() + the TUI footer) lands in
           # /workspace regardless of which of the two the wrapper sees.
           workingDir: "{{ item.terminal_cwd | default(hermes.terminal_cwd) }}"
-          # We let the image's default ENTRYPOINT run instead of overriding
-          # `command:`. Since v2026.5.28 that ENTRYPOINT is s6-overlay's /init
+          # `command:` (files/hermes_uid_remap.sh) only pre-sets the hermes UID/GID, then execs
+          # the image's ENTRYPOINT. Since v2026.5.28 that ENTRYPOINT is s6-overlay's /init
           # (pre-s6 it was /opt/hermes/docker/entrypoint.sh, now a deprecated
           # shim). The s6 flow preserves the old contract 1:1 ("Architecture B"):
-          #   1. /init runs as root, cont-init script stage2-hook.sh usermod's
-          #      the baked-in `hermes` user (UID 10000) to HERMES_UID/HERMES_GID
+          #   1. /init runs as root, cont-init script stage2-hook.sh finds the
+          #      `hermes` user already at HERMES_UID/HERMES_GID (no usermod walk)
           #      and chown's HERMES_HOME + .venv + ui-tui.
           #   2. docker/main-wrapper.sh (the CMD wrapper) sources the venv,
           #      cd's /opt/data, sets HOME=/opt/data, then drops via
@@ -347,6 +349,9 @@ spec:
           # 127.0.0.1 which matches Hermes' built-in _LOOPBACK_HOSTS.
           # `--insecure` not needed (Hermes only requires it for non-
           # loopback binds).
+          command:
+            - /bin/sh
+            - /opt/hermes-uid-remap/hermes_uid_remap.sh
           args:
             - "dashboard"
             # Bind 0.0.0.0 (was 127.0.0.1 behind the retired Caddy sidecar).
@@ -475,6 +480,9 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /opt/data
+            - name: uid-remap
+              mountPath: /opt/hermes-uid-remap
+              readOnly: true
 {% if _seafile_workspace %}
             - name: workspace-fuse
               mountPath: /workspace
@@ -580,11 +588,14 @@ spec:
         # localhost-only. shareProcessNamespace stays false (s6 needs PID 1), so
         # the dashboard uses the HTTP probe, not a same-ns PID check.
         - name: hermes-gateway
-          image: "nousresearch/hermes-agent:{{ item.image_tag | default(hermes.image_tag) }}"
+          image: "{{ item.image | default(hermes.image | default('nousresearch/hermes-agent')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
           imagePullPolicy: Always
           # Same as the dashboard container: make $PWD = /workspace so the
           # gateway process (and any agent it spawns) starts there.
           workingDir: "{{ item.terminal_cwd | default(hermes.terminal_cwd) }}"
+          command:
+            - /bin/sh
+            - /opt/hermes-uid-remap/hermes_uid_remap.sh
           args:
             - "gateway"
             - "run"
@@ -634,6 +645,9 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /opt/data
+            - name: uid-remap
+              mountPath: /opt/hermes-uid-remap
+              readOnly: true
 {% if _seafile_workspace %}
             - name: workspace-fuse
               mountPath: /workspace
@@ -690,6 +704,10 @@ spec:
               mountPath: /opt/data
               readOnly: true
       volumes:
+        - name: uid-remap
+          configMap:
+            name: hermes-uid-remap
+            defaultMode: 0755
         - name: data
           hostPath:
             path: "{{ hermes.data_base }}/{{ item.username }}"

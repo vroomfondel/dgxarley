@@ -137,7 +137,9 @@ before the defaults move, and a `--tags hermes` run with the old pin rolls the p
    what moved in the patch header.
 4. Verify: `black --check`, `ast.parse`, pyflakes, diff vs the new baseline shows only
    `[PATCH-N]` sections. The patch must add no non-stdlib import beyond upstream's own.
-5. Rollout happens with the next `--tags hermes` run (`checksum/email-patch` rolls the pod).
+5. Build and push `xomoxcc/hermes-agent-tools:<tag>` with `repo_scripts/build-hermes-image.sh` before the
+   rollout: the pods run `hermes.image`, so a tag missing there ends in ImagePullBackOff.
+6. Rollout happens with the next `--tags hermes` run (`checksum/email-patch` rolls the pod).
 
 The same bump also re-checks the contracts listed above `hermes.image_tag` (the former
 `hermes_health_patch.py` was retired 2026-10-11, see below).
