@@ -1,6 +1,6 @@
 # Crawl4AI per-user tokens and LLM keys
 
-Drop-in for the self-hosted Crawl4AI Docker server (`unclecode/crawl4ai`, tested against source v0.9.5). A bearer token
+Drop-in for the self-hosted Crawl4AI Docker server (`unclecode/crawl4ai`, tested against v0.9.5 and the v0.9.6 image). A bearer token
 identifies a user, and that user's LLM calls (`/md` with `f=llm`, `/llm/{url}`, `/llm/job`, MCP tool `md`) use a LiteLLM
 virtual key that exists for Crawl4AI only. LiteLLM then attributes spend, budget and rate limits per user.
 
@@ -118,7 +118,7 @@ A container restart starts from the image's filesystem again.
 | installed Crawl4AI is not the version last checked | warning line only                           | warning line only               |
 | root without `setpriv` and `runuser`               | exit 1                                      | exit 1                          |
 
-Only whole sets are applied: all hooks or none. The version checked last is the constant `CHECKED_VERSION` (0.9.5) in the
+Only whole sets are applied: all hooks or none. The version checked last is the constant `CHECKED_VERSION` (0.9.6) in the
 script; the anchors are the real check.
 
 Facts from the v0.9.5 image (Dockerfile, `deploy/docker/`):
@@ -216,6 +216,9 @@ The server and the container were never started; no Docker, no cluster. Verified
 (exact added and removed lines, byte-identical other files, idempotence, drift and ambiguity), the launch script with
 stand-ins for the server command and the user switch (both drift cases, restore after a failing real run, modes), the
 drop-in unit tests, and the patched `llm_broker.py` / `auth_gate.py` behaviour was exercised earlier against stubs.
+v0.9.6: all five patches, the verifier and a second (idempotent) run against `/app` of the v0.9.6 image. 0.9.6 wraps
+the final app call in `auth_gate.py` in a `browser_context_partition` try block keyed by `principal["sub"]`, so each
+usermap user (`sub` `user:<name>`) gets its own browser context; `c10_auth_gate.py` anchors on either form.
 Open: the real `setpriv` switch and capability set under a pod `securityContext`, `setpriv`/`runuser` presence in the
 image, that MCP tool handlers inherit the connection's context (otherwise MCP follows the `mcp-service` rule), and
 that slowapi and Starlette see the principal the way the code assumes.

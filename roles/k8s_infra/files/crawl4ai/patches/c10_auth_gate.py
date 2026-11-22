@@ -1,7 +1,8 @@
 """[dgxarley] auth_gate.py: per-user token lookup and request identity for crawl4ai_usermap.
 
 Three hooks: the import, usermap.authenticate(token) between the static operator token and the JWT check, and
-usermap.call_app(...) in place of the final app call (sets the identity ContextVars). Inactive module = upstream.
+usermap.call_app(...) in place of the final app call (sets the identity ContextVars; inside the
+browser_context_partition try block from 0.9.6 on). Inactive module = upstream.
 """
 
 from _c4lib import IMPORT_LINE, Patch, edit, patch_for
@@ -27,10 +28,21 @@ def apply(p: Patch) -> None:
         "usermap.authenticate(token)",
         "auth_gate jwt step",
     )
-    edit(
-        p,
-        '        state["principal"] = principal\n        await self.app(scope, receive, send)',
-        '        state["principal"] = principal\n        await usermap.call_app(self.app, scope, receive, send)',
-        "usermap.call_app(",
-        "auth_gate app call",
-    )
+    if "browser_context_partition.set(" in p.code:
+        edit(
+            p,
+            "        try:\n            await self.app(scope, receive, send)\n"
+            "        finally:\n            browser_context_partition.reset(token)",
+            "        try:\n            await usermap.call_app(self.app, scope, receive, send)\n"
+            "        finally:\n            browser_context_partition.reset(token)",
+            "usermap.call_app(",
+            "auth_gate app call",
+        )
+    else:
+        edit(
+            p,
+            '        state["principal"] = principal\n        await self.app(scope, receive, send)',
+            '        state["principal"] = principal\n        await usermap.call_app(self.app, scope, receive, send)',
+            "usermap.call_app(",
+            "auth_gate app call",
+        )

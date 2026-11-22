@@ -7,7 +7,7 @@ APP_DIR="${CRAWL4AI_APP_DIR:-/app}"
 PATCH_DIR="${CRAWL4AI_PATCH_DIR:-/patches}"
 RUN_AS="${CRAWL4AI_RUN_AS:-appuser}"
 PY="${CRAWL4AI_PYTHON:-python3}"
-CHECKED_VERSION="0.9.5"
+CHECKED_VERSION="0.9.6"
 HOOKED="api.py auth_gate.py llm_broker.py mcp_bridge.py server.py"
 
 log() { echo "[crawl4ai-launch] $*" >&2; }
