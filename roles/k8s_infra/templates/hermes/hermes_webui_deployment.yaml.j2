@@ -468,8 +468,8 @@ spec:
               cpu: "20m"
               memory: "128Mi"
             limits:
-              cpu: "{{ item.gateway.cpu_limit | default(item.email.cpu_limit | default('500m')) }}"
-              memory: "{{ item.gateway.memory_limit | default(item.email.memory_limit | default('512Mi')) }}"
+              cpu: "{{ (item.gateway | default({})).get('cpu_limit', '500m') }}"
+              memory: "{{ (item.gateway | default({})).get('memory_limit', '512Mi') }}"
           volumeMounts:
             - name: data
               mountPath: /opt/data

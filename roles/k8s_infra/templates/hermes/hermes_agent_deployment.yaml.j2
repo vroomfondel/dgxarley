@@ -631,8 +631,8 @@ spec:
               cpu: "20m"
               memory: "128Mi"
             limits:
-              cpu: "{{ (item.gateway | default({})).get('cpu_limit', _email.get('cpu_limit', '500m')) }}"
-              memory: "{{ (item.gateway | default({})).get('memory_limit', _email.get('memory_limit', '512Mi')) }}"
+              cpu: "{{ (item.gateway | default({})).get('cpu_limit', '500m') }}"
+              memory: "{{ (item.gateway | default({})).get('memory_limit', '512Mi') }}"
           volumeMounts:
             - name: data
               mountPath: /opt/data

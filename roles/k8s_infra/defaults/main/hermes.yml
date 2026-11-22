@@ -359,8 +359,7 @@ hermes:
 #               poll_interval?  (default 15),
 #               home_address?,
 #               allow_all_users?, allowed_users?,
-#               skip_attachments?,
-#               cpu_limit?, memory_limit?
+#               skip_attachments?
 #           },
 #           matrix?: {          (default disabled — omit block to skip)
 #               enabled,        (default hermes.matrix.enabled_default)
@@ -373,9 +372,9 @@ hermes:
 #               allowed_users?, allowed_rooms?,  (lists or comma strings)
 #               home_room?      (room for cron/notification delivery)
 #           },
-#           gateway?: {         (optional sidecar resource override; falls
-#               cpu_limit?,     back to email.cpu_limit/memory_limit, then
-#               memory_limit?   '500m'/'512Mi')
+#           gateway?: {         (hermes-gateway sidecar, serves email + matrix)
+#               cpu_limit?,     (default '500m')
+#               memory_limit?   (default '512Mi')
 #           },
 #           replicas?           (default hermes_agent_replicas, both Deployments),
 #           enabled }
