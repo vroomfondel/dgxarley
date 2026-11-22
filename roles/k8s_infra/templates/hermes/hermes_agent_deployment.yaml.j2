@@ -10,16 +10,14 @@
 {%- set _seafile = item.seafile | default({}) -%}
 {%- set _seafile_workspace = (_seafile.get('workspace_enabled', hermes.seafile.workspace_enabled_default)) | bool -%}
 {#- Messaging-gateway gate: the `hermes gateway run` sidecar lives in THIS
-    (agent) pod whenever the dashboard is enabled, so the dashboard can show
-    gateway liveness via the in-pod HTTP health probe. The webui pod only hosts
-    the gateway when the dashboard is OFF (see hermes_webui_deployment.yaml.j2)
-    — exactly one gateway runs, so the two never contend on the
-    /opt/data/gateway.lock flock. -#}
+    (agent) pod whenever the dashboard is enabled, also without email/matrix:
+    the dashboard chat (TUI) attaches to it and loops on reconnect otherwise.
+    The webui pod only hosts the gateway when the dashboard is OFF (see
+    hermes_webui_deployment.yaml.j2) — exactly one gateway runs, so the two
+    never contend on the /opt/data/gateway.lock flock. -#}
 {%- set _email = item.email | default({}) -%}
 {%- set _email_enabled = _email.get('enabled', hermes.email.enabled_default) -%}
-{%- set _matrix = item.matrix | default({}) -%}
-{%- set _matrix_enabled = _matrix.get('enabled', hermes.matrix.enabled_default) -%}
-{%- set _gateway_enabled = (_email_enabled or _matrix_enabled) -%}
+{%- set _gateway_enabled = true -%}
 {#- Skills are installed by the agent pod when the dashboard is on, else by the webui pod. -#}
 {%- set _skills = _hermes_skills_by_user.get(item.username) -%}
 apiVersion: apps/v1
