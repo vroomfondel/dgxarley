@@ -1,91 +1,20 @@
 # Model profile: sparkarena/Minimax-M3-v0-NVFP4
 # Loaded by include_vars in k8s_dgx role, merged into sglang_model_profiles.
 #
-# VERIFIED RUNNING (2026-06-17). M3 serves in production on the scitrera mm:v0
-# image via the normal deploy path — the live launch command was captured from
-# the sglang-head pod (see STATUS block). Written 2026-06-15 as an UPSTREAM-BLOCKED
-# first-contact stub; the load/serve blockers have since CLEARED (arch resolution,
-# NVFP4/quant-tool matcher, flashinfer attention, fi_cutlass MoE all work live).
-# The serving point in the body is now the verified one; the throughput/context
-# sweep AROUND it is still open (bench matrix territory — see the OPEN axes).
+# First NVFP4 quant of MiniMaxAI/MiniMax-M3 (sparkarena, for DGX Spark).
+# ~428B total / ~23B active multimodal MoE, arch MiniMaxM3SparseForConditionalGeneration.
+#   - 60 layers, 4 KV heads, 128 experts (4 active + 1 shared), first 3 layers dense.
+#   - MiniMax Sparse Attention (MSA), max_position_embeddings 524288.
+#   - NVFP4 group 16 from "quantization-tool" v1.0 (not modelopt), loads as modelopt_fp4.
+#   - 245 GB weights, ~61 GB/GPU at TP=4.
+#   - config declares an MTP head, but no M3 checkpoint ships MTP weights (HF discussion #5).
 #
-# WHAT THIS CHECKPOINT IS (verified against HF config.json/hf_quant_config.json
-# 2026-06-15): the FIRST published NVFP4 quant of MiniMaxAI/MiniMax-M3, produced
-# by `sparkarena` (the Spark Arena community) explicitly for DGX Spark.
-#   - MiniMax-M3: native-multimodal MoE, ~428B total / ~23B activated, 1M-context
-#     class. arch MiniMaxM3SparseForConditionalGeneration, model_type
-#     minimax_m3_vl (custom_code: configuration_minimax_m3_vl.py /
-#     processing_minimax.py / image_processor.py / video_processor.py).
-#   - text_config: 60 layers, hidden 6144, 64 attn heads, num_key_value_heads=4,
-#     head_dim 128, swigluoai activation (alpha 1.702, limit 7.0), per-head QK
-#     norm, rope_theta 5e6, partial_rotary 0.5, vocab 200064,
-#     max_position_embeddings 524288.
-#   - MoE: 128 routed experts, 4 active/token + 1 shared expert, sigmoid routing
-#     with routing bias, routed_scaling_factor 2.0. First 3 layers dense
-#     (moe_layer_freq = [0,0,0,1,1,...]). expert intermediate 3072, dense 12288.
-#   - num_mtp_modules in config.json → the M3 ARCH declares an MTP/NEXTN draft
-#     head, BUT NO M3 CHECKPOINT SHIPS MTP WEIGHTS — this is an UPSTREAM omission,
-#     not a quant artifact (verified 2026-06-17): the BF16 source MiniMaxAI/
-#     MiniMax-M3 has layers 0-59 only and zero mtp/nextn/eh_proj/enorm/hnorm/
-#     shared_head tensors, and HF discussion #5 confirms "MTP declared but not in
-#     the released weights." All public NVFP4 quants inherit this — sparkarena,
-#     lukealonso, brandonmusic, Mapika ALL have layers 0-59 / 0 MTP tensors.
-#     → NEXTN is impossible for the entire M3 family until MiniMax releases the
-#     MTP head. No quant can add what the source lacks.
-#   - **MiniMax Sparse Attention (MSA)**: sparse_attention_config use_sparse_attention
-#     true, sparse_index_dim 128, sparse_num_index_heads 4, sparse_topk_blocks 16,
-#     sparse_block_size 128. Custom high-perf sparse-attn operator
-#     (github MiniMax-AI/MSA) — the M3 analogue of DeepSeek-V4 DSA. This is the
-#     long-context enabler; served live via the custom model code (see STATUS §2).
-#   - Vision: CLIP-style tower (hidden 1280, 32 layers, patch 14, image 2016,
-#     patch_merge spatial_merge_size 2, temporal_patch_size 2 for video),
-#     projection_dim 6144. image-text-to-text + video.
-#   - NVFP4 (group 16), producer "quantization-tool" v1.0 (NOT modelopt, but the
-#     loader/exclude matching is VERIFIED loading — see STATUS §5). exclude_modules:
-#     lm_head, embed_tokens, vision_tower*, multi_modal_projector*,
-#     patch_merge_mlp*, *block_sparse_moe.gate. 245 GB safetensors total
-#     → ~61 GB/GPU at TP=4 (heavier than the M2.5/M2.7 ~35 GB/GPU; less KV
-#     headroom, and the vision tower + MSA index buffers eat into it further).
-#
-# ── STATUS (verified 2026-06-17): what cleared, what remains ───────────────────
-#   1. ARCHITECTURE SUPPORT — CLEARED. minimax_m3_vl /
-#      MiniMaxM3SparseForConditionalGeneration resolves and loads on the
-#      sparkarena-designated multimodal image scitrera/dgx-spark-sglang-mm:v0.
-#      Our own xomoxcc/dgx-spark-sglang:{0.5.12,0.5.13}-sm121 images still
-#      implement MiniMaxM2ForCausalLM ONLY (no M3 path) — so the sglang_image
-#      override below is MANDATORY; do not drop it. (recipe reference:
-#      github spark-arena/recipe-registry .../minimax-m3/minimax-m3-v0-nvfp4-4x.yaml.)
-#   2. MSA ON SM121/GB10 — CLEARED for serving. The model runs with
-#      --attention-backend flashinfer live; MiniMax Sparse Attention is handled
-#      inside the custom model code (trust_remote_code), not via a separate sglang
-#      attention backend. (Open: whether full MSA sparsity / its long-context
-#      benefit is actually engaged vs dense fallback — a quality/throughput
-#      question, NOT a boot blocker. fp8-KV still has no MSA path — see kv note.)
-#   3. MULTIMODAL PATH — UNVERIFIED. The text path serves; vision tower +
-#      image/video preprocessing has NOT been exercised on our cluster. Validate
-#      with a multimodal harness before claiming image/video support.
-#   4. NVFP4 MoE on SM121 — CLEARED. flashinfer_cutlass serves the M3 128-expert
-#      +1-shared NVFP4 layout live. eager (disable_cuda_graph) remains OUT —
-#      broken on any cutlass_moe_fp4 path; the live config runs piecewise CG.
-#   5. QUANT-CONFIG PRODUCER — CLEARED. The generic "quantization-tool" v1.0 NVFP4
-#      layout (incl. the exclude_modules matching) loads correctly under
-#      --quantization modelopt_fp4.
-#   VERIFIED live launch command (sglang-head pod, 2026-06-17) — case 01 of the
-#   bench matrix reproduces it exactly:
-#     python3 -m sglang.launch_server --model-path sparkarena/Minimax-M3-v0-NVFP4 \
-#       --context-length 65536 --kv-cache-dtype auto --mem-fraction-static 0.70 \
-#       --tp-size 4 --pp-size 1 --nnodes 4 --quantization modelopt_fp4 \
-#       --trust-remote-code --moe-runner-backend flashinfer_cutlass \
-#       --attention-backend flashinfer --fp4-gemm-backend flashinfer_cutlass \
-#       --cuda-graph-max-bs 16 --reasoning-parser minimax-m3 \
-#       --tool-call-parser minimax-m3 --max-running-requests 32 \
-#       --schedule-policy lpm --enable-custom-logit-processor
-#   (--max-running-requests / --schedule-policy / --enable-custom-logit-processor
-#    come from global dgxarley defaults, not this profile.) NB the FIRST live point
-#    used a conservative deploy override (context_length 65536 + mfs 0.70); the
-#    bench matrix (2026-06-18) then swept context/mfs and the profile now carries
-#    the WINNER (case 12): context_length 524288 + mfs 0.90, full 512K co-fit and
-#    top throughput. See those keys' notes + TESTLOG_…_minimax-m3-v0-nvfp4_4n.md.
+# Status:
+#   - Text path verified 2026-06-17/18 on scitrera/dgx-spark-sglang-mm:v0.
+#   - Since 2026-11-22 on the default image (upstream M3 support #28715), not re-verified.
+#   - Multimodal path never exercised.
+#   - Bench winner (case 12): 512K context, mfs 0.90, n16 agg 115.98, 16/16 clean.
+#   - TESTLOG: TESTLOGS/sglang_nn4_tp4_ep1/minimax-m3-v0-nvfp4/
 _model_profile:
   "sparkarena/Minimax-M3-v0-NVFP4":
     knowledge_cutoff: null  # not disclosed (HF card/blog/arXiv 2606.13392 silent)
@@ -93,88 +22,37 @@ _model_profile:
     info_url: "https://huggingface.co/sparkarena/Minimax-M3-v0-NVFP4"
     litellm_input_cost_per_token: 0.0000003   # $0.3 per 1M, OpenRouter, StreamLake/Novita MiniMax-M3 (base model; CoreWeave $0.23 in), checked 2026-10-10
     litellm_output_cost_per_token: 0.0000012  # $1.2 per 1M, OpenRouter, StreamLake/Novita MiniMax-M3, checked 2026-10-10
-    # Per-profile image override (STATUS §1): the sparkarena card's designated
-    # serving image for minimax_m3_vl on DGX Spark. Our xomoxcc 0.5.12/0.5.13
-    # images implement MiniMaxM2 only and cannot load M3, so this MUST override
-    # the default — do not drop it. VERIFIED serving M3 (text path) on our cluster
-    # 2026-06-17. ⚠️ "v0" is a ROLLING tag, not a pinned release — record the
-    # digest of any run. (Multimodal path still unverified — STATUS §3.)
-    sglang_image: "scitrera/dgx-spark-sglang-mm:v0"
+    # sglang_image: "scitrera/dgx-spark-sglang-mm:v0"  # pre-upstream-M3 override (#28715), dropped 2026-11-22, untested on default image
     nccl_transport: "roce"
-    # num_key_value_heads=4 → TP=4 gives exactly 1 KV head/rank (divides cleanly;
-    # TP=3 impossible). TP=4/PP=1: ~61 GB weights/GPU + vision tower + MSA index
-    # buffers, leaving the rest of 128 GB unified memory for KV. Re-evaluate vs
-    # PP if weight+vision+KV won't co-fit (the M2.5 PP=4/TP=1 fallback pattern).
+    # 4 KV heads: TP=4 gives 1 KV head/rank, TP=3 impossible.
     tp_size: 4
-    # max_position_embeddings = 524288 (512K). The card markets "1M context" via
-    # MSA, but config pins 524288 and rope_scaling is null — do NOT exceed it.
-    # WINNER VALUE (bench matrix case 12, 2026-06-18): the FULL 512K window co-fits
-    # at TP=4 with mem_fraction_static 0.90 and is the throughput winner (n16 agg
-    # 115.98, clean 16/16). The old "512K won't fit at TP=4" worry was dense-KV math
-    # — MSA makes KV sub-linear, so it fits. Throughput RISES with context (no cost
-    # to long). See TESTLOG_…_minimax-m3-v0-nvfp4_4n.md §5. (Earlier live point ran
-    # 65536; that was conservative.) NB: bench drove text-only short prompts — the
-    # 512K co-fit is proven for KV-pool allocation, not yet for >100K-token inputs.
+    # = max_position_embeddings, rope_scaling null; 512K co-fit proven for pool allocation, not >100K inputs.
     context_length: 524288
-    # NVFP4. SGLang's NVFP4 flag is modelopt_fp4; this checkpoint's producer is
-    # generic "quantization-tool", and the loader VERIFIED accepts it (STATUS §5).
     quantization: "modelopt_fp4"
-    # Custom model code (minimax_m3_vl) must execute. Safe: community repo, but
-    # not an NVIDIA-official one — eyeball the custom .py before first run.
     trust_remote_code: true
-    # NVFP4 MoE on SM121 → flashinfer_cutlass (our proven NVFP4 MoE runner on TP
-    # models: qwen3-235b, glm-4.7, minimax-m2.7). VERIFIED on M3's 128-expert
-    # +1-shared layout live 2026-06-17 (STATUS §4); triton is the fallback probe.
     moe_runner_backend: "flashinfer_cutlass"
-    # fp8_e4m3 is BROKEN here: the MiniMax Sparse Attention (MSA) triton kernel on
-    # scitrera/dgx-spark-sglang-mm:v0 (SM121/GB10) has no fp8-KV path — tl.dot
-    # asserts rhs in (int8/uint8/fp16/bf16/fp32) and rejects fp8e4nv, dying during
-    # CUDA-graph capture (verified 2026-06-17). Keep "auto" (bf16 KV) until an MSA
-    # kernel with fp8-KV support exists. (Even with 2× bf16 KV footprint, the full
-    # 512K context co-fits at mfs0.90 — see context_length note + TESTLOG §5.)
+    # fp8 KV crashed CUDA-graph capture on mm:v0 (MSA tl.dot rejects fp8e4nv); untested on the default image.
     kv_cache_dtype: "auto"
-    # WINNER VALUE (bench matrix case 12, 2026-06-18). On SGLang, mem_fraction_static
-    # is the static pool that must hold weights + KV — HIGHER = more KV room (NOT
-    # vLLM's lower-=-less semantics). 0.90 is what unlocks the full 512K window and
-    # tops throughput. Cases at 0.60 CRASHED ("Not enough memory") — you must raise
-    # mfs to push context, not lower it (TESTLOG §6). Earlier live point used 0.70
-    # at 64K; 0.90 is the verified ceiling value.
+    # Higher = more KV; 0.60 OOMs, 0.90 needed for 512K.
     mem_fraction_static: "0.90"
-    # VERIFIED working live (STATUS §2): the M3 custom model code handles MiniMax
-    # Sparse Attention internally, so --attention-backend flashinfer serves the
-    # model. NOT a placeholder. (Open question is whether MSA sparsity is actually
-    # engaged vs a dense fallback — quality/throughput, not a boot blocker.)
     attention_backend: "flashinfer"
     fp4_gemm_backend: "flashinfer_cutlass"
     jit_max_jobs: 4
-    # CUDA graph ENABLED (piecewise) — WINNER value: every bench matrix winner
-    # (incl. case 12) is piecewise; full-CG (case 02) gave no advantage at context
-    # (TESTLOG §2/§7). Eager is OUT: broken on cutlass_moe_fp4 (CLAUDE.md/TURBOQUANT.md).
+    # Eager is broken on cutlass_moe_fp4 paths.
     disable_piecewise_cuda_graph: false
     disable_cuda_graph: false
     cuda_graph_max_bs: 16
     pp_async_batch_depth: 0  # no-op at PP=1
-    # NVFP4 (scale_fmt != ue8m0) → DeepGemm off; FP4 GEMM uses fp4_gemm_backend.
     disable_deep_gemm: true
-    # From generation_config.json: reasoning_parser/tool_call_parser = minimax-m3
-    # (NOT the minimax-m2 parser the M2.x profiles use). M3 supports thinking /
-    # non-thinking modes.
     reasoning_parser: "minimax-m3"
     tool_call_parser: "minimax-m3"
     num_experts: 128
-    # TP=4 EP=1: each rank holds all 128 experts. 128 % 4 == 0, so TP=4 EP=4 is a
-    # valid future sweep (own matrix), same as the minimax-m2.7 ep note.
     ep_size: 1
     recommended_sampling:
       temperature: 1.0   # generation_config.json
       top_p: 0.95        # generation_config.json
       top_k: 40
-    # MUST stay OFF for the entire M3 family: config declares an MTP module, but
-    # NO M3 checkpoint ships MTP weights — upstream omission, not a quant artifact
-    # (verified 2026-06-17: BF16 MiniMaxAI/MiniMax-M3 + all NVFP4 quants =
-    # layers 0-59, 0 MTP tensors; HF M3 discussion #5 confirms). NEXTN is
-    # impossible until MiniMax releases the MTP head; switching NVFP4 source
-    # won't help — none have it.
+    # No M3 checkpoint ships MTP weights.
     speculative_enabled: false
     speculative_algo: NEXTN
     speculative_num_steps: 1

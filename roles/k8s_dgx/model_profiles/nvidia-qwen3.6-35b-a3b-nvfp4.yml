@@ -18,8 +18,7 @@
 #   * MTP head (mtp*) → EXCLUDED (kept full precision)
 #   * kv_cache_quant_algo → FP8
 #
-# ── WHY THE PATCH IS NEEDED (SGLang 0.5.12 AND 0.5.13 — dispatch code identical;
-#    active image: xomoxcc/dgx-spark-sglang:0.5.13-sm121) ──
+# ── WHY THE PATCH IS NEEDED ──
 # _parse_modelopt_quant_config() maps MIXED_PRECISION → quant method by ARCHITECTURE:
 # NemotronH → modelopt_mixed, everything else → w4afp8. This Qwen arch
 # (Qwen3_5MoeForConditionalGeneration) falls through to w4afp8, which is a closed trap:
