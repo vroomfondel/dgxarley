@@ -68,6 +68,8 @@ The table goes to stdout and progress to stderr, so the output stays pipe-friend
 
 Browser-based control panel for the KCEVE KVM1001A KVM switch via RS232 serial. Shows the currently active input port on a virtual 7-segment display and allows switching between inputs with a single click. The port count defaults to 10 and is selectable for the 4-port variant via `-n/--ports` (or the `KCEVE_KVM_PORTS` env var). Commands are sent over a USB-to-RS232 adapter at 115200 baud using the `X<channel>,1$` ASCII protocol.
 
+With `-c/--console-url` (or the `KCEVE_KVM_CONSOLE_URL` env var) `/` turns into a console view: a compact port bar on top and the remote console (e.g. a GL.iNet Comet KVM behind the switch) embedded below it, so switching and watching happen in one window. The replica stays available at `/panel`. The console must allow being framed by the kceve page and should share its site (same registrable domain), otherwise browsers drop its login cookies inside the frame.
+
 [Demo video](https://raw.githubusercontent.com/vroomfondel/dgxarley/main/media/simplescreenrecorder-2026-04-04_17.10.24.mp4)
 
 <details>
