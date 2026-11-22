@@ -7,7 +7,8 @@ to the real hardware over RS232 using :mod:`dgxarley.tools.kceve_kvm`.
 
 Endpoints::
 
-    GET  /                HTML UI (stylized KVM replica)
+    GET  /                HTML UI: console view if a console URL is set, else the replica
+    GET  /panel           HTML UI (stylized KVM replica)
     GET  /api/health      JSON: {"status": "ok"}
     GET  /api/status      JSON: {"port": N}
     POST /api/switch/{N}  JSON: {"port": N, "previous": M}
@@ -17,11 +18,14 @@ Usage::
     kceve-kvm-web                          # default: /dev/ttyACM0, port 8800
     kceve-kvm-web -d /dev/ttyUSB0          # custom serial device
     kceve-kvm-web -p 9000                  # custom HTTP port
+    kceve-kvm-web -c https://kvm.example   # port bar on top, remote console below
 """
 
 import argparse
 import contextlib
+import html
 import logging
+import os
 import threading
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -59,6 +63,9 @@ _active_port: int | None = None
 _num_ports: int = DEFAULT_NUM_PORTS
 _monitor_stop = threading.Event()
 _monitor_reset = threading.Event()
+_console_url: str | None = None
+
+CONSOLE_URL_ENV = "KCEVE_KVM_CONSOLE_URL"
 
 
 def _open_serial(device: str, timeout: float) -> None:
@@ -188,8 +195,40 @@ def api_switch(port: int) -> JSONResponse:
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
-    """Serve the KVM switch web UI, rendered for the configured port count."""
+    """Serve the console view if a console URL is configured, else the replica.
+
+    Returns:
+        The rendered HTML page.
+    """
+    if _console_url:
+        return _CONSOLE_HTML.replace("__NUM_PORTS__", str(_num_ports)).replace(
+            "__CONSOLE_URL__", html.escape(_console_url, quote=True)
+        )
+    return panel()
+
+
+@app.get("/panel", response_class=HTMLResponse)
+def panel() -> str:
+    """Serve the stylized KVM switch replica, rendered for the configured port count.
+
+    Returns:
+        The rendered HTML page.
+    """
     return _HTML.replace("__NUM_PORTS__", str(_num_ports))
+
+
+def resolve_console_url(cli_value: str | None = None) -> str | None:
+    """Resolve the remote console URL from CLI arg or env var.
+
+    Args:
+        cli_value: URL from ``--console-url``, or ``None`` to fall back to
+            ``KCEVE_KVM_CONSOLE_URL``.
+
+    Returns:
+        The console URL, or ``None`` if neither source sets a non-empty value.
+    """
+    value = cli_value if cli_value is not None else os.environ.get(CONSOLE_URL_ENV, "")
+    return value.strip() or None
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +492,133 @@ setInterval(poll, 5000);
 </html>
 """
 
+
+_CONSOLE_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KCEVE KVM Console</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: #131316;
+    display: flex; flex-direction: column;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    color: #ccc;
+  }
+  .bar {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 12px;
+    padding: 6px 12px;
+    background: linear-gradient(180deg, #3e3e44 0%, #2c2c32 100%);
+    border-bottom: 1.5px solid #555;
+    user-select: none;
+  }
+  .brand {
+    font-size: 15px; font-weight: 900; letter-spacing: 3px;
+    font-style: italic; color: #d8d8d8;
+  }
+  .seg {
+    font-family: 'Courier New', 'Consolas', monospace;
+    font-size: 22px; font-weight: 700; color: #ff3333;
+    text-shadow: 0 0 10px rgba(255,50,50,.6);
+    background: #0c0c0e; border: 1.5px solid #3a3a40; border-radius: 4px;
+    min-width: 34px; text-align: center; padding: 1px 6px;
+  }
+  .btns { display: flex; gap: 5px; flex-wrap: wrap; }
+  .btn {
+    width: 38px; height: 28px;
+    background: linear-gradient(180deg, #48484f 0%, #36363c 100%);
+    border: 1px solid #505058; border-radius: 4px;
+    color: #bbb; font-size: 13px; font-weight: 700;
+    cursor: pointer;
+  }
+  .btn:hover { color: #fff; border-color: #707078; }
+  .btn.active {
+    background: linear-gradient(180deg, #2670b8 0%, #1c5590 100%);
+    border-color: #3a9dff; color: #fff;
+  }
+  .btn.busy { opacity: .5; pointer-events: none; }
+  .foot { font-size: 11px; color: #666; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .foot.err { color: #c44; }
+  .foot.ok  { color: #4a4; }
+  .links a { color: #8ab4f8; font-size: 11px; text-decoration: none; margin-left: 10px; }
+  .links a:hover { text-decoration: underline; }
+  iframe { flex: 1 1 auto; width: 100%; border: 0; background: #000; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <span class="brand">KCEVE</span>
+  <span class="seg" id="seg">-</span>
+  <div class="btns" id="btns"></div>
+  <span class="foot" id="foot"></span>
+  <span class="links">
+    <a href="/panel">Panel</a>
+    <a href="__CONSOLE_URL__" target="_blank" rel="noopener">Console in new tab</a>
+  </span>
+</div>
+<iframe src="__CONSOLE_URL__" allow="fullscreen; clipboard-read; clipboard-write; autoplay; keyboard-map" allowfullscreen></iframe>
+
+<script>
+const N = __NUM_PORTS__;
+let cur = null;
+
+const btnsEl = document.getElementById('btns');
+for (let i = 1; i <= N; i++) {
+  const b = document.createElement('button');
+  b.className = 'btn'; b.id = 'b'+i; b.textContent = i;
+  b.onclick = () => sw(i);
+  btnsEl.appendChild(b);
+}
+
+function show(port) {
+  cur = port;
+  document.getElementById('seg').textContent = port == null ? '-' : port <= 9 ? port : 'A';
+  for (let i = 1; i <= N; i++) {
+    document.getElementById('b'+i).classList.toggle('active', i === port);
+  }
+}
+
+function foot(msg, cls) {
+  const e = document.getElementById('foot');
+  e.textContent = msg; e.className = 'foot ' + (cls||'');
+}
+
+async function poll() {
+  try {
+    const r = await fetch('/api/status');
+    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+    const d = await r.json();
+    show(d.port);
+    foot(d.port != null ? 'Connected' : 'Connected (port unknown until first switch)', 'ok');
+  } catch(e) { foot(e.message, 'err'); }
+}
+
+async function sw(p) {
+  if (cur != null && p === cur) return;
+  document.getElementById('b'+p).classList.add('busy');
+  foot('Switching to port ' + p + ' …');
+  try {
+    const r = await fetch('/api/switch/'+p, {method:'POST'});
+    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+    const d = await r.json();
+    show(d.port);
+    foot('Switched to port ' + d.port + (d.previous != null ? ' (was '+d.previous+')' : ''), 'ok');
+  } catch(e) { foot('Switch failed: '+e.message, 'err'); }
+  finally { document.getElementById('b'+p).classList.remove('busy'); }
+}
+
+poll();
+setInterval(poll, 5000);
+</script>
+</body>
+</html>
+"""
+
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
@@ -460,7 +626,7 @@ setInterval(poll, 5000);
 
 def main() -> None:
     """Parse CLI arguments, open serial, and start the FastAPI server."""
-    global _num_ports
+    global _num_ports, _console_url
 
     print_banner(module=Path(__file__).stem)
     parser = argparse.ArgumentParser(description="KCEVE KVM Web UI")
@@ -475,16 +641,24 @@ def main() -> None:
         default=None,
         help=f"Number of KVM ports (default {DEFAULT_NUM_PORTS}, env {NUM_PORTS_ENV})",
     )
+    parser.add_argument(
+        "-c",
+        "--console-url",
+        default=None,
+        help=f"Remote console URL shown below a port bar on / (env {CONSOLE_URL_ENV}, empty = replica only)",
+    )
     args = parser.parse_args()
 
     _num_ports = resolve_num_ports(args.ports)
+    _console_url = resolve_console_url(args.console_url)
     logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
     _open_serial(args.device, args.timeout)
     log.info(
-        "serial=%s timeout=%.1fs ports=%d  |  http://%s:%d/",
+        "serial=%s timeout=%.1fs ports=%d console=%s  |  http://%s:%d/",
         args.device,
         args.timeout,
         _num_ports,
+        _console_url or "-",
         args.host,
         args.port,
     )

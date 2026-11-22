@@ -11,6 +11,14 @@
 # See KCEVE_KVM.md for wiring and protocol details.
 # =============================================================================
 
+- name: Assert kceve console target is set
+  ansible.builtin.assert:
+    that:
+      - kceve_kvm_console_target_host | length > 0
+      - kceve_kvm_console_target_host is match('^[0-9]{1,3}(\\.[0-9]{1,3}){3}$')
+    fail_msg: "kceve_kvm_console_enabled needs kceve_kvm_console_target_host as IPv4 address (EndpointSlice, no ExternalName)"
+  when: kceve_kvm_console_enabled | bool
+
 - name: Create kceve-kvm namespace
   kubernetes.core.k8s:
     name: kceve-kvm
@@ -78,11 +86,13 @@
                   - -c
                   - |
                     apt update && apt -y install tini && \
-                    pip install --quiet --no-cache-dir 'dgxarley[web]>=0.0.46' && \
+                    pip install --quiet --no-cache-dir 'dgxarley[web]>={{ '0.0.65' if kceve_kvm_console_enabled | bool else '0.0.46' }}' && \
                     exec tini -s -- kceve-kvm-web -d "{{ kceve_kvm_serial_device }}" -p 8080 -t 6
                 env:
                   - name: KCEVE_KVM_PORTS
                     value: "{{ kceve_kvm_num_ports | string }}"
+                  - name: KCEVE_KVM_CONSOLE_URL
+                    value: "{{ ('https://' ~ kceve_kvm_console_hostname ~ '/') if kceve_kvm_console_enabled | bool else '' }}"
                 resources:
                   requests:
                     cpu: 50m
@@ -231,3 +241,163 @@
     type: A
     value: "{{ nsupdate_default.ingress_ip }}"
     state: present
+
+
+- name: Set kceve console resource state
+  ansible.builtin.set_fact:
+    kceve_kvm_console_state: "{{ 'present' if kceve_kvm_console_enabled | bool else 'absent' }}"
+
+
+- name: Manage kceve console upstream service
+  kubernetes.core.k8s:
+    state: "{{ kceve_kvm_console_state }}"
+    definition:
+      kind: Service
+      apiVersion: v1
+      metadata:
+        name: kceve-console
+        namespace: kceve-kvm
+        labels:
+          app: kceve-console
+      spec:
+        ports:
+          - port: "{{ kceve_kvm_console_target_port | int }}"
+            targetPort: "{{ kceve_kvm_console_target_port | int }}"
+            name: console
+            protocol: TCP
+
+
+- name: Manage kceve console upstream endpoints
+  kubernetes.core.k8s:
+    state: "{{ kceve_kvm_console_state }}"
+    definition:
+      apiVersion: discovery.k8s.io/v1
+      kind: EndpointSlice
+      metadata:
+        name: kceve-console
+        namespace: kceve-kvm
+        labels:
+          kubernetes.io/service-name: kceve-console
+          endpointslice.kubernetes.io/managed-by: ansible
+      addressType: IPv4
+      ports:
+        - name: console
+          port: "{{ kceve_kvm_console_target_port | int }}"
+          protocol: TCP
+      endpoints:
+        - addresses:
+            - "{{ kceve_kvm_console_target_host | default('127.0.0.1', true) }}"
+          conditions:
+            ready: true
+
+
+- name: Manage kceve console servers transport
+  kubernetes.core.k8s:
+    state: "{{ kceve_kvm_console_state }}"
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: ServersTransport
+      metadata:
+        name: kceve-console
+        namespace: kceve-kvm
+      spec:
+        insecureSkipVerify: "{{ kceve_kvm_console_insecure_skip_verify | bool }}"
+
+
+- name: Manage kceve console IP allowlist middleware
+  kubernetes.core.k8s:
+    state: "{{ kceve_kvm_console_state }}"
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata:
+        name: console-ip-source-limiter
+        namespace: kceve-kvm
+      spec:
+        ipAllowList:
+          sourceRange: "{{ kceve_kvm_console_allowlist }}"
+
+
+- name: Manage kceve console TLS certificate
+  kubernetes.core.k8s:
+    state: "{{ kceve_kvm_console_state }}"
+    definition:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        name: "{{ kceve_kvm_console_hostname }}"
+        namespace: kceve-kvm
+      spec:
+        dnsNames:
+          - "{{ kceve_kvm_console_hostname }}"
+        secretName: "{{ kceve_kvm_console_hostname }}"
+        issuerRef:
+          name: letsencrypt-production
+          kind: ClusterIssuer
+
+
+- name: Manage kceve console ingressroute HTTP
+  kubernetes.core.k8s:
+    state: "{{ kceve_kvm_console_state }}"
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: kceve-console-http
+        namespace: kceve-kvm
+      spec:
+        entryPoints:
+          - web
+        routes:
+          - kind: Rule
+            match: "Host(`{{ kceve_kvm_console_hostname }}`)"
+            priority: 10
+            services:
+              - kind: Service
+                name: kceve-console
+                namespace: kceve-kvm
+                port: "{{ kceve_kvm_console_target_port | int }}"
+            middlewares:
+              - name: console-ip-source-limiter
+                namespace: kceve-kvm
+              - name: redirect-myhttps
+                namespace: kceve-kvm
+
+
+- name: Manage kceve console ingressroute HTTPS
+  kubernetes.core.k8s:
+    state: "{{ kceve_kvm_console_state }}"
+    definition:
+      apiVersion: traefik.io/v1alpha1
+      kind: IngressRoute
+      metadata:
+        name: kceve-console-https
+        namespace: kceve-kvm
+      spec:
+        entryPoints:
+          - websecure
+        routes:
+          - kind: Rule
+            match: "Host(`{{ kceve_kvm_console_hostname }}`)"
+            priority: 10
+            services:
+              - kind: Service
+                name: kceve-console
+                namespace: kceve-kvm
+                port: "{{ kceve_kvm_console_target_port | int }}"
+                scheme: "{{ kceve_kvm_console_target_scheme }}"
+                serversTransport: kceve-console
+                passHostHeader: true
+            middlewares:
+              - name: console-ip-source-limiter
+                namespace: kceve-kvm
+        tls:
+          secretName: "{{ kceve_kvm_console_hostname }}"
+
+
+- name: Manage DNS A record for kceve console
+  community.general.nsupdate:
+    record: "{{ kceve_kvm_console_hostname }}."
+    type: A
+    value: "{{ nsupdate_default.ingress_ip if kceve_kvm_console_enabled | bool else omit }}"
+    state: "{{ kceve_kvm_console_state }}"

@@ -6,3 +6,15 @@ kceve_kvm_serial_device: "/dev/ttyACM0"
 # Number of ports on the KCEVE KVM switch (4-port and 10-port variants exist).
 # Injected into the web pod as KCEVE_KVM_PORTS env var.
 kceve_kvm_num_ports: 10
+# Remote console (e.g. GL.iNet Comet) proxied as kvm.<dns_external_domain_suffix> and embedded below the port bar.
+# false removes the console route; kceve then serves only the replica.
+kceve_kvm_console_enabled: false
+kceve_kvm_console_hostname: "kvm.{{ dns_external_domain_suffix }}"
+# Console address reachable from the Traefik pods; required when enabled.
+kceve_kvm_console_target_host: ""
+kceve_kvm_console_target_port: 443
+kceve_kvm_console_target_scheme: https
+# Self-signed console certificates fail verification otherwise.
+kceve_kvm_console_insecure_skip_verify: true
+# Root console of the attached machines: always the internal allowlist, independent of app_exposure.kceve.
+kceve_kvm_console_allowlist: "{{ traefik_internal_allowlist }}"
