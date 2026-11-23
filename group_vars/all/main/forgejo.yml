@@ -28,6 +28,6 @@ forgejo:
     email: "admin@example.com"
     password: "changeme"
   images:
-    server: {repo: "codeberg.org/forgejo/forgejo", tag: "16.0"}
+    server: {repo: "codeberg.org/forgejo/forgejo", tag: "17.0"}
   resources:
     server: {memory_request: "256Mi", memory_limit: "1Gi"}

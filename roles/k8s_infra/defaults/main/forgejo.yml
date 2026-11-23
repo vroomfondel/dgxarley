@@ -32,6 +32,6 @@ forgejo:
     password: "changeme"
   images:
     # Major bumps (X->X+1) must be walked one series at a time, never skipped.
-    server: { repo: "codeberg.org/forgejo/forgejo", tag: "16.0" }
+    server: { repo: "codeberg.org/forgejo/forgejo", tag: "17.0" }
   resources:
     server: { memory_request: "256Mi", memory_limit: "1Gi" }
