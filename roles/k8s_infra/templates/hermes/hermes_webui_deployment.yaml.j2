@@ -188,7 +188,7 @@ spec:
         # ConfigMap/Secret. UID/GID via env; WEBUI_SETTINGS_B64 additionally
         # drives the WebUI settings.json merge (agent pod omits it).
         - name: merge-config
-          image: "{{ item.image | default(hermes.image | default('nousresearch/hermes-agent')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
+          image: "{{ item.image | default(hermes.image | default('xomoxcc/hermes-agent-tools')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
           command:
             - /opt/hermes/.venv/bin/python
             - /opt/merge-config/hermes_merge_config.py
@@ -228,7 +228,7 @@ spec:
         # contained (no cross-pod volume coupling). The webui's docker_init.bash
         # then runs `uv pip install <agent-src>[all]` against this dir.
         - name: copy-agent-src
-          image: "{{ item.image | default(hermes.image | default('nousresearch/hermes-agent')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
+          image: "{{ item.image | default(hermes.image | default('xomoxcc/hermes-agent-tools')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
           env:
             - name: TZ
               value: "{{ hermes.timezone }}"
@@ -425,7 +425,7 @@ spec:
         # sessions/skills/.env. Outbound mail/messages from webui-spawned hermes
         # subprocesses also work via the same .env, no extra wiring needed.
         - name: hermes-gateway
-          image: "{{ item.image | default(hermes.image | default('nousresearch/hermes-agent')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
+          image: "{{ item.image | default(hermes.image | default('xomoxcc/hermes-agent-tools')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
           imagePullPolicy: Always
           command:
             - /bin/sh
@@ -522,7 +522,7 @@ spec:
         # directly as the per-user uid and only touches uid-owned /opt/data).
         # Purely cosmetic: the IMAP/SMTP gateway itself is unaffected either way.
         - name: gateway-state-refresh
-          image: "{{ item.image | default(hermes.image | default('nousresearch/hermes-agent')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
+          image: "{{ item.image | default(hermes.image | default('xomoxcc/hermes-agent-tools')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
           imagePullPolicy: Always
           command:
             - /opt/hermes/.venv/bin/python

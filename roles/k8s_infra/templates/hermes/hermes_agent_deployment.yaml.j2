@@ -152,7 +152,7 @@ spec:
         # Uses the agent image because it already has PyYAML in its venv and
         # is guaranteed cached on the node (used by the main container too).
         - name: merge-config
-          image: "{{ item.image | default(hermes.image | default('nousresearch/hermes-agent')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
+          image: "{{ item.image | default(hermes.image | default('xomoxcc/hermes-agent-tools')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
           imagePullPolicy: Always
           command:
             - /opt/hermes/.venv/bin/python
@@ -223,7 +223,7 @@ spec:
         # under the entrypoint pattern, since pre-#33045 entrypoints only
         # chowned $HERMES_HOME, not /opt/hermes/.
         # - name: copy-ui-tui
-        #   image: "{{ item.image | default(hermes.image | default('nousresearch/hermes-agent')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
+        #   image: "{{ item.image | default(hermes.image | default('xomoxcc/hermes-agent-tools')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
         #   command:
         #     - sh
         #     - -c
@@ -312,7 +312,7 @@ spec:
               memory: "512Mi"
 {% endif %}
         - name: hermes
-          image: "{{ item.image | default(hermes.image | default('nousresearch/hermes-agent')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
+          image: "{{ item.image | default(hermes.image | default('xomoxcc/hermes-agent-tools')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
           imagePullPolicy: Always
           # Overrides the image WORKDIR (/opt/hermes). main-wrapper.sh cd's to
           # `${HERMES_ORIG_CWD:-$PWD}` before exec'ing `hermes dashboard`, so
@@ -588,7 +588,7 @@ spec:
         # localhost-only. shareProcessNamespace stays false (s6 needs PID 1), so
         # the dashboard uses the HTTP probe, not a same-ns PID check.
         - name: hermes-gateway
-          image: "{{ item.image | default(hermes.image | default('nousresearch/hermes-agent')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
+          image: "{{ item.image | default(hermes.image | default('xomoxcc/hermes-agent-tools')) }}:{{ item.image_tag | default(hermes.image_tag) }}"
           imagePullPolicy: Always
           # Same as the dashboard container: make $PWD = /workspace so the
           # gateway process (and any agent it spawns) starts there.
