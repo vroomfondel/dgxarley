@@ -8,8 +8,9 @@ release list of the project it comes from.
 The pins are declared in ``pin_drift.yml``, searched upwards from the current
 directory. Each entry names the files carrying the pin, how to extract it
 (``var``, ``image`` or a raw ``pattern`` with one capture group) and where the
-releases live (``github: owner/repo`` or ``forgejo: host/owner/repo``). Nothing
-is ever written: the script reads the repo and the release APIs only.
+releases live (``github: owner/repo``, ``forgejo: host/owner/repo`` or
+``dockerhub: owner/repo`` for the tags of an image). Nothing is ever written:
+the script reads the repo and the release APIs only.
 
 A pin shorter than the upstream version (``5.1`` against ``5.1.3``) is a
 floating tag and counts as current until a newer ``5.2`` appears.
@@ -48,6 +49,8 @@ Attributes:
     CONFIG_NAME: File name of the pin declarations, searched upwards from the
         current directory.
     GITHUB_API_HOST: Host of the GitHub REST API.
+    DOCKERHUB_API_HOST: Host of the Docker Hub REST API.
+    DOCKERHUB_MAX_PAGES: Number of Docker Hub tag pages read per image.
     GITCRYPT_MAGIC: Leading bytes of a file that git-crypt has not decrypted.
     DEFAULT_TAG_PATTERN: Regular expression a release tag must match to count
         as a version (``1.2``, ``v1.2.3``, ...).
@@ -95,19 +98,25 @@ configure_logging()
 glogger.enable("dgxarley")
 
 type VersionKey = tuple[int, ...]
-type UpstreamKind = Literal["github", "forgejo"]
+type UpstreamKind = Literal["github", "forgejo", "dockerhub"]
 type UpstreamSource = Literal["releases", "tags"]
 type ImageRepo = tuple[str, str]
 
 CONFIG_NAME: Final[str] = "pin_drift.yml"
 GITHUB_API_HOST: Final[str] = "api.github.com"
+DOCKERHUB_API_HOST: Final[str] = "hub.docker.com"
+DOCKERHUB_MAX_PAGES: Final[int] = 10
 GITCRYPT_MAGIC: Final[bytes] = b"\x00GITCRYPT"
 DEFAULT_TAG_PATTERN: Final[str] = r"^v?\d+(?:\.\d+)+$"
 REQUEST_TIMEOUT_SECONDS: Final[int] = 20
 FINISHED_POD_PHASES: Final[frozenset[str]] = frozenset({"Succeeded", "Failed"})
 MAX_WORKERS: Final[int] = 8
-# GitHub caps a page at 100 entries, Forgejo/Gitea at 50 by default.
-PAGE_SIZE: Final[dict[UpstreamKind, tuple[str, int]]] = {"github": ("per_page", 100), "forgejo": ("limit", 50)}
+# GitHub and Docker Hub cap a page at 100 entries, Forgejo/Gitea at 50 by default.
+PAGE_SIZE: Final[dict[UpstreamKind, tuple[str, int]]] = {
+    "github": ("per_page", 100),
+    "forgejo": ("limit", 50),
+    "dockerhub": ("page_size", 100),
+}
 
 _WIDE: Final[int] = 200
 
@@ -152,6 +161,21 @@ class ReleaseEntry(TypedDict, total=False):
 _RELEASE_LISTING: Final[TypeAdapter[list[ReleaseEntry]]] = TypeAdapter(list[ReleaseEntry])
 
 
+class DockerHubTagPage(TypedDict, total=False):
+    """One page of the Docker Hub tag listing, reduced to the fields used here.
+
+    Attributes:
+        results: The tags of this page, each carrying the tag in ``name``.
+        next: URL of the next page, null on the last one.
+    """
+
+    results: list[ReleaseEntry]
+    next: str | None
+
+
+_DOCKERHUB_PAGE: Final[TypeAdapter[DockerHubTagPage]] = TypeAdapter(DockerHubTagPage)
+
+
 class PinStatus(StrEnum):
     """Outcome of comparing a pin with the newest upstream version.
 
@@ -188,9 +212,10 @@ class Upstream:
     Hashable, so pins sharing an upstream share a single API request.
 
     Attributes:
-        kind: Which forge API to talk to.
-        repo: ``owner/repo`` for GitHub, ``host/owner/repo`` for Forgejo.
-        source: Whether to read the ``releases`` or the ``tags`` endpoint.
+        kind: Which forge or registry API to talk to.
+        repo: ``owner/repo`` for GitHub and Docker Hub, ``host/owner/repo`` for Forgejo.
+        source: Whether to read the ``releases`` or the ``tags`` endpoint; always
+            ``tags`` for Docker Hub.
     """
 
     kind: UpstreamKind
@@ -202,10 +227,13 @@ class Upstream:
         """API URL of the release or tag listing.
 
         Returns:
-            The listing URL on ``api.github.com`` or on the Forgejo host.
+            The listing URL on ``api.github.com``, ``hub.docker.com`` or the Forgejo host.
         """
         if self.kind == "github":
             return f"https://{GITHUB_API_HOST}/repos/{self.repo}/{self.source}"
+        if self.kind == "dockerhub":
+            repo = self.repo if "/" in self.repo else f"library/{self.repo}"
+            return f"https://{DOCKERHUB_API_HOST}/v2/repositories/{repo}/tags"
         host, _, path = self.repo.partition("/")
         return f"https://{host}/api/v1/repos/{path}/{self.source}"
 
@@ -214,16 +242,17 @@ class Upstream:
         """Human-readable name for the result table.
 
         Returns:
-            The repo path, suffixed with ``(forgejo)`` for a Forgejo upstream.
+            The repo path, suffixed with ``(forgejo)`` or ``(dockerhub)`` unless on GitHub.
         """
-        return self.repo if self.kind == "github" else f"{self.repo} (forgejo)"
+        return self.repo if self.kind == "github" else f"{self.repo} ({self.kind})"
 
 
 class PinSpec(BaseModel):
     """One pin as declared in ``pin_drift.yml``.
 
     Exactly one extraction method (``var``, ``image``, ``pattern``) and exactly
-    one upstream (``github``, ``forgejo``) must be set, plus at least one file.
+    one upstream (``github``, ``forgejo``, ``dockerhub``) must be set, plus at
+    least one file.
 
     Attributes:
         name: Unique name of the pin, used by ``--only`` and in the table.
@@ -234,7 +263,9 @@ class PinSpec(BaseModel):
         pattern: Regular expression with exactly one capture group for the pin.
         github: GitHub ``owner/repo`` of the upstream.
         forgejo: Forgejo ``host/owner/repo`` of the upstream.
-        source: Whether upstream versions come from releases or from tags.
+        dockerhub: Docker Hub ``owner/repo`` whose image tags are the upstream versions.
+        source: Whether upstream versions come from releases or from tags;
+            ignored for ``dockerhub``, which only has tags.
         tag_pattern: Regular expression an upstream tag must match to count.
         running_image: Image names whose tags in the cluster's pods are the
             running version; defaults to ``image``.
@@ -251,6 +282,7 @@ class PinSpec(BaseModel):
     pattern: str | None = None
     github: str | None = None
     forgejo: str | None = None
+    dockerhub: str | None = None
     source: UpstreamSource = "releases"
     tag_pattern: str = DEFAULT_TAG_PATTERN
     running_image: tuple[str, ...] = ()
@@ -307,8 +339,8 @@ class PinSpec(BaseModel):
             raise ValueError("needs 'file' or 'files'")
         if sum(item is not None for item in (self.var, self.image, self.pattern)) != 1:
             raise ValueError("needs exactly one of 'var', 'image', 'pattern'")
-        if sum(item is not None for item in (self.github, self.forgejo)) != 1:
-            raise ValueError("needs exactly one of 'github', 'forgejo'")
+        if sum(item is not None for item in (self.github, self.forgejo, self.dockerhub)) != 1:
+            raise ValueError("needs exactly one of 'github', 'forgejo', 'dockerhub'")
         if self.pattern is not None and re.compile(self.pattern).groups != 1:
             raise ValueError("'pattern' needs exactly one capture group")
         if self.running_image and self.running_kubelet:
@@ -356,10 +388,13 @@ class PinSpec(BaseModel):
         """The upstream project of this pin.
 
         Returns:
-            An :class:`Upstream` for whichever of ``github`` / ``forgejo`` is set.
+            An :class:`Upstream` for whichever of ``github`` / ``forgejo`` /
+            ``dockerhub`` is set.
         """
         if self.github is not None:
             return Upstream("github", self.github, self.source)
+        if self.dockerhub is not None:
+            return Upstream("dockerhub", self.dockerhub, "tags")
         return Upstream("forgejo", self.forgejo or "", self.source)
 
 
@@ -620,6 +655,8 @@ def fetch_tags(upstream: Upstream, token: str | None) -> TagLookup:
     Returns:
         The published tags (drafts and pre-releases skipped), or an error.
     """
+    if upstream.kind == "dockerhub":
+        return fetch_dockerhub_tags(upstream)
     headers = {"Accept": "application/json"}
     if upstream.kind == "github" and token:
         headers["Authorization"] = f"Bearer {token}"
@@ -649,6 +686,52 @@ def fetch_tags(upstream: Upstream, token: str | None) -> TagLookup:
             if (tag := entry.get("tag_name")) and not entry.get("prerelease") and not entry.get("draft")
         )
     )
+
+
+def fetch_dockerhub_tags(upstream: Upstream) -> TagLookup:
+    """Fetch the tags of a Docker Hub image, following up to :data:`DOCKERHUB_MAX_PAGES` pages.
+
+    Docker Hub lists the most recently pushed tags first, so a flood of rolling
+    tags (``canary.<date>``) can push release tags onto later pages.
+
+    Args:
+        upstream: The Docker Hub image to query.
+
+    Returns:
+        All tag names read, or an error if the first page fails.
+    """
+    size_key, size = PAGE_SIZE["dockerhub"]
+    url: str | None = upstream.url
+    params: dict[str, str] | None = {size_key: str(size)}
+    tags: list[str] = []
+    for _ in range(DOCKERHUB_MAX_PAGES):
+        if url is None:
+            break
+        try:
+            response = requests.get(
+                url, headers={"Accept": "application/json"}, params=params, timeout=REQUEST_TIMEOUT_SECONDS
+            )
+        except requests.exceptions.RequestException as exc:
+            if tags:
+                break
+            return TagLookup(error=f"unreachable: {type(exc).__name__}")
+        if not response.ok:
+            if tags:
+                break
+            detail = response.text.strip()[:80].replace("\n", " ")
+            return TagLookup(error=f"HTTP {response.status_code} {detail}")
+        try:
+            page = _DOCKERHUB_PAGE.validate_json(response.content)
+        except ValidationError as exc:
+            if tags:
+                break
+            if any(error["type"] == "json_invalid" for error in exc.errors()):
+                return TagLookup(error="no JSON in the response")
+            return TagLookup(error="unexpected response shape")
+        tags.extend(name for entry in page.get("results", []) if (name := entry.get("name")))
+        url = page.get("next")
+        params = None
+    return TagLookup(tags=tuple(tags))
 
 
 def read_pin(spec: PinSpec, root: Path) -> tuple[str | None, str]:
@@ -706,14 +789,14 @@ def evaluate(spec: PinSpec, root: Path, lookup: TagLookup) -> Finding:
         (version_key(tag), tag) for tag in lookup.tags if matcher.search(tag)
     )
     if not candidates:
-        return Finding(spec, pinned, None, PinStatus.UNCLEAR, f"no upstream {spec.source} match tag_pattern")
+        return Finding(spec, pinned, None, PinStatus.UNCLEAR, f"no upstream {spec.upstream.source} match tag_pattern")
 
     latest_key, latest = candidates[-1]
     status = classify(pinned_key, latest_key)
     notes: list[str] = []
     if status is PinStatus.CURRENT:
         if latest_key[: len(pinned_key)] < pinned_key:
-            notes.append(f"pin is ahead of the newest upstream {spec.source}")
+            notes.append(f"pin is ahead of the newest upstream {spec.upstream.source}")
         elif len(pinned_key) < len(latest_key):
             notes.append("floating tag")
     elif status is PinStatus.MAJOR:

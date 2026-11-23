@@ -7,8 +7,9 @@
 #   image        image repo; the tag after the colon is the version     these
 #   pattern      raw regex with exactly one capture group               three)
 #   github       owner/repo                                            (one of
-#   forgejo      host/owner/repo                                        these two)
-#   source       releases (default) or tags
+#   forgejo      host/owner/repo                                        these
+#   dockerhub    owner/repo, its image tags are the versions            three)
+#   source       releases (default) or tags; ignored for dockerhub
 #   tag_pattern  regex an upstream tag must match (default: ^v?\d+(\.\d+)+$)
 #   running_image    image(s) whose tags in live pods are the running version (default: image)
 #   running_kubelet  true: the running version is the nodes' kubelet version
@@ -26,6 +27,13 @@ pins:
     running_image:
       - xomoxcc/hermes-agent-tools
       - nousresearch/hermes-agent
+  # Same pin against our own build: an update here = tools image pushed but not deployed.
+  - name: hermes-agent-tools
+    dockerhub: xomoxcc/hermes-agent-tools
+    file: roles/k8s_infra/defaults/main/hermes.yml
+    pattern: 'image_tag:\s*"(?:rc\.\d+-)?(v[\d.]+)"'
+    tag_pattern: '^v\d{1,3}(\.\d+)+$'
+    running_image: xomoxcc/hermes-agent-tools
   - name: honcho
     github: plastic-labs/honcho
     file: roles/k8s_infra/defaults/main/honcho.yml

@@ -1,8 +1,10 @@
 """Tests for dgxarley.k3shelperstuff.pin_drift."""
 
+import json
 from pathlib import Path
 
 import pytest
+import requests
 import yaml
 from pydantic import ValidationError
 
@@ -16,6 +18,7 @@ from dgxarley.k3shelperstuff.pin_drift import (
     TagLookup,
     classify,
     evaluate,
+    fetch_tags,
     find_config,
     image_repo,
     read_pin,
@@ -75,6 +78,7 @@ def test_classify(pinned: tuple[int, ...], candidate: tuple[int, ...], expected:
         {"image": "foo/bar"},
         {"var": None},
         {"forgejo": "codeberg.org/owner/repo"},
+        {"dockerhub": "owner/image"},
         {"github": None},
         {"file": None},
         {"var": None, "pattern": "no-group"},
@@ -161,6 +165,34 @@ def test_evaluate_unclear(tmp_path: Path) -> None:
     assert evaluate(_spec(), tmp_path, TagLookup(tags=("nightly",))).status is PinStatus.UNCLEAR
     _write(tmp_path, 'demo_version: "latest"\n')
     assert evaluate(_spec(), tmp_path, TagLookup(tags=("v1.0.0",))).status is PinStatus.UNCLEAR
+
+
+def test_dockerhub_upstream() -> None:
+    spec = _spec(github=None, dockerhub="owner/image")
+    assert spec.upstream.source == "tags"
+    assert spec.upstream.url == "https://hub.docker.com/v2/repositories/owner/image/tags"
+    assert spec.upstream.display == "owner/image (dockerhub)"
+    assert _spec(github=None, dockerhub="redis").upstream.url.endswith("/repositories/library/redis/tags")
+
+
+def test_fetch_dockerhub_tags_follows_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    pages = {
+        "first": {"results": [{"name": "canary"}, {"name": "v1.0.0"}], "next": "second"},
+        "second": {"results": [{"name": "v1.1.0"}], "next": None},
+    }
+
+    class _Response:
+        def __init__(self, body: object) -> None:
+            self.ok = True
+            self.content = json.dumps(body).encode()
+
+    def _get(url: str, **_: object) -> _Response:
+        return _Response(pages["second" if url == "second" else "first"])
+
+    monkeypatch.setattr(requests, "get", _get)
+    lookup = fetch_tags(_spec(github=None, dockerhub="owner/image").upstream, None)
+    assert lookup.tags == ("canary", "v1.0.0", "v1.1.0")
+    assert lookup.error == ""
 
 
 def test_find_config_walks_upwards(tmp_path: Path) -> None:
