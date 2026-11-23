@@ -27,6 +27,12 @@ pins:
     running_image:
       - xomoxcc/hermes-agent-tools
       - nousresearch/hermes-agent
+  # Upstream base image: the git tag can precede the Docker Hub push, the tools build needs this one.
+  - name: hermes-agent-base
+    dockerhub: nousresearch/hermes-agent
+    file: roles/k8s_infra/defaults/main/hermes.yml
+    pattern: 'image_tag:\s*"(?:rc\.\d+-)?(v[\d.]+)"'
+    tag_pattern: '^v\d{1,3}(\.\d+)+$'
   # Same pin against our own build: an update here = tools image pushed but not deployed.
   - name: hermes-agent-tools
     dockerhub: xomoxcc/hermes-agent-tools
