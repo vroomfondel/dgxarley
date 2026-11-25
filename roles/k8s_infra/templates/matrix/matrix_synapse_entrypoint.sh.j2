@@ -7,6 +7,7 @@ chmod 0400 /run/synapse/homeserver.yaml
 {% if matrix.enable_token_authenticator %}
 # constraint on the image's own packages: an unpinned transitive upgrade (cryptography 50 via jwcrypto 1.6.1) breaks pyOpenSSL
 pip freeze > /tmp/image-constraints.txt
-pip install --no-cache-dir -c /tmp/image-constraints.txt synapse-token-authenticator
+# jwcrypto 1.6.2 rejects padded base64url, synapse-token-authenticator 0.14.1 pads the jwt secret into the JWK
+pip install --no-cache-dir -c /tmp/image-constraints.txt synapse-token-authenticator 'jwcrypto<1.6.2'
 {% endif %}
 exec /start.py
