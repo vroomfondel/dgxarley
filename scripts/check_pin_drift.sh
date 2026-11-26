@@ -7,7 +7,7 @@
 #
 # Env overrides:
 #   DGXARLEY_PYTHON   interpreter with dgxarley installed     (default: <repo>/.venv/bin/python, else uvx dgxarley from PyPI)
-#   DGXARLEY_SPEC     uvx package spec for the PyPI fallback  (default: dgxarley)
+#   DGXARLEY_SPEC     uvx package spec for the PyPI fallback  (default: dgxarley[k3s])
 #   KUBE_CONTEXT      kubeconfig context for keel + pin's running column (default: ht@dgxarley)
 #   PIN_DRIFT_CONFIG  pin only; pin declarations             (default: <repo>/pin_drift.yml)
 #   GITHUB_TOKEN      pin only; falls back to GH_TOKEN, then `gh auth token`
@@ -15,7 +15,7 @@ set -euo pipefail
 
 readonly REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly KUBE_CONTEXT="${KUBE_CONTEXT:-ht@dgxarley}"
-readonly SPEC="${DGXARLEY_SPEC:-dgxarley}"
+readonly SPEC="${DGXARLEY_SPEC:-dgxarley[k3s]}"
 export KUBE_CONTEXT
 export DRIFT_PROG_NAME=scripts/check_pin_drift.sh
 readonly module=dgxarley.k3shelperstuff.drift
