@@ -154,7 +154,7 @@ hermes:
   #  * host-wide gateway lock ($HERMES_GATEWAY_LOCK_DIR unset -> container fs, not the shared /opt/data).
   # nousresearch/hermes-agent + OCR/PDF tools, rootless pip/micromamba (repo_scripts/build-hermes-image.sh); per-user item.image.
   image: "xomoxcc/hermes-agent-tools"
-  image_tag: "v0.23.3"                  # upstream tag; rebuild + push hermes-agent-tools before every bump
+  image_tag: "v0.23.4"                  # upstream tag; rebuild + push hermes-agent-tools before every bump
   # busybox helper image (fix-perms / init-dashboard-themes initContainers, log-tail sidecar)
   busybox_image: "busybox:1.38"
   # NFS-backed hostPath base on k3smaster — per-user subdirs <base>/<username>
